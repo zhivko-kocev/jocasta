@@ -1,0 +1,4 @@
+prompt: 'Add a --json flag to cli.ts that prints {"greeting": "Hello, <name>!"} instead of the plain greeting.'
+tags: [feature]
+checks:
+  - command: bun check.ts

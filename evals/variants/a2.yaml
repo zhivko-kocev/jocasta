@@ -1,0 +1,4 @@
+# Arm A2 (0482): A1 plus plan first, headless (E3): `--plan-yolo --plan-yolo-into <A0's model>`, so omp plans,
+# approves its own plan and executes it on the same model instead of switching to its smol model.
+extends: [a1]
+plan_first: true

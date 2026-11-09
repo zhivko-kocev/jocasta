@@ -1,0 +1,51 @@
+/* Tokyo Night as herdr 0.9.5 draws it (src/app/state.rs, tokyo_night): the one palette file (0401, 0474). The canvas
+   page's HTML links it first, and `palette.ts` reads its hex values for what CSS can't colour (the
+   canvas's Monaco theme, the Windows Terminal scheme `jocasta setup` writes). Colours are hex here and only here;
+   translucent ones are made from them. */
+
+:root {
+	--bg-0: #1a1b26;
+	--bg-1: #232636;
+	--bg-2: #24283b;
+	--bg-3: #2d3650;
+
+	--fg: #c0caf5;
+	/* The quiet second tier: herdr's subtext. */
+	--fg-2: #a9b1d6;
+	/* Quiet text, lifted from herdr's overlay1 (--mark-3) to reach 4.5:1 on bg-0 to bg-2 (0432); marks keep overlay1. */
+	--fg-3: #8a93bf;
+	--mark-3: #697196;
+	/* Comments, and the lines' colour. */
+	--comment: #565f89;
+	/* The terminal's bright black. */
+	--bright-black: #414868;
+
+	--blue: #7aa2f7;
+	--cyan: #7dcfff;
+	--yellow: #e0af68;
+	--red: #f7768e;
+	--green: #9ece6a;
+	--purple: #bb9af7;
+	--orange: #ff9e64;
+	/* The word being spoken: a lifted fg. */
+	--spoken: #e5e9fb;
+
+	--line-1: rgb(from var(--comment) r g b / 22%);
+	--line-2: rgb(from var(--comment) r g b / 40%);
+	--line-3: rgb(from var(--comment) r g b / 65%);
+	--blue-wash: rgb(from var(--blue) r g b / 10%);
+	--blue-line: rgb(from var(--blue) r g b / 40%);
+	--blue-find: rgb(from var(--blue) r g b / 30%);
+	--blue-select: rgb(from var(--blue) r g b / 24%);
+	--blue-hover: rgb(from var(--blue) r g b / 6%);
+	--blue-press: rgb(from var(--blue) r g b / 5%);
+	--red-line: rgb(from var(--red) r g b / 38%);
+
+	/* What lifts off the ground: a hairline of light on top, a soft shadow under. */
+	--lift: 0 1px 0 rgb(255 255 255 / 3%) inset, 0 10px 30px -14px rgb(0 0 0 / 75%), 0 2px 6px -2px rgb(0 0 0 / 50%);
+}
+
+/* The page's first paint is already Tokyo Night's ground (0401): no white flash before the page's stylesheet. */
+html {
+	background: var(--bg-0);
+}

@@ -1,0 +1,4 @@
+prompt: "Add toCsv(rows) to report.ts: a header line from the first row's keys, then one line per row, quoting fields that contain commas, quotes or newlines as RFC 4180 does. bun check.ts must pass."
+tags: [feature]
+checks:
+  - command: bun check.ts

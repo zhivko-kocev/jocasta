@@ -1,0 +1,185 @@
+/* The canvas page's ground (0552): Jocasta's type, buttons and motion for the parts the host adds around whiteboard's
+   canvas, on Tokyo Night (0401). The colours come from palette.css (0474); the host's own parts are whiteboard.css. */
+
+@font-face {
+	font-family: "Mona Sans";
+	src: url("./fonts/MonaSans-VF.woff2") format("woff2");
+	font-weight: 200 900;
+	font-stretch: 75% 125%;
+	font-style: normal;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: "Geist Mono";
+	src: url("./fonts/GeistMono-VF.woff2") format("woff2");
+	font-weight: 100 900;
+	font-style: normal;
+	font-display: swap;
+}
+
+:root {
+	--sans: "Mona Sans", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+	--mono: "Geist Mono", "Cascadia Mono", Consolas, ui-monospace, monospace;
+
+	--ease: cubic-bezier(0.22, 1, 0.36, 1);
+	--quick: 180ms;
+	--calm: 420ms;
+
+	--r-s: 6px;
+	--r-m: 10px;
+
+	color-scheme: dark;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+	height: 100%;
+	margin: 0;
+}
+
+body {
+	overflow: hidden;
+	background: var(--bg-1);
+}
+
+/* Jocasta's own parts. Its element rules (type, links, buttons, focus, scrollbars) stay inside them, so none reaches
+   whiteboard's canvas, which brings its own (0393). */
+:where(.wb-bar, .wb-unavailable, .wb-empty, .wb-source, .wb-menu) {
+	color: var(--fg);
+	font: 400 14px / 1.55 var(--sans);
+	-webkit-font-smoothing: antialiased;
+	text-rendering: optimizeLegibility;
+	caret-color: var(--blue);
+}
+
+:where(.wb-bar, .wb-unavailable, .wb-empty, .wb-source, .wb-menu) ::selection {
+	background: var(--blue-select);
+	color: var(--fg);
+}
+
+:where(.wb-bar, .wb-unavailable, .wb-empty, .wb-source, .wb-menu) :focus-visible {
+	outline: 1px solid var(--blue);
+	outline-offset: 2px;
+}
+
+:where(.wb-bar, .wb-unavailable, .wb-empty, .wb-source, .wb-menu),
+:where(.wb-bar, .wb-unavailable, .wb-empty, .wb-source, .wb-menu) * {
+	scrollbar-width: thin;
+	scrollbar-color: var(--line-2) transparent;
+}
+
+:where(.wb-bar, .wb-unavailable, .wb-empty, .wb-source, .wb-menu) a {
+	color: var(--blue);
+	text-decoration-color: var(--blue-line);
+	text-underline-offset: 3px;
+}
+
+:where(.wb-bar, .wb-unavailable, .wb-empty, .wb-source, .wb-menu) a:hover {
+	text-decoration-color: var(--blue);
+}
+
+:where(.wb-bar, .wb-unavailable, .wb-empty, .wb-source, .wb-menu) button {
+	font: inherit;
+	color: inherit;
+	background: none;
+	border: 1px solid transparent;
+	border-radius: var(--r-s);
+	padding: 5px 10px;
+	cursor: pointer;
+	transition:
+		background-color var(--quick) var(--ease),
+		border-color var(--quick) var(--ease),
+		color var(--quick) var(--ease);
+}
+
+:where(.wb-bar, .wb-unavailable, .wb-empty, .wb-source, .wb-menu) button:hover {
+	background: var(--blue-hover);
+}
+
+:where(.wb-bar, .wb-unavailable, .wb-empty, .wb-source, .wb-menu) button:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+
+/* Buttons: quiet by default, never filled. The border is line-3 so the control reads against the ground (0432);
+   hover brings it to the quiet text colour. */
+.btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 12px;
+	border-color: var(--line-3);
+	color: var(--fg);
+}
+
+.btn:hover {
+	border-color: var(--fg-3);
+	background: var(--blue-press);
+}
+
+.btn.small {
+	gap: 6px;
+	padding: 3px 9px;
+	font-size: 12.5px;
+}
+
+.notice {
+	color: var(--fg-3);
+}
+
+.notice.error {
+	color: var(--red);
+}
+
+/* The canvas couldn't start (0432): the raw error folded under Details. */
+.wb-unavailable details {
+	color: var(--fg-3);
+	font-size: 12.5px;
+}
+
+.wb-unavailable summary {
+	cursor: pointer;
+}
+
+.wb-unavailable details code {
+	display: block;
+	margin-top: 6px;
+	color: var(--fg-2);
+	font: 12px / 1.5 var(--mono);
+	overflow-wrap: anywhere;
+}
+
+/* Things that change resolve into place once, like light settling. */
+@keyframes resolve {
+	from {
+		opacity: 0;
+		filter: blur(4px);
+		transform: translateY(4px);
+	}
+	to {
+		opacity: 1;
+		filter: none;
+		transform: none;
+	}
+}
+
+/* Reduced motion: every motion of Jocasta's own parts ends at once; whiteboard's canvas keeps its own reduced-motion
+   design. */
+@media (prefers-reduced-motion: reduce) {
+	:where(.wb, .wb-menu) *:not(.review-canvas-root, .review-canvas-root *),
+	:where(.wb, .wb-menu) *:not(.review-canvas-root, .review-canvas-root *)::before,
+	:where(.wb, .wb-menu) *:not(.review-canvas-root, .review-canvas-root *)::after {
+		/* biome-ignore lint/complexity/noImportantStyles: it must beat every rule that sets a motion. */
+		animation-duration: 1ms !important;
+		/* biome-ignore lint/complexity/noImportantStyles: as above. */
+		animation-iteration-count: 1 !important;
+		/* biome-ignore lint/complexity/noImportantStyles: as above. */
+		transition-duration: 1ms !important;
+	}
+}

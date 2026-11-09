@@ -1,0 +1,3 @@
+SURFACE CONCEPT SEED (key: 7fa50927; mode: operate; source: api; approved pool: c3b204a1eed6; 306/564 human-approved; rerun with --scope surface --mode operate --from 7fa50927 --reroll 1 --candidate-count 7 to reproduce this roll against this catalog revision)
+DEALT INDICES: 7, 6, 2 (index 7 leads)
+DEALT INDICES (restated for truncated readers): 7, 6, 2; index

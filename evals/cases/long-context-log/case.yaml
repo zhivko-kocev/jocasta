@@ -1,0 +1,5 @@
+prompt: "The nightly import failed; logs/import.log has the error. Find the cause under steps/ and fix it so bun check.ts passes."
+tags: [long-context]
+setup: bun make-log.ts
+checks:
+  - command: bun check.ts

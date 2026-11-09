@@ -1,0 +1,68 @@
+# The `jocasta` herdr plugin (0553, 0554, 0558). `jocasta setup` writes it to ~/.jocasta/agent/herdr-plugin/,
+# replacing {{jocasta}} with how herdr starts this Jocasta (`jocasta.exe`, or Bun and the repo's entry in a source run),
+# and links that folder with `herdr plugin link`; `jocasta uninstall` unlinks it. Every command talks to the running
+# Jocasta service over its localhost API with the token from <data>/frontier.json.
+id = "jocasta"
+name = "Jocasta"
+version = "0.1.0"
+min_herdr_version = "0.9.5"
+description = "Jocasta's today pane, its questions and the thread keys"
+platforms = ["windows", "linux", "macos"]
+
+# Re-applies the Agents view at every herdr server start: blocked and done first, then working, then idle; the boss's
+# workspace left out (0553, 0554).
+[[startup]]
+command = [{{jocasta}}, "plugin", "startup"]
+
+# The thread keys (0544, 0554), bound in herdr.toml to Ctrl+B then Alt+F, Alt+S, Alt+R, Alt+N; Quit to Ctrl+B Alt+Q
+# (0563). Each acts on the thread of the focused pane.
+[[actions]]
+id = "finish"
+title = "Finish thread"
+description = "Merge or PR the focused thread"
+contexts = ["pane"]
+command = [{{jocasta}}, "plugin", "action", "finish"]
+
+[[actions]]
+id = "stop"
+title = "Stop thread"
+description = "Stop the focused thread's run"
+contexts = ["pane"]
+command = [{{jocasta}}, "plugin", "action", "stop"]
+
+[[actions]]
+id = "review"
+title = "Review thread"
+description = "Review the focused thread's commits, hunk beside it"
+contexts = ["pane"]
+command = [{{jocasta}}, "plugin", "action", "review"]
+
+[[actions]]
+id = "new-thread"
+title = "New thread"
+description = "Start a thread: project and brief"
+contexts = ["global"]
+command = [{{jocasta}}, "plugin", "action", "new-thread"]
+
+[[actions]]
+id = "quit"
+title = "Quit Jocasta"
+description = "Close Jocasta, asking first while threads work"
+contexts = ["global"]
+command = [{{jocasta}}, "plugin", "action", "quit"]
+
+# `today` beside the boss, boss 65 / today 35 (0551, 0555); the service opens it and opens it again when it is gone.
+[[panes]]
+id = "today"
+title = "today"
+placement = "split"
+command = [{{jocasta}}, "plugin", "today"]
+
+# His questions, in front of whatever he is on (0553, 0558, 0563); the service opens it with the question's code.
+[[panes]]
+id = "ask"
+title = "Jocasta asks"
+placement = "popup"
+width = "70%"
+height = 18
+command = [{{jocasta}}, "plugin", "ask"]

@@ -1,0 +1,142 @@
+/**
+ * mise in project and thread panes (0473, 0477). Every pane of a project gets `MISE_ENV=jocasta-<project id>`, so mise
+ * loads Jocasta's own config for that project, `~/.config/mise/config.jocasta-<project id>.override.toml` (global config,
+ * trusted by path), in every worktree without a copy. With paranoid config trust on (`paranoid = ["config"]`, which
+ * Jocasta's mise file sets, 0476) and every repo config in the folder trusted, `mise env --json` run there is merged
+ * into the pane's env too (shims carry no `[env]`), and the review may run its `verify` (else `test`) task. Jocasta
+ * never trusts a config itself. Without mise on PATH nothing changes.
+ */
+import { asObject } from "../../shared/fsx.ts";
+import { log } from "../../shared/log.ts";
+
+/** How long one mise call may take before it counts as failed. */
+const MISE_TIMEOUT_MS = 15_000;
+
+type Env = Record<string, string | undefined>;
+
+/** mise's argv prefix: the one on PATH, or none. */
+function findMise(): string[] | null {
+	const found = Bun.which("mise");
+	return found ? [found] : null;
+}
+
+/** One mise call in `cwd`; undefined when it fails or times out. */
+async function runMise(mise: string[], args: string[], cwd: string, env: Env): Promise<string | undefined> {
+	try {
+		const proc = Bun.spawn([...mise, ...args], {
+			cwd,
+			env,
+			stdin: "ignore",
+			stdout: "pipe",
+			stderr: "pipe",
+			timeout: MISE_TIMEOUT_MS,
+		});
+		const [stdout, stderr, code] = await Promise.all([
+			new Response(proc.stdout).text(),
+			new Response(proc.stderr).text(),
+			proc.exited,
+		]);
+		if (code === 0) return stdout;
+		log("warn", "mise", `mise ${args.join(" ")} in ${cwd} failed (${code}): ${stderr.trim().split("\n")[0] ?? ""}`);
+	} catch (error) {
+		log("warn", "mise", `mise ${args.join(" ")} in ${cwd} failed: ${String(error)}`);
+	}
+	return undefined;
+}
+
+/** `MISE_ENV` with the project's `jocasta-<pid>` appended to whatever the pane already has (0477). */
+function withJocastaEnv(projectId: string, base: Env): string {
+	const own = `jocasta-${projectId}`;
+	const names = (base.MISE_ENV ?? "")
+		.split(",")
+		.map((name) => name.trim())
+		.filter((name) => name && name !== own);
+	return [...names, own].join(",");
+}
+
+/**
+ * Why mise may not load the folder's config for Jocasta (0473), or undefined when it may: paranoid config trust must
+ * be on, so omp's `CI=true` can't trust a repo by itself, and `mise trust --show` must report no untrusted config here
+ * or above (global config, Jocasta's own included, isn't listed: it is trusted by path). The reason is "" when there is
+ * no repo config to say anything about.
+ */
+async function distrust(mise: string[], cwd: string, env: Env): Promise<string | undefined> {
+	const paranoid = await runMise(mise, ["settings", "get", "paranoid"], cwd, env);
+	const show = await runMise(mise, ["trust", "--show"], cwd, env);
+	const configs = [...(show ?? "").matchAll(/^(.+): (trusted|untrusted)\s*$/gm)];
+	if (paranoid === undefined || !/\btrue\b|"config"/.test(paranoid)) {
+		return configs.length > 0 ? "mise's paranoid config trust is off" : "";
+	}
+	if (show === undefined) return "mise didn't say whether its config is trusted";
+	const untrusted = configs.find((config) => config[2] === "untrusted");
+	return untrusted ? `${untrusted[1]} isn't trusted in mise` : undefined;
+}
+
+/**
+ * The env to merge into a project or thread pane started in `cwd` (0473, 0477): `MISE_ENV` with `jocasta-<pid>`
+ * appended, plus `mise env --json` when the folder's config may be loaded. `base` is the env the pane would otherwise
+ * get (its thread variables reach mise's `[env]` templates). Empty when mise isn't on PATH.
+ */
+export async function miseEnv(
+	projectId: string,
+	cwd: string,
+	base: Env = process.env,
+	mise = findMise(),
+): Promise<Record<string, string>> {
+	if (!mise) return {};
+	const MISE_ENV = withJocastaEnv(projectId, base);
+	const env = { ...base, MISE_ENV };
+	if ((await distrust(mise, cwd, env)) !== undefined) return { MISE_ENV };
+	const out = await runMise(mise, ["env", "--json"], cwd, env);
+	let parsed: unknown;
+	try {
+		parsed = out === undefined ? undefined : JSON.parse(out);
+	} catch {
+		log("warn", "mise", `mise env --json in ${cwd} printed no JSON`);
+	}
+	const merged: Record<string, string> = {};
+	if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+		for (const [key, value] of Object.entries(parsed)) if (typeof value === "string") merged[key] = value;
+	}
+	return { ...merged, MISE_ENV };
+}
+
+/** The project's own check (0453, 0473, 0477): its mise task, or why it didn't run. */
+export type MiseCheck = { task: "verify" | "test" } | { skipped: string };
+
+/** How a project check that couldn't run is said beside the checks that did (0559): never a silent pass. */
+export function skippedSaid(why: string): string {
+	return `the project's check didn't run: ${why}`;
+}
+
+/**
+ * The project's own check as a mise task (0453, 0473, 0477): `verify`, else `test`, when the folder's config may be
+ * loaded and defines it (Jocasta's own per-project config counts through `MISE_ENV`); why it can't run when the folder
+ * has a repo config mise may not load for Jocasta (0559); undefined otherwise.
+ */
+export async function miseCheck(
+	projectId: string,
+	cwd: string,
+	base: Env = process.env,
+	mise = findMise(),
+): Promise<MiseCheck | undefined> {
+	if (!mise) return undefined;
+	const env = { ...base, MISE_ENV: withJocastaEnv(projectId, base) };
+	const why = await distrust(mise, cwd, env);
+	if (why !== undefined) return why ? { skipped: why } : undefined;
+	const out = await runMise(mise, ["tasks", "ls", "--json"], cwd, env);
+	const names: string[] = [];
+	try {
+		const tasks: unknown = out === undefined ? [] : JSON.parse(out);
+		if (Array.isArray(tasks)) {
+			for (const task of tasks) {
+				const name = asObject(task)?.name;
+				if (typeof name === "string") names.push(name);
+			}
+		}
+	} catch {
+		log("warn", "mise", `mise tasks ls --json in ${cwd} printed no JSON`);
+	}
+	const task = names.includes("verify") ? "verify" : names.includes("test") ? "test" : undefined;
+	return task ? { task } : undefined;
+}

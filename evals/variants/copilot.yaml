@@ -1,0 +1,5 @@
+# GitHub Copilot only: omp's default role on the Copilot model (0375, 0386), layered into the trial's `--config`
+# overlay. Needs his omp GitHub Copilot login (`/login` in omp) before it can run.
+settings:
+  modelRoles:
+    default: github-copilot/claude-opus-5.5

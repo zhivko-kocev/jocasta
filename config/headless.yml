@@ -1,0 +1,13 @@
+# Headless runs (`omp -p`) Jocasta starts: the weekly big-picture review (0470). With `async.enabled` on (omp's
+# default), the `task` tool spawns a subagent as a background job and the parent's turn ends at once; print mode then
+# exits and aborts the job, so the reviewer's result never comes back (seen in the sandbox on 2026-10-24: "Reviewer is
+# running… its result will come back to me", then omp exited 0 with no answer). Off, the parent waits for the subagent
+# inline. The benchmark arms set the same in `evals/variants/a0.yaml`. Checked against omp 18.12.6
+# (`tools/settings.ts` `async.enabled`, `task/index.ts`'s spawn mode).
+async:
+  enabled: false
+# A read-only review needs no memory, and must not add any to the project's own: with mnemopi on, omp also starts an
+# embedding server that outlived the headless run in the sandbox and held its folder. Comes after the project overlay,
+# and omp merges `--config` files in order, so this wins (`config/settings.ts` `#readConfigOverlays`).
+memory:
+  backend: "off"

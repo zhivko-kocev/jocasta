@@ -1,0 +1,9 @@
+prompt: "Split utils.ts into strings.ts, dates.ts and math.ts by topic, update every import, and delete utils.ts. Behavior must not change."
+tags: [refactor]
+checks:
+  - file: utils.ts
+    absent: true
+  - file: strings.ts
+  - file: dates.ts
+  - file: math.ts
+  - command: bun test

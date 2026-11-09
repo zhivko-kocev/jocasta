@@ -1,0 +1,3 @@
+[submodule "forks/whiteboard"]
+	path = forks/whiteboard
+	url = https://github.com/devdotfast/whiteboard

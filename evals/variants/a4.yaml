@@ -1,0 +1,8 @@
+# Arm A4 (0482): Claude Code 2.1.296 headless (E4), `claude -p … --output-format stream-json --verbose`, on the same
+# model and thinking level as the omp arms (`--effort high`, as A0's `--thinking high`), with its defaults otherwise.
+# Headless print mode can't answer permission prompts, so it runs with permissions bypassed, as omp's arms run in its
+# default yolo mode. The model id and the permission and effort flags are Claude Code's documented ones; check them
+# against `claude --help` in the VM before the pilot.
+harness: claude
+model: claude-opus-5-5
+args: [--permission-mode, bypassPermissions, --effort, high]

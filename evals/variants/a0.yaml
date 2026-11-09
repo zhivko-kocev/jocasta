@@ -1,0 +1,17 @@
+# Arm A0 (0482, 0567): omp alone with its defaults except cache warming, on the model and thinking level every omp
+# arm pins (same model and thinking level; one omp version for the whole run). Run under `--profile` so his daily omp
+# stays apart (E8).
+model: anthropic/claude-opus-5-5
+# omp's default thinking level is already `high` (its settings' `defaultThinkingLevel`); pinned here so a profile's
+# settings can't change it. A4 passes Claude Code's `--effort high`.
+args: [--thinking, high]
+# Headless print mode exits when the parent's turn ends, so a `task` subagent spawned as a background job is aborted
+# and its result lost (seen in the sandbox on 2026-10-24). Every omp arm inherits async off from here, so subagents run
+# inline and every arm loses nothing to headless mode; A4 (Claude Code) doesn't extend this file.
+settings:
+  async:
+    enabled: false
+  # 0567: every omp arm warms the cache only while a run streams (his config's `streaming`, 0541), so none pings
+  # between runs, as omp's default `idle` would. Only the follow-up arm f-keepalive sets `idle`.
+  providers:
+    cacheWarming: streaming

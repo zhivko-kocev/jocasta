@@ -1,0 +1,6 @@
+prompt: "memo.test.ts fails. Fix memo.ts without changing the test."
+tags: [fix]
+checks:
+  - command: bun test memo.test.ts
+  - file: memo.test.ts
+    contains: "expect(add(1, 3)).toBe(4);"

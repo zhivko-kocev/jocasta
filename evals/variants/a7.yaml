@@ -1,0 +1,9 @@
+# Arm A7 (0537, 0543): opencode 1.18.22, bare, headless (`opencode run --format json`), on the other arms' model and
+# thinking level (`--variant high`, as A0's `--thinking high`), with its defaults otherwise. Its only Anthropic sign-in
+# is an API key (0506): the bench passes the key from JOCASTA_A7_ANTHROPIC_API_KEY to opencode's process alone as
+# ANTHROPIC_API_KEY, runs the arm in the VM only, and stops starting A7 trials once their priced spend reaches $150.
+# Headless runs can't answer permission prompts, so it auto-approves them (`--auto`), as A4 bypasses Claude Code's.
+# Check the model id and flags against `opencode run --help` in the VM before the pilot.
+harness: opencode
+model: anthropic/claude-opus-5-5
+args: [--variant, high, --auto]

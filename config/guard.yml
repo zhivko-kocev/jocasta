@@ -1,0 +1,149 @@
+# The guard (0450): every project, thread and boss pane starts with an extra `--config <config>/guard.yml`, so it acts
+# whatever his ~/.omp/agent/config.yml says and outranks a repo's own .omp/config.yml. Keys checked against omp
+# 18.12.6 (`exec/settings.ts`, `tools/bash.ts`).
+#
+# How omp matches: anchored, case-sensitive, `*` is the only wildcard; quotes are stripped; deny and prompt rules also
+# match each segment of a compound command; the first rule in list order wins, so every deny comes before every prompt.
+# Under omp's default `yolo` these rules still act. Shapes on omp's own critical list (`/`-rooted recursive rm,
+# `--no-preserve-root`, piping into sh/bash) are deny here: a prompt for them would be silently allowed under yolo.
+#
+# Known limits (accepted, 0485): commands run through omp's `eval` tool aren't covered; a commit message quoting a
+# denied command is denied; scripts and interpreter one-liners beyond the shapes below, the `ri`/`del`/`erase`
+# aliases, and mise's `u`/`up` short forms beyond the ones below aren't covered; prompts are rejected in subagents.
+# Everything runs as him: an OS boundary for thread panes is after v1 (0485).
+bash:
+  gitGuard: true
+  patterns:
+    # deny: git and gh (the leading `*git *` also catches `git -C x`, `cd x &&`, `pwsh -c "…"`, `cmd /c`; `*git*push*`
+    # also catches git.exe and a full path to git, 0485)
+    - { match: "*git*push* --force", approval: deny }
+    - { match: "*git*push* --force *", approval: deny }
+    - { match: "*git*push* -f", approval: deny }
+    - { match: "*git*push* -f *", approval: deny }
+    - { match: "*git*push* +*", approval: deny }
+    - { match: "*git*push* :*", approval: deny }
+    - { match: "*git*push* --delete*", approval: deny }
+    - { match: "*git*push* -d *", approval: deny }
+    - { match: "*git*push* --mirror*", approval: deny }
+    - { match: "*git*push* --prune*", approval: deny }
+    - { match: "*git*reset* --hard*", approval: deny }
+    - { match: "*git*clean -*", approval: deny }
+    # also the long and split delete-and-force forms, and ref deletes (0481's re-test, under 0485)
+    - { match: "*git*branch* -D*", approval: deny }
+    - { match: "*git*branch* -d* -f*", approval: deny }
+    - { match: "*git*branch* -d* --force*", approval: deny }
+    - { match: "*git*branch* --delete* -f*", approval: deny }
+    - { match: "*git*branch* --delete* --force*", approval: deny }
+    - { match: "*git*branch* -f* -d*", approval: deny }
+    - { match: "*git*branch* --force* -d*", approval: deny }
+    - { match: "*git*branch* -f* --delete*", approval: deny }
+    - { match: "*git*branch* --force* --delete*", approval: deny }
+    - { match: "*git*branch* -df*", approval: deny }
+    - { match: "*git*branch* -fd*", approval: deny }
+    - { match: "*git*update-ref* -d*", approval: deny }
+    - { match: "*git*checkout* .*", approval: deny }
+    - { match: "*git*checkout* -- *", approval: deny }
+    - { match: "*git*checkout -f*", approval: deny }
+    - { match: "*git*checkout --force*", approval: deny }
+    - { match: "*git*restore .*", approval: deny }
+    - { match: "*git*restore -- *", approval: deny }
+    - { match: "*git*switch -f*", approval: deny }
+    - { match: "*git*switch --force*", approval: deny }
+    - { match: "*git*switch --discard-changes*", approval: deny }
+    - { match: "*git*worktree remove* -f*", approval: deny }
+    - { match: "*git*worktree remove* --force*", approval: deny }
+    - { match: "*git*config*alias.*", approval: deny }
+    - { match: "*git*-c alias.*", approval: deny }
+    - { match: "*git*-c*alias.*", approval: deny }
+    - { match: "*gh repo delete*", approval: deny }
+    - { match: "*gh release delete*", approval: deny }
+    - { match: "*gh api*-X*DELETE*", approval: deny }
+    - { match: "*gh api*--method*DELETE*", approval: deny }
+    # deny: logins and tokens leaving the machine (0485): the CLIs' token commands, and omp's, gh's, az's and Jocasta's
+    # credential files named on a command line
+    - { match: "*gh auth token*", approval: deny }
+    - { match: "*gh auth status* -t*", approval: deny }
+    - { match: "*gh auth status* --show-token*", approval: deny }
+    - { match: "*az account get-access-token*", approval: deny }
+    - { match: "*gcloud auth print-access-token*", approval: deny }
+    - { match: "*.omp/agent/auth.json*", approval: deny }
+    - { match: "*.omp\\agent\\auth.json*", approval: deny }
+    - { match: "*.omp/agent/accounts.json*", approval: deny }
+    - { match: "*.omp\\agent\\accounts.json*", approval: deny }
+    - { match: "*.config/gh/hosts.yml*", approval: deny }
+    - { match: "*.config\\gh\\hosts.yml*", approval: deny }
+    - { match: "*.azure/msal_token_cache*", approval: deny }
+    - { match: "*.azure\\msal_token_cache*", approval: deny }
+    - { match: "*frontier.json*", approval: deny }
+    - { match: "*graphiti-token*", approval: deny }
+    - { match: "*.ssh/id_*", approval: deny }
+    - { match: "*.ssh\\id_*", approval: deny }
+    # deny: shapes omp's critical list also matches (a prompt would be silently allowed under yolo)
+    - { match: "*rm -*r* /*", approval: deny }
+    - { match: "*rm -*R* /*", approval: deny }
+    - { match: "*--no-preserve-root*", approval: deny }
+    - { match: "*shutdown /*", approval: deny }
+    - { match: "*| sh", approval: deny }
+    - { match: "*| sh *", approval: deny }
+    - { match: "*|sh", approval: deny }
+    - { match: "*|sh *", approval: deny }
+    - { match: "*| bash", approval: deny }
+    - { match: "*| bash *", approval: deny }
+    - { match: "*|bash", approval: deny }
+    - { match: "*|bash *", approval: deny }
+    # deny: mise trust and global changes (0476); Jocasta checks a repo's trust itself, outside omp
+    - { match: "*mise trust*", approval: deny }
+    - { match: "*mise use* -g*", approval: deny }
+    - { match: "*mise use* --global*", approval: deny }
+    - { match: "*mise up* --bump*", approval: deny }
+    # prompt
+    - { match: "*git*push* --force-with-lease*", approval: prompt }
+    - { match: "*rm -r *", approval: prompt }
+    - { match: "*rm -R *", approval: prompt }
+    - { match: "*rm -rf *", approval: prompt }
+    - { match: "*rm -fr *", approval: prompt }
+    - { match: "*rm -Rf *", approval: prompt }
+    - { match: "*rm -fR *", approval: prompt }
+    - { match: "*rm --recursive*", approval: prompt }
+    - { match: "*rm -* -r *", approval: prompt }
+    - { match: "*rm -Recurse*", approval: prompt }
+    - { match: "*rm -recurse*", approval: prompt }
+    - { match: "*Remove-Item* -R*", approval: prompt }
+    - { match: "*Remove-Item* -r*", approval: prompt }
+    - { match: "*remove-item* -r*", approval: prompt }
+    - { match: "*remove-item* -R*", approval: prompt }
+    - { match: "ri -R*", approval: prompt }
+    - { match: "ri -r*", approval: prompt }
+    - { match: "ri * -R*", approval: prompt }
+    - { match: "ri * -r*", approval: prompt }
+    - { match: "*rd /s*", approval: prompt }
+    - { match: "*rd /S*", approval: prompt }
+    - { match: "*rmdir /s*", approval: prompt }
+    - { match: "*rmdir /S*", approval: prompt }
+    - { match: "*rd /*/s*", approval: prompt }
+    - { match: "*rd /*/S*", approval: prompt }
+    - { match: "*rmdir /*/s*", approval: prompt }
+    - { match: "*rmdir /*/S*", approval: prompt }
+    - { match: "*git*reflog expire*", approval: prompt }
+    - { match: "*git*gc --prune=now*", approval: prompt }
+    - { match: "*git*stash drop*", approval: prompt }
+    - { match: "*git*stash clear*", approval: prompt }
+    - { match: "*Invoke-Expression*", approval: prompt }
+    - { match: "*invoke-expression*", approval: prompt }
+    - { match: "*| iex*", approval: prompt }
+    - { match: "*|iex*", approval: prompt }
+    - { match: "*iex (*", approval: prompt }
+    - { match: "*iex(*", approval: prompt }
+    # prompt: interpreter one-liners that delete (0485); other one-liners aren't covered
+    - { match: "*python -c*rmtree*", approval: prompt }
+    - { match: "*python -c*os.remove*", approval: prompt }
+    - { match: "*python -c*unlink*", approval: prompt }
+    - { match: "*python3 -c*rmtree*", approval: prompt }
+    - { match: "*py -c*rmtree*", approval: prompt }
+    - { match: "*node -e*rmSync*", approval: prompt }
+    - { match: "*node -e*rm(*", approval: prompt }
+    - { match: "*bun -e*rmSync*", approval: prompt }
+    - { match: "*bun -e*rm(*", approval: prompt }
+    - { match: "*pwsh -c*Remove-Item*", approval: prompt }
+    - { match: "*powershell -c*Remove-Item*", approval: prompt }
+    - { match: "*powershell -Command*Remove-Item*", approval: prompt }

@@ -1,0 +1,6 @@
+prompt: "Write tests for slugify.ts in slugify.test.ts that cover its edge cases."
+tags: [tests]
+checks:
+  - file: slugify.test.ts
+  - command: bun test slugify.test.ts
+  - command: bun mutants.ts

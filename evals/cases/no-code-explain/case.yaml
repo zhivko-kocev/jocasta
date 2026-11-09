@@ -1,0 +1,4 @@
+prompt: "What does queue.ts do when it is full? Answer in two sentences and don't change any files."
+tags: [question]
+checks:
+  - git_clean: true

@@ -1,0 +1,66 @@
+# Jocasta: rules for agents
+
+Read `docs/plan.md` before any work. It is the final plan (2026-10-03) and the only plan in this repo.
+
+## Precedence
+Vision (plan section 1, V1–V14) > `docs/plan.md` > decision records in `docs/decisions/` > v5 > v4 > older plans.
+Records answer the questions the plan leaves open; they never silently contradict it.
+
+## No drift
+- Build only the current slice, exactly as its records say. Nothing from a later slice or phase "while you're at it".
+- Every decision of phases 1–9 goes through the grilling program before the build starts (0086): one pass in phase order, using the interactive question tool, with facts verified that day, 2–4 options with pros and cons, the recommendation, and a preview for content decisions. One question per decision, except a tick-list of a slice's low-stakes, unchanged recommendations (0089). A feature opens with its status (v1, after v1, dropped); older-plan designs are decided fresh (0088).
+- Each answer becomes a record before the slice's code is written (0002).
+- Anything visible or lasting is Zhivko's decision (0005): features, commands, flags, output text, errors, file formats, paths, env vars, libraries, schemas, ids, shipped prompts, defaults, layouts, key bindings, package layout. The agent picks only unexported names, helper structure, test layout and comments.
+- Since 0363 (v1 beta): details that carry out a decided record (texts, labels, small defaults, fixes restoring decided behavior) are chosen by the builders and listed as built; Zhivko is asked only about what goes outside the plan or enhances it (features, new dependencies, formats, paths, changes to a record).
+- Unclear means stop (0020): a decision missing from the list, an ambiguity in the vision, or a fact that contradicts the plan stops the work and opens a grilling session.
+- `docs/plan.md` is edited only to carry a decided record into the plan text, in the same change, citing the record.
+- A slice that adds or removes a seam, or claims a migration, command, env var or exit code, updates plan appendix I in the same change (0027).
+
+## Execution rules
+- Git (0564): the first commit comes after the whole harness-OS build (0532–0564) passes `mise run check`; from then on the agent commits each finished phase once its gates pass, under the repo's own identity (`git config user.*` in this repo; never his global one); no branches or force-pushes unless he asks. Before any push, the private-names scan below prints nothing and every author and committer address in `git log` is the repo identity. He forks and tags; `forks/whiteboard` is a submodule at `v0.2.4`.
+- No installs without asking: no software, packages from outside the pinned set, or container images. Approved when their stage starts (0385): herdr 0.9.4, Node 24 + pnpm 11, Rust via rustup, the whiteboard 0.2.4 desktop app; for the polish round (0435): Bun 1.4.3 and herdr 0.9.5; mise through its official script (0476); Windows' Hyper-V and Containers features and the Windows 11 Enterprise evaluation ISO (0481); inside the VM only (0497, 0503, 0505): Git, Bun 1.4.3, omp, herdr 0.9.5, Claude Code 2.1.296, Node 24 with npm, pnpm and yarn, Python 3.13, Go 1.25, the repo's packages, the task projects' dependencies, R with `lme4`, opencode 1.18.22 and PowerShell 7; for the harness-OS program: tokscale for the benchmark only (0538), and codebase-memory-mcp and pitchfork through mise for their spikes, with mise's experimental task cache and daemons on (0542); `@opentui/core` with its native packages, pinned (0551).
+- No fixture gate: omp's approvals guard every repo (0391).
+- Reference files (`D:/learn-harnesses/`, `D:/friday-harness/`, the v4 and v5 plans) are read-only and never copied into this repo. The learn-harnesses clones and lessons are grilling sources (0085); the older plans are no longer consulted (0088).
+- Older-plan material enters only with Zhivko's approval (0028).
+- The repo is public (0035; `github.com/zhivko-kocev/jocasta`, 0564): everything in it uses placeholder names only (`acme`, `client-a`, `example-org`). Before a phase-end review and before every push, `git grep --untracked -niE -f ~/.jocasta/agent/private-names.txt` (at `~/.jarvis/agent/` until the cutover, 0487) prints nothing; that pattern file never enters the repo.
+
+## Package map (0038)
+```
+docs/plan.md              the final plan
+docs/status.md            where we are: each round's history, what is next, open items (0475)
+docs/decisions/           README.md (index) + NNNN-<slug>.md (template: 0031)
+src/entry.ts              the `jocasta` command: work surface, setup, uninstall, diagnose, mcp, project, thread, worktree (0387, 0468, 0472, 0544); the internal roles `service` and `plugin` (0552, 0553); `src/shared/route.ts` routes argv
+src/mcp/                  `jocasta mcp [--boss]`, the MCP stdio server (0389, 0392, 0539)
+src/setup/                `jocasta setup` with its numbered migrations and `--refresh`, `jocasta uninstall`, `jocasta diagnose` (0387, 0396, 0466–0468, 0472, 0476)
+src/frontier/protocol.ts  the service's messages to the `today` pane and the canvas (0392, 0553)
+src/frontier/server/      the Jocasta service: herdr module, plugin actions and popups, collab relay and host state, MCP endpoints, watcher, Graphiti proxy, day, push-to-talk (0392, 0552, 0553, 0561)
+src/frontier/today/       the `today` pane, drawn with OpenTUI (0551, 0555)
+src/frontier/ask/         the `ask` popup: his answers, with the typed code (0553, 0558, 0568)
+src/frontier/canvas/      the whiteboard host page the service serves to his browser (0552)
+src/frontier/layer/       the layer as the benchmark's A6 sets it up per trial (0543)
+src/shared/               projects, storage, config; `thread-cli.ts` the `jocasta thread` and `worktree` commands (0544); `ledger.ts` the cost ledger (0538)
+config/                   shipped config: boss manual, `boss.yml` (0424), `ponytail.md` (0427), omp and herdr templates, `herdr-plugin/` (0553); `skills/` the shipped mise and diagnose skills (0472, 0476)
+docker/graphiti/          the Graphiti service image (0334, 0430)
+bench/                    the benchmark harness of 0482 (H1–H9); fixtures and results outside the repo
+evals/                    the eval runner, cases and variants (`bun run evals`; 0375), with 0482's arms, pacer and A5
+forks/                    upstream sources: a submodule at a tag or a `jocasta` branch (0383); whiteboard a submodule at v0.2.4 (0564)
+docs/research/            guides and proposals (omp adaptation, UX)
+scripts/build.ts          per-platform compile and packaging
+scripts/install.ps1, scripts/install.sh
+mise.toml, mise.lock      the development entry: pinned Bun and Node, `mise run check|build|evals|smoke` (0476)
+test/                     unit and smoke tests
+```
+Paths appear when the slice that fills them is built.
+
+## Conventions
+- Bun for runtime, build and tests; Biome for lint and format (0036). Strict ESM TypeScript, `tsc --noEmit` (0037).
+- After each code slice: `bun run typecheck`, `bun run lint` and the tests pass (`mise run check` runs them with the app's tsc, 0476).
+- Personal identity, scopes, watched roots and memory never go in the repo (principle 6).
+- herdr, hunk and whiteboard versions are pinned; omp is his daily install. A bump re-checks plan 5.4's seams and 5.5's list (0383). Bun's version is in both `package.json`'s `packageManager` and `mise.toml`; a bump changes both and runs `mise lock`.
+- Record a slice in `CHANGELOG.md` when it lands.
+- Thesis (0483, 0507): agents prepare the kit in `D:/thesis/`. Once everything else is finished, the agent writes the thesis and the slides, as his mentor allows (asking first for that permission in writing, kept in `D:/thesis/`), and the disclosure appendix (Прилог Г) says so.
+
+## Where we are
+v1 campaign (2026-10-24, records 0478–0496): renamed to Jocasta (0480, built); wave 1 built (0484–0486, 0487's `JOCASTA_INSTALL_FROM`, 0482's harness and tasks); the campaign's fixes are built and re-tested live (0490–0496; verdicts in `docs/testing.md`); reviews stay on Anthropic (0488). The VM run (2026-10-27/28, records 0497–0506): the clean-machine test and H9 done in the VM, with three fixes re-tested on a rebuilt release, its thread to merge passing on 2026-10-29; H7 and H1 (omp 18.13.1, git guard measured, `pwsh` lines too after 0505, and its live check: 24/24 agree) done; the task harness fixed and the 30 main tasks valid after one swap (chezmoi out, rclone in); he signed in inside the VM (0504) to omp (both accounts) and Claude Code, and opencode stays unsigned, measured starting and idle only (0506); the pilot ran on omp's defaults (2026-10-29 to 11-01) and was shown to him with the research on his links (`docs/research/enhancement-proposals.md`): records 0508–0515 (the full run with three fixes, built; session state along omp's active branch, built; an exploratory harness study after the run; the analysis's additions; after-v1 product and platform directions; the playbook's rules as a principle with the omp² move); H5 and H6 for the competitors done; the agent operates the VM benchmarks' own steps, logged, and H8's plans are approved unread (0516); herdr's dropped reads are retried and every Jocasta benchmark row runs on that build (0517, built), where H2, H5, H6 and H8 ran; H3's first fault led to records 0518–0523 (2026-11-02, built and checked live): a dead herdr server heals behind `jocasta`'s terminal, the close question, the Allow box and the toasts become Jocasta's own windows, an omp that ends in an open pane starts again, H3's checks fit the product, and every Jocasta row runs again on that build; during the live checks both questions came to leave the keyboard with his app (0524) and the VM's Firewall prompts are cancelled (0525, 0526); while those reruns ran, the thesis gave the Harness Playbook and omp² their own sections (0527), H3 came to kill each folder's omp at most once in 10 minutes and to count the companion fault by omp being back (0528, built), and H8 to count a thread finished only with a commit (0529, built); both reruns then failed on three product findings, and H3 came to start a Jocasta that closed itself again (0530, built), with H8's 8-thread run and H3 run attended before the full run; that 8-thread run ran out of the VM's memory and ran once more on a clean sandbox (0531), and both then ran to the end; the full run, started 2026-11-05, paused at 4 of 450 rows. The harness-OS program (2026-11-08/09, records 0532–0562, from `docs/research/harness-os.md` and `docs/research/herdr-experience.md`): Jocasta becomes an OS around omp threads before any benchmark runs again (0532, 0533): no companion app, herdr the whole surface with Jocasta as a herdr plugin (`today` beside the boss, questions in a popup), dictation through omp's own, a local collab relay for thread state, the cost ledger, `report_result`, a task file with `done_when`, `jocasta thread`/`worktree` commands, checks cached by git tree as gates, a code index behind `graph_search`, and the rerun's design (seven arms, a follow-up study, H8 with four threads); spikes recorded (0558–0562). The harness-OS build (2026-11-09, records 0563–0571): omp 18.18.2 pinned; git initialised with its remote, no commit yet (0564); phases A (no app), B (the herdr plugin, checked live), C (threads), D (ledger, checks, code index, A6's layer), E (0534's fixes: 0565, 0566, 0570) and F (the benchmark; `f-check-off` dropped, 0571) built, `mise run check` passing; next the integrated live smoke on his PC, the first commit and push, the rename to `D:/jocasta` (his script), then every benchmark from the start (0533); then H4 and A5 with him, a dictation session, his review of v1 and the cutover (0487); after everything, the agent writes the thesis and the slides (0507, 2026-11-01). Last record: 0571.
+
+The history of every round, what is next and the open items are in `docs/status.md` (0475); update it when a slice's records are written, when its build lands, and when a grilling session stops (name the next slice), and keep the line above in step.

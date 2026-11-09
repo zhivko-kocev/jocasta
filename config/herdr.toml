@@ -1,0 +1,97 @@
+# herdr config for Jocasta's session `jocasta` (0392, 0401–0408). `jocasta setup` copies it to
+# ~/.jocasta/agent/herdr.toml, replacing {{data}} with Jocasta's data dir; when that file differs from
+# this template, setup shows the diff and replaces it after `y` (0440). herdr reads it through HERDR_CONFIG_PATH.
+
+# No first-run overlay: `jocasta setup` already installs herdr's omp integration.
+onboarding = false
+
+[session]
+# Restored panes come back as shells; the service starts omp in them again with each pane's
+# `--config` (the boss's boss.yml, a thread's project overlay), which herdr's own resume drops.
+resume_agents_on_restore = false
+
+[theme]
+# One theme with omp's `dark-tokyo-night` and Jocasta's canvas (0401).
+name = "tokyo-night"
+
+[update]
+# Bumps are deliberate (0383).
+version_check = false
+# No agent-detection manifests fetched from herdr.dev: detection stays what the pinned binary ships (0458).
+manifest_check = false
+
+[keys]
+# Alt digits for workspaces: Alt+1 is the boss's workspace "Jocasta" (0404, 0408).
+switch_workspace = ["prefix+shift+1..9", "alt+1..9"]
+goto = ["prefix+g", "alt+g"]
+next_agent = "alt+]"
+previous_agent = "alt+["
+
+# The `jocasta` plugin's thread keys (0554): Ctrl+B, then Alt+F Finish, Alt+S Stop, Alt+R Review, Alt+N New thread;
+# Ctrl+B, then Alt+Q closes Jocasta, asking first while threads work (0563).
+[[keys.command]]
+key = "prefix+alt+f"
+type = "plugin_action"
+command = "jocasta.finish"
+description = "Finish the focused thread"
+
+[[keys.command]]
+key = "prefix+alt+s"
+type = "plugin_action"
+command = "jocasta.stop"
+description = "Stop the focused thread"
+
+[[keys.command]]
+key = "prefix+alt+r"
+type = "plugin_action"
+command = "jocasta.review"
+description = "Review the focused thread"
+
+[[keys.command]]
+key = "prefix+alt+n"
+type = "plugin_action"
+command = "jocasta.new-thread"
+description = "New thread"
+
+[[keys.command]]
+key = "prefix+alt+q"
+type = "plugin_action"
+command = "jocasta.quit"
+description = "Quit Jocasta"
+
+[ui]
+# Blocked threads first (0402).
+agent_panel_sort = "priority"
+# Distinct glyphs for blocked, working, done, idle (0554).
+status_indicators = "symbols"
+# The terminal's title (0554).
+window_title = "Jocasta · {workspace}"
+# The HUD: the blocked count and today's spend from hud.txt, which the service rewrites on every change and herdr
+# reads every 5 s, then the time; the quota is in `today` (0403, 0437, 0554).
+tab_bar_right = [
+  { type = "command", command = "type \"{{data}}\\hud.txt\"", interval_seconds = 5, timeout_seconds = 1 },
+  { type = "datetime", format = "%H:%M" },
+]
+tab_bar_right_separator = " · "
+
+[ui.sidebar.agents]
+# Row 1: the thread, its short model and cost; row 2: the state words alone (the question it
+# asks, "plan ready", "review ready"), so they get the full width (UX-04). The service reports
+# `$model`, `$cost` and the state labels with pane.report_metadata (0402).
+rows = [["state_icon", "workspace", "$model", "$cost"], ["state_text"]]
+
+[ui.sidebar.spaces]
+rows = [["state_icon", "workspace", "$running"], ["branch", "git_status"]]
+
+[ui.toast]
+# The service's notifications go to Windows' notification service through herdr (0407, 0554).
+delivery = "system"
+
+[ui.sound]
+# The service's notifications for a thread that needs him carry herdr's request sound (0554). herdr 0.9.5 has no
+# per-agent sound key for omp (`ui.sound.agents.omp` is an unknown key), so herdr's own done sound stays on.
+enabled = true
+
+[experimental]
+# Recent pane screens kept across a full server restart (0554).
+pane_history = true

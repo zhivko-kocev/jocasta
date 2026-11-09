@@ -1,0 +1,15 @@
+{
+	"$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+	"files": {
+		"includes": ["**", "!node_modules", "!dist", "!.impeccable", "!.claude", "!forks"]
+	},
+	"formatter": {
+		"lineWidth": 120
+	},
+	"overrides": [
+		{
+			"includes": ["test/**"],
+			"linter": { "rules": { "correctness": { "useHookAtTopLevel": "off" } } }
+		}
+	]
+}

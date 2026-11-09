@@ -1,0 +1,67 @@
+# The boss pane's omp settings (0424): a calm pane. The service starts the boss with
+# `omp --continue --config <this file> --config <config>/guard.yml` (0450), over his ~/.omp/agent/config.yml. Keys
+# checked against omp 18.12.6's source.
+
+# The boss's own memory, in its own file (0400, 0447): the boss pane runs in <data>/home, so this relative path is
+# <data>/home/mnemopi.db; `global` scoping keeps the boss's one bank in that file, apart from every project's.
+memory:
+  backend: mnemopi
+mnemopi:
+  scoping: global
+  llmMode: smol
+  dbPath: mnemopi.db
+
+# Compaction at 300k tokens, whatever his global config says (0399, 0448).
+compaction:
+  methodOrder: [shake, handoff, soft, snapcompact, remote]
+  thresholdTokens: 300000
+  idleEnabled: true
+  idleThresholdTokens: 100000
+
+# The privacy settings, whatever his global config says (0478): no Auto QA reports to qa.omp.sh, no Claude Code
+# plugins, web search on DuckDuckGo. Objects merge key by key over his config (his other model roles stay); a list
+# replaces his (`disabledProviders`).
+dev:
+  autoqa: false
+disabledProviders: [claude-plugins]
+modelRoles:
+  web: web/duckduckgo
+  # Dictation's engine (0556): omp's local Parakeet, kept on this machine.
+  dictation: local/parakeet-tdt-0.6b-v3
+
+# Dictation through omp's own speech-to-text (0556): Right Ctrl, anywhere, sends `app.stt.toggle`'s key to this pane
+# through herdr on press and again on release; the text is sent as soon as recording stops. No fallback model: the
+# audio never leaves this machine. Keys checked against omp 18.18.2's source.
+stt:
+  enabled: true
+  submitTrigger: release
+retry:
+  fallbackChains:
+    dictation: []
+
+# Thinking hidden.
+hideThinkingBlock: true
+
+startup:
+  # No welcome screen or startup status lines.
+  quiet: true
+
+statusLine:
+  # A short status line: the model on the left, cost and context use on the right
+  # (segment ids from omp's `default` preset; `custom` reads the two lists below).
+  preset: custom
+  leftSegments: [model]
+  rightSegments: [cost, context_pct]
+
+# Tool output collapsed: omp already shows it collapsed (Ctrl+O expands it); there is no setting
+# for it (`toolOutputExpanded = false`, packages/coding-agent/src/modes/interactive-mode.ts:1220).
+
+# Jocasta's local collab relay (0536, 0561): the boss's session hosts there (omp's host registry reports whether it
+# works or asks), never on omp's public relay; `/share` uploads to the same loopback port, which serves nothing else.
+# The port is `RELAY_PORT` in src/frontier/server/relay.ts. Keys checked against omp 18.18.2's source
+# (`collab/settings.ts`, `commands/settings.ts`).
+collab:
+  autoStart: control
+  relayUrl: "ws://127.0.0.1:47499"
+share:
+  serverUrl: "http://127.0.0.1:47499/s"

@@ -1,0 +1,68 @@
+# omp settings Jocasta relies on (0396, 0398, 0399, 0400, 0451): deltas from omp's defaults only (principle 3), his
+# reference for the `/settings` pass (0420). Keys checked against omp 18.12.6's source.
+# Per-pane values are not here: every project and thread pane gets `--config <config>/guard.yml` (the guard, 0450) and
+# `--config <data>/projects/<pid>/omp.yml` (memory file, compaction, plan mode, AGENTS.local.md, lessons, and the
+# privacy settings `dev.autoqa`, `disabledProviders`, `modelRoles.web`; 0447–0449, 0459, 0478; no reviewer model, so
+# omp's reviewer runs on his `slow` role, 0488); the boss pane
+# gets `config/boss.yml` (the same privacy settings) and the guard.
+#
+# Outside config.yml, written by `jocasta setup` as a diff after his `y` (0451, 0479; his other keys kept):
+# - ~/.omp/agent/keybindings.yml: `app.live.toggle: []` (Ctrl+L no longer starts omp's live voice, which sends mic
+#   audio and the session to OpenAI).
+# - ~/.omp/agent/WATCHDOG.md: the advisor's brief, from `config/WATCHDOG.md`; one he changed is shown and kept.
+# - ~/.omp/agent/lsp.json: `"idleTimeoutMs": 300000` (idle language servers shut down; each pane holds its own).
+# By hand: ~/.omp/agent/secrets.yml, his own strings to redact (with `secrets.enabled` below); never in this repo.
+
+# One shared theme with herdr and Jocasta's canvas (0401).
+theme:
+  dark: dark-tokyo-night
+
+# Memory (0389, 0400); every Jocasta pane also sets it, with its own file (0447).
+memory:
+  backend: mnemopi
+
+# One continuous thread (0399, 0448): compaction at 300k tokens, not a percent of a 1M window.
+compaction:
+  methodOrder: [shake, handoff, soft, snapcompact, remote]
+  thresholdTokens: 300000
+  idleEnabled: true
+  idleThresholdTokens: 100000
+
+# Nothing leaves the machine that doesn't have to (0398, 0451).
+telemetry:
+  otlpExportEnabled: false
+dev:
+  autoqa: false
+  autoqaConsent: denied
+startup:
+  checkUpdate: false
+  quiet: true
+  # Onboarding scenes and changelog chrome stay out of panes.
+  setupWizard: false
+  changelogMode: hidden
+marketplace:
+  autoUpdate: "off"
+recap:
+  enabled: false
+# His Claude Code plugins stop loading into omp.
+disabledProviders: [claude-plugins]
+# Web search off parallel.ai (keyless Parallel sends the query, session id and model name).
+modelRoles:
+  web: web/duckduckgo
+# No file passages sent to the `judge` role.
+find:
+  enabled: "off"
+github:
+  enabled: true
+# Pinned off: when on, every session is hosted through wss://my.omp.sh.
+collab:
+  autoStart: "off"
+# Configured strings and credential-shaped tokens are replaced before provider requests (~/.omp/agent/secrets.yml).
+secrets:
+  enabled: true
+providers:
+  cacheWarming: streaming
+lsp:
+  diagnosticsOnEdit: true
+paste:
+  largeMenuThreshold: 0

@@ -1,0 +1,22 @@
+# Arm A3 (0482): A2 plus the review step as follow-up turns (E2), run with `omp -c -p`: the task-end review of
+# `hunk.ts` `reviewPrompt` without hunk (tests, then omp's reviewer in a fresh context), findings listed in the reply
+# with their priority so the runner counts them (`findings`), then one turn that fixes the blocking ones. The reviewer
+# runs on the arms' model, not his `slow` role, so his own settings can't change the run (0488).
+extends: [a2]
+settings:
+  task:
+    agentModelOverrides:
+      reviewer: [anthropic/claude-opus-5-5]
+followups:
+  - >-
+    Check this task's work. First run the project's tests the way its AGENTS.md or package scripts say, as one bash
+    command; when the project has a `verify` skill, read skill://verify and run it too. Don't fix failures in this
+    turn. Then run `git add -N .` so new files show, and run the reviewer subagent on `git diff {base}` in this
+    worktree. In its task give it the project's rules (AGENTS.md, when there is one), and tell it: report only
+    material findings; prefer one strong finding over several weak ones. List every finding in your reply on its own
+    line, starting with its priority, [P0] to [P3], then the file and line and one sentence. No findings: say so.
+    Don't change code in this turn. End your reply with one line on its own: `TESTS: pass — <the test command you
+    ran>`, `TESTS: fail — <the test command you ran>`, or `TESTS: none` when the project has no tests to run.
+  - >-
+    Fix the review's blocking findings ([P0] and [P1]) and any failing tests, then run the project's tests again.
+    No blocking findings and the tests pass: change nothing and say so.

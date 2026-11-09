@@ -1,0 +1,133 @@
+# Releases on a tag (0051): each target tested, then built on its own platform (0043; CR-07), packaged (0044) with its
+# checksum, then one GitHub release. whiteboard v0.2.4 is cloned at its pinned commit (the build refuses any other, 0417)
+# and built with Node 24 and pnpm through Corepack (0393); hunk comes from its npm platform package (0394). The companion
+# (Electrobun) builds on Windows only (0367): the Windows zip must carry `app\bin\launcher.exe` and the app's parts, and
+# the Linux and macOS archives say in the run summary that they have no companion. Only the publish job may write; every
+# action is pinned to the commit its tag named when it was pinned.
+# Installer integrity (0484): before the release exists, the publish job commits `checksums.sha256` (one sha256sum line
+# per archive) on top of the release's tag and pushes that commit as the tag `checksums-<tag>`. install.ps1 and
+# install.sh read the expected SHA-256 from that tag on raw.githubusercontent.com, never from the release, so a
+# replaced release asset is refused. Tag protection, set once in the repository's settings: a tag ruleset on `v*` and
+# `checksums-v*` with "Restrict updates" and "Restrict deletions" and no bypass actors, so neither tag can be moved or
+# deleted once pushed (the built-in GITHUB_TOKEN can't be a bypass actor, so creations stay open to anyone with write
+# access; that access is outside what this check covers). A rerun of the publish job keeps the checksums tag as first
+# pushed and goes on only when it names these very archives.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: windows-x64
+            os: windows-latest
+          - target: linux-x64
+            os: ubuntu-latest
+          - target: darwin-arm64
+            os: macos-14
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.3
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: whiteboard v0.2.4
+        shell: bash
+        run: git clone --depth 1 --branch v0.2.4 https://github.com/devdotfast/whiteboard.git forks/whiteboard
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run lint
+      - run: bun test
+      - run: bun run build --target ${{ matrix.target }}
+      - name: The companion's main process type-checks
+        if: matrix.target == 'windows-x64'
+        run: bunx tsc -p src/app
+      - name: The Windows build runs and its zip carries the companion
+        if: matrix.target == 'windows-x64'
+        shell: pwsh
+        run: |
+          dist/windows-x64/jocasta.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "jocasta.exe --version exited $LASTEXITCODE" }
+          if (-not (Test-Path dist/windows-x64/app/bin/launcher.exe)) { throw 'dist/windows-x64 has no app\bin\launcher.exe: the companion did not build' }
+          $parts = @(
+            'jocasta.exe', 'config', 'node/node.exe', 'whiteboard/dist/cli.js', 'hunk/hunk.exe',
+            'app/Resources/app/server/server.js',
+            'app/Resources/app/server/light.js',
+            'app/Resources/app/server/whiteboard-canvas/.vite/manifest.json',
+            'app/Resources/app/server/editor.worker.js',
+            'app/Resources/app/server/node_modules/sherpa-onnx-win-x64'
+          )
+          foreach ($part in $parts) {
+            if (-not (Test-Path "dist/windows-x64/$part")) { throw "dist/windows-x64 has no $part" }
+          }
+      - name: What this archive lacks
+        if: matrix.target != 'windows-x64'
+        shell: bash
+        run: |
+          echo "### ${{ matrix.target }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "No companion app: Electrobun's companion builds on Windows only (0367); \`jocasta\` opens herdr without it." >> "$GITHUB_STEP_SUMMARY"
+          for part in node whiteboard hunk; do
+            [ -e "dist/${{ matrix.target }}/$part" ] || echo "Missing: $part" >> "$GITHUB_STEP_SUMMARY"
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: jocasta-${{ matrix.target }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: repo
+      - name: Checksums in the repository at checksums-<tag> (0484)
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="checksums-$GITHUB_REF_NAME"
+          sums="$RUNNER_TEMP/checksums.sha256"
+          cd dist
+          for file in *.sha256; do sha256sum -c "$file"; done
+          sha256sum *.zip *.tar.gz > "$sums"
+          cd ../repo
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+            git fetch --depth 1 origin "refs/tags/$tag:refs/tags/$tag"
+            git show "$tag:checksums.sha256" | cmp - "$sums"
+            echo "$tag already names these archives."
+            exit 0
+          fi
+          cp "$sums" checksums.sha256
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add checksums.sha256
+          git commit -m "Checksums for $GITHUB_REF_NAME (0484)"
+          git tag "$tag"
+          git push origin "refs/tags/$tag"
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes dist/*.zip dist/*.tar.gz dist/*.sha256

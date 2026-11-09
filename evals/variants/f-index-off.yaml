@@ -1,0 +1,4 @@
+# Follow-up study (0543): A6 with the code index off; graph_search answers with Graphiti's facts only (0542, 0562).
+extends: [a6]
+layer:
+  index: false

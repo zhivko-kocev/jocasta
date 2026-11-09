@@ -1,0 +1,4 @@
+# Follow-up study (0545): A6 with Ponytail's "Running tests" rules inside <important if="you are running or writing
+# tests"> (`ponytail-important-if.md`) in place of plain Ponytail; the last append_system_prompt wins over A1's.
+extends: [a6]
+append_system_prompt: ponytail-important-if.md

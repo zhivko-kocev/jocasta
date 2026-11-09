@@ -1,0 +1,267 @@
+/* whiteboard's canvas on Jocasta's canvas page (0393, 0552) and its Monaco views (0411), on Tokyo Night (0401). The
+   canvas brings its own stylesheet, scoped to `.review-canvas-root`; these rules dress only what Jocasta's host adds. */
+
+.wb {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	min-height: 0;
+}
+
+.wb-bar {
+	flex: none;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 8px 14px;
+	border-bottom: 1px solid var(--line-1);
+	background: var(--bg-0);
+	color: var(--fg-2);
+	font: 500 12.5px / 1.4 var(--sans);
+}
+
+.wb-title {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--fg);
+}
+
+.wb-stage {
+	position: relative;
+	flex: 1;
+	min-height: 0;
+}
+
+/* whiteboard's page scrolls itself; one scroll area, so the host never scrolls around it. */
+.wb-mount {
+	position: absolute;
+	inset: 0;
+	overflow: hidden;
+}
+
+/* Before the first review (0419): Jocasta's empty state instead of whiteboard's Welcome, quiet and centred. */
+.wb-empty {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	padding: 28px;
+	text-align: center;
+	animation: resolve var(--calm) var(--ease) both;
+}
+
+.wb-empty h2 {
+	margin: 0;
+	color: var(--fg);
+	font: 500 15px / 1.4 var(--sans);
+}
+
+.wb-empty p {
+	max-width: 44ch;
+	margin: 0;
+	color: var(--fg-2);
+	font-size: 14.5px;
+	line-height: 1.5;
+}
+
+.wb-empty .btn {
+	margin-top: 14px;
+}
+
+.wb-empty .notice {
+	margin-top: 8px;
+	font-size: 13px;
+}
+
+/* The canvas couldn't start (0432): centred like the empty state, the plain reason and remedy, Try again only when it
+   can help, the raw error folded under Details. */
+.wb-unavailable {
+	position: absolute;
+	inset: 0;
+	z-index: 1;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	padding: 28px;
+	background: var(--bg-1);
+	text-align: center;
+	animation: resolve var(--calm) var(--ease) both;
+}
+
+.wb-unavailable h2 {
+	margin: 0;
+	color: var(--fg);
+	font: 500 15px / 1.4 var(--sans);
+}
+
+.wb-unavailable p {
+	max-width: 52ch;
+	margin: 0;
+	color: var(--fg-2);
+	font-size: 14.5px;
+	line-height: 1.5;
+}
+
+.wb-unavailable .btn {
+	margin-top: 14px;
+}
+
+.wb-unavailable details {
+	max-width: 60ch;
+	margin-top: 10px;
+}
+
+/* A code peek and an embedded diff: Monaco on the page's ground, a hairline around. */
+.wb-peek-code {
+	width: 100%;
+	border-radius: var(--r-s);
+	overflow: hidden;
+}
+
+.wb-counted {
+	background: var(--blue-wash);
+}
+
+.wb-lit {
+	background: var(--blue-wash);
+	border-left: 2px solid var(--blue);
+}
+
+.wb-find {
+	background: var(--blue-find);
+}
+
+.wb-error {
+	padding: 10px 12px;
+	color: var(--red);
+	font: 12.5px / 1.5 var(--mono);
+}
+
+.wb-diff {
+	height: 100%;
+	overflow: auto;
+}
+
+.wb-diff-doc {
+	height: auto;
+	overflow: visible;
+}
+
+.wb-diff-file {
+	border: 1px solid var(--line-2);
+	border-radius: var(--r-s);
+	margin: 0 0 12px;
+	overflow: hidden;
+}
+
+.wb-diff-file header {
+	display: flex;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 6px 10px;
+	background: var(--bg-1);
+	border-bottom: 1px solid var(--line-1);
+	font: 12px / 1.4 var(--mono);
+	color: var(--fg);
+}
+
+.wb-diff-file .counts .add {
+	color: var(--green);
+	font-weight: 500;
+}
+
+.wb-diff-file .counts .del {
+	color: var(--red);
+	font-weight: 500;
+}
+
+.wb-diff-body {
+	min-height: 40px;
+}
+
+/* The source panel: the code a step points at, over the canvas, until Escape or Close. */
+.wb-overlay {
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+}
+
+.wb-source {
+	position: absolute;
+	inset: 24px 24px 24px 30%;
+	display: flex;
+	flex-direction: column;
+	pointer-events: auto;
+	background: var(--bg-0);
+	border: 1px solid var(--line-2);
+	border-radius: var(--r-m);
+	box-shadow: var(--lift);
+	overflow: hidden;
+}
+
+.wb-source header {
+	flex: none;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 8px 12px;
+	background: var(--bg-1);
+	border-bottom: 1px solid var(--line-1);
+}
+
+.wb-source .path {
+	color: var(--fg);
+	font: 12.5px / 1.4 var(--mono);
+}
+
+.wb-source .meta {
+	flex: 1;
+	color: var(--fg-3);
+	font: 12px / 1.4 var(--sans);
+}
+
+.wb-source-body {
+	flex: 1;
+	min-height: 0;
+	overflow: auto;
+}
+
+/* A menu the canvas asks for. */
+.wb-menu {
+	position: fixed;
+	z-index: 50;
+	display: flex;
+	flex-direction: column;
+	min-width: 160px;
+	padding: 4px;
+	background: var(--bg-2);
+	border: 1px solid var(--line-2);
+	border-radius: var(--r-s);
+	box-shadow: var(--lift);
+}
+
+.wb-menu button {
+	padding: 6px 10px;
+	border: 0;
+	border-radius: 4px;
+	background: none;
+	color: var(--fg);
+	font: 12.5px / 1.4 var(--sans);
+	text-align: left;
+}
+
+.wb-menu button:hover:not(:disabled) {
+	background: var(--blue-wash);
+}
+
+.wb-menu button[aria-checked="true"]::before {
+	content: "✓ ";
+	color: var(--blue);
+}

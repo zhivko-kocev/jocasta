@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Frontier · Ask, and it appears</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&family=Mona+Sans:wdth,wght@75..125,200..900&display=swap" rel="stylesheet">
+<style>
+:root{--i0:#06090f;--i1:#0a0f17;--i2:#0e1520;--i3:#131c29;--h1:rgb(150 190 230/9%);--h2:rgb(150 190 230/16%);--h3:rgb(150 190 230/26%);--t1:#dde7f1;--t2:#93a3b7;--t3:#6c7f97;--arc:#92d6ec;--arch:#c4ecf8;--aw:rgb(146 214 236/8%);--al:rgb(146 214 236/34%);--gold:#d9c08f;--gw:rgb(217 192 143/9%);--gl:rgb(217 192 143/38%);--rose:#e39a9a;--sage:#9cc9b0;--sans:"Mona Sans",system-ui,sans-serif;--mono:"Geist Mono",ui-monospace,monospace}
+*{box-sizing:border-box}
+html,body{margin:0;width:1440px;height:900px;overflow:hidden;background:var(--i0);color:var(--t1);font:400 14px/1.55 var(--sans);font-feature-settings:"tnum" 1;-webkit-font-smoothing:antialiased}
+svg.ic{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.hud{position:relative;z-index:3;display:flex;align-items:center;gap:22px;height:46px;padding:0 12px 0 14px;border-bottom:1px solid var(--h1);white-space:nowrap}
+.id{display:flex;align-items:center;gap:12px}.pr{width:22px;height:22px;overflow:visible}
+.wm{font-size:12px;font-stretch:125%;letter-spacing:.34em}
+.fig{display:flex;align-items:baseline;gap:22px;color:var(--t2);font-size:13px}.fig b{font-weight:500;color:var(--t1);margin-right:5px}.fig .at,.fig .at b{color:var(--gold)}.fig small{color:var(--t3);font-size:11.5px;margin-left:5px}
+.grow{flex:1}.clock{color:var(--t3);font-size:13px;margin-right:6px}.tools{display:flex;gap:2px}.ib{display:grid;place-items:center;width:30px;height:30px;color:var(--t2)}
+.st{display:inline-block;width:7px;height:7px;border-radius:50%;flex:none}.st.run{background:var(--arc);box-shadow:0 0 0 3px rgb(146 214 236/12%)}.st.blk{background:var(--gold);box-shadow:0 0 0 3px rgb(217 192 143/13%)}.st.q{border:1.2px solid var(--t3)}.st.done{background:var(--sage);opacity:.75}.st.fail{background:var(--rose)}.st.note{border:1.2px solid var(--t3);border-radius:2px}
+.pills{position:absolute;top:58px;left:360px;display:flex;gap:8px}.pill{display:inline-flex;align-items:center;gap:8px;height:28px;padding:0 12px;border-radius:999px;border:1px solid var(--h2);font-size:12.5px;color:var(--t2)}.pill b{font-weight:500;color:var(--t1)}.pill.g{border-color:var(--gl);background:var(--gw);color:var(--gold)}.pill.g b{color:var(--gold)}
+.col{position:absolute;top:112px;left:360px;width:720px}
+.you{display:inline-block;padding:9px 14px;border-radius:12px;background:var(--i2);border:1px solid var(--h1)}
+.jv{display:grid;grid-template-columns:18px 1fr;column-gap:12px;margin-top:22px}.jv .g{width:14px;height:14px;margin-top:4px}
+.th{color:var(--t3);font-size:13px;font-style:italic;margin-bottom:8px}.tool{display:flex;align-items:center;gap:10px;color:var(--t3);font-size:13px;margin-bottom:6px}.tool svg.ic{width:14px;height:14px}.tool code{font:12px var(--mono);color:var(--t2)}
+.p{margin:10px 0 0;font-size:15px;line-height:1.65;color:#cbd7e3}.p b{font-weight:550;color:var(--t1)}.say{font-weight:520;color:var(--t1)}
+.ev{display:grid;grid-template-columns:7px 1fr auto;column-gap:12px;align-items:center;margin:18px 0 0 30px;padding:10px 14px;border-radius:10px;border:1px solid var(--h1);font-size:13.5px;color:var(--t2)}.ev b{font-weight:500;color:var(--t1)}.ev a{color:var(--arc);text-decoration:none}
+.dock{position:absolute;left:360px;width:720px;bottom:108px}.card{padding:16px 18px 14px;border-radius:14px;background:var(--i2);border:1px solid var(--h2);box-shadow:0 1px 0 rgb(255 255 255/3%) inset,0 10px 30px -14px rgb(0 0 0/75%)}
+.card .hd{display:flex;align-items:center;gap:10px;margin-bottom:10px;font-size:13px;color:var(--t2)}.card .hd b{font-weight:500;color:var(--t1)}.card .hd .m{margin-left:auto;color:var(--t3)}
+.q{margin:0 0 6px;font-size:15px;line-height:1.6}.q code{font:13px var(--mono);color:var(--arch)}.lk{margin:0 0 14px;color:var(--t3);font-size:13px}
+.opts{display:flex;gap:8px}.btn{display:inline-flex;align-items:center;gap:8px;padding:6px 12px;border:1px solid var(--h2);border-radius:6px;font-size:13.5px}.btn.lit{border-color:var(--al);background:var(--aw);color:var(--arch)}.btn.gh{border-color:transparent;color:var(--t2)}
+.k{font:500 10.5px var(--mono);color:var(--t3);border:1px solid var(--h2);border-bottom-width:1.5px;border-radius:4px;padding:0 5px;line-height:16px}.btn.lit .k{color:var(--arc);border-color:var(--al)}
+.comp{position:absolute;left:310px;width:770px;bottom:42px;display:flex;align-items:center;gap:14px}.comp .pr{width:36px;height:36px}
+.field{position:relative;flex:1;display:flex;align-items:center;height:48px;padding:0 16px;border-radius:14px;background:var(--i1);border:1px solid var(--h2);color:var(--t3);font-size:15px}
+.field::before{content:"";position:absolute;top:-1px;left:14px;right:14px;height:1px;background:linear-gradient(90deg,var(--arc) 41%,transparent 41%)}
+.hints{position:absolute;left:360px;width:720px;bottom:14px;display:flex;gap:18px;color:var(--t3);font-size:12.5px}.hints .r{margin-left:auto}
+.scrim{position:absolute;inset:47px 0 0;z-index:4;background:rgb(6 9 15/55%)}
+.pal{position:absolute;z-index:5;top:110px;left:400px;width:640px;border-radius:14px;background:var(--i2);border:1px solid var(--h2);box-shadow:0 1px 0 rgb(255 255 255/4%) inset,0 24px 60px -20px rgb(0 0 0/85%),0 4px 12px -4px rgb(0 0 0/55%);overflow:hidden}
+.ps{display:flex;align-items:center;gap:12px;height:54px;padding:0 16px;border-bottom:1px solid var(--h1);font-size:15px;color:var(--t3)}.ps .ic{color:var(--t2)}.caret{width:1px;height:19px;background:var(--arc);margin-right:-8px}.ps .k{margin-left:auto}
+.chips{display:flex;gap:6px;padding:10px 14px 6px}.chip{display:inline-flex;align-items:center;gap:7px;height:26px;padding:0 10px;border-radius:999px;border:1px solid var(--h2);font-size:12.5px;color:var(--t2)}.chip b{font-weight:500;color:var(--t1)}.chip.on{border-color:var(--al);background:var(--aw);color:var(--arch)}
+.list{padding:4px 8px 8px}.gh{display:flex;align-items:center;gap:8px;height:30px;padding:0 10px;font-size:12.5px;font-weight:500;color:var(--t2)}.gh .ic{width:14px;height:14px;color:var(--t3)}.gh .n{margin-left:auto;font-weight:400;color:var(--t3)}
+.tr{position:relative;display:grid;grid-template-columns:7px auto minmax(0,1fr) auto;column-gap:10px;align-items:center;height:34px;padding:0 12px 0 34px;border-radius:8px;font-size:13.5px}
+.tr::before{content:"";position:absolute;left:19px;top:0;bottom:0;border-left:1px solid var(--h2)}.tr.last::before{bottom:50%}.tr::after{content:"";position:absolute;left:19px;top:50%;width:9px;border-top:1px solid var(--h2)}
+.tr .sm{color:var(--t3);font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tr .e{display:flex;align-items:center;gap:10px;font:11.5px var(--mono);color:var(--t3)}
+.tr.cur{background:var(--aw);box-shadow:inset 0 0 0 1px rgb(146 214 236/14%)}.tr.cur .sm{color:#c9b98f}
+.ar{display:flex;align-items:center;gap:10px;height:32px;padding:0 12px 0 14px;border-radius:8px;font-size:13.5px}.ar .ic{width:15px;height:15px;color:var(--t2)}.ar .kk{margin-left:auto;display:flex;gap:4px}
+.pf{display:flex;align-items:center;gap:16px;height:38px;padding:0 16px;border-top:1px solid var(--h1);color:var(--t3);font-size:12px}.pf span{display:inline-flex;align-items:center;gap:6px}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+<symbol id="pr" viewBox="0 0 36 36"><circle cx="18" cy="18" r="15" fill="none" stroke="#92d6ec" stroke-width="1" stroke-opacity=".32"/><circle cx="18" cy="18" r="10" fill="none" stroke="#92d6ec" stroke-width="1" stroke-opacity=".55"/><circle cx="18" cy="18" r="2.6" fill="#92d6ec" fill-opacity=".85"/></symbol>
+<symbol id="canvas" viewBox="0 0 16 16"><rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M9.5 2.5v11"/></symbol>
+<symbol id="today" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="11" rx="1.5"/><path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3"/></symbol>
+<symbol id="digest" viewBox="0 0 16 16"><path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01"/></symbol>
+<symbol id="voice" viewBox="0 0 16 16"><path d="M2.5 6v4h2.5l3.5 3V3L5 6z"/><path d="M11 5.5a3.5 3.5 0 0 1 0 5M12.8 3.6a6 6 0 0 1 0 8.8"/></symbol>
+<symbol id="quit" viewBox="0 0 16 16"><path d="M8 2v5.5M4.6 4.2a5 5 0 1 0 6.8 0"/></symbol>
+<symbol id="search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></symbol>
+<symbol id="folder" viewBox="0 0 16 16"><path d="M2 4.5v8h12V6H8L6.5 4.5z"/></symbol>
+<symbol id="read" viewBox="0 0 16 16"><path d="M3 2.5h7l3 3v8H3z"/><path d="M5.5 8h5M5.5 10.5h5"/></symbol>
+<symbol id="bolt" viewBox="0 0 16 16"><path d="M9 1.5 3.5 9H8l-1 5.5L12.5 7H8z"/></symbol>
+</svg>
+
+<header class="hud">
+<div class="id"><svg class="pr"><use href="#pr"/></svg><span class="wm">JOCASTA</span></div>
+<div class="fig"><span><b>3</b>at work</span><span class="at"><b>1</b>awaiting you</span><span><b>1</b>queued</span><span><b>$4.82</b>today<small>list price</small></span><span><b>62%</b>left</span></div>
+<span class="grow"></span><span class="clock">14:32</span>
+<div class="tools"><span class="ib"><svg class="ic"><use href="#canvas"/></svg></span><span class="ib"><svg class="ic"><use href="#today"/></svg></span><span class="ib"><svg class="ic"><use href="#digest"/></svg></span><span class="ib"><svg class="ic"><use href="#voice"/></svg></span><span class="ib"><svg class="ic"><use href="#quit"/></svg></span></div>
+</header>
+
+<div class="pills">
+<span class="pill g"><span class="st blk"></span><b>acme-api</b> · Fix flaky checkout test · awaiting you 4m</span>
+<span class="pill"><span class="st done"></span><b>client-a-portal</b> · README line landed</span>
+<span class="pill"><span class="st run"></span><b>3</b> at work</span>
+</div>
+
+<main class="col">
+<div class="you">How is acme-api doing?</div>
+<div class="jv"><svg class="pr g"><use href="#pr"/></svg><div>
+<div class="th">Thought for 3s</div>
+<div class="tool"><svg class="ic"><use href="#read"/></svg>Read thread <code>acme-api / rate-limiter</code><span>· 214 lines</span></div>
+<div class="tool"><svg class="ic"><use href="#read"/></svg>Read thread <code>acme-api / flaky-checkout</code><span>· 88 lines</span></div>
+<p class="p">Two threads. <b>Rate limiter</b> is running: the token bucket is in and it is writing tests, 6 of 9 passing. <span class="say">Flaky checkout is waiting on you, just below.</span></p>
+<p class="p">In client-a-portal, <b>OIDC</b> is queued; it starts when a slot frees, 3 of 5 running.</p>
+</div></div>
+<div class="ev"><span class="st fail"></span><span><b>example-org-infra #482</b> · pipeline failed: terraform plan, 2 errors</span><a href="#">Open</a></div>
+</main>
+
+<section class="dock"><div class="card">
+<div class="hd"><span class="st blk"></span><span>acme-api</span>·<b>Fix flaky checkout test</b><span class="m">waiting 4m</span></div>
+<p class="q">The test fails whenever the clock crosses midnight UTC. Freeze time in the test, or fix <code>orderDate()</code> to use the store's timezone?</p>
+<p class="lk">Likely: fix the cause. You chose the cause over the symptom in 3 of your last 4 answers like this.</p>
+<div class="opts"><span class="btn lit">Fix orderDate()<span class="k">1</span></span><span class="btn">Freeze time in the test<span class="k">2</span></span><span class="btn gh">Answer in words<span class="k">3</span></span></div>
+</div></section>
+
+<div class="comp"><svg class="pr"><use href="#pr"/></svg><div class="field">Speak or type to Jocasta</div></div>
+<div class="hints"><span>Hold <span class="k">Space</span> or <span class="k">Right Ctrl</span> to speak</span><span><span class="k">Ctrl K</span> to go anywhere</span><span class="r">41% of context · $1.12</span></div>
+
+<div class="scrim"></div>
+
+<section class="pal" aria-label="Go to">
+<div class="ps"><svg class="ic"><use href="#search"/></svg><span class="caret"></span><span>Go to a project, thread or action</span><span class="k">Esc</span></div>
+<div class="chips"><span class="chip on">All</span><span class="chip"><span class="st blk"></span>Awaiting <b>1</b></span><span class="chip"><span class="st run"></span>At work <b>3</b></span><span class="chip"><span class="st done"></span>Landed <b>1</b></span><span class="chip"><span class="st q"></span>Queued <b>1</b></span></div>
+<div class="list">
+<div class="gh"><svg class="ic"><use href="#folder"/></svg>acme-api<span class="n">2 threads</span></div>
+<div class="tr"><span class="st run"></span><span>Add rate limiter to /orders</span><span class="sm">Writing tests: 6 of 9 pass</span><span class="e">18m</span></div>
+<div class="tr cur last"><span class="st blk"></span><span>Fix flaky checkout test</span><span class="sm">Awaiting you: freeze time or fix orderDate()</span><span class="e">7m<span class="k">Enter</span></span></div>
+<div class="gh"><svg class="ic"><use href="#folder"/></svg>client-a-portal<span class="n">3 threads · 2 behind</span></div>
+<div class="tr"><span class="st run"></span><span>Dark mode for settings page</span><span class="sm">Updating 14 components</span><span class="e">32m</span></div>
+<div class="tr"><span class="st q"></span><span>Migrate auth to OIDC</span><span class="sm">Starts when a slot frees</span><span class="e">queued</span></div>
+<div class="tr last"><span class="st run"></span><span>Add a README line</span><span class="sm">Committing</span><span class="e">2m</span></div>
+<div class="gh"><svg class="ic"><use href="#folder"/></svg>example-org-infra<span class="n">1 note</span></div>
+<div class="tr last"><span class="st note"></span><span>Rotate staging certs before Friday</span><span class="sm">Inbox note</span><span class="e"></span></div>
+<div class="gh"><svg class="ic"><use href="#folder"/></svg>demo<span class="n">1 thread</span></div>
+<div class="tr last"><span class="st done"></span><span>Bump test runner</span><span class="sm">Landed 11:52</span><span class="e">4m</span></div>
+<div class="gh"><svg class="ic"><use href="#bolt"/></svg>Actions</div>
+<div class="ar"><svg class="ic"><use href="#canvas"/></svg>Open canvas<span class="kk"><span class="k">Ctrl</span><span class="k">Shift</span><span class="k">C</span></span></div>
+<div class="ar"><svg class="ic"><use href="#today"/></svg>Today<span class="kk"><span class="k">Ctrl</span><span class="k">T</span></span></div>
+<div class="ar"><svg class="ic"><use href="#digest"/></svg>Ask for a digest<span class="kk"><span class="k">Ctrl</span><span class="k">D</span></span></div>
+</div>
+<div class="pf"><span><span class="k">↑</span><span class="k">↓</span>move</span><span><span class="k">Enter</span>open</span><span><span class="k">Ctrl 1-9</span>tabs</span><span><span class="k">Esc</span>close</span></div>
+</section>
+</body>
+</html>

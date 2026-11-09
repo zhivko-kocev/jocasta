@@ -1,0 +1,3 @@
+# Eval case fixtures under evals/cases/ hold failing tests on purpose; Jocasta's own tests live in test/.
+[test]
+root = "test"

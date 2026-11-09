@@ -1,0 +1,4 @@
+# Ponytail 5.2.0's short AGENTS.md text (MIT, @dietrichgebert/ponytail on npm, github.com/DietrichGebert/ponytail),
+# the same file every project and thread pane appends (0421, 0427). Layers over the default model like the omp
+# baseline run.
+append_system_prompt: ../../config/ponytail.md

@@ -1,0 +1,11 @@
+{
+	"what": "LiteLLM's model prices and context windows: the benchmark's one price table (0538). Fetched once; never refreshed during a run.",
+	"file": "model_prices_and_context_window.json",
+	"repository": "https://github.com/BerriAI/litellm",
+	"license": "MIT",
+	"url": "https://raw.githubusercontent.com/BerriAI/litellm/e58354f0554cb11b0ce2f042ff625957cded398f/model_prices_and_context_window.json",
+	"commit": "e58354f0554cb11b0ce2f042ff625957cded398f",
+	"commitDate": "2026-11-08T04:32:42Z",
+	"fetchedAt": "2026-11-09",
+	"sha256": "faa400408127c27aa323d29544389f85a06ab77660aa910b6d6e30dc46f33aa2"
+}

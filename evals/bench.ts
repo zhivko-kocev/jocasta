@@ -1,0 +1,831 @@
+// The task benchmark of 0482, as 0543 amends it: `bun evals/bench.ts --tasks <tasks.jsonl> --cache <dir>
+// --out <runDir> [--study main|followup] [--arms a0,a1,a2,a3,a4,a6,a7] [--reps 3] [--set main] [--only id,id]
+// [--pilot] [--workers 2] [--seed 482] [--timeout 60] [--profile <omp profile>] [--work <dir>] [--validate]
+// [--dry-run]`. Trials (tasks × arms × reps; `--study followup` is the follow-up study's 10 tasks × 2 reps × A6 and
+// its five arms) run in a seeded random order through the eval runner's `runTrial`, each in its own worker thread
+// (`--workers` at once, never two of one task), the quota pacer awaited before each, their roots in `--work` (default
+// the OS temp folder). Results go to `<runDir>/results.jsonl` (with each trial's ledger totals), the ledger's rows to
+// `ledger.jsonl`, each attempt's priced spend to `spend.jsonl`, the harnesses' own records to `sessions/`, infra errors
+// to `errors.jsonl` (retried, at most twice more), setup and grading output to `logs/`, the run's conditions to
+// `conditions.json`; a rerun with the same `--out` resumes. `--validate` checks each task without a model: its hidden
+// tests fail on the base commit and pass three times with the gold patch (logs in `validation/`). Real trials bill
+// model usage: they need `JOCASTA_EVALS_REAL=1` and never run in CI (0169). Exits 1 when a trial or task is left
+// failing, 2 on a bad flag, 3 after three sign-in failures in a row, 4 when A7's spend limit stopped its trials.
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { hostname, tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { isMainThread, parentPort, Worker } from "node:worker_threads";
+import { BenchUsageError, flag, isInside, listFlag, parseBenchArgs, REPO_ROOT, runScript } from "../bench/lib/args.ts";
+import { toolCommand } from "../bench/lib/launch.ts";
+import { benchPricing, ledgerOfDir } from "../bench/lib/ledger.ts";
+import { type Conditions, conditions } from "../bench/lib/output.ts";
+import { loadPriceTable, type PriceTable } from "../bench/lib/prices.ts";
+import { UserError } from "../src/shared/errors.ts";
+import type { TrialLedger } from "../src/shared/ledger.ts";
+import { parseRunArgs } from "./args.ts";
+import { FOLLOWUP_ARMS, FOLLOWUP_COMPARISONS, FOLLOWUP_REPS, FOLLOWUP_TASKS, pickFollowupTasks } from "./followup.ts";
+import { LAYER_MODULE, layerBuilt, layerMissingMessage } from "./layer.ts";
+import { createPacer, PACER_PROVIDER, PAUSE_AT, type Pause, realPacerDeps } from "./pacer.ts";
+import {
+	A7_API_KEY_ENV,
+	type EvalCase,
+	gradeHidden,
+	makeTrialRepo,
+	makeTrialRoot,
+	type ResultRow,
+	readVersion,
+	runTrial,
+	type TrialOptions,
+	trialArgs,
+	trialEnv,
+} from "./runner.ts";
+import {
+	appendJsonl,
+	type BenchRow,
+	type BenchTask,
+	classifyInfra,
+	type InfraRow,
+	loadTasks,
+	MAX_ATTEMPTS,
+	type PreparedTask,
+	pendingTrials,
+	pickPilot,
+	planTrials,
+	prepareTask,
+	readResumeState,
+	scanLeaks,
+	type Trial,
+	taskCase,
+	trialKey,
+} from "./tasks.ts";
+import { BENCH_PTY_SESSION } from "./terminal.ts";
+import { loadVariants, type Variant } from "./variants.ts";
+
+/** One arm as the run uses it: its variant, the command that starts its harness, and that harness's version. */
+export interface Arm {
+	name: string;
+	variant: Variant;
+	launcher: string[];
+	harnessVersion: string;
+}
+
+/** What a worker runs: one trial through `runTrial`. */
+export interface TrialJob {
+	evalCase: EvalCase;
+	rep: number;
+	harnessVersion: string;
+	options: Omit<TrialOptions, "onHarnessRun">;
+}
+
+/** A trial's result as the worker returns it: the row, or the error it threw, and the harness's stderr. */
+export interface TrialOutcome {
+	row?: ResultRow;
+	error?: string;
+	stderr: string;
+}
+
+export interface BenchOptions {
+	tasks: BenchTask[];
+	cacheDir: string;
+	outDir: string;
+	arms: Arm[];
+	reps: number;
+	seed: number;
+	workers: number;
+	timeoutMs?: number;
+	profile?: string;
+	/** The bench herdr session for plan-review trials' terminals (`--pty-session`, 0567). */
+	ptySession?: string;
+	/** Recorded in `conditions.json`. */
+	pilot?: boolean;
+	pace?: () => Promise<void>;
+	/** Whether the pacer's last reading had a full account: a rate limit then is an infra error (0543). */
+	accountFull?: () => boolean;
+	/** The ledger's price table; the committed one by default. */
+	prices?: PriceTable;
+	/** A7's spend limit in dollars at the price table (0537); {@link A7_SPEND_LIMIT_USD} by default. */
+	a7SpendLimitUsd?: number;
+	/** Where trial roots go (`--work`); the OS temp folder when unset. Recorded in `conditions.json`. */
+	workDir?: string;
+	/** Runs one trial; the default runs it in a worker thread. */
+	execute?: (job: TrialJob) => Promise<TrialOutcome>;
+	/** The host's conditions for `conditions.json`; the default asks each tool for its version. */
+	describeHost?: () => Conditions;
+	log?: (line: string) => void;
+	/** Pauses the pacer took, for `conditions.json`. */
+	pauses?: Pause[];
+}
+
+/** The tools whose versions `conditions.json` records (0482, 0537). */
+export const VERSION_TOOLS = ["omp", "claude", "opencode", "git", "bun", "node", "python", "go"] as const;
+
+/**
+ * A7's spend limit (0537): once the priced spend of A7's attempts (`spend.jsonl`, the pinned price table) reaches it,
+ * no further A7 trial starts. The key's own limit at Anthropic is the backstop for a trial already running.
+ */
+export const A7_SPEND_LIMIT_USD = 150;
+/** A7 runs in 0481's VM only (0537), the machine H1's git-guard check also requires. */
+export const VM_MACHINE = "JOCASTA-CLEAN";
+
+/** One `spend.jsonl` row: an attempt's priced cost, whether it counted or was an infra error. */
+export interface SpendRow {
+	task: string;
+	arm: string;
+	rep: number;
+	attempt: number;
+	harness: string;
+	cost: number;
+	unpricedModels: string[];
+}
+
+/** Long-path support as the trials see it: git's effective `core.longpaths` and, on Windows, `LongPathsEnabled`. */
+export interface LongPaths {
+	gitCoreLongpaths: string | null;
+	/** `HKLM\SYSTEM\CurrentControlSet\Control\FileSystem` `LongPathsEnabled`; null off Windows or when unset. */
+	windowsLongPathsEnabled: number | null;
+}
+
+/** Reads {@link LongPaths} without changing anything. */
+export function readLongPaths(): LongPaths {
+	const config = spawnSync("git", ["config", "--get", "core.longpaths"], {
+		cwd: tmpdir(),
+		encoding: "utf8",
+		windowsHide: true,
+	});
+	let windowsLongPathsEnabled: number | null = null;
+	if (process.platform === "win32") {
+		const reg = spawnSync(
+			"reg",
+			["query", "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem", "/v", "LongPathsEnabled"],
+			{ encoding: "utf8", windowsHide: true, timeout: 30_000 },
+		);
+		const value = /LongPathsEnabled\s+REG_DWORD\s+(0x[0-9a-f]+)/i.exec(reg.stdout ?? "")?.[1];
+		if (value !== undefined) windowsLongPathsEnabled = Number(value);
+	}
+	return { gitCoreLongpaths: config.status === 0 ? config.stdout.trim() : null, windowsLongPathsEnabled };
+}
+
+/** The host, the tools' versions (Go's from `go version`, not `--version`) and long-path support. */
+export function hostConditions(): Conditions & { longPaths: LongPaths } {
+	const host = conditions(VERSION_TOOLS.filter((tool) => tool !== "go"));
+	const go = Bun.which("go");
+	const version =
+		go === null ? null : spawnSync(go, ["version"], { encoding: "utf8", windowsHide: true, timeout: 30_000 });
+	host.versions.go = version?.status === 0 ? version.stdout.trim() : null;
+	return { ...host, longPaths: readLongPaths() };
+}
+
+/** Runs one trial in a worker thread, so a setup's or a check's blocking spawn never stalls another trial's harness. */
+export function executeInWorker(job: TrialJob): Promise<TrialOutcome> {
+	const { promise, resolve } = Promise.withResolvers<TrialOutcome>();
+	const worker = new Worker(import.meta.path);
+	let settled = false;
+	const finish = (outcome: TrialOutcome) => {
+		if (settled) return;
+		settled = true;
+		void worker.terminate();
+		resolve(outcome);
+	};
+	worker.once("message", (outcome: TrialOutcome) => finish(outcome));
+	worker.once("error", (error) => finish({ error: String(error), stderr: "" }));
+	worker.once("exit", (code) => finish({ error: `trial worker exited ${code}`, stderr: "" }));
+	worker.postMessage(job);
+	return promise;
+}
+
+if (!isMainThread)
+	parentPort?.once("message", async (job: TrialJob) => {
+		const stderr: string[] = [];
+		try {
+			const row = await runTrial(job.evalCase, job.rep, job.harnessVersion, {
+				...job.options,
+				onHarnessRun: (run) => stderr.push(run.stderr),
+			});
+			parentPort?.postMessage({ row, stderr: stderr.join("\n") } satisfies TrialOutcome);
+		} catch (error) {
+			parentPort?.postMessage({
+				error: error instanceof Error ? error.message : String(error),
+				stderr: stderr.join("\n"),
+			} satisfies TrialOutcome);
+		}
+	});
+
+interface RunRecord {
+	seed: number;
+	arms: string[];
+	reps: number;
+	tasks: string[];
+	pilot: boolean;
+	order: string[];
+	sessions: (Conditions & {
+		workers: number;
+		timeoutMinutes: number | null;
+		profile: string | null;
+		workRoot: string;
+	})[];
+}
+
+/** Infra errors in a row that were sign-in failures; three stop the run (0482). */
+const AUTH_STOP = 3;
+
+/**
+ * Runs the benchmark's trials into `outDir`, resuming what is there. A free worker takes the next trial in the seeded
+ * order whose task isn't running already, so two trials never share a task's caches or tool folders at once. Each
+ * attempt's saved sessions are priced into the ledger (0538); A7's trials stop once its priced spend reaches the limit
+ * (0537). Returns the exit code: 0 when every trial has a row, 1 when some used up their attempts on infra errors, 3
+ * when three sign-in failures in a row stopped the run, 4 when A7's spend limit (or an A7 model the price table lacks)
+ * stopped its trials.
+ */
+export async function runBench(options: BenchOptions): Promise<number> {
+	const log = options.log ?? ((line: string) => console.log(line));
+	const execute = options.execute ?? executeInWorker;
+	mkdirSync(join(options.outDir, "transcripts"), { recursive: true });
+	const order = planTrials(
+		options.tasks,
+		options.arms.map((arm) => arm.name),
+		options.reps,
+		options.seed,
+	);
+	const record: RunRecord = {
+		seed: options.seed,
+		arms: options.arms.map((arm) => arm.name),
+		reps: options.reps,
+		tasks: options.tasks.map((task) => task.instance_id),
+		pilot: options.pilot ?? false,
+		order: order.map(trialKey),
+		sessions: [],
+	};
+	const recordFile = join(options.outDir, "conditions.json");
+	if (existsSync(recordFile)) {
+		const before = JSON.parse(readFileSync(recordFile, "utf8")) as RunRecord;
+		if (JSON.stringify(before.order) !== JSON.stringify(record.order))
+			throw new BenchUsageError(
+				`${options.outDir} holds a run with another plan (seed, arms, reps or tasks); resume it with the same flags or use a new --out`,
+			);
+		record.sessions = before.sessions;
+	}
+	const session = {
+		...(options.describeHost ?? hostConditions)(),
+		workers: options.workers,
+		timeoutMinutes: options.timeoutMs === undefined ? null : options.timeoutMs / 60_000,
+		profile: options.profile ?? null,
+		workRoot: options.workDir ?? tmpdir(),
+	};
+	record.sessions.push(session);
+	const saveRecord = () => writeFileSync(recordFile, `${JSON.stringify(record, null, 2)}\n`);
+	saveRecord();
+
+	const tasks = new Map<string, { task: BenchTask; evalCase: EvalCase }>();
+	for (const task of options.tasks) {
+		log(`preparing ${task.instance_id}`);
+		tasks.set(task.instance_id, { task, evalCase: taskCase(task, prepareTask(task, options.cacheDir)) });
+	}
+	const arms = new Map(options.arms.map((arm) => [arm.name, arm]));
+	const state = readResumeState(options.outDir);
+	const { pending, exhausted } = pendingTrials(order, state);
+	log(`${order.length} trials: ${order.length - pending.length - exhausted.length} done, ${pending.length} to run`);
+	const queue = [...pending];
+	let authInRow = 0;
+	let stoppedBy: string | null = null;
+	const prices = options.prices ?? loadPriceTable();
+	const spendFile = join(options.outDir, "spend.jsonl");
+	const spendLimit = options.a7SpendLimitUsd ?? A7_SPEND_LIMIT_USD;
+	const isA7 = (trial: Trial) => arms.get(trial.arm)?.variant.harness === "opencode";
+	let a7Spent = existsSync(spendFile)
+		? readFileSync(spendFile, "utf8")
+				.split(/\r?\n/)
+				.filter((line) => line.trim() !== "")
+				.map((line) => JSON.parse(line) as SpendRow)
+				.filter((row) => row.harness === "opencode")
+				.reduce((sum, row) => sum + row.cost, 0)
+		: 0;
+	let a7StoppedWhy: string | null = a7Spent >= spendLimit ? `A7's priced spend is $${a7Spent.toFixed(2)}` : null;
+	const a7Skipped: Trial[] = [];
+	/** Tasks with a trial running now. */
+	const running = new Set<string>();
+	let wake = Promise.withResolvers<void>();
+	const notify = () => {
+		const woken = wake;
+		wake = Promise.withResolvers<void>();
+		woken.resolve();
+	};
+
+	const runOne = async (trial: Trial) => {
+		const { task, evalCase } = tasks.get(trial.task) as { task: BenchTask; evalCase: EvalCase };
+		const arm = arms.get(trial.arm) as Arm;
+		const key = trialKey(trial);
+		const attempt = (state.failures.get(key) ?? 0) + 1;
+		const transcriptName = `${trial.task}-${trial.arm}-${trial.rep}`;
+		const sessionsDir = join(options.outDir, "sessions", transcriptName);
+		const outcome = await execute({
+			evalCase,
+			rep: trial.rep,
+			harnessVersion: arm.harnessVersion,
+			options: {
+				outDir: options.outDir,
+				launcher: arm.launcher,
+				variant: arm.variant,
+				profile: options.profile,
+				timeoutMs: options.timeoutMs,
+				transcriptName,
+				workDir: options.workDir,
+				ptySession: options.ptySession,
+				logDir: join(options.outDir, "logs", transcriptName),
+				sessionsDir,
+			},
+		});
+		const ledger: TrialLedger | null = existsSync(sessionsDir)
+			? ledgerOfDir(sessionsDir, arm.variant.harness, benchPricing(prices))
+			: null;
+		const spend: SpendRow = {
+			task: trial.task,
+			arm: trial.arm,
+			rep: trial.rep,
+			attempt,
+			harness: arm.variant.harness,
+			cost: ledger?.totals.cost ?? 0,
+			unpricedModels: ledger?.totals.unpricedModels ?? [],
+		};
+		appendJsonl(spendFile, spend);
+		if (isA7(trial)) {
+			a7Spent += spend.cost;
+			if (spend.unpricedModels.length > 0)
+				a7StoppedWhy ??= `the price table lacks ${spend.unpricedModels.join(", ")}, so A7's spend can't be counted`;
+			else if (a7Spent >= spendLimit) a7StoppedWhy ??= `A7's priced spend is $${a7Spent.toFixed(2)}`;
+		}
+		const transcriptFile = join(options.outDir, "transcripts", `${transcriptName}.jsonl`);
+		const transcript = outcome.row && existsSync(transcriptFile) ? readFileSync(transcriptFile, "utf8") : "";
+		const infra = classifyInfra({
+			...outcome,
+			transcript,
+			prompt: evalCase.prompt,
+			accountFull: options.accountFull?.() ?? false,
+		});
+		if (infra) {
+			const row: InfraRow = {
+				task: trial.task,
+				arm: trial.arm,
+				rep: trial.rep,
+				attempt,
+				trialIndex: trial.index,
+				harness: arm.variant.harness,
+				...infra,
+				at: new Date().toISOString(),
+			};
+			appendJsonl(join(options.outDir, "errors.jsonl"), row);
+			state.failures.set(key, attempt);
+			log(`infra ${key} (attempt ${attempt}, ${infra.kind}): ${infra.message.split("\n")[0]}`);
+			authInRow = infra.kind === "auth" ? authInRow + 1 : 0;
+			if (authInRow >= AUTH_STOP) stoppedBy ??= arm.variant.harness;
+			else if (attempt < MAX_ATTEMPTS) queue.push(trial);
+			else exhausted.push(trial);
+			return;
+		}
+		authInRow = 0;
+		const row: BenchRow = {
+			...(outcome.row as ResultRow),
+			task: trial.task,
+			arm: trial.arm,
+			language: task.language,
+			attempt,
+			trialIndex: trial.index,
+			leak: scanLeaks(task, transcript, evalCase.prompt),
+			...(ledger ? { ledger: { ...ledger.totals, sessions: ledger.sessions.length } } : {}),
+		};
+		appendJsonl(join(options.outDir, "results.jsonl"), row);
+		for (const ledgerRow of ledger?.rows ?? [])
+			appendJsonl(join(options.outDir, "ledger.jsonl"), {
+				task: trial.task,
+				arm: trial.arm,
+				rep: trial.rep,
+				...ledgerRow,
+			});
+		state.done.add(key);
+		log(`${row.hiddenPassed ? "pass" : "FAIL"} ${key}${row.leak.length > 0 ? ` (leak: ${row.leak.join(", ")})` : ""}`);
+	};
+
+	const worker = async () => {
+		for (;;) {
+			if (stoppedBy !== null || queue.length === 0) return;
+			if (a7StoppedWhy !== null)
+				for (let i = queue.length - 1; i >= 0; i--) if (isA7(queue[i] as Trial)) a7Skipped.push(...queue.splice(i, 1));
+			if (queue.length === 0) return;
+			const next = queue.findIndex((trial) => !running.has(trial.task));
+			if (next === -1) {
+				await wake.promise;
+				continue;
+			}
+			const [trial] = queue.splice(next, 1) as [Trial];
+			running.add(trial.task);
+			try {
+				await options.pace?.();
+				if (stoppedBy === null && !(a7StoppedWhy !== null && isA7(trial))) await runOne(trial);
+				else if (stoppedBy === null) a7Skipped.push(trial);
+			} finally {
+				running.delete(trial.task);
+				notify();
+			}
+		}
+	};
+	await Promise.all(Array.from({ length: Math.max(1, options.workers) }, worker));
+
+	Object.assign(session, {
+		finishedAt: new Date().toISOString(),
+		pauses: options.pauses ?? [],
+		a7SpendUsd: Math.round(a7Spent * 100) / 100,
+	});
+	saveRecord();
+	if (stoppedBy !== null) {
+		log(
+			`stopped: ${AUTH_STOP} trials in a row could not sign in to ${stoppedBy}. Sign in to ${stoppedBy} again (a token refresh on another machine may have revoked the copied login), then rerun the same command to resume.`,
+		);
+		return 3;
+	}
+	if (a7StoppedWhy !== null && a7Skipped.length > 0) {
+		log(
+			`A7 stopped (${a7StoppedWhy}; limit $${spendLimit}, 0537): ${a7Skipped.length} A7 trials not run: ${a7Skipped.map(trialKey).join(", ")}`,
+		);
+		return 4;
+	}
+	if (exhausted.length > 0) {
+		log(
+			`${exhausted.length} trials used up ${MAX_ATTEMPTS} attempts on infra errors: ${exhausted.map(trialKey).join(", ")}`,
+		);
+		return 1;
+	}
+	return 0;
+}
+
+/** One `validation.jsonl` row: the task's hidden tests without a model, on the base commit and with the gold patch. */
+export interface ValidationRow {
+	task: string;
+	language: string;
+	/** The hidden tests failed on the base commit (as they must); null when validation stopped before. */
+	null_failed: boolean | null;
+	/** Gold-patch gradings that passed, of {@link GOLD_GRADES}. */
+	gold_passes: number;
+	seconds: { prepare: number; setup: number; null: number | null; gold: number[] };
+	error: string | null;
+}
+
+export const GOLD_GRADES = 3;
+
+const since = (start: number) => Math.round((performance.now() - start) / 100) / 10;
+
+/**
+ * Validates one task without a model (0482, the SWE-bench-Live check): the fixture with its setup, graded unchanged on
+ * a clean clone (a *null* trial, which must fail), then `gold.patch` applied as the "agent" and graded on a fresh clean
+ * clone {@link GOLD_GRADES} times (each must pass). Grading is the runner's own `gradeHidden`. With `logDir`, each
+ * phase's commands and output go to `setup.log`, `null.log` and `gold-<n>.log` there; the trial root goes in `workDir`.
+ */
+export function validateTask(
+	task: BenchTask,
+	cacheDir: string,
+	options: { logDir?: string; workDir?: string } = {},
+): ValidationRow {
+	const row: ValidationRow = {
+		task: task.instance_id,
+		language: task.language,
+		null_failed: null,
+		gold_passes: 0,
+		seconds: { prepare: 0, setup: 0, null: null, gold: [] },
+		error: null,
+	};
+	let start = performance.now();
+	let prepared: PreparedTask;
+	try {
+		prepared = prepareTask(task, cacheDir);
+	} catch (error) {
+		row.error = (error as Error).message;
+		return row;
+	}
+	row.seconds.prepare = since(start);
+	const evalCase = taskCase(task, prepared);
+	const logFile = (phase: string) => (options.logDir === undefined ? undefined : join(options.logDir, `${phase}.log`));
+	if (options.logDir !== undefined) rmSync(options.logDir, { recursive: true, force: true });
+	const root = makeTrialRoot(options.workDir);
+	try {
+		const env = trialEnv(evalCase, root);
+		start = performance.now();
+		const { repo, branch } = makeTrialRepo(evalCase, 0, root, env, logFile("setup"));
+		row.seconds.setup = since(start);
+		const passes = (gradeDir: string, phase: string) =>
+			Object.values(gradeHidden(evalCase, repo, branch, join(root, gradeDir), env, logFile(phase))).every(
+				(score) => score === 1,
+			);
+		start = performance.now();
+		row.null_failed = !passes("g0", "null");
+		row.seconds.null = since(start);
+		gitIn(repo, ["apply", "--whitespace=nowarn", prepared.goldPatch]);
+		gitIn(repo, ["add", "-A"]);
+		for (let i = 1; i <= GOLD_GRADES; i++) {
+			start = performance.now();
+			if (passes(`g${i}`, `gold-${i}`)) row.gold_passes++;
+			row.seconds.gold.push(since(start));
+		}
+	} catch (error) {
+		row.error = (error as Error).message;
+	} finally {
+		rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 500 });
+	}
+	return row;
+}
+
+function gitIn(cwd: string, args: string[]): void {
+	const result = spawnSync("git", args, { cwd, encoding: "utf8", windowsHide: true });
+	if (result.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${result.stderr || result.error?.message}`);
+}
+
+export const validationPassed = (row: ValidationRow): boolean =>
+	row.error === null && row.null_failed === true && row.gold_passes === GOLD_GRADES;
+
+/**
+ * `--validate`: every task in turn into `<out>/validation.jsonl` (rewritten), each phase's log in
+ * `<out>/validation/<task>/`, then a summary; the failing ids.
+ */
+export function runValidation(
+	tasks: readonly BenchTask[],
+	cacheDir: string,
+	outDir: string,
+	log: (line: string) => void = (line) => console.log(line),
+	workDir?: string,
+): string[] {
+	mkdirSync(outDir, { recursive: true });
+	const file = join(outDir, "validation.jsonl");
+	writeFileSync(file, "");
+	const failed: string[] = [];
+	for (const task of tasks) {
+		log(`validating ${task.instance_id}`);
+		const row = validateTask(task, cacheDir, { logDir: join(outDir, "validation", task.instance_id), workDir });
+		appendJsonl(file, row);
+		if (!validationPassed(row)) failed.push(task.instance_id);
+		log(
+			`  ${validationPassed(row) ? "ok" : "FAILED"}: null ${row.null_failed === null ? "not run" : row.null_failed ? "failed" : "PASSED"}, gold ${row.gold_passes}/${GOLD_GRADES}${row.error ? `, error: ${row.error.split("\n")[0]}` : ""}`,
+		);
+	}
+	log(`${tasks.length - failed.length}/${tasks.length} tasks valid; results: ${file}`);
+	if (failed.length > 0) log(`swap for a spare of the same language: ${failed.join(", ")}`);
+	return failed;
+}
+
+/** The main run's arms (0543): A0–A4 as 0482 has them, A6 = A3 + the harness-OS layer, A7 = opencode bare. */
+export const DEFAULT_ARMS = ["a0", "a1", "a2", "a3", "a4", "a6", "a7"];
+const VARIANTS_DIR = join(import.meta.dir, "variants");
+
+function wholeNumber(text: string | undefined, name: string, fallback: number, min = 1): number {
+	if (text === undefined) return fallback;
+	if (!/^\d+$/.test(text) || Number(text) < min)
+		throw new BenchUsageError(`--${name} needs a whole number of ${min} or more, not "${text}"`);
+	return Number(text);
+}
+
+async function main(): Promise<void> {
+	const argv = process.argv.slice(2);
+	if (argv.includes("--runs")) throw new BenchUsageError("unknown option: --runs (use --reps)");
+	const args = parseBenchArgs(argv, {
+		defaultRuns: 3,
+		valued: [
+			"--tasks",
+			"--cache",
+			"--arms",
+			"--reps",
+			"--set",
+			"--study",
+			"--only",
+			"--workers",
+			"--seed",
+			"--timeout",
+			"--profile",
+			"--work",
+			"--pty-session",
+		],
+		booleans: ["--pilot", "--validate"],
+	});
+	const tasksFile = flag(args, "tasks");
+	const cacheText = flag(args, "cache");
+	if (tasksFile === undefined || cacheText === undefined || args.out === undefined)
+		throw new BenchUsageError("--tasks <tasks.jsonl>, --cache <dir> and --out <runDir> are required");
+	const cacheDir = resolve(cacheText);
+	if (isInside(REPO_ROOT, cacheDir)) throw new BenchUsageError(`--cache must be outside the repo, not ${cacheDir}`);
+	const outDir = args.out;
+	const workText = flag(args, "work");
+	const workDir = workText === undefined ? undefined : resolve(workText);
+	if (workDir !== undefined && isInside(REPO_ROOT, workDir))
+		throw new BenchUsageError(`--work must be outside the repo, not ${workDir}`);
+	const pilot = args.flags.get("pilot") === true;
+	const validate = args.flags.get("validate") === true;
+	const study = flag(args, "study", "main");
+	if (study !== "main" && study !== "followup")
+		throw new BenchUsageError(`--study must be main or followup, not "${study}"`);
+	if (study === "followup")
+		for (const name of ["arms", "reps", "set", "only"])
+			if (flag(args, name) !== undefined)
+				throw new BenchUsageError(`--study followup fixes its own --${name}; drop it`);
+	if (study === "followup" && pilot) throw new BenchUsageError("--study followup has no pilot; drop --pilot");
+	if (pilot && flag(args, "reps") !== undefined) throw new BenchUsageError("--pilot runs 1 rep; drop --reps");
+	const reps = study === "followup" ? FOLLOWUP_REPS : pilot ? 1 : wholeNumber(flag(args, "reps"), "reps", 3);
+	const workers = wholeNumber(flag(args, "workers"), "workers", 2);
+	const seed = wholeNumber(flag(args, "seed"), "seed", 482, 0);
+	const timeoutText = flag(args, "timeout", "60");
+	const timeoutMinutes = Number(timeoutText);
+	if (!Number.isFinite(timeoutMinutes) || timeoutMinutes <= 0)
+		throw new BenchUsageError(`--timeout needs a number of minutes above 0, not "${timeoutText}"`);
+	const set = flag(args, "set", "main");
+	if (set !== "main" && set !== "spare" && set !== "all")
+		throw new BenchUsageError(`--set must be main, spare or all, not "${set}"`);
+	let profile: string | undefined;
+	const armNames = study === "followup" ? [...FOLLOWUP_ARMS] : listFlag(args, "arms", DEFAULT_ARMS);
+	const variants = new Map<string, Variant>();
+	try {
+		profile =
+			flag(args, "profile") === undefined
+				? undefined
+				: parseRunArgs(["--profile", flag(args, "profile") ?? ""]).profile;
+		for (const name of armNames) variants.set(name, loadVariants(VARIANTS_DIR, [name]));
+	} catch (error) {
+		if (error instanceof UserError) throw new BenchUsageError(error.message);
+		throw error;
+	}
+	if (armNames.length === 0) throw new BenchUsageError("--arms needs at least one arm");
+
+	const all = loadTasks(resolve(tasksFile));
+	const only = listFlag(args, "only", []);
+	for (const id of only)
+		if (!all.some((task) => task.instance_id === id)) throw new BenchUsageError(`no task ${id} in ${tasksFile}`);
+	let tasks =
+		only.length > 0
+			? all.filter((task) => only.includes(task.instance_id))
+			: all.filter((task) => set === "all" || task.set === set);
+	if (study === "followup") tasks = pickFollowupTasks(all, seed);
+	if (pilot) tasks = pickPilot(tasks, seed);
+	if (tasks.length === 0) throw new BenchUsageError("no tasks selected");
+
+	if (args.dryRun) {
+		printDryRun({
+			tasks,
+			armNames,
+			variants,
+			reps,
+			seed,
+			workers,
+			timeoutMinutes,
+			profile,
+			pilot,
+			validate,
+			study,
+			ptySession: flag(args, "pty-session", BENCH_PTY_SESSION),
+			cacheDir,
+			workDir,
+			outDir,
+		});
+		return;
+	}
+	if (validate) {
+		const failed = runValidation(tasks, cacheDir, outDir, undefined, workDir);
+		if (failed.length > 0) process.exitCode = 1;
+		return;
+	}
+	if (!process.env.JOCASTA_EVALS_REAL)
+		throw new BenchUsageError("the benchmark runs real models and bills usage; set JOCASTA_EVALS_REAL=1 to run it");
+	if (process.env.CI) throw new BenchUsageError("real-model runs never run in CI (0169)");
+	const layered = armNames.filter((name) => variants.get(name)?.layer !== undefined);
+	if (layered.length > 0 && !layerBuilt()) throw new BenchUsageError(`${layered.join(", ")}: ${layerMissingMessage()}`);
+	const a7 = armNames.filter((name) => variants.get(name)?.harness === "opencode");
+	if (a7.length > 0) {
+		if (hostname().toUpperCase() !== VM_MACHINE)
+			throw new BenchUsageError(`${a7.join(", ")} runs in the VM ${VM_MACHINE} only (0537), not on this machine`);
+		if (!process.env[A7_API_KEY_ENV])
+			throw new BenchUsageError(`${a7.join(", ")} needs A7's Anthropic API key in ${A7_API_KEY_ENV} (0537)`);
+	}
+	const arms: Arm[] = armNames.map((name) => {
+		const variant = variants.get(name) as Variant;
+		const launcher = toolCommand(variant.harness);
+		let version: string;
+		try {
+			version = readVersion(launcher);
+		} catch (error) {
+			throw new BenchUsageError(`arm ${name}: ${(error as Error).message}`);
+		}
+		return { name, variant, launcher, harnessVersion: version };
+	});
+	const ptySession = flag(args, "pty-session", BENCH_PTY_SESSION);
+	const interactive = armNames.filter((name) => variants.get(name)?.planReview !== undefined);
+	if (interactive.length > 0 && !Bun.which("herdr"))
+		throw new BenchUsageError(
+			`${interactive.join(", ")} answer omp's plan review in a herdr pane: herdr is not on PATH`,
+		);
+	const pauses: Pause[] = [];
+	const pacer = createPacer(realPacerDeps, pauses);
+	const code = await runBench({
+		tasks,
+		cacheDir,
+		outDir,
+		arms,
+		reps,
+		seed,
+		workers,
+		timeoutMs: timeoutMinutes * 60_000,
+		profile,
+		pilot,
+		workDir,
+		ptySession,
+		pace: pacer.pace,
+		accountFull: pacer.accountFull,
+		pauses,
+	});
+	console.log(`results: ${join(outDir, "results.jsonl")}`);
+	process.exitCode = code;
+}
+
+function printDryRun(plan: {
+	tasks: BenchTask[];
+	armNames: string[];
+	variants: Map<string, Variant>;
+	reps: number;
+	seed: number;
+	workers: number;
+	timeoutMinutes: number;
+	profile?: string;
+	pilot: boolean;
+	validate: boolean;
+	study: "main" | "followup";
+	ptySession: string;
+	cacheDir: string;
+	workDir?: string;
+	outDir: string;
+}): void {
+	const quote = (arg: string) => (/\s/.test(arg) ? JSON.stringify(arg) : arg);
+	console.log(
+		`task benchmark (0482, 0543${plan.study === "followup" ? ": the follow-up study" : ""}) dry run: nothing is fetched, prepared or run, and no model is called.`,
+	);
+	console.log(
+		`  tasks: ${plan.tasks.length}${plan.pilot ? ` (pilot, seed ${plan.seed}: 2 Python, 2 TypeScript/JavaScript, 1 Go)` : ""}${plan.study === "followup" ? ` (${FOLLOWUP_TASKS} main tasks, seed ${plan.seed}, languages in the main set's proportions)` : ""}`,
+	);
+	for (const task of plan.tasks) console.log(`    ${task.instance_id} (${task.language}, ${task.set})`);
+	if (plan.validate) {
+		console.log(
+			`  validate: per task, the hidden tests on the base commit (must fail), then with gold.patch ${GOLD_GRADES} times (must pass)`,
+		);
+	} else {
+		const order = planTrials(plan.tasks, plan.armNames, plan.reps, plan.seed);
+		console.log(
+			`  trials: ${order.length} = ${plan.tasks.length} tasks × ${plan.armNames.length} arms × ${plan.reps} rep${plan.reps === 1 ? "" : "s"}, seed ${plan.seed}, ${plan.workers} at once, ${plan.timeoutMinutes} min limit each`,
+		);
+		if (plan.study === "followup") {
+			console.log("  comparisons, each paired with a6 by task and rep, kept by 0543's rule (`bun evals/keep.ts`):");
+			for (const c of FOLLOWUP_COMPARISONS)
+				console.log(
+					`    ${c.arm}: ${c.change} (${c.records}; the feature is ${c.feature === "arm" ? "the arm's" : "a6's"})`,
+				);
+			console.log("    not compared: pitchfork (0560)");
+		}
+		console.log(`  order (first ${Math.min(15, order.length)}):`);
+		for (const trial of order.slice(0, 15))
+			console.log(`    ${trial.index + 1}. ${trial.task} ${trial.arm} rep ${trial.rep}`);
+		for (const name of plan.armNames) {
+			const variant = plan.variants.get(name) as Variant;
+			const turns = ["<prompt>", ...variant.followups.map((_, i) => `<follow-up ${i + 1}>`)];
+			turns.forEach((prompt, i) => {
+				const args = trialArgs(variant, {
+					prompt,
+					followUp: i > 0,
+					overlay: "<trial>/eval-run.yml",
+					profile: plan.profile,
+					sessionDir: "<trial>/sessions",
+					session: "<session>",
+					...(variant.planReview !== undefined && i === 0 ? { extension: "<trial>/plan-review.js" } : {}),
+				});
+				console.log(`  arm ${name} turn ${i + 1}: ${variant.harness} ${args.map(quote).join(" ")}`);
+			});
+			if (variant.planReview !== undefined)
+				console.log(
+					`  arm ${name} plan review (0567): turn 1 runs omp interactive in a pane of the herdr session ${plan.ptySession}, plan mode at startup; the extension answers "${variant.planReview === "execute" ? "Approve and execute" : "Approve and keep context"}" and shuts omp down after the execution`,
+				);
+			if (variant.layer !== undefined)
+				console.log(
+					`  arm ${name} layer: index ${variant.layer.index ? "on" : "off"}; ${layerBuilt() ? `${LAYER_MODULE} adds its flags, settings and env` : `NOT RUNNABLE: ${layerMissingMessage()}`}`,
+				);
+			if (variant.harness === "opencode")
+				console.log(
+					`  arm ${name}: Anthropic API key from ${A7_API_KEY_ENV} (as ANTHROPIC_API_KEY, opencode only), VM ${VM_MACHINE} only, stops at $${A7_SPEND_LIMIT_USD} priced spend (0537)`,
+				);
+		}
+		console.log(
+			`  quota pacer: omp usage --json before each trial, waits only while every ${PACER_PROVIDER} account has its 5h or 7d window at ${PAUSE_AT * 100}% or more; a rate limit while an account is full is an infra error, retried`,
+		);
+		console.log(
+			"  ledger: each trial's sessions saved to <out>/sessions/, priced with bench/prices/ (LiteLLM, pinned), rows in ledger.jsonl, totals in each results row, spend per attempt in spend.jsonl",
+		);
+		console.log(`  profile: ${plan.profile ?? "his default"} (omp arms)`);
+		if (plan.study === "main" && !plan.pilot)
+			console.log(
+				`  follow-up study (after the main run, --study followup): ${FOLLOWUP_TASKS} tasks × ${FOLLOWUP_REPS} reps × ${FOLLOWUP_ARMS.length} arms (${FOLLOWUP_ARMS.join(", ")}) = ${FOLLOWUP_TASKS * FOLLOWUP_REPS * FOLLOWUP_ARMS.length} trials`,
+			);
+	}
+	console.log(`  cache: ${plan.cacheDir}`);
+	console.log(`  trial roots: ${plan.workDir ?? `${tmpdir()} (the OS temp folder; --work sets a short root)`}`);
+	console.log(`  results: ${plan.outDir}`);
+}
+
+if (isMainThread && import.meta.main) await runScript(main);

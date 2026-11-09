@@ -1,0 +1,19 @@
+# Arm A6 (0543, 0567): A3 plus the whole harness-OS layer (0532), built into each trial by Jocasta's layer
+# (`evals/layer.ts`, LAYER_MODULE): the task file's brief and Done-when (0540), report_result (0539), the cached checks
+# with gate replies (0542, 0546), the `check` thread tool and the code index behind graph_search (0562). The ledger
+# reads every arm's saved sessions itself (0538). Without the layer build the arm stops before any model call ("A6
+# needs Jocasta's layer build").
+extends: [a3]
+# Plan first as Jocasta's threads do it (0567): not A3's `--plan-yolo`, but omp's interactive plan review answered
+# "Approve and execute" (`evals/plan-review.ts`): the first turn runs omp interactive in a bench herdr pane, starting in
+# plan mode; the review turns then run as A3's.
+plan_first: false
+plan_review: execute
+layer:
+  index: true
+# The interactive review switches to the `plan` role while planning and executes on the `default` tier its model
+# slider starts on: both pinned to the arms' model and thinking level, so a profile's roles can't change them.
+settings:
+  modelRoles:
+    default: anthropic/claude-opus-5-5:high
+    plan: anthropic/claude-opus-5-5:high

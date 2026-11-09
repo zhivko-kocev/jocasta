@@ -1,0 +1,7 @@
+# Placeholder case (0163): his real cases live in ~/.jocasta/agent/evals/cases/ and never enter this repo (0035).
+prompt: "check.ts fails. Fix sum.ts so that bun check.ts passes."
+tags: [fix]
+checks:
+  - command: bun check.ts
+  - file: sum.ts
+    contains: a + b

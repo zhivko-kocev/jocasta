@@ -1,0 +1,24 @@
+# Development entry for the Jocasta repo (0476): the pinned Bun and Node, and the checks as tasks. Plain versions and
+# tasks only, so mise loads it without trust; `mise.lock` pins each tool's URL and checksum (`mise install --locked`).
+# Bun matches package.json's packageManager; a bump changes both and is re-checked per 0383. What ships keeps
+# scripts/build.ts's own hash-checked Node and pnpm.
+[tools]
+bun = "1.4.3"
+node = "24.21.0"
+
+[tasks.check]
+description = "typecheck, lint and the tests"
+run = ["bun run typecheck", "bun run lint", "bun run test"]
+
+[tasks.build]
+description = "the per-platform build (scripts/build.ts)"
+run = "bun run build"
+
+[tasks.evals]
+description = "the eval runner (evals/run.ts)"
+run = "bun run evals"
+
+[tasks.smoke]
+description = "the opt-in smokes on this machine: a throwaway herdr session and Graphiti in Docker"
+env = { JOCASTA_HERDR_SMOKE = "1", JOCASTA_GRAPHITI_SMOKE = "1" }
+run = "bun test test/herdr/herdr.test.ts test/graph/smoke.test.ts"

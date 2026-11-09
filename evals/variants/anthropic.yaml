@@ -1,0 +1,4 @@
+# Anthropic only: omp's default role on the Anthropic model (0375, 0386), layered into the trial's `--config` overlay.
+settings:
+  modelRoles:
+    default: anthropic/claude-opus-5-5

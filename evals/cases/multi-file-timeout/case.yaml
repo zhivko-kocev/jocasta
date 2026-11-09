@@ -1,0 +1,6 @@
+prompt: "Add a timeoutMs option (default 5000) to the client: config.ts, client.ts (abort the fetch after it), cli.ts (--timeout <ms>) and README.md."
+tags: [multi-file]
+checks:
+  - command: bun check.ts
+  - file: README.md
+    contains: "--timeout"

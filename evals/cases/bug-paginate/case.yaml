@@ -1,0 +1,6 @@
+prompt: "paginate.test.ts fails. Fix paginate.ts without changing the test."
+tags: [fix]
+checks:
+  - command: bun test paginate.test.ts
+  - file: paginate.test.ts
+    contains: "[[1, 2], [3, 4], [5]]"

@@ -1,0 +1,4 @@
+# Follow-up study (0545, 0567): A6 with omp's plan review answered "Approve and keep context" in place of "Approve and
+# execute": implementation keeps the plan's research context.
+extends: [a6]
+plan_review: keep

@@ -1,0 +1,2 @@
+torch
+graphiti-core[falkordb,sentence-transformers]==0.30.2

@@ -1,0 +1,7 @@
+# Follow-up study (0543, 0541 K9): A6 with keep-alive pings on: omp's `providers.cacheWarming: idle` re-sends the last
+# request with a one-token budget before its 5-minute cache entry ends, also between runs (every other omp arm has
+# `streaming`, 0567).
+extends: [a6]
+settings:
+  providers:
+    cacheWarming: idle

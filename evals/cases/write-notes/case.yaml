@@ -1,0 +1,7 @@
+# Placeholder case (0163): his real cases live in ~/.jocasta/agent/evals/cases/ and never enter this repo (0035).
+prompt: "Create notes.txt with the line: hello from acme"
+tags: [write]
+checks:
+  - file: notes.txt
+    contains: hello from acme
+  - git_clean: false

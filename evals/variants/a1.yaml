@@ -1,0 +1,20 @@
+# Arm A1 (0482): A0 plus Jocasta's pane config: the guard (0450) as a second `--config`, Ponytail appended (0427), and
+# the project overlay's settings from `service.ts` `overlayText`: compaction at 300k (0399, 0448), `AGENTS.local.md`
+# as a context file (0449) and the privacy settings (0478). Left out on purpose: memory (off in every arm, so lessons
+# from his sessions can't carry over), plan-on-startup (that is A2) and the lessons skill (a benchmark task has none).
+extends: [a0]
+configs: [../../config/guard.yml]
+append_system_prompt: ../../config/ponytail.md
+settings:
+  compaction:
+    methodOrder: [shake, handoff, soft, snapcompact, remote]
+    thresholdTokens: 300000
+    idleEnabled: true
+    idleThresholdTokens: 100000
+  contextFiles:
+    extra: [AGENTS.local.md]
+  dev:
+    autoqa: false
+  disabledProviders: [claude-plugins]
+  modelRoles:
+    web: web/duckduckgo

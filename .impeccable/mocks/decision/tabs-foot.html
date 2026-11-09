@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Frontier · Tabs at Jocasta's feet</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Mona+Sans:wdth,wght@75..125,200..900&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--i0:#06090f;--i1:#0a0f17;--i2:#0e1520;--i3:#131c29;--h1:rgb(150 190 230 / 9%);--h2:rgb(150 190 230 / 16%);--h3:rgb(150 190 230 / 26%);--t1:#dde7f1;--t2:#93a3b7;--t3:#6c7f97;--arc:#92d6ec;--arch:#c4ecf8;--arcl:rgb(146 214 236 / 34%);--arcw:rgb(146 214 236 / 8%);--gold:#d9c08f;--goldl:rgb(217 192 143 / 38%);--sage:#9cc9b0;--rose:#e39a9a;--sans:"Mona Sans",system-ui,sans-serif;--mono:"Geist Mono",ui-monospace,monospace}
+*{box-sizing:border-box}html,body{margin:0;width:1440px;height:900px;overflow:hidden}
+body{background:var(--i0);color:var(--t1);font:400 14px/1.55 var(--sans);font-feature-settings:"tnum" 1;-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;background:none;border:1px solid transparent;border-radius:6px;padding:5px 10px}
+.ico{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round}
+.pr .s{fill:none;stroke:var(--arc);stroke-width:1.5;opacity:.9;stroke-linecap:round;vector-effect:non-scaling-stroke}
+kbd{font:500 10.5px var(--mono);color:var(--t3);border:1px solid var(--h2);border-bottom-width:1.5px;border-radius:4px;padding:0 4px;margin-left:8px}
+.st{display:inline-block;width:7px;height:7px;border-radius:50%;flex:none}.st.run{background:var(--arc);box-shadow:0 0 0 3px rgb(146 214 236 / 12%)}.st.blk{background:var(--gold);box-shadow:0 0 0 3px rgb(217 192 143 / 13%)}.st.q{border:1.2px solid var(--t3)}.st.dn{background:var(--sage);box-shadow:0 0 0 3px rgb(156 201 176 / 12%)}.st.bad{background:var(--rose)}
+.hud{display:flex;align-items:center;gap:22px;height:46px;padding:0 12px 0 16px;border-bottom:1px solid var(--h1);white-space:nowrap}
+.id{display:flex;align-items:center;gap:12px}.id svg{width:22px;height:22px}.wm{font:400 12px var(--sans);font-stretch:125%;letter-spacing:.34em;text-transform:uppercase}
+.fig{display:flex;align-items:baseline;gap:22px;color:var(--t2);font-size:13px}.fig b{font-weight:500;color:var(--t1);margin-right:5px}.fig .at,.fig .at b{color:var(--gold)}.fig small{color:var(--t3);font-size:11.5px;margin-left:5px}
+.grow{flex:1}.clock{color:var(--t3);font-size:13px;margin-right:6px}.tools{display:flex;gap:2px}.ib{width:30px;height:30px;padding:0;display:grid;place-items:center;color:var(--t2)}
+.main{display:grid;grid-template-columns:816px 1fr;height:854px}
+.conv{display:flex;flex-direction:column;height:854px;overflow:hidden}.col{width:616px;margin:0 auto}.log{flex:1;overflow:hidden;padding-top:34px}
+.greet{display:flex;align-items:center;gap:20px;margin-bottom:34px}.greet svg{width:64px;height:64px;flex:none}
+.hello{margin:0 0 4px;font:300 30px/1.2 var(--sans);font-stretch:112.5%;letter-spacing:-.005em}.greet p{margin:0;color:var(--t2);font-size:14.5px}
+.you{display:inline-block;margin:0 0 22px;padding:9px 14px;border-radius:12px;background:var(--i2);border:1px solid var(--h1)}
+.jv{display:grid;grid-template-columns:18px 1fr;column-gap:12px}.jv svg{width:14px;height:14px;margin-top:4px}
+.th{display:flex;align-items:center;gap:6px;margin:0 0 8px;color:var(--t3);font-size:13px;font-style:italic}.th .ico{width:13px;height:13px}
+.tr{display:flex;align-items:center;gap:10px;margin:0 0 12px;color:var(--t3);font-size:13px}.tr .ico{width:14px;height:14px}.tr code{font:12px var(--mono);color:var(--t2)}
+.pr-b p{margin:0 0 10px;font-size:15px;line-height:1.65}.pr-b b{font-weight:550}.spk{font-weight:520;text-decoration:underline 1px rgb(146 214 236 / 34%);text-underline-offset:5px}
+.ev{display:grid;grid-template-columns:7px 1fr auto;column-gap:12px;align-items:center;margin:6px 0 0 30px;padding:10px 14px;border-radius:10px;border:1px solid var(--h1);font-size:13.5px;color:var(--t2)}.ev b{color:var(--t1);font-weight:500}.ev span:last-child{color:var(--arc);font-size:13px}
+.req{margin:0 0 14px;padding:15px 18px 14px;border-radius:14px;background:var(--i2);border:1px solid var(--h2);box-shadow:0 1px 0 rgb(255 255 255 / 3%) inset,0 10px 30px -14px rgb(0 0 0 / 75%),0 2px 6px -2px rgb(0 0 0 / 50%)}
+.req .h{display:flex;align-items:center;gap:10px;margin-bottom:9px;font-size:13px;color:var(--t2)}.req .h b{color:var(--t1);font-weight:500}.req .h .m{margin-left:auto;color:var(--t3);font-size:12.5px}
+.req .q{margin:0 0 6px;font-size:15px;line-height:1.6}.req code{font:13px var(--mono);color:var(--arch)}.req .lk{margin:0 0 13px;color:var(--t3);font-size:13px}
+.opts{display:flex;gap:8px}.b{display:inline-flex;align-items:center;border-color:var(--h2);padding:6px 12px}.b.lit{border-color:var(--arcl);background:var(--arcw);color:var(--arch)}.b.lit kbd{color:var(--arc);border-color:var(--arcl)}.b.gh{color:var(--t2)}
+.cmp{display:flex;align-items:center;gap:14px;margin-left:-50px}.cmp svg{width:36px;height:36px;flex:none}
+.fld{position:relative;flex:1;display:flex;align-items:center;height:48px;padding:0 16px;border-radius:14px;background:var(--i1);border:1px solid var(--h2);color:var(--t3);font-size:15px}
+.fld::before{content:"";position:absolute;top:-1px;left:14px;width:calc((100% - 28px) * .41);height:1px;background:var(--arc)}
+.hints{display:flex;gap:18px;padding:8px 0 16px;color:var(--t3);font-size:12.5px}.hints kbd{margin:0 3px;color:var(--t2)}.hints .r{margin-left:auto}
+.tabs{display:flex;align-items:stretch;gap:2px;height:42px;padding:0 14px;border-top:1px solid var(--h1);font-size:12.5px;font-stretch:87.5%;white-space:nowrap}
+.tab{position:relative;display:flex;align-items:center;gap:7px;padding:0 10px;border-radius:0;color:var(--t2)}.tab .p{color:var(--t3)}.tab .ico{width:14px;height:14px}
+.tab.on{color:var(--t1);background:var(--i1)}.tab.on::before{content:"";position:absolute;left:0;right:0;top:-1px;height:1px;background:var(--arc)}
+.tab .new{width:5px;height:5px;border-radius:50%;background:var(--arc);margin-left:1px}.tab.qd{color:var(--t3)}
+.tv{display:flex;flex-direction:column;height:854px;border-left:1px solid var(--h1);overflow:hidden}
+.strip{display:flex;align-items:center;gap:16px;height:36px;padding:0 18px;border-bottom:1px solid var(--h1);background:var(--i1);font-size:12.5px;color:var(--t2);white-space:nowrap}
+.strip .aw{display:inline-flex;align-items:center;gap:8px;color:var(--gold)}.strip b{color:var(--t1);font-weight:500}.strip .mn{font:12px var(--mono);color:var(--t3)}.strip kbd{margin:0}
+.term{flex:1;padding:16px 18px;font:12.5px/1.55 var(--mono);color:#c9d5e2;white-space:pre;overflow:hidden}
+.a-r{color:#e39a9a}.a-g{color:#9cc9b0}.a-y{color:#d9c08f}.a-b{color:#8fb4e8}.a-c{color:#92d6ec}.a-d{color:#6c7f97}.a-hl{color:var(--arch);background:var(--arcw)}
+.foot{display:flex;gap:14px;padding:10px 18px 14px;border-top:1px solid var(--h1);font:12px var(--mono);color:var(--t3)}
+</style></head><body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+<symbol id="pres" viewBox="0 0 36 36"><circle cx="18" cy="18" r="15" fill="none" stroke="#92d6ec" stroke-opacity=".32" vector-effect="non-scaling-stroke"/><circle cx="18" cy="18" r="10" fill="none" stroke="#92d6ec" stroke-opacity=".55" vector-effect="non-scaling-stroke"/><circle cx="18" cy="18" r="2.6" fill="#92d6ec" fill-opacity=".85"/></symbol>
+<symbol id="i-canvas" viewBox="0 0 16 16"><rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M9.5 2.5v11"/></symbol>
+<symbol id="i-today" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="11" rx="1.5"/><path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3"/></symbol>
+<symbol id="i-digest" viewBox="0 0 16 16"><path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01"/></symbol>
+<symbol id="i-voice" viewBox="0 0 16 16"><path d="M2.5 6v4H5l3.5 3V3L5 6zM11 5.5a3.5 3.5 0 0 1 0 5M12.8 3.6a6 6 0 0 1 0 8.8"/></symbol>
+<symbol id="i-quit" viewBox="0 0 16 16"><path d="M8 2v5.5M4.6 4.2a5 5 0 1 0 6.8 0"/></symbol>
+<symbol id="i-read" viewBox="0 0 16 16"><path d="M4 2h5.5L12 4.5V14H4z"/><path d="M6 8h4M6 10.5h4"/></symbol>
+<symbol id="i-chev" viewBox="0 0 16 16"><path d="M6 4.5l3.5 3.5L6 11.5"/></symbol>
+</svg>
+<header class="hud">
+<div class="id"><svg class="pr" viewBox="0 0 36 36"><use href="#pres"/></svg><span class="wm">Jocasta</span></div>
+<div class="fig"><span><b>3</b>at work</span><span class="at"><b>1</b>awaiting you</span><span><b>1</b>queued</span><span><b>$4.82</b>today<small>list price</small></span><span><b>62%</b>left</span></div>
+<span class="grow"></span><span class="clock">14:32</span>
+<div class="tools"><button class="ib" title="Canvas"><svg class="ico"><use href="#i-canvas"/></svg></button><button class="ib" title="Today"><svg class="ico"><use href="#i-today"/></svg></button><button class="ib" title="Digest"><svg class="ico"><use href="#i-digest"/></svg></button><button class="ib" title="Voice on"><svg class="ico"><use href="#i-voice"/></svg></button><button class="ib" title="Quit"><svg class="ico"><use href="#i-quit"/></svg></button></div>
+</header>
+<div class="main">
+<section class="conv">
+<div class="log"><div class="col">
+<div class="greet"><svg class="pr" viewBox="0 0 36 36"><use href="#pres"/><path class="s" d="M18 3A15 15 0 0 1 31 10.5"/></svg><div><h1 class="hello">Good afternoon.</h1><p>Three threads at work. One would like a word.</p></div></div>
+<div class="you">How is acme-api doing?</div>
+<div class="jv"><svg class="pr" viewBox="0 0 36 36"><use href="#pres"/></svg><div class="pr-b">
+<div class="th"><svg class="ico"><use href="#i-chev"/></svg>Thought for 3s</div>
+<div class="tr"><svg class="ico"><use href="#i-read"/></svg>Read thread <code>acme-api / rate-limiter</code><span>· 214 lines</span></div>
+<p>Two threads. <b>Rate limiter</b> is running: the token bucket is in and it is writing tests, 6 of 9 passing. <span class="spk">Flaky checkout is waiting on a question for you, just below.</span></p>
+<p>In client-a-portal, <b>OIDC</b> is queued; it starts when a slot frees, 3 of 5 running.</p>
+</div></div>
+<div class="ev"><span class="st bad"></span><span><b>example-org-infra #482</b> failed its pipeline: terraform plan, 2 errors.</span><span>Open</span></div>
+</div></div>
+<div class="col">
+<div class="req"><div class="h"><span class="st blk"></span><b>acme-api</b>Fix flaky checkout test<span class="m">waiting 4m · open on the right</span></div>
+<p class="q">The test fails whenever the clock crosses midnight UTC. Freeze time in the test, or fix <code>orderDate()</code> to use the store's timezone?</p>
+<p class="lk">Likely your call: fix the cause. You chose it in 3 of your last 4 answers like this.</p>
+<div class="opts"><button class="b lit">Fix orderDate()<kbd>1</kbd></button><button class="b">Freeze time in the test<kbd>2</kbd></button><button class="b gh">Answer in words<kbd>3</kbd></button></div></div>
+<div class="cmp"><svg class="pr" viewBox="0 0 36 36"><use href="#pres"/></svg><div class="fld">Speak or type to Jocasta</div></div>
+<div class="hints"><span>Hold <kbd>Space</kbd> or <kbd>Right Ctrl</kbd> to speak</span><span>Enter to send</span><span class="r">41% of context</span></div>
+</div>
+<nav class="tabs" aria-label="Threads">
+<button class="tab"><svg class="ico"><use href="#i-canvas"/></svg>Canvas<span class="new"></span></button>
+<button class="tab"><span class="st run"></span><span class="p">acme-api</span>Rate limiter</button>
+<button class="tab on"><span class="st blk"></span><span class="p">acme-api</span>Flaky checkout</button>
+<button class="tab"><span class="st run"></span><span class="p">client-a-portal</span>Dark mode</button>
+<button class="tab"><span class="st dn"></span>README line</button>
+<button class="tab qd"><span class="st q"></span>+ 1 queued</button>
+
+</nav>
+</section>
+<section class="tv">
+<div class="strip"><span class="aw"><span class="st blk"></span>awaiting you</span><span><b>acme-api</b> · Fix flaky checkout test</span><span class="grow"></span><span class="mn">7m · $0.41</span><kbd>Ctrl J</kbd></div>
+<div class="term"><span class="a-c">jocasta</span> <span class="a-d">on pi · acme-api · plan mode off</span>
+
+<span class="a-b">›</span> fix the flaky checkout test
+
+Ran the checkout suite 40 times: it fails only between 23:59 and
+00:01 UTC. orderDate() reads the clock in UTC, but the assertion
+builds the expected day in local time, so the two disagree near
+midnight.
+
+<span class="a-d">╭─</span> <span class="a-y">bash</span> bun test test/checkout --repeat 40
+<span class="a-d">│</span> <span class="a-g">✓</span> 38 pass
+<span class="a-d">│</span> <span class="a-r">✗</span> 2 fail  order date matches the store day  <span class="a-d">23:59:41 UTC</span>
+<span class="a-d">╰─ 40 runs · 1.8s</span>
+
+<span class="a-d">╭─</span> <span class="a-y">read</span> src/checkout/order-date.ts <span class="a-d">· 12–19</span>
+<span class="a-d">│</span>   export const orderDate = () =&gt; new Date().toISOString().slice(0, 10);
+<span class="a-d">╰─</span>
+
+<span class="a-y">╭─ question ─────────────────────────────────────────────╮</span>
+<span class="a-y">│</span> Freeze time or fix orderDate()?                        <span class="a-y">│</span>
+<span class="a-y">│</span>                                                        <span class="a-y">│</span>
+<span class="a-y">│</span> <span class="a-hl">› 1  Fix orderDate() to use the store's timezone      </span> <span class="a-y">│</span>
+<span class="a-y">│</span>   2  Freeze time in the test                           <span class="a-y">│</span>
+<span class="a-y">│</span>   3  Answer in words                                   <span class="a-y">│</span>
+<span class="a-y">╰────────────────────────────────────────────────────────╯</span>
+<span class="a-d">↑↓ choose · enter answers · or answer on the card</span></div>
+<div class="foot"><span>claude-opus-5-5 · high</span><span>23% of context</span><span class="grow"></span><span>$0.41</span></div>
+</section>
+</div>
+</body></html>

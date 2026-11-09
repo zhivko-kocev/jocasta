@@ -1,0 +1,66 @@
+# Frozen copy of config/guard.yml as it was before record 0485 (2026-10-24), for benchmark H1's before/after comparison
+# (0482). Never load this file into a pane; it is a benchmark input only.
+bash:
+  gitGuard: true
+  patterns:
+    - { match: "*git *push* --force", approval: deny }
+    - { match: "*git *push* --force *", approval: deny }
+    - { match: "*git *push* -f", approval: deny }
+    - { match: "*git *push* -f *", approval: deny }
+    - { match: "*git *push* +*", approval: deny }
+    - { match: "*git *reset --hard*", approval: deny }
+    - { match: "*git *clean -*", approval: deny }
+    - { match: "*git *branch -D*", approval: deny }
+    - { match: "*git *checkout .*", approval: deny }
+    - { match: "*git *checkout -- *", approval: deny }
+    - { match: "*git *checkout -f*", approval: deny }
+    - { match: "*git *checkout --force*", approval: deny }
+    - { match: "*git *restore .*", approval: deny }
+    - { match: "*git *restore -- *", approval: deny }
+    - { match: "*git *switch -f*", approval: deny }
+    - { match: "*git *switch --force*", approval: deny }
+    - { match: "*git *switch --discard-changes*", approval: deny }
+    - { match: "*git *worktree remove* -f*", approval: deny }
+    - { match: "*git *worktree remove* --force*", approval: deny }
+    - { match: "*gh repo delete*", approval: deny }
+    - { match: "*rm -*r* /*", approval: deny }
+    - { match: "*rm -*R* /*", approval: deny }
+    - { match: "*--no-preserve-root*", approval: deny }
+    - { match: "*shutdown /*", approval: deny }
+    - { match: "*| sh", approval: deny }
+    - { match: "*| sh *", approval: deny }
+    - { match: "*|sh", approval: deny }
+    - { match: "*|sh *", approval: deny }
+    - { match: "*| bash", approval: deny }
+    - { match: "*| bash *", approval: deny }
+    - { match: "*|bash", approval: deny }
+    - { match: "*|bash *", approval: deny }
+    - { match: "*mise trust*", approval: deny }
+    - { match: "*mise use* -g*", approval: deny }
+    - { match: "*mise use* --global*", approval: deny }
+    - { match: "*mise up* --bump*", approval: deny }
+    - { match: "*git *push* --force-with-lease*", approval: prompt }
+    - { match: "*rm -r *", approval: prompt }
+    - { match: "*rm -R *", approval: prompt }
+    - { match: "*rm -rf *", approval: prompt }
+    - { match: "*rm -fr *", approval: prompt }
+    - { match: "*rm -Rf *", approval: prompt }
+    - { match: "*rm -fR *", approval: prompt }
+    - { match: "*rm --recursive*", approval: prompt }
+    - { match: "*rm -* -r *", approval: prompt }
+    - { match: "*Remove-Item* -R*", approval: prompt }
+    - { match: "*Remove-Item* -r*", approval: prompt }
+    - { match: "*remove-item* -r*", approval: prompt }
+    - { match: "*remove-item* -R*", approval: prompt }
+    - { match: "*rd /s*", approval: prompt }
+    - { match: "*rd /S*", approval: prompt }
+    - { match: "*rmdir /s*", approval: prompt }
+    - { match: "*rmdir /S*", approval: prompt }
+    - { match: "*git *reflog expire*", approval: prompt }
+    - { match: "*git *gc --prune=now*", approval: prompt }
+    - { match: "*Invoke-Expression*", approval: prompt }
+    - { match: "*invoke-expression*", approval: prompt }
+    - { match: "*| iex*", approval: prompt }
+    - { match: "*|iex*", approval: prompt }
+    - { match: "*iex (*", approval: prompt }
+    - { match: "*iex(*", approval: prompt }
