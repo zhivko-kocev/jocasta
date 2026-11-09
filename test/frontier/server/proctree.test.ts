@@ -181,7 +181,15 @@ test.if(process.platform === "win32")(
 		expect(short).toContain("~");
 		const tree = await sleeperTree(short);
 		cleanup.push(tree.stop);
-		expect(processesIn(folder).map((p) => p.pid)).toContain(tree.root);
+		// Under the full suite's load the new process's working folder can be unreadable for a moment: ask again until
+		// it shows or 10 s pass.
+		const deadline = Date.now() + 10_000;
+		let pids = processesIn(folder).map((p) => p.pid);
+		while (!pids.includes(tree.root) && Date.now() < deadline) {
+			await Bun.sleep(200);
+			pids = processesIn(folder).map((p) => p.pid);
+		}
+		expect(pids).toContain(tree.root);
 	},
 	30_000,
 );
