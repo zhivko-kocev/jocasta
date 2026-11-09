@@ -128,7 +128,7 @@ test("a dropped herdr read never ends the turn: the pane's process is watched lo
 			return "w1";
 		},
 		async createTab(_workspace: string, tab: { command: string[]; cwd: string }) {
-			child = Bun.spawn(tab.command, { cwd: tab.cwd, stdio: ["ignore", "ignore", "ignore"] });
+			child = Bun.spawn(tab.command, { cwd: tab.cwd, stdio: ["ignore", "ignore", "ignore"], windowsHide: true });
 			return { tabId: "t1", paneId: "p1" };
 		},
 		async paneRoot() {

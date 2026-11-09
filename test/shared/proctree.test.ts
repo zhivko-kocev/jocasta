@@ -197,7 +197,9 @@ test.if(process.platform === "win32")(
 		const folder = join(dir, "A Long Folder Name");
 		mkdirSync(folder);
 		const fso = `(New-Object -ComObject Scripting.FileSystemObject).GetFolder('${folder}').ShortPath`;
-		const short = Bun.spawnSync(["powershell", "-NoProfile", "-Command", fso]).stdout.toString().trim();
+		const short = Bun.spawnSync(["powershell", "-NoProfile", "-Command", fso], { windowsHide: true })
+			.stdout.toString()
+			.trim();
 		if (short === "" || short.toLowerCase() === folder.toLowerCase()) return; // This volume makes no 8.3 names.
 		expect(short).toContain("~");
 		const tree = await sleeperTree(short);
@@ -218,7 +220,7 @@ test.if(process.platform === "win32")(
 );
 
 test("a process that is gone, or this process, is never in a tree and ends nothing", async () => {
-	const gone = Bun.spawn([process.execPath, "-e", "0"], { stdio: ["ignore", "ignore", "ignore"] });
+	const gone = Bun.spawn([process.execPath, "-e", "0"], { stdio: ["ignore", "ignore", "ignore"], windowsHide: true });
 	await gone.exited;
 	expect(await killTree(gone.pid)).toEqual([]);
 	const own = [process.pid, process.ppid].flatMap((pid) => processIdOf(pid) ?? []);

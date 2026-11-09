@@ -11,8 +11,8 @@
 // second bench out while one runs. `--validate` checks each task without a model: its hidden tests fail on the base
 // commit and pass three times with the gold patch (logs in `validation/`). Real trials bill model usage: they need
 // `JOCASTA_EVALS_REAL=1` and never run in CI (0169). Exits 1 when a trial or task is left failing or an arm stopped on
-// a new harness version, 2 on a bad flag, 3 after three sign-in failures in a row, 4 when A7's spend limit stopped its
-// trials.
+// a new harness version, 2 on a bad flag or an omp folder that would give the omp arms MCP servers (0587), 3 after
+// three sign-in failures in a row, 4 when A7's spend limit stopped its trials.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
@@ -26,10 +26,11 @@ import { type Conditions, conditions, readVersion } from "../bench/lib/output.ts
 import { loadPriceTable, type PriceTable } from "../bench/lib/prices.ts";
 import { BENCH_PTY_SESSION } from "../bench/lib/sandbox.ts";
 import { findHerdr } from "../src/frontier/server/herdr.ts";
-import { removeTree } from "../src/shared/fsx.ts";
+import { asObject, removeTree } from "../src/shared/fsx.ts";
 import { git as gitRead } from "../src/shared/git.ts";
 import { appendJsonl, readJsonlFile } from "../src/shared/jsonl.ts";
 import type { TrialLedger } from "../src/shared/ledger.ts";
+import { ompAgentDir } from "../src/shared/paths.ts";
 import { onPath } from "../src/shared/process.ts";
 import { pidAlive, processStartedAt } from "../src/shared/proctree.ts";
 import { profileName } from "./args.ts";
@@ -747,6 +748,70 @@ function wholeNumber(text: string | undefined, name: string, fallback: number, m
 	return Number(text);
 }
 
+/** The layer's own MCP server's name in a layered arm's extension root (`src/frontier/layer/bench.ts`). */
+const LAYER_SERVER = "jocasta";
+
+/** omp's `enabled` as it reads it (`discovery/builtin.ts`): false, or the strings "false" and "0", turn a server off. */
+function turnedOff(config: unknown): boolean {
+	const enabled = asObject(config)?.enabled;
+	return enabled === false || (typeof enabled === "string" && ["false", "0"].includes(enabled.toLowerCase()));
+}
+
+/**
+ * 0587: why the omp arms can't run with omp's folder `agentDir` (the profile's with `--profile`) as it is, or
+ * undefined. omp starts every server its `mcp.json` and `.mcp.json` list that's on (`enabled` not false, or named in
+ * `enabledServers`; not named in `disabledServers`) in every trial. For the `layered` arms, a `jocasta` entry there,
+ * even one turned off, or `jocasta` in `disabledServers` hides the layer's own server: omp keeps its folder's over an
+ * extension's (`discovery/omp-plugins.ts`). A file that's missing or isn't JSON gives omp nothing.
+ */
+export function mcpProblem(agentDir: string, layered: readonly string[]): string | undefined {
+	const strings = (value: unknown) =>
+		Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+	const files = ["mcp.json", ".mcp.json"].flatMap((name) => {
+		const file = join(agentDir, name);
+		let config: Record<string, unknown> | undefined;
+		try {
+			config = asObject(JSON.parse(readFileSync(file, "utf8")));
+		} catch {
+			return [];
+		}
+		if (config === undefined) return [];
+		return [
+			{
+				file,
+				servers: asObject(config.mcpServers) ?? {},
+				disabled: strings(config.disabledServers),
+				forced: strings(config.enabledServers),
+			},
+		];
+	});
+	const disabled = new Set(files.flatMap((each) => each.disabled));
+	const forced = new Set(files.flatMap((each) => each.forced));
+	const loaded = files
+		.map(({ file, servers }) => ({
+			file,
+			names: Object.entries(servers)
+				.filter(([name, config]) => !disabled.has(name) && (!turnedOff(config) || forced.has(name)))
+				.map(([name]) => name),
+		}))
+		.filter(({ names }) => names.length > 0);
+	if (loaded.length > 0) {
+		const where = loaded.map(({ file, names }) => `${file}: ${names.join(", ")}`).join("; ");
+		return `the omp arms would load MCP servers from ${where}. Remove them (jocasta uninstall removes Jocasta's) or use a --profile without them; no trial ran.`;
+	}
+	if (layered.length === 0) return undefined;
+	const entry = files.find(({ servers }) => LAYER_SERVER in servers);
+	const denied = files.find((each) => each.disabled.includes(LAYER_SERVER));
+	const why =
+		entry !== undefined
+			? `${entry.file} has a "${LAYER_SERVER}" entry, which hides the layer's even turned off`
+			: denied !== undefined
+				? `${denied.file} names "${LAYER_SERVER}" in disabledServers`
+				: undefined;
+	if (why === undefined) return undefined;
+	return `${layered.join(", ")} would lose the layer's own MCP server "${LAYER_SERVER}": ${why}. Remove it or use a --profile without it; no trial ran.`;
+}
+
 async function main(): Promise<void> {
 	const argv = process.argv.slice(2);
 	if (argv.includes("--runs")) throw new BenchUsageError("unknown option: --runs (use --reps)");
@@ -825,6 +890,13 @@ async function main(): Promise<void> {
 		const switches = variants.get(name)?.layer;
 		if (switches === undefined) continue;
 		layerProblems.set(name, layerBuilt() ? await (await loadBenchLayer()).preflight(switches) : layerMissingMessage());
+	}
+	// 0587: omp's folder gives the omp arms no MCP server of its own and doesn't hide a layered arm's (dry run too).
+	const ompArms = armNames.filter((name) => variants.get(name)?.harness === "omp");
+	if (!validate && ompArms.length > 0) {
+		const layered = ompArms.filter((name) => variants.get(name)?.layer !== undefined);
+		const problem = mcpProblem(ompAgentDir(profile), layered);
+		if (problem !== undefined) throw new BenchUsageError(problem);
 	}
 	if (args.dryRun) {
 		printDryRun({

@@ -30,7 +30,7 @@ test("a bundled server serves its page files from another working directory", as
 	const elsewhere = join(env.root, "elsewhere");
 	mkdirSync(elsewhere);
 	const entry = join(out, "test", "frontier", "server", "fixtures", "serve-page.js");
-	const run = Bun.spawnSync([process.execPath, entry], { cwd: elsewhere, stderr: "pipe" });
+	const run = Bun.spawnSync([process.execPath, entry], { cwd: elsewhere, stderr: "pipe", windowsHide: true });
 	expect(run.stderr.toString()).toBe("");
 	expect(JSON.parse(run.stdout.toString())).toEqual({ page: 200, title: true, chunk: 200 });
 }, 60_000);

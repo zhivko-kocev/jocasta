@@ -54,12 +54,15 @@ export function defaultDataDir(): string {
 }
 
 /**
- * omp's agent dir (0387): `PI_CODING_AGENT_DIR` (tilde-expanded), else `~/.omp/agent`, as omp resolves it
- * (`@oh-my-pi/pi-utils` `dirs.ts` `getAgentDir`). Setup writes there; the service reads its `sessions/`.
+ * omp's agent dir (0387), as omp resolves it (`@oh-my-pi/pi-utils` `dirs.ts` `getAgentDir`): a named `profile`'s is
+ * `<root>/profiles/<name>/agent` whatever `PI_CODING_AGENT_DIR` says; else `PI_CODING_AGENT_DIR` (tilde-expanded), else
+ * `<root>/agent`; `<root>` is `~/.omp`, or `~/<PI_CONFIG_DIR>`. Setup writes there; the service reads its `sessions/`.
  */
-export function ompAgentDir(): string {
+export function ompAgentDir(profile?: string): string {
+	const root = join(homedir(), process.env.PI_CONFIG_DIR || ".omp");
+	if (profile !== undefined) return join(root, "profiles", profile, "agent");
 	const env = process.env.PI_CODING_AGENT_DIR;
-	return env ? expandTilde(env) : join(homedir(), ".omp", "agent");
+	return env ? expandTilde(env) : join(root, "agent");
 }
 
 /** `~/.jocasta/agent/projects.yaml` (0109). */

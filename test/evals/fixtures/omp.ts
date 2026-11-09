@@ -22,7 +22,7 @@ const prompt = after("-p") ?? "";
 const config = after("--config");
 if (process.env.JOCASTA_TEST_OMP_LOG) {
 	const overlay = config === undefined ? undefined : JSON.parse(readFileSync(config, "utf8"));
-	const branch = spawnSync("git", ["branch", "--show-current"], { encoding: "utf8" }).stdout.trim();
+	const branch = spawnSync("git", ["branch", "--show-current"], { encoding: "utf8", windowsHide: true }).stdout.trim();
 	const appended = after("--append-system-prompt");
 	appendFileSync(
 		process.env.JOCASTA_TEST_OMP_LOG,

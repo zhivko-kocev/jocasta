@@ -148,6 +148,7 @@ test(
 				const other = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], {
 					cwd: path,
 					stdio: ["ignore", "ignore", "ignore"],
+					windowsHide: true,
 				});
 				try {
 					server.herdr.roots.set(paneId, tree.shim);

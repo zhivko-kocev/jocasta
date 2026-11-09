@@ -53,6 +53,7 @@ test("a live holder that doesn't answer within the bound is hung: its tree is en
 	// A hung service: a live process holding the lock whose /health never answers (`busy`).
 	const hung = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], {
 		stdio: ["ignore", "ignore", "ignore"],
+		windowsHide: true,
 	});
 	try {
 		let holder = processIdOf(hung.pid);

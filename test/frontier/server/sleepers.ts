@@ -68,7 +68,11 @@ export interface SleeperTree {
 	stop(): Promise<void>;
 }
 
-/** Whether children must start detached to outlive their parent (Windows). */
+/**
+ * Whether children must start detached to outlive their parent (Windows). These stand-ins never start hidden
+ * (`windowsHide`): a hidden attached process gets a console host (`conhost.exe`) as its child, which would join the
+ * trees these tests compare. Attached, they share the test's console; detached, they have none; so none opens a window.
+ */
 const WINDOWS = process.platform === "win32";
 
 /**

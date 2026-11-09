@@ -17,6 +17,8 @@ import { cut, quoted } from "./wording.ts";
 /** herdr's notification limits (0554): a title of 80 characters, a body of 240. */
 const NOTIFICATION_TITLE = 80;
 const NOTIFICATION_BODY = 240;
+/** How long the start's unshown notifications wait for his terminal to attach before they're dropped (0584). */
+const UNSHOWN_WAIT_MS = 10 * 60_000;
 
 /** The boss pane as the service keeps it (0404). */
 export interface BossPane {
@@ -48,8 +50,15 @@ export class Events {
 	private readonly bossQueue: { line: string; holds?: () => boolean }[] = [];
 	/** Notifications and `[event]` lines sent without waiting, until herdr answered and the log line is written. */
 	private readonly inFlight = new Set<Promise<void>>();
-	/** Notifications herdr couldn't show for want of a client, by text, to send again once (`resendUnshown`). */
+	/**
+	 * The start's notifications herdr couldn't show for want of a client, by text, to send again once (`resendUnshown`,
+	 * 0584). Only ones raised while `starting` wait; later ones without a client are dropped, as before.
+	 */
 	private readonly unshown = new Map<string, Extract<ServerMessage, { type: "toast" }>>();
+	/** When the first of them was kept: they're dropped once no terminal attached within `UNSHOWN_WAIT_MS`. */
+	private unshownSince: number | undefined;
+	/** Until herdr first answers a notification for a client, or `UNSHOWN_WAIT_MS` passed with none. */
+	private starting = true;
 	private resending = false;
 
 	constructor(
@@ -170,8 +179,8 @@ export class Events {
 	 * A toast as a Windows notification through herdr (0407, 0554), and a refused key's (0552): the thread it names as
 	 * the title (the text before " — "), else "Jocasta", and the rest as the body, cut to herdr's 80 and 240
 	 * characters; urgent and blocked ones with herdr's request sound. Each call and herdr's answer is one line of
-	 * `<data>/notifications.jsonl`, for the benchmark's time to the notification (H2, 0543). One herdr couldn't show
-	 * for want of a client (`no_foreground_client`: the service started before his terminal attached) is kept and sent
+	 * `<data>/notifications.jsonl`, for the benchmark's time to the notification (H2, 0543). One raised before any
+	 * client was attached (`no_foreground_client`: the service started before his terminal attached) is kept and sent
 	 * again once by `resendUnshown` (0584: the start's settings problems are said once).
 	 */
 	async notify(toast: Extract<ServerMessage, { type: "toast" }>, options: { show?: boolean } = {}): Promise<void> {
@@ -190,8 +199,15 @@ export class Events {
 			result = "error";
 			this.c.warn(error);
 		}
-		if (result === "no_foreground_client") this.unshown.set(toast.text, toast);
-		else if (result !== "repeat") this.unshown.delete(toast.text);
+		if (result === "no_foreground_client") {
+			if (this.starting) {
+				this.unshown.set(toast.text, toast);
+				this.unshownSince ??= Date.now();
+			}
+		} else if (result !== "repeat") {
+			this.unshown.delete(toast.text);
+			if (result !== "error") this.starting = false;
+		}
 		try {
 			appendFileSync(
 				join(dataDir(), "notifications.jsonl"),
@@ -203,12 +219,17 @@ export class Events {
 	}
 
 	/**
-	 * Sends the notifications herdr couldn't show for want of a client again, in order (each refresh tick): the first
-	 * one probes; while herdr still has no client they all wait for the next tick. Once herdr answered anything else, a
-	 * notification isn't sent again.
+	 * Sends the start's notifications herdr couldn't show again, in order (each refresh tick): the first one probes;
+	 * while no client was ever attached they all wait for the next tick, and once one is, each is sent once, whatever
+	 * herdr answers. A service no terminal attached to within `UNSHOWN_WAIT_MS` drops them.
 	 */
 	resendUnshown(): void {
 		if (this.unshown.size === 0 || this.resending) return;
+		if (Date.now() - (this.unshownSince ?? Date.now()) > UNSHOWN_WAIT_MS) {
+			this.starting = false;
+			this.unshown.clear();
+			return;
+		}
 		this.resending = true;
 		this.track(
 			(async () => {
@@ -216,7 +237,8 @@ export class Events {
 					for (const toast of [...this.unshown.values()]) {
 						if (this.c.stopping) return;
 						await this.notify(toast);
-						if (this.unshown.has(toast.text)) return;
+						if (this.starting) return;
+						this.unshown.delete(toast.text);
 					}
 				} finally {
 					this.resending = false;

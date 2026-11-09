@@ -339,7 +339,11 @@ test(
 				const close = server.herdr.closeWorkspace.bind(server.herdr);
 				let holder: Bun.Subprocess | undefined;
 				server.herdr.closeWorkspace = async (workspaceId) => {
-					holder = Bun.spawn([process.execPath, "-e", "await Bun.sleep(1500)"], { cwd: path, stdout: "ignore" });
+					holder = Bun.spawn([process.execPath, "-e", "await Bun.sleep(1500)"], {
+						cwd: path,
+						stdout: "ignore",
+						windowsHide: true,
+					});
 					await server.service.refresh();
 					await close(workspaceId);
 				};
@@ -376,6 +380,7 @@ test(
 				const holder = Bun.spawn([process.execPath, "-e", "await Bun.sleep(2000)"], {
 					cwd: join(path, "sub"),
 					stdout: "ignore",
+					windowsHide: true,
 				});
 				let exited = false;
 				const gone = holder.exited.then(() => {

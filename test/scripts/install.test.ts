@@ -67,7 +67,7 @@ function run(cmd: string[], env: Record<string, string>) {
 	// Started from PowerShell 7 (CI's shell), PSModulePath lists PowerShell 7's modules first, and Windows PowerShell
 	// then can't load its own `Get-FileHash`; without the variable it builds its default.
 	for (const key of Object.keys(merged)) if (key.toLowerCase() === "psmodulepath") delete merged[key];
-	const result = Bun.spawnSync(cmd, { env: merged, stdout: "pipe", stderr: "pipe" });
+	const result = Bun.spawnSync(cmd, { env: merged, stdout: "pipe", stderr: "pipe", windowsHide: true });
 	return { code: result.exitCode, out: result.stdout.toString(), err: result.stderr.toString() };
 }
 

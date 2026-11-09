@@ -142,6 +142,7 @@ test(
 				// The pane's omp: a real process, so its pid and start can be read (0490).
 				const omp = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], {
 					stdio: ["ignore", "ignore", "ignore"],
+					windowsHide: true,
 				});
 				const host = await fakeHost(join(env.data, "collab-hosts"), {
 					pid: omp.pid,

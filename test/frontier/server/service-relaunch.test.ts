@@ -90,6 +90,7 @@ test(
 				const other = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], {
 					cwd: path,
 					stdio: ["ignore", "ignore", "ignore"],
+					windowsHide: true,
 				});
 				try {
 					herdr.roots.set(paneId, tree.root);
@@ -132,6 +133,7 @@ test(
 				const other = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], {
 					cwd: path,
 					stdio: ["ignore", "ignore", "ignore"],
+					windowsHide: true,
 				});
 				try {
 					server.herdr.roots.set(paneId, tree.root);
@@ -164,7 +166,10 @@ test(
 				// The thread's and the boss's omps: real processes that outlive their roots, as omp's workers do.
 				const omp = await sleeperTree(join(env.root, "thread-omp"), true);
 				const boss = await sleeperTree(join(env.root, "boss-omp"), true);
-				const ended = Bun.spawn([process.execPath, "-e", ""], { stdio: ["ignore", "ignore", "ignore"] });
+				const ended = Bun.spawn([process.execPath, "-e", ""], {
+					stdio: ["ignore", "ignore", "ignore"],
+					windowsHide: true,
+				});
 				await ended.exited;
 				try {
 					server.herdr.roots.set(paneId, omp.root);

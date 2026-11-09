@@ -54,6 +54,12 @@ start their threads as `jocasta thread new` does (`POST /api/cli`: no Allow, no 
 threads still open in plan mode and wait for the operator's approval of their plan in their pane. The bench never
 closes threads or removes worktrees: those ask him first (0484), so H6 and H8 wait for Enter between runs.
 
+Before the full runs (0588), each script runs once in the VM's sandbox, each into its own throwaway `--out` (checks,
+not results): every script's `--dry-run`, then `h3-recovery.ts --runs 1`, `h5-startup.ts --runs 1`,
+`h6-memory.ts --threads 0,1` and `h8-parallel.ts --threads 2`; anything broken is fixed before the long runs. These
+runs need setup's files in tester's omp folder (`restore-setup-files.ps1`); the task benchmark needs them out
+(`fullrun-prep.ps1`) and refuses to start while that folder gives its omp arms an MCP server (0587).
+
 ## The scripts
 
 - **H1 (0482, 0500, 0501, 0535).** Four scripts; the corpus is a separate file and this folder holds no command list.
@@ -149,7 +155,9 @@ closes threads or removes worktrees: those ask him first (0484), so H6 and H8 wa
   in `h2-notifications.jsonl`.
 - **H3, `bun bench/h3-recovery.ts --out <dir> [--runs 20] [--faults herdr,service,pane] [--restart jocasta]`.**
   Kills herdr's server, the service, or one omp pane and times recovery from the moment the kill returned (the
-  lookups before it). Every fault counts as recovered when every workspace that had an omp pane before has an omp
+  lookups before it; the herdr and pane faults' kill, the product's `killTree`, returns once the process tree is gone,
+  about 50 ms after the bench's own kill did before 0573's fixes). Every fault counts as recovered when every
+  workspace that had an omp pane before has an omp
   pane again, whatever its pane id (0522: the service relaunches panes under new ids); the service fault also needs a
   new service answering (0528: it relaunches the boss pane under a new id with its new key). Before 0576 the service
   fault was named `companion`; `h3-recovery.json`'s `"renamed": {"service": "companion"}` says so. For the herdr
@@ -388,6 +396,12 @@ stopped its trials. The fixed choices:
 - **Dry run:** the trial count and limit, the first 15 trials of the order, each arm's harness command line, A6's
   layer switches and whether its layer can run here, A7's key, machine and limit, the pacer's rule, the ledger's
   files, and the cache, trial-root and results paths; the main run's dry run also names the follow-up study's size.
+- **omp's own MCP servers (0587):** before any trial and in the dry run (not `--validate`), a run with an omp arm
+  reads `mcp.json` and `.mcp.json` in the omp folder it uses (the `--profile`'s, else `PI_CODING_AGENT_DIR` or
+  `~/.omp/agent`) as omp reads them, and refuses (exit 2) while a server there is on, naming each file and server.
+  With a layered arm, a `jocasta` entry, even one turned off, or `jocasta` in `disabledServers` refuses too: omp keeps
+  its folder's `jocasta` over the layer's own, so A6 would lose `report_result` and `check`. Servers omp imports from
+  other tools' configs aren't checked.
 - **Smoke run in the VM (EVL-15; about 12 paid trials):** a dry run with `--only` one Python, one TypeScript/JavaScript
   and one Go task, `--arms a4,a6,a7,f-keep-context --reps 1 --work C:\t --timeout 90`, then the same for real
   (`JOCASTA_EVALS_REAL=1`, A7's key set). Check: `errors.jsonl` is empty; A6's and `f-keep-context`'s rows have

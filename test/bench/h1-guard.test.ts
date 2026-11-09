@@ -104,6 +104,7 @@ test("the CLI prints the table, writes its results outside the repo, and dry-run
 		[script, "--corpus", corpus, "--guard", guard, "--out", out, "--resamples", "200"],
 		{
 			encoding: "utf8",
+			windowsHide: true,
 		},
 	);
 	expect(run.status).toBe(0);
@@ -113,13 +114,14 @@ test("the CLI prints the table, writes its results outside the repo, and dry-run
 	expect(readJsonl(join(out, "h1-guard.jsonl"))).toHaveLength(6);
 	const dry = spawnSync(process.execPath, [script, "--corpus", corpus, "--guard", guard, "--dry-run"], {
 		encoding: "utf8",
+		windowsHide: true,
 	});
 	expect(dry.status).toBe(0);
 	expect(dry.stdout).toContain("judge 6 commands (groups: dev, held-out) against 2 rules");
 	const inside = spawnSync(
 		process.execPath,
 		[script, "--corpus", corpus, "--guard", guard, "--out", join(import.meta.dir, "out")],
-		{ encoding: "utf8" },
+		{ encoding: "utf8", windowsHide: true },
 	);
 	expect(inside.status).toBe(2);
 	expect(inside.stderr).toContain("--out must be outside the repo");
@@ -226,7 +228,7 @@ test("the CLI scores omp's verdicts with --verdicts and reports each way of writ
 	const run = spawnSync(
 		process.execPath,
 		[script, "--corpus", corpus, "--guard", guard, "--verdicts", verdicts, "--out", out, "--resamples", "200"],
-		{ encoding: "utf8" },
+		{ encoding: "utf8", windowsHide: true },
 	);
 	expect(run.status).toBe(0);
 	expect(run.stdout).toContain("matcher: omp's own verdicts");
@@ -242,6 +244,7 @@ test("the CLI scores omp's verdicts with --verdicts and reports each way of writ
 	expect(rows[2]).toMatchObject({ id: "c3", verdict: "allow", mechanism: "mode-default", reimplemented: "allow" });
 	const dry = spawnSync(process.execPath, [script, "--corpus", corpus, "--verdicts", verdicts, "--dry-run"], {
 		encoding: "utf8",
+		windowsHide: true,
 	});
 	expect(dry.stdout).toContain("matcher: omp's own verdicts");
 });

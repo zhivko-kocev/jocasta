@@ -93,6 +93,7 @@ test("a run folder with nothing to compare exits 2 instead of passing (0576)", (
 		[join(import.meta.dir, "..", "..", "bench", "tokscale-parity.ts"), "--out", runDir],
 		{
 			encoding: "utf8",
+			windowsHide: true,
 		},
 	);
 	expect(run.status).toBe(2);

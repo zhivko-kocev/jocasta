@@ -106,6 +106,7 @@ describe("the keep rule (0375)", () => {
 			[join(import.meta.dir, "..", "..", "evals", "run.ts"), "compare", dirA, dirB],
 			{
 				encoding: "utf8",
+				windowsHide: true,
 			},
 		);
 		expect(run.status).toBe(0);
@@ -118,6 +119,7 @@ describe("the keep rule (0375)", () => {
 			[join(import.meta.dir, "..", "..", "evals", "run.ts"), "compare", dirA],
 			{
 				encoding: "utf8",
+				windowsHide: true,
 			},
 		);
 		expect(missing.status).toBe(2);

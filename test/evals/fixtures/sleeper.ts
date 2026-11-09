@@ -8,7 +8,7 @@ if (process.argv.includes("--version")) {
 	console.log("omp/0.0.0-sleeper");
 	process.exit(0);
 }
-const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 120_000)"], { stdio: "ignore" });
+const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 120_000)"], { stdio: "ignore", windowsHide: true });
 writeFileSync(process.env.JOCASTA_TEST_SLEEPER_PID_FILE ?? "", String(child.pid));
 console.log(JSON.stringify({ type: "agent_start" }));
 setTimeout(() => {}, 120_000);

@@ -746,7 +746,7 @@ test("herdrConfig writes the HUD's command per platform as a TOML string and lea
 		writeFileSync(join(data, "hud.txt"), "2 awaiting you\n");
 		const command = `cat '${root}/it'\\''s/hud.txt'`;
 		expect(Bun.TOML.parse(herdrConfig(template, data, false))).toEqual({ command });
-		expect(Bun.spawnSync([sh, "-c", command]).stdout.toString()).toBe("2 awaiting you\n");
+		expect(Bun.spawnSync([sh, "-c", command], { windowsHide: true }).stdout.toString()).toBe("2 awaiting you\n");
 	}
 });
 

@@ -43,6 +43,7 @@ describe("eval run flags (0318)", () => {
 		const run = spawnSync(process.execPath, [join(import.meta.dir, "..", "..", "evals", "run.ts"), ...argv], {
 			env,
 			encoding: "utf8",
+			windowsHide: true,
 		});
 		expect(run.status).toBe(2);
 		expect(run.stderr.trim()).toBe(message);

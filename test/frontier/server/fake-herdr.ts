@@ -163,7 +163,9 @@ export class FakeHerdr implements Herdr {
 		const { path } = opts;
 		mkdirSync(join(path, ".."), { recursive: true });
 		// Like herdr: checks out `branch` at `path`, creating it from `base` (else HEAD) when missing.
-		const exists = Bun.spawnSync(["git", "-C", opts.repo, "rev-parse", "--verify", "--quiet", opts.branch]).success;
+		const exists = Bun.spawnSync(["git", "-C", opts.repo, "rev-parse", "--verify", "--quiet", opts.branch], {
+			windowsHide: true,
+		}).success;
 		if (exists) sh(opts.repo, "worktree", "add", path, opts.branch);
 		else sh(opts.repo, "worktree", "add", "-b", opts.branch, path, ...(opts.base ? [opts.base] : []));
 		const extra = opts.prepare ? await opts.prepare(path) : {};

@@ -594,7 +594,7 @@ describe("H7", () => {
 				"--lengths",
 				"20,40",
 			],
-			{ encoding: "utf8" },
+			{ encoding: "utf8", windowsHide: true },
 		);
 		expect(run.status).toBe(0);
 		const summary = JSON.parse(readFileSync(join(out, "h7-longpath.json"), "utf8"));
@@ -703,6 +703,7 @@ describe("H8", () => {
 			spawnSync("git", ["-c", "user.name=Bench", "-c", "user.email=bench@example.org", ...args], {
 				cwd,
 				encoding: "utf8",
+				windowsHide: true,
 			});
 		for (const [path, text] of Object.entries(fixtureFiles(4))) {
 			mkdirSync(join(repo, path, ".."), { recursive: true });
@@ -731,7 +732,7 @@ describe("H8", () => {
 		git(repo, ["checkout", "-q", "main"]);
 		const testsPass = (branch: string) => {
 			git(repo, ["checkout", "-q", branch]);
-			return spawnSync(process.execPath, ["test"], { cwd: repo, encoding: "utf8" }).status === 0;
+			return spawnSync(process.execPath, ["test"], { cwd: repo, encoding: "utf8", windowsHide: true }).status === 0;
 		};
 		expect([testsPass("rename"), testsPass("upper")]).toEqual([true, true]);
 		git(repo, ["checkout", "-q", "main"]);
@@ -814,7 +815,11 @@ describe("every script dry-runs without a sandbox, a model or an --out", () => {
 		["evals/run.ts --variant a4", "turn 1: claude --model claude-opus-5-5"],
 	])("%s", (command, expected) => {
 		const [file = "", ...rest] = command.split(" ");
-		const run = spawnSync(process.execPath, [join(root, file), ...rest, "--dry-run"], { env, encoding: "utf8" });
+		const run = spawnSync(process.execPath, [join(root, file), ...rest, "--dry-run"], {
+			env,
+			encoding: "utf8",
+			windowsHide: true,
+		});
 		expect(run.stderr).toBe("");
 		expect(run.status).toBe(0);
 		expect(run.stdout).toContain(expected);

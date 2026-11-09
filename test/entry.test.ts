@@ -14,6 +14,7 @@ function jocasta(args: string[], stdin: "pipe" | "ignore" = "ignore") {
 		stdout: "pipe",
 		stderr: "pipe",
 		env: { ...process.env, JOCASTA_DATA_DIR: env.data, JOCASTA_CODING_AGENT_DIR: join(env.root, "config") },
+		windowsHide: true,
 	});
 }
 
@@ -33,6 +34,7 @@ test("--version names Jocasta, omp, herdr and Bun", async () => {
 			JOCASTA_DATA_DIR: env.data,
 			JOCASTA_CODING_AGENT_DIR: join(env.root, "config"),
 		},
+		windowsHide: true,
 	});
 	const out = await new Response(child.stdout).text();
 	expect(await child.exited).toBe(0);

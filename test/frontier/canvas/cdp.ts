@@ -2,7 +2,7 @@
 // test file (`Edge.launch`); each test gets a tab in a browser context of its own (`edge.tab()`), so no cookie, cache
 // or storage carries over from another test.
 import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { removeTree } from "../../../src/shared/fsx.ts";
@@ -12,6 +12,25 @@ export const EDGE = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msed
 
 /** How long Edge may take to open DevTools on a loaded machine. */
 const LAUNCH_TIMEOUT_MS = 30_000;
+
+/** How long `close` tries to remove the profile once Edge's tree has ended. */
+const PROFILE_REMOVAL_MS = 10_000;
+
+/** A profile left this long ago by an earlier run is no longer held by anything; `launch` removes it. */
+const STALE_PROFILE_MS = 60 * 60_000;
+
+/** Removes the throwaway profiles earlier runs had to leave, once they are `STALE_PROFILE_MS` old. */
+function sweepStaleProfiles(): void {
+	for (const name of readdirSync(tmpdir())) {
+		if (!name.startsWith("jocasta-edge-")) continue;
+		const dir = join(tmpdir(), name);
+		try {
+			if (Date.now() - statSync(dir).mtimeMs > STALE_PROFILE_MS) removeTree(dir);
+		} catch {
+			// Still held: a later launch tries again.
+		}
+	}
+}
 
 interface CdpReply {
 	id?: number;
@@ -72,6 +91,7 @@ export class Edge {
 
 	/** Starts headless Edge on a throwaway profile; `flags` add Edge switches. */
 	static async launch(flags: readonly string[] = []): Promise<Edge> {
+		sweepStaleProfiles();
 		const profile = mkdtempSync(join(tmpdir(), "jocasta-edge-"));
 		const proc = spawn(
 			EDGE,
@@ -124,7 +144,9 @@ export class Edge {
 
 	/**
 	 * Closes Edge through CDP, ends whatever of its tree still runs (its helper processes can hold the profile's files
-	 * for over 30 s after the browser exits on a loaded machine), then removes the profile.
+	 * for over 30 s after the browser exits on a loaded machine), then removes the profile. Windows can keep a file of
+	 * a just-ended Edge held longer than `PROFILE_REMOVAL_MS` under load, with no Edge process left: that profile is
+	 * said and left for a later launch's sweep.
 	 */
 	async close(): Promise<void> {
 		const root = this.proc.pid === undefined ? undefined : processIdOf(this.proc.pid);
@@ -136,14 +158,18 @@ export class Edge {
 		this.browser.close();
 		if (root) await endProcesses([root]);
 		// An ended process's open files close a moment after it's gone.
-		const end = Date.now() + LAUNCH_TIMEOUT_MS;
+		const end = Date.now() + PROFILE_REMOVAL_MS;
 		for (;;) {
 			try {
 				removeTree(this.profile);
 				return;
 			} catch (error) {
 				const code = error instanceof Error && "code" in error ? error.code : undefined;
-				if ((code !== "EBUSY" && code !== "EPERM") || Date.now() > end) throw error;
+				if (code !== "EBUSY" && code !== "EPERM") throw error;
+				if (Date.now() > end) {
+					console.warn(`cdp: left ${this.profile} (${code}); a later launch removes it`);
+					return;
+				}
 				await Bun.sleep(250);
 			}
 		}

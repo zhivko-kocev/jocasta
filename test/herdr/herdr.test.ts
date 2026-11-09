@@ -750,7 +750,8 @@ test.skipIf(process.env.JOCASTA_HERDR_SMOKE !== "1")(
 			configPath,
 			`[worktrees]\ndirectory = "${join(root, "wt").replaceAll("\\", "/")}"\n\n[ui.toast]\ndelivery = "off"\n`,
 		);
-		const git = (...args: string[]) => Bun.spawnSync(["git", "-C", cwd, ...args], { stdout: "ignore" });
+		const git = (...args: string[]) =>
+			Bun.spawnSync(["git", "-C", cwd, ...args], { stdout: "ignore", windowsHide: true });
 		git("init", "-q", "-b", "main");
 		git(
 			"-c",
@@ -809,7 +810,7 @@ test.skipIf(process.env.JOCASTA_HERDR_SMOKE !== "1")(
 				["--session", session, "server", "stop"],
 				["session", "delete", session],
 			]) {
-				const run = Bun.spawnSync([bin, ...args]);
+				const run = Bun.spawnSync([bin, ...args], { windowsHide: true });
 				console.log(
 					`herdr ${args.join(" ")} → exit ${run.exitCode} ${run.stdout.toString().trim()} ${run.stderr.toString().trim()}`,
 				);
@@ -861,8 +862,8 @@ test.skipIf(process.env.JOCASTA_HERDR_SMOKE !== "1")(
 		} finally {
 			herdr?.close();
 			killAll(started);
-			Bun.spawnSync([bin, "--session", session, "server", "stop"]);
-			Bun.spawnSync([bin, "session", "delete", session]);
+			Bun.spawnSync([bin, "--session", session, "server", "stop"], { windowsHide: true });
+			Bun.spawnSync([bin, "session", "delete", session], { windowsHide: true });
 			removeTree(root);
 		}
 	},

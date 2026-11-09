@@ -370,7 +370,7 @@ describe("bun run evals", () => {
 	const run = (env: Record<string, string | undefined>) => {
 		const merged: Record<string, string | undefined> = { ...process.env, ...env };
 		for (const [key, value] of Object.entries(env)) if (value === undefined) delete merged[key];
-		return spawnSync(process.execPath, [runScript], { env: merged, encoding: "utf8" });
+		return spawnSync(process.execPath, [runScript], { env: merged, encoding: "utf8", windowsHide: true });
 	};
 
 	test("needs JOCASTA_EVALS_REAL, refuses CI, and needs omp on PATH", () => {
@@ -402,7 +402,7 @@ describe("the trial repo (0482)", () => {
 				'\twriteFileSync(dir + "/pre-commit", "#!/bin/sh\\nexit 1\\n");',
 				'\tchmodSync(dir + "/pre-commit", 0o755);',
 				"}",
-				'spawnSync("git", ["config", "core.hooksPath", ".husky"]);',
+				'spawnSync("git", ["config", "core.hooksPath", ".husky"], { windowsHide: true });',
 				"",
 			].join("\n"),
 		});
@@ -421,12 +421,15 @@ describe("the trial repo (0482)", () => {
 		const root = tempDir();
 		const { repo } = await makeTrialRepo(evalCase, 1, root, process.env);
 		const copy = join(tempDir(), "copy");
-		expect(spawnSync("git", ["clone", "-q", repo, copy]).status).toBe(0);
+		expect(spawnSync("git", ["clone", "-q", repo, copy], { windowsHide: true }).status).toBe(0);
 		expect(existsSync(join(copy, "internal", "gh", "gh.go"))).toBe(true);
 		// The tag moved onto the commit that folds setup's output in, so the clean clone's checkout is still at it.
-		const described = spawnSync("git", ["describe", "--tags"], { cwd: copy, encoding: "utf8" });
+		const described = spawnSync("git", ["describe", "--tags"], { cwd: copy, encoding: "utf8", windowsHide: true });
 		expect(described.stdout.trim()).toBe("v2.3.0");
-		const commit = spawnSync("git", ["commit", "-q", "--allow-empty", "-m", "the agent's commit"], { cwd: repo });
+		const commit = spawnSync("git", ["commit", "-q", "--allow-empty", "-m", "the agent's commit"], {
+			cwd: repo,
+			windowsHide: true,
+		});
 		expect(commit.status).toBe(0);
 	});
 
@@ -434,7 +437,7 @@ describe("the trial repo (0482)", () => {
 		const cases = tempDir();
 		const pidFile = join(tempDir(), "setup-grandchild.pid").replaceAll("\\", "/");
 		// Real time on purpose: the limit is the platform clock ending a child process tree, which fake timers can't drive.
-		const hang = `const c = require("node:child_process").spawn(process.execPath, ["-e", "setTimeout(() => {}, 120000)"], { stdio: "ignore" }); require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(c.pid)); for (;;) {}`;
+		const hang = `const c = require("node:child_process").spawn(process.execPath, ["-e", "setTimeout(() => {}, 120000)"], { stdio: "ignore", windowsHide: true }); require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(c.pid)); for (;;) {}`;
 		writeFiles(cases, {
 			"slowsetup/case.yaml": JSON.stringify({
 				prompt: "p",
@@ -507,7 +510,7 @@ describe("grading after the harness (0574)", () => {
 	test("a hidden check past the grading limit is ended with its tree and grades 0, and the trial counts", async () => {
 		const cases = tempDir();
 		const pidFile = join(tempDir(), "grandchild.pid").replaceAll("\\", "/");
-		const hang = `const c = require("node:child_process").spawn(process.execPath, ["-e", "setTimeout(() => {}, 120000)"], { stdio: "ignore" }); require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(c.pid)); for (;;) {}`;
+		const hang = `const c = require("node:child_process").spawn(process.execPath, ["-e", "setTimeout(() => {}, 120000)"], { stdio: "ignore", windowsHide: true }); require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(c.pid)); for (;;) {}`;
 		writeFiles(cases, {
 			"hang/case.yaml": JSON.stringify({
 				prompt: "Write out.txt: hello",
@@ -600,7 +603,7 @@ describe("grading after the harness (0574)", () => {
 			}),
 		});
 		const launcher = harness(
-			`spawnSync("git", ["checkout", "-q", "-b", "fix/issue-3"]); writeFileSync("out.txt", "hello\\n");`,
+			`spawnSync("git", ["checkout", "-q", "-b", "fix/issue-3"], { windowsHide: true }); writeFileSync("out.txt", "hello\\n");`,
 		);
 		const [row] = await runEvals({ casesDir: cases, outDir: join(tempDir(), "run"), reps: 1, launcher });
 		expect(row?.hiddenPassed).toBe(true);

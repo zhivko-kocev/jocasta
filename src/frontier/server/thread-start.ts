@@ -123,10 +123,16 @@ export class ThreadStarts {
 		if (checks.some((command) => !command || /[\r\n]/.test(command))) {
 			throw new UserError(`${prefix}: each done_when is one command on one line.`);
 		}
-		// Jocasta runs each done_when itself, outside omp's guard: the guard's own rules decide first (0580).
+		// Jocasta runs each done_when itself, outside omp's guard: the guard's own rules decide first (0580). omp matches
+		// a command with its quotes removed, Jocasta's copy the raw text, so both forms are matched and the stricter
+		// verdict counts: `git push --for"ce"` is still `--force`.
 		const prompted: string[] = [];
 		for (const command of checks) {
-			const { verdict: said, rule } = verdict(command, shippedGuard());
+			const forms = [verdict(command, shippedGuard()), verdict(command.replace(/["']/g, ""), shippedGuard())];
+			const { verdict: said, rule } =
+				forms.find((form) => form.verdict === "deny") ??
+				forms.find((form) => form.verdict === "prompt") ??
+				(forms[0] as (typeof forms)[number]);
 			if (said === "deny") {
 				throw new UserError(
 					`${prefix}: done_when \`${command}\` is denied by Jocasta's guard (\`${rule}\`); no thread was started.`,

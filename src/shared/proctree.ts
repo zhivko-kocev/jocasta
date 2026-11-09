@@ -262,11 +262,12 @@ export async function endOmpLeftovers(sets: OmpProcesses[], waitMs: number): Pro
  * (0490): a process counts only when it started at or after its parent, so a live process that names a long-dead parent
  * whose pid Windows gave again is never reached (SRV-A-1; `taskkill /T` walks raw parent pids, so it isn't used). The
  * walk is taken again until nothing is left or 5 s pass: children started meanwhile, and the orphans of a process that
- * ended first (each process found stays a root by its own pid and start). Each process found gets SIGKILL
- * (TerminateProcess on Windows); on POSIX a found group leader's whole group too, unless a spared process or one under
- * it is in that group. `spare` (a process and what runs under it) is never entered or signalled while it is still that
- * same run: the herdr server a hung service started (0582). Never this process or its ancestors. Resolves the pids
- * found.
+ * ended first (each process found stays a root by its own pid and start). A root whose pid another run holds that can't
+ * be read yet (one being made or ending; Windows gives a freed pid again within milliseconds under load) hides that
+ * root's orphans, so the walk isn't done while one does. Each process found gets SIGKILL (TerminateProcess on Windows);
+ * on POSIX a found group leader's whole group too, unless a spared process or one under it is in that group. `spare` (a
+ * process and what runs under it) is never entered or signalled while it is still that same run: the herdr server a
+ * hung service started (0582). Never this process or its ancestors. Resolves the pids found.
  */
 export async function endProcesses(roots: ProcessId[], spare: ProcessId[] = []): Promise<number[]> {
 	const all = new Map<string, ProcessId>();
@@ -286,7 +287,11 @@ export async function endProcesses(roots: ProcessId[], spare: ProcessId[] = []):
 			spared.flatMap((pid) => [pid, ...descendants(pid, parents, own)]).flatMap((pid) => groups.get(pid) ?? []),
 		);
 		const now = [...new Set(ids.flatMap((root) => leftovers(root, processes, skip)))];
-		if (now.length === 0 || Date.now() >= end) return [...found];
+		const unread = ids.some((root) => {
+			const holder = processes.get(root.pid);
+			return holder !== undefined && holder.start === undefined;
+		});
+		if ((now.length === 0 && !unread) || Date.now() >= end) return [...found];
 		for (const pid of now) {
 			found.add(pid);
 			add({ pid, start: processes.get(pid)?.start as number });

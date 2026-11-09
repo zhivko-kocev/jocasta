@@ -28,7 +28,7 @@ const tempDir = useTempDirs("jocasta-bench-");
 const ompLog = useOmpLog();
 
 function git(cwd: string, ...args: string[]): string {
-	const result = spawnSync("git", ["-c", "core.autocrlf=false", ...args], { cwd, encoding: "utf8" });
+	const result = spawnSync("git", ["-c", "core.autocrlf=false", ...args], { cwd, encoding: "utf8", windowsHide: true });
 	if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
 	return result.stdout;
 }
@@ -517,7 +517,7 @@ describe("resume (0482)", () => {
 		);
 		expect(existsSync(join(out, "results.jsonl"))).toBe(false);
 		// A crashed run's lock: its process is gone.
-		const gone = Bun.spawnSync([process.execPath, "-e", "0"]).pid;
+		const gone = Bun.spawnSync([process.execPath, "-e", "0"], { windowsHide: true }).pid;
 		writeFileSync(join(out, RUN_LOCK), JSON.stringify({ pid: gone, startedAt }));
 		expect(await runBench(options)).toBe(0);
 		expect(existsSync(join(out, RUN_LOCK))).toBe(false);

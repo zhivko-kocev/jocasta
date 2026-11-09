@@ -2,11 +2,22 @@ import { afterEach, beforeEach } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { removeTree } from "../../src/shared/fsx.ts";
+import { isInside } from "../../src/shared/pathkey.ts";
 
-/** Runs git in `dir` with a throwaway identity; throws on failure. */
+/** This repo's root: no test's git may run in it. */
+const REPO_ROOT = resolve(import.meta.dir, "..", "..");
+
+/**
+ * Runs git in `dir` with a throwaway identity; throws on failure. An empty `dir` (a fixture path read before its
+ * `beforeEach` set it) or one inside this repo is refused before git runs: git would act on the repo itself, as a
+ * test once did when it set the repo's commit address to the tests' own.
+ */
 export function sh(dir: string, ...args: string[]): string {
+	if (dir === "" || isInside(REPO_ROOT, dir)) {
+		throw new Error(`git ${args.join(" ")}: refused in ${dir === "" ? "an empty folder (this repo)" : dir}`);
+	}
 	const result = spawnSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], {
 		cwd: dir,
 		encoding: "utf8",

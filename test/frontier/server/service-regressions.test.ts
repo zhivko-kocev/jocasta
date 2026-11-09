@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setSystemTime, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { Confirmation } from "../../../src/frontier/server/allow.ts";
@@ -442,6 +442,11 @@ test(
 					text: "thread_start: done_when `git push --force origin main` is denied by Jocasta's guard (`*git*push* --force *`); no thread was started.",
 					isError: true,
 				});
+				// Quotes don't launder a denied command: omp's own matcher sees it without them.
+				expect(await start('git push --for"ce" origin main')).toEqual({
+					text: 'thread_start: done_when `git push --for"ce" origin main` is denied by Jocasta\'s guard (`*git*push* --force *`); no thread was started.',
+					isError: true,
+				});
 				expect(asks).toEqual([]);
 				expect(await start("npm publish")).toEqual({ text: "He chose Deny; no thread was started.", isError: true });
 				expect(asks).toHaveLength(1);
@@ -669,6 +674,7 @@ test(
 					const { paneId, path } = await startThread(server);
 					const omp = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], {
 						stdio: ["ignore", "ignore", "ignore"],
+						windowsHide: true,
 					});
 					const host = await fakeHost(join(env.data, "collab-hosts"), {
 						pid: omp.pid,
@@ -723,7 +729,7 @@ test(
 );
 
 test(
-	"a start notification herdr couldn't show for want of a client is sent again once a client is attached, once (0584)",
+	"a start notification herdr couldn't show for want of a client is sent again once a client is attached, once; a later one isn't (0584)",
 	async () => {
 		writeSettings(env.config, { service: { colour: "red" } });
 		const herdr = new FakeHerdr();
@@ -758,6 +764,49 @@ test(
 				expect(said.at(-1)).toBe("shown");
 				expect(said.slice(0, -1).every((result) => result === "no_foreground_client")).toBe(true);
 				expect(said.length).toBeGreaterThan(tried);
+				// A client was attached: one herdr can't show later (his terminal closed since) isn't kept for the next.
+				const later = { type: "toast", reason: "blocked", level: "warning", text: "Ship — waits for you" } as const;
+				herdr.notifyResult = "no_foreground_client";
+				await server.service.notify(later);
+				herdr.notifyResult = "shown";
+				await server.service.refresh();
+				await server.service.refresh();
+				const once = { title: "Ship", body: "waits for you", sound: "request" };
+				expect(herdr.of("notify").filter(([note]) => Bun.deepEquals(note, once))).toHaveLength(1);
+			},
+			{ herdr },
+		);
+	},
+	GIT_TEST_TIMEOUT,
+);
+
+test(
+	"the start's notifications wait 10 minutes for a client: then they're dropped, and later ones aren't kept (0584)",
+	async () => {
+		const herdr = new FakeHerdr();
+		herdr.notifyResult = "no_foreground_client";
+		await withServer(
+			async (server) => {
+				const toast = (text: string) => ({ type: "toast", reason: "event", level: "warning", text }) as const;
+				const sent = (body: string) =>
+					herdr.of("notify").filter(([note]) => Bun.deepEquals(note, { title: "Jocasta", body, sound: "none" })).length;
+				await server.service.notify(toast("early"));
+				const t = Date.now();
+				try {
+					setSystemTime(new Date(t + 10 * 60_000 + 1_000));
+					// Two ticks: one may find a resend from the service's own tick still running.
+					await server.service.refresh();
+					await server.service.refresh();
+					await server.service.notify(toast("late"));
+					const early = sent("early");
+					herdr.notifyResult = "shown";
+					await server.service.refresh();
+					await server.service.refresh();
+					expect(sent("early")).toBe(early);
+					expect(sent("late")).toBe(1);
+				} finally {
+					setSystemTime();
+				}
 			},
 			{ herdr },
 		);

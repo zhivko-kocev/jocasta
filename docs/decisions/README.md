@@ -593,3 +593,5 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0584](0584-setup-settings-tests-names-and-stale-files.md) | Setup, settings, tests, names and stale files | product, process | v1 | program | 2026-11-09 |
 | [0585](0585-h1-live-check-gets-a-new-recorder.md) | H1's live check gets a new recorder on omp 18.18.2 | benchmark | v1 | program | 2026-11-09 |
 | [0586](0586-keep-alive-pings-are-not-measured.md) | Keep-alive pings are not measured | benchmark | v1 | program | 2026-11-09 |
+| [0587](0587-bench-refuses-omp-folder-mcp-servers.md) | The task benchmark refuses an omp folder that gives its omp arms MCP servers | benchmark | v1 | program | 2026-11-09 |
+| [0588](0588-benchmark-scripts-run-once-first.md) | Each benchmark script runs once before the full runs | benchmark | v1 | program | 2026-11-09 |

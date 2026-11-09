@@ -63,7 +63,7 @@ await Bun.sleep(500);
 db.exec("COMMIT");
 db.close();`,
 		],
-		{ stdout: "pipe", stderr: "inherit", windowsHide: true },
+		{ stdout: "pipe", stderr: "pipe", windowsHide: true },
 	);
 	const reader = holder.stdout.getReader();
 	const { value } = await reader.read();
@@ -76,7 +76,11 @@ db.close();`,
 	]);
 	db.close();
 	reader.releaseLock();
-	expect(await holder.exited).toBe(0);
+	// Its stderr in the comparison, so a holder that failed says why.
+	expect({ exit: await holder.exited, stderr: await new Response(holder.stderr).text() }).toEqual({
+		exit: 0,
+		stderr: "",
+	});
 });
 
 test("a newer file is refused with 0101's message and left untouched", () => {

@@ -121,7 +121,9 @@ test(
 		expect(fresh?.passed).toBe(true);
 		expect(existsSync(join(dir, (tree as string).slice(0, 12), "test.lock"))).toBe(false);
 		// The real index was never touched: the new file is still untracked.
-		expect(Bun.spawnSync(["git", "-C", repo, "status", "--porcelain"]).stdout.toString()).toContain("?? new.txt");
+		expect(
+			Bun.spawnSync(["git", "-C", repo, "status", "--porcelain"], { windowsHide: true }).stdout.toString(),
+		).toContain("?? new.txt");
 	},
 	GIT_TEST_TIMEOUT,
 );

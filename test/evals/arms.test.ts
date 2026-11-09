@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
-import { DEFAULT_ARMS } from "../../evals/bench.ts";
+import { DEFAULT_ARMS, mcpProblem } from "../../evals/bench.ts";
 import { FOLLOWUP_ARMS, FOLLOWUP_REPS, FOLLOWUP_TASKS, pickFollowupTasks } from "../../evals/followup.ts";
 import {
 	A7_API_KEY_ENV,
@@ -298,4 +298,30 @@ test("opencode's usage comes from its exports: steps as requests, reasoning as o
 	expect(response).toMatchObject({ model: "claude-opus-5-5", requests: 2, turns: 1, toolCalls: 1 });
 	expect(response.usage).toMatchObject({ input: 11, output: 9, cacheRead: 100, cacheWrite: 20, totalTokens: 140 });
 	expect(response.usage.cost).toBeCloseTo(0.012, 12);
+});
+
+test("0587: the omp arms refuse an omp folder whose MCP files give them a server, or hide a layered arm's own", () => {
+	const dir = tempDir();
+	const write = (name: string, config: unknown) => writeFileSync(join(dir, name), JSON.stringify(config));
+	const loads = (where: string) =>
+		`the omp arms would load MCP servers from ${where}. Remove them (jocasta uninstall removes Jocasta's) or use a --profile without them; no trial ran.`;
+	expect(mcpProblem(dir, ["a6"])).toBeUndefined();
+	write("mcp.json", {
+		mcpServers: { jocasta: { command: "jocasta" }, whiteboard: { command: "node", enabled: "false" } },
+	});
+	write(".mcp.json", { mcpServers: { acme: { command: "acme" } } });
+	expect(mcpProblem(dir, [])).toBe(loads(`${join(dir, "mcp.json")}: jocasta; ${join(dir, ".mcp.json")}: acme`));
+	// Turned off, a server reaches no arm, yet a "jocasta" entry still hides the layer's own server from A6.
+	write("mcp.json", { mcpServers: { jocasta: { command: "jocasta", enabled: false } } });
+	writeFileSync(join(dir, ".mcp.json"), "not json");
+	expect(mcpProblem(dir, [])).toBeUndefined();
+	expect(mcpProblem(dir, ["a6", "f-keep-context"])).toBe(
+		`a6, f-keep-context would lose the layer's own MCP server "jocasta": ${join(dir, "mcp.json")} has a "jocasta" entry, which hides the layer's even turned off. Remove it or use a --profile without it; no trial ran.`,
+	);
+	// enabledServers turns a server back on; disabledServers keeps one off, and hides the layer's of the same name.
+	write("mcp.json", { mcpServers: { acme: { command: "acme", enabled: "0" } }, enabledServers: ["acme"] });
+	expect(mcpProblem(dir, [])).toBe(loads(`${join(dir, "mcp.json")}: acme`));
+	write("mcp.json", { mcpServers: { acme: { command: "acme" } }, disabledServers: ["acme", "jocasta"] });
+	expect(mcpProblem(dir, [])).toBeUndefined();
+	expect(mcpProblem(dir, ["a6"])).toContain(`${join(dir, "mcp.json")} names "jocasta" in disabledServers`);
 });
