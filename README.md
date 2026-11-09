@@ -8,7 +8,7 @@ Zhivko's work surface around his daily omp. Three parts (0386, 0392, 0552):
 
 ## Prerequisites
 
-- Windows 11 (Linux and macOS builds exist but are untested; see below).
+- Windows 11 (Linux and macOS builds exist; the test suite passes there, the builds themselves are untested; see below).
 - [herdr](https://herdr.dev) 0.9.5 or a later 0.9.x, from its official installer (0385, 0435); the plugin needs 0.9.5 (0553).
 - omp on PATH, signed in (`omp`, then `/login`; 0386). This build is checked against omp 18.18.2 (0535). Dictation is omp's own: omp downloads its speech model on first use or with `omp setup speech` (0556).
 - Docker Desktop, for the memory graph (Graphiti with FalkorDB; 0334). Without it everything else works.
@@ -126,7 +126,7 @@ The canvas page allows eval (`'unsafe-eval'`) so whiteboard's software maps can 
 
 ## Linux and macOS
 
-Builds exist for linux-x64 and darwin-arm64 (`scripts/install.sh`, installing to `~/.local/share/jocasta/`), with the same service and herdr plugin. Right Ctrl dictation, the terminal reopened for the close question (it waits for the next `jocasta` instead) and the calendar's Credential Manager entry are Windows-only. They compile but are untested (0481).
+Builds exist for linux-x64 and darwin-arm64 (`scripts/install.sh`, installing to `~/.local/share/jocasta/`), with the same service and herdr plugin. Right Ctrl dictation, the terminal reopened for the close question (it waits for the next `jocasta` instead) and the calendar's Credential Manager entry are Windows-only. CI runs the test suite on Ubuntu and macOS as on Windows (0572); the builds themselves haven't been run there (0481).
 
 ## Where things are
 
