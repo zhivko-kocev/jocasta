@@ -36,7 +36,9 @@ test("workspace Jocasta is made first, made first again after he closes it, with
 	expect(key).toMatch(/^[0-9a-f]{64}$/);
 	expect(launched.keyOf(pane.paneId)).toBe(key);
 	expect(new LaunchedPanes().paneOfKey(key)).toBe(pane.paneId);
-	expect(new LaunchedPanes().paneOfKey(`${key.slice(0, -1)}0`)).toBeUndefined();
+	// One character off: the last one changed, whatever it was.
+	const forged = `${key.slice(0, -1)}${key.endsWith("0") ? "1" : "0"}`;
+	expect(new LaunchedPanes().paneOfKey(forged)).toBeUndefined();
 	expect(new LaunchedPanes().paneOfKey(undefined)).toBeUndefined();
 	const manual = join(env.data, "home", ".omp", "APPEND_SYSTEM.md");
 	expect(readFileSync(manual, "utf8")).toBe(readFileSync(join(shippedConfigDir(), "boss-manual.md"), "utf8"));
