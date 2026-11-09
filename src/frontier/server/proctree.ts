@@ -156,8 +156,18 @@ export function leftovers(root: ProcessId, processes: Map<number, ProcessEntry>,
  * this process with its ancestors (never in a tree).
  */
 function snapshotUnder(roots: ProcessId[]): { processes: Map<number, ProcessEntry>; own: Set<number> } {
-	const parents = parentPids();
+	const groups = new Map<number, number>();
+	const parents = parentPids(groups);
 	const own = ownLine(parents);
+	// POSIX hands a process whose parent ended to init or a subreaper, so its parent pid no longer leads back. One still
+	// in a root's process group is that root's: the pane's root leads its own group, and a child stays in it unless it
+	// starts one of its own (0486, 0490). Windows keeps the parent's pid and has no groups here.
+	for (const root of roots) {
+		for (const [pid, group] of groups) {
+			if (group !== root.pid || pid === root.pid || own.has(pid)) continue;
+			if (groups.get(parents.get(pid) ?? 0) !== root.pid) parents.set(pid, root.pid);
+		}
+	}
 	const near = new Set<number>();
 	for (const root of roots) {
 		if (own.has(root.pid)) continue;
@@ -278,17 +288,22 @@ export async function killTree(pid: number): Promise<number[]> {
 	return tree;
 }
 
-/** Each running process's parent pid, from one snapshot of the process list. */
-function parentPids(): Map<number, number> {
+/**
+ * Each running process's parent pid, from one snapshot of the process list; on POSIX, `groups` gets each one's process
+ * group from the same snapshot.
+ */
+function parentPids(groups?: Map<number, number>): Map<number, number> {
 	const parents = new Map<number, number>();
 	if (process.platform === "win32") {
 		for (const [pid, ppid] of windows().parents()) parents.set(pid, ppid);
 		return parents;
 	}
-	const ps = Bun.spawnSync(["ps", "-A", "-o", "pid=,ppid="], { stdout: "pipe", stderr: "ignore" });
+	const ps = Bun.spawnSync(["ps", "-A", "-o", "pid=,ppid=,pgid="], { stdout: "pipe", stderr: "ignore" });
 	for (const line of ps.stdout.toString().split("\n")) {
-		const [pid, ppid] = line.trim().split(/\s+/).map(Number);
-		if (pid && ppid !== undefined && Number.isInteger(ppid)) parents.set(pid, ppid);
+		const [pid, ppid, pgid] = line.trim().split(/\s+/).map(Number);
+		if (!pid || ppid === undefined || !Number.isInteger(ppid)) continue;
+		parents.set(pid, ppid);
+		if (groups && pgid !== undefined && Number.isInteger(pgid)) groups.set(pid, pgid);
 	}
 	return parents;
 }

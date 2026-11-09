@@ -34,9 +34,10 @@ export async function endAll(pids: number[]): Promise<void> {
 
 /**
  * The command of a real tree of `bun` sleepers, as a pane's omp with its workers: the root starts a child, which
- * starts a grandchild detached (its own group and session on POSIX, as a language server may). `outlive` starts the
- * child detached too, so both outlive the root, as omp's workers outlive omp (on Windows Bun ends a child started
- * attached with its parent). Each writes its pid to `<folder>/pids/`; `started` lists them.
+ * starts a grandchild detached (its own group and session on POSIX, as a language server may). `outlive` makes the
+ * child outlive the root, as omp's workers outlive omp: detached on Windows (Bun ends a child started attached with
+ * its parent there); on POSIX a child outlives its parent anyway and stays in the root's group. Each writes its pid to
+ * `<folder>/pids/`; `started` lists them.
  */
 export function sleeperCommand(folder: string, outlive = false): { command: string[]; started: () => number[] } {
 	const pids = join(folder, "pids");
@@ -52,7 +53,7 @@ export function sleeperCommand(folder: string, outlive = false): { command: stri
 			"if (depth < 2) {",
 			"\tconst child = Bun.spawn([process.execPath, import.meta.path, String(depth + 1)], {",
 			'\t\tstdio: ["ignore", "ignore", "ignore"],',
-			`\t\tdetached: depth === 1 || ${outlive},`,
+			`\t\tdetached: depth === 1 || ${outlive && WINDOWS},`,
 			"\t});",
 			"\tchild.unref();",
 			"}",
@@ -71,10 +72,16 @@ export interface SleeperTree {
 	stop(): Promise<void>;
 }
 
-/** A sleeper tree (`sleeperCommand`) this process starts, working in `folder`, once all three run. */
+/** Whether children must start detached to outlive their parent (Windows). */
+const WINDOWS = process.platform === "win32";
+
+/**
+ * A sleeper tree (`sleeperCommand`) this process starts, working in `folder`, once all three run. On POSIX its root
+ * leads its own process group, as a herdr pane's process does.
+ */
 export async function sleeperTree(folder: string, outlive = false): Promise<SleeperTree> {
 	const { command, started } = sleeperCommand(folder, outlive);
-	const root = Bun.spawn(command, { cwd: folder, stdio: ["ignore", "ignore", "ignore"] });
+	const root = Bun.spawn(command, { cwd: folder, stdio: ["ignore", "ignore", "ignore"], detached: !WINDOWS });
 	if (!(await settles(() => started().length === 3))) {
 		killAll([root.pid, ...started()]);
 		throw new Error("the sleeper tree didn't start");
@@ -99,9 +106,10 @@ export interface ShimTree {
 }
 
 /**
- * A real tree like a pane's omp on Windows (0490): a shim whose child is the real omp, each started detached so either
- * outlives the other. omp starts its workers (detached) only on `exit()`, then exits. `ompLater`: the shim starts omp
- * only on `startOmp()`, as a shim whose omp isn't up yet. Works in `folder`.
+ * A real tree like a pane's omp (0490): a shim whose child is the real omp, either outliving the other. omp starts its
+ * workers only on `exit()`, then exits. On Windows each starts detached (Bun ends an attached child with its parent);
+ * on POSIX the shim leads its own group, as a herdr pane's process does, and omp and its workers stay in it.
+ * `ompLater`: the shim starts omp only on `startOmp()`, as a shim whose omp isn't up yet. Works in `folder`.
  */
 export async function shimTree(folder: string, ompLater = false): Promise<ShimTree> {
 	const pids = join(folder, "pids");
@@ -119,7 +127,7 @@ export async function shimTree(folder: string, ompLater = false): Promise<ShimTr
 			"const role = process.argv[2];",
 			'writeFileSync(join(pids, role + "-" + process.pid), "");',
 			"const start = (r) =>",
-			'\tBun.spawn([process.execPath, import.meta.path, r], { stdio: ["ignore", "ignore", "ignore"], detached: true }).unref();',
+			`\tBun.spawn([process.execPath, import.meta.path, r], { stdio: ["ignore", "ignore", "ignore"], detached: ${WINDOWS} }).unref();`,
 			'if (role === "shim") {',
 			"\tconst go = setInterval(() => {",
 			`\t\tif (!existsSync(${JSON.stringify(goFile)})) return;`,
@@ -146,7 +154,11 @@ export async function shimTree(folder: string, ompLater = false): Promise<ShimTr
 		readdirSync(pids)
 			.filter((name) => name.startsWith(`${role}-`))
 			.map((name) => Number(name.slice(role.length + 1)));
-	const root = Bun.spawn([process.execPath, script, "shim"], { cwd: folder, stdio: ["ignore", "ignore", "ignore"] });
+	const root = Bun.spawn([process.execPath, script, "shim"], {
+		cwd: folder,
+		stdio: ["ignore", "ignore", "ignore"],
+		detached: !WINDOWS,
+	});
 	const all = () => [...of("shim"), ...of("omp"), ...of("worker")];
 	const ompRuns = () => of("omp").length === 1;
 	if (!(await settles(() => of("shim").length === 1 && (ompLater || ompRuns())))) {

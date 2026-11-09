@@ -4,7 +4,16 @@
 // temp HOME. No network: only the local-folder path is exercised.
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	copyFileSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { rcPathLine, readInstallRecord } from "../../src/setup/uninstall.ts";
@@ -20,7 +29,8 @@ let from = "";
 let dir = "";
 
 beforeEach(() => {
-	root = mkdtempSync(join(tmpdir(), "jocasta-install-test-"));
+	// The long path: %TEMP% can be an 8.3 name (`RUNNER~1` on CI), and PowerShell prints the long one.
+	root = realpathSync.native(mkdtempSync(join(tmpdir(), "jocasta-install-test-")));
 	from = join(root, "from");
 	dir = join(root, "install");
 	mkdirSync(from);
@@ -40,7 +50,11 @@ function writeHash(archive: string, hash = sha256(join(from, archive))) {
 }
 
 function run(cmd: string[], env: Record<string, string>) {
-	const result = Bun.spawnSync(cmd, { env: { ...process.env, ...env }, stdout: "pipe", stderr: "pipe" });
+	const merged: Record<string, string | undefined> = { ...process.env, ...env };
+	// Started from PowerShell 7 (CI's shell), PSModulePath lists PowerShell 7's modules first, and Windows PowerShell
+	// then can't load its own `Get-FileHash`; without the variable it builds its default.
+	for (const key of Object.keys(merged)) if (key.toLowerCase() === "psmodulepath") delete merged[key];
+	const result = Bun.spawnSync(cmd, { env: merged, stdout: "pipe", stderr: "pipe" });
 	return { code: result.exitCode, out: result.stdout.toString(), err: result.stderr.toString() };
 }
 

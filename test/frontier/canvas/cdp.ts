@@ -85,6 +85,10 @@ export class Browser {
 		const browser = new Browser(proc, profile, ws);
 		await browser.send("Page.enable");
 		await browser.send("Runtime.enable");
+		// The machine's own "show animations" setting (off on CI's Windows Server) never decides what a page test sees.
+		await browser.send("Emulation.setEmulatedMedia", {
+			features: [{ name: "prefers-reduced-motion", value: "no-preference" }],
+		});
 		// What the page's Content-Security-Policy blocks (0368), for tests to assert none.
 		await browser.send("Page.addScriptToEvaluateOnNewDocument", {
 			source: `window.__csp = []; document.addEventListener("securitypolicyviolation", (e) => window.__csp.push(e.effectiveDirective + " " + e.blockedURI + " " + (e.sourceFile || "") + ":" + e.lineNumber));`,

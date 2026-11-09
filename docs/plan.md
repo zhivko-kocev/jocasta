@@ -643,6 +643,7 @@ The image's statements are numbered V1–V14 so decisions can cite them.
 | 0569 | Finished threads chime with herdr's done sound | product | herdr 0.9.5 can't mute omp alone (`ui.sound.agents.omp` is unknown); finished threads keep herdr's done sound, "needs you" the request sound (amends 0554) |
 | 0570 | Parallel thread starts in one project no longer race on its omp.yml | product | One overlay write per project at a time, no rewrite when the text is unchanged, a refused rename retried 10× at 100 ms (program; carries out 0534) |
 | 0571 | The follow-up study drops f-check-off; A6's check stays as the product behaves | process | The fixtures have no mise check, so A6's `check` tool answers "No checks" as the product would; `f-check-off` leaves the follow-up (five comparisons, 120 trials); cached checks are measured in H8 (program; amends 0542, 0543) |
+| 0572 | CI's Linux and macOS jobs pass before the benchmarks | process | CI keeps Windows, Ubuntu and macOS; the failing Linux and macOS paths are fixed before the benchmarks (program; differs from the recommendation) |
 
 Notes:
 - **0001–0008** fold v4's nine planning-era process records into their current form. 0001's wording now points to 0020.
@@ -691,6 +692,7 @@ Notes:
 - **0529** was decided on 2026-11-02, when H8's 8-thread run measured eight threads that hadn't worked (they sat at omp's setup wizard, 0530).
 - **0530** was decided on 2026-11-02, when H3's and H8's reruns failed on product bugs and the queue had started the full run early twice.
 - **0531** was decided on 2026-11-02, when H8's attended 8-thread run ran out of the VM's memory.
+- **0572** was decided on 2026-11-09, when the first push ran CI on Ubuntu and macOS for the first time; it differs from the recommendation (Windows only for now).
 
 ## 4. Process, principles and rules
 

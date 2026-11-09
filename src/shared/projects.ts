@@ -72,7 +72,10 @@ function scanRoot(rootPath: string, depth: number, ignore: string[]): string[] {
 	const walk = (dir: string, level: number) => {
 		let entries: Dirent[];
 		try {
-			entries = readdirSync(dir, { withFileTypes: true });
+			// Name order on every OS (NTFS lists it; ext4 and APFS don't), so "the first one found" is the same path (0104).
+			entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
+				a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+			);
 		} catch {
 			return; // unreadable folders (`System Volume Information`) are not projects
 		}

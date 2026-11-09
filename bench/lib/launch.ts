@@ -53,7 +53,7 @@ export function toolCommand(tool: BenchTool, which: (name: string) => string | n
 	if (found === null) throw new BenchUsageError(`${tool} is not on PATH`);
 	if (!/\.(cmd|bat)$/i.test(found)) return [found];
 	const target = /"%dp0%\\([^"]+\.exe)"/i.exec(readFileSync(found, "utf8"))?.[1];
-	return target === undefined ? ["cmd.exe", "/d", "/c", found] : [join(dirname(found), target)];
+	return target === undefined ? ["cmd.exe", "/d", "/c", found] : [join(dirname(found), ...target.split("\\"))];
 }
 
 /** `--ready omp=<regex>,claude=<regex>` over the defaults. */

@@ -1,17 +1,18 @@
 # Jocasta
 
-Zhivko's work surface around his daily omp. Three parts (0386, 0392):
+Zhivko's work surface around his daily omp. Three parts (0386, 0392, 0552):
 
 - **the agent** is his own [omp](https://github.com/can1357/oh-my-pi), unforked and tuned in its `/settings`; Jocasta adds config, MCP tools and memory only, never code inside omp (0386, 0387);
-- **the work surface** is herdr session `jocasta`: workspace "Jocasta" with the boss pane first, then one workspace per project and a worktree workspace per thread (0392, 0412);
-- **the companion** is a desktop app (Electrobun on WebView2) with the Jocasta service inside: the rail (the Presence, today, toasts, dictation), whiteboard's canvas, and on the second screen the dashboard's third column (0409, 0428, 0439). It keeps the thread map, reviews finished tasks with hunk (0394), feeds the memory graph and speaks.
+- **the work surface** is herdr session `jocasta`: workspace "Jocasta" with the boss pane first and the `today` pane beside it, then one workspace per project and a worktree workspace per thread (0392, 0412, 0553);
+- **the Jocasta service** is a plain Bun process (`jocasta service`) that `jocasta` starts beside herdr, with the `jocasta` herdr plugin it drives: the `today` pane, the `ask` popup for its questions, and keys for Finish, Stop, Review, New thread and Quit (0551–0554). It keeps the thread map, reviews finished tasks with hunk (0394), runs the threads' checks and the code index (0542), feeds the memory graph, and opens whiteboard's diagrams and reviews in your browser (0393, 0552).
 
 ## Prerequisites
 
-- Windows 11 (the companion is Windows-only for now).
-- [herdr](https://herdr.dev) 0.9.x from its official installer (0385, 0435).
-- omp on PATH, signed in (`omp`, then `/login`; 0386).
-- Docker Desktop, for the memory graph (Graphiti with FalkorDB; 0334). Without it everything else works and the dashboard says Graphiti is down.
+- Windows 11 (Linux and macOS builds exist but are untested; see below).
+- [herdr](https://herdr.dev) 0.9.5 or a later 0.9.x, from its official installer (0385, 0435); the plugin needs 0.9.5 (0553).
+- omp on PATH, signed in (`omp`, then `/login`; 0386). This build is checked against omp 18.18.2 (0535). Dictation is omp's own: omp downloads its speech model on first use or with `omp setup speech` (0556).
+- Docker Desktop, for the memory graph (Graphiti with FalkorDB; 0334). Without it everything else works.
+- [mise](https://mise.jdx.dev), optional: with it, setup pins herdr, hunk, gh and codebase-memory-mcp 0.12.1, the code index behind `graph_search` (0476, 0542, 0562); without mise there is no code index.
 
 ## Install
 
@@ -19,7 +20,7 @@ Zhivko's work surface around his daily omp. Three parts (0386, 0392):
 irm https://raw.githubusercontent.com/zhivko-kocev/jocasta/main/scripts/install.ps1 | iex
 ```
 
-Installs to `%LOCALAPPDATA%\Programs\jocasta\` (or `JOCASTA_INSTALL_DIR`, which must be an empty folder or an earlier Jocasta install; 0049): `jocasta.exe`, `config\` (the boss manual, omp, herdr and Ponytail config), `app\` (the companion), `node\` and `whiteboard\` (whiteboard's server), `hunk\` and `install.json`, and adds the folder to your user PATH. The download's SHA-256 is checked against the hash the release workflow commits in this repository at the tag `checksums-<release tag>`, never against a file from the release, so a replaced release asset is refused (0484). To upgrade, run it again: a running companion is stopped, the new build is copied in, and the companion starts again on it (0440).
+Installs to `%LOCALAPPDATA%\Programs\jocasta\` (or `JOCASTA_INSTALL_DIR`, which must be an empty folder or an earlier Jocasta install; 0049): `jocasta.exe`, `config\` (the boss manual, omp, herdr, the herdr plugin and Ponytail config), `node\` and `whiteboard\` (whiteboard's server), `whiteboard-canvas\` (its canvas), `editor.worker.js` (Monaco's worker), `hunk\` and `install.json`, and adds the folder to your user PATH. The download's SHA-256 is checked against the hash the release workflow commits in this repository at the tag `checksums-<release tag>`, never against a file from the release, so a replaced release asset is refused (0484). To upgrade, run it again: the Jocasta service and whiteboard's server stop, herdr's panes keep running, files still in use are renamed aside as `<name>.old-<stamp>` and the new build is copied in; the next `jocasta` starts the service on it (0552). omp sessions and hunk panes started before the upgrade run the old build until they restart.
 
 To install a local build instead, point `JOCASTA_INSTALL_FROM` at a folder holding `jocasta-windows-x64.zip` and its `.sha256` (`bun run build` writes both to `dist\`; 0487):
 
@@ -35,57 +36,70 @@ $env:JOCASTA_INSTALL_FROM = "$PWD\dist"; .\scripts\install.ps1   # from the repo
 jocasta setup
 ```
 
-Setup's changes are numbered migrations (0466). Each one shows its diff and is written only after `y`; it runs once per shipped version, with a marker in `~/.jocasta/agent/setup/`, so a file you edit afterwards is left alone until Jocasta ships something new for it. The first failure stops the rest and says why (exit 1). When changes are waiting, the companion shows one toast at start: "jocasta setup has N change(s) waiting: run `jocasta setup` to see them."
+Setup's changes are numbered migrations (0466). Each one shows its diff and is written only after `y`; it runs once per shipped version, with a marker in `~/.jocasta/agent/setup/`, so a file you edit afterwards is left alone until Jocasta ships something new for it. The first failure stops the rest and says why (exit 1). When changes are waiting, the service says so once at start, in a notification through herdr: "jocasta setup has N changes waiting: run `jocasta setup` to see them."
 
-- omp's global MCP servers `jocasta` (`graph_search`) and `whiteboard` in `~/.omp/agent/mcp.json`, and the boss's `jocasta mcp --boss` in the boss's own folder (0389, 0392, 0393);
+- omp's global MCP servers `jocasta` (`graph_search`, `report_result`, `check`) and `whiteboard` in `~/.omp/agent/mcp.json`, and the boss's `jocasta mcp --boss` in the boss's own folder (0389, 0392, 0393, 0539, 0542);
 - omp's settings `~/.omp/agent/config.yml`: a missing file gets `config/omp-config.yml` as it is; an existing one is merged key by key: missing keys are added, keys still at Jocasta's previous value follow the new one, and keys you set differently are kept and shown ("kept: <key>: yours X kept (Jocasta ships Y)"). Comments in your file are lost, as when omp saves its settings (0396, 0420, 0466);
 - herdr's omp integration (`herdr integration install omp`), which reports each pane's state to herdr (0388);
-- `~/.jocasta/agent/herdr.toml` for session `jocasta` (0401, 0440, 0466);
+- `~/.jocasta/agent/herdr.toml` for session `jocasta` (0401, 0440, 0466, 0554);
 - `~/.jocasta/agent/jocasta.yaml`, with the `frontier` and `pollers` settings moved from an older Jocasta's settings file when there is one (0387);
-- the Windows Terminal scheme Tokyo Night, from the companion's palette (0401, 0474);
-- with mise on PATH, mise's machine file `~/.config/mise/conf.d/jocasta.toml` (pinned herdr, hunk and gh; your own `config.toml` wins); with or without mise, the mise skill in `~/.omp/agent/skills/mise/` (0476);
+- the Windows Terminal scheme Tokyo Night, from Jocasta's palette (0401, 0474);
+- with mise on PATH, mise's machine file `~/.config/mise/conf.d/jocasta.toml` (pinned herdr, hunk, gh and codebase-memory-mcp; your own `config.toml` wins); with or without mise, the mise skill in `~/.omp/agent/skills/mise/` (0476, 0562);
+- omp's `keybindings.yml`, `lsp.json` and `WATCHDOG.md` (under Config below; 0451, 0479, 0556);
+- the logon Run value an earlier install's app wrote, removed: Jocasta no longer starts at logon; run `jocasta` yourself (0557);
+- the `jocasta` herdr plugin, written to `~/.jocasta/agent/herdr-plugin/` with how herdr starts this Jocasta, linked with `herdr plugin link`, and herdr's config reloaded so its keys find the plugin's actions (0553, 0558);
 - the calendar's secret address from `JOCASTA_CALENDAR_ICAL_SECRET` into Windows Credential Manager (0430).
 
 To put one file back to the shipped version, run `jocasta setup --refresh herdr.toml`, `jocasta.json` (the Terminal scheme) or `mcp.json` (Jocasta's MCP entries), by name or full path: it shows the diff, asks "Refresh? [y/N]", keeps the old file as `<file>.bak.<YYYYMMDD-HHMMSS>` beside it, and reloads herdr's config after a herdr.toml refresh (0467).
 
-After upgrading, run `jocasta setup` once: since 0484 the boss's MCP entry gets `timeout: 300000`, so a boss call can wait the 2 minutes a confirmation takes (omp gives up after 30 s otherwise).
+After upgrading, run `jocasta setup` once: this build links the herdr plugin, binds F9 for dictation and removes the autostart value (0553, 0556, 0557); since 0484 the boss's MCP entry gets `timeout: 300000`, so a boss call can wait the 2 minutes a confirmation takes (omp gives up after 30 s otherwise).
 
 ## Daily use
 
-Run `jocasta` in a terminal. It starts the companion when it isn't running and attaches herdr's client to session `jocasta`; the boss pane runs omp with the boss manual and continues where it was (0424). Ask the boss for a thread in a project; it opens a worktree workspace, plans first, and you approve the plan in its pane. When a task ends, hunk opens beside it with the reviewer's notes (0394); `thread_finish` merges it or opens a PR (0426).
+Run `jocasta` in a terminal. It starts the Jocasta service when none answers and waits for it (a hung one is replaced after 15 s; 0565), then attaches herdr's client to session `jocasta`; the boss pane runs omp with the boss manual and continues where it was (0424), with `today` beside it (boss 65 / `today` 35; 0553). Ask the boss for a thread in a project, press Ctrl+B then Alt+N (pick the project, write the brief), or run `jocasta thread new`; it opens a worktree workspace, plans first, and you approve the plan in its pane. Each thread runs with `--warn-cost 50` (0541) and can carry `done_when` commands its review runs (0540); it ends a task with `report_result` (0539), and its `check` runs the project's checks once per git tree (0542, 0546). When a task ends, hunk opens beside it with the reviewer's notes (0394); `thread_finish` merges it or opens a PR (0426).
 
-Some boss actions wait for your Allow (0484): merging a thread or opening its PR (`thread_finish`), removing a leftover worktree (`worktree_remove`), starting a thread in a project other than the one whose pane you last focused, and saving a lesson (the window shows its full text). The companion asks in a small window of its own titled "Jocasta: Allow or Deny" (0519), centred and on top of your other windows even while the companion is in the tray, with Allow and Deny (Deny is the default); it leaves the keyboard with the app you're in, so click it, or click into it to use Enter and Escape (0524). Deny, no answer within 2 minutes, closing Jocasta, or no companion running all count as Deny, and the boss is told which. Only the boss pane can use the boss's tools: it gets a per-run key. `graph_search` answers from the pane's own project, each fact quoted «…» with its source and date (0484).
+`today` shows, top to bottom: the date and time, the weather (when `dashboard.weather` is set), CPU and memory, the quota windows (red from 80%) and today's spend; NEEDS YOU; UNDERWAY (each thread's state, time, cost and context); LANDED TODAY; NEXT (the calendar); NEWS while rows are left; and its keys, `↑↓ thread · Enter go to it · f Finish · s Stop` (0555). herdr's tab bar shows `N blocked · $X today` and the time (0554). In any pane, Ctrl+B then Alt+F finishes the focused thread (merge or PR), Alt+S stops its run, Alt+R reviews its commits with hunk beside it, Alt+N starts a new thread and Alt+Q quits Jocasta (0554); Alt+1…9 switch workspaces and Alt+[ / Alt+] move between agents (0408).
+
+Some actions wait for your Allow (0484, 0544): merging a thread or opening its PR (`thread_finish`), removing a leftover worktree (`worktree_remove`), starting a thread in a project other than the one whose pane you last focused, saving a lesson (the question shows its full text), and from the command line `jocasta thread send|stop|finish` and `jocasta worktree remove`. The question opens in herdr's `ask` popup, titled "Jocasta: Allow or Deny", in front of whatever you're on (0553). Allow takes the three letters the popup shows: type them; the arrows or Tab pick a choice, and Esc, or Enter on Deny, denies (0558). Finish's Merge and PR and the close question's Stop everything take a code the same way; Cancel stays one key (0568). Deny, a third wrong code, no answer within 2 minutes, closing the popup any other way, or closing Jocasta all count as Deny, and the boss is told which. Only the boss pane can use the boss's tools: it gets a per-run key. `graph_search` answers from the pane's own project, each fact quoted «…» with its source and date (0484), and relationship questions also get code locations from the code index (0562).
+
+When a thread needs you, herdr shows a system notification with its request sound; a finished thread chimes with herdr's done sound (0554, 0569). Every notification is also a line in `<data>/notifications.jsonl`.
 
 Closing a thread or stopping everything ends every process its panes started (omp's workers, language servers, MCP servers), and a worktree is removed only once no process works in it; otherwise the reason names them (0486).
 
-Jocasta has one life (0434): closing the terminal tab, quitting herdr's client or quitting the companion (the window's × or the tray's Quit) closes everything Jocasta runs: the companion and its whiteboard server, herdr session `jocasta` and the Graphiti and FalkorDB containers (data kept). With threads working or awaiting you, the companion asks first, in its own window titled "Jocasta: Stop everything?": "Stop 2 working threads and 1 awaiting you? Their sessions are saved." (0438, 0519); Keep running in background leaves everything up and hides the window to the tray, and the companion keeps running while the question waits. If herdr's server itself dies, that isn't a close: the companion starts it again and `jocasta` attaches again in the same terminal, saying so meanwhile (0518). An omp that ends in an open Jocasta pane is started again there (0521). Your other herdr sessions and omp windows are never touched. The next `jocasta` continues the boss and every thread.
+Nothing runs without Jocasta (0549): closing the terminal, quitting herdr's client or Ctrl+B then Alt+Q stops everything Jocasta started: the service, herdr session `jocasta` and every omp in it, the relay, the code index, whiteboard, hunk, and the Graphiti and FalkorDB containers (data kept). There is no keep-running-in-the-background. With threads working or awaiting you, closing the terminal opens a new terminal on the same herdr session (Windows Terminal, else a console window) and asks in the popup, titled "Jocasta: Stop everything?": "Stop 2 working threads and 1 awaiting you? Their sessions are saved."; Cancel leaves everything as it was (0563). The quit key asks the same. On the next `jocasta`, threads that were mid-turn go on with that turn (`omp --restore`) and the others reopen idle; GitHub, Azure DevOps and the calendar are read again, and reminders and events that came due meanwhile show once (0549). If herdr's server itself dies, that isn't a close: the service starts it again and `jocasta` attaches again in the same terminal, telling a healed crash from your quitting by the service's restart count (0518, 0566). The service opens `today` again when it is gone (0553), and an omp that ends in an open Jocasta pane is started again there (0521). Your other herdr sessions and omp windows are never touched.
 
-Hold Right Ctrl anywhere to talk to the boss (0368); the speech model downloads after you say yes. The voice reads the boss's answers when it is on (0418).
+Hold Right Ctrl anywhere in Windows to talk to the boss: the service sends F9 (omp's `app.stt.toggle`) to the boss pane through herdr on press and again on release, omp transcribes on this machine with its local Parakeet model, and the text is sent when you let go (0556). Holding Space in a focused omp pane is omp's own push-to-talk. There are no spoken replies (0552).
+
+The boss's `show` opens a whiteboard review in your browser, on a page the service serves on 127.0.0.1; a "Reviews" button goes back to the list of reviews (0393, 0552).
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `jocasta` | opens the work surface (herdr session `jocasta`) and starts the companion |
+| `jocasta` | opens the work surface (herdr session `jocasta`) and starts the Jocasta service |
 | `jocasta setup` | shows what Jocasta adds to omp, herdr, Windows Terminal and mise; writes after `y` (0466) |
 | `jocasta setup --refresh <file>` | puts `herdr.toml`, `jocasta.json` or `mcp.json` back to the shipped version after a diff and `y`, keeping a `.bak.<stamp>` copy; an unknown file exits 2 (0467) |
-| `jocasta uninstall` | removes everything install and setup added (herdr session `jocasta`, setup's writes, the calendar credential, the `config.jocasta-*.override.toml` mise files, the autostart value, the PATH entry, the app's WebView2 data, `~/.jocasta/agent` except `private-names.txt`, the install folder) after one list and one `y`; asks separately about the data folder and about the containers, images and volumes; keeps your other MCP servers, your `config.yml` keys, your mise `config.toml` and mise itself; refuses while Jocasta is running (0468). It deletes a folder only while it still holds what put it on the list, never follows links or junctions, and never touches a drive root or your home folder ("kept <path>: …"; 0484) |
+| `jocasta uninstall` | removes everything install and setup added (herdr session `jocasta`, setup's writes and the herdr plugin's link, the calendar credential, the `config.jocasta-*.override.toml` mise files, the PATH entry, an earlier install's app's autostart value and WebView2 data, `~/.jocasta/agent` except `private-names.txt`, the install folder) after one list and one `y`; asks separately about the data folder and about the containers, images and volumes; keeps your other MCP servers, your `config.yml` keys, your mise `config.toml` and mise itself; refuses while Jocasta is running (0468). It deletes a folder only while it still holds what put it on the list, never follows links or junctions, and never touches a drive root or your home folder ("kept <path>: …"; 0484) |
 | `jocasta diagnose` | writes `<data>\diagnose\` (state, the newest 400 log lines) and opens a read-only omp pane, tab "diagnose" in workspace Jocasta, to find what's wrong (0472). The state and log, with project names and folders, go to your model provider with its first message (0484) |
-| `jocasta mcp [--boss]` | the MCP server omp starts: `graph_search`, and the boss's tools with `--boss` |
+| `jocasta mcp [--boss]` | the MCP server omp starts: `graph_search`, `report_result` and `check`, and the boss's tools with `--boss` |
 | `jocasta project list \| add <path> \| remove <name\|id>` | lists, adds or removes a project (0111) |
+| `jocasta thread new <project> "<brief>" [--title <t>] [--done-when "<cmd>"]...` | starts a thread through the running service, as the boss's `thread_start` does: plan mode, a task file, its `done_when` commands (0540, 0544) |
+| `jocasta thread list [<project>] \| status <thread> \| send <thread> "<text>" \| stop <thread>` | lists threads, shows one, sends it a message or stops its run; `send` and `stop` ask your Allow first (0544) |
+| `jocasta thread finish <thread> merge\|pr` | merges the thread or opens its PR, after your Allow (0426, 0544) |
+| `jocasta worktree list \| remove <path>` | lists leftover worktrees, or removes one after your Allow (0456, 0544). The `thread` and `worktree` commands exit 1 when refused or failed (Deny included), 2 on bad usage and 3 when Jocasta isn't running |
 | `jocasta --version`, `-v` | `jocasta <version> (omp <version>, herdr <version>, bun <version>)` (0052) |
 | `jocasta --help`, `-h` | the usage |
 
 ## Config
 
 - omp's own config stays in `~/.omp/agent` (0387). `config/omp-config.yml` is the reference for your `/settings` pass (0420, 0451): besides the earlier settings it sets `disabledProviders: [claude-plugins]`, `modelRoles.web: web/duckduckgo`, `find.enabled: "off"`, `startup.setupWizard: false`, `startup.changelogMode: hidden`, `github.enabled: true`, `collab.autoStart: "off"`, `secrets.enabled: true` and compaction at 300k tokens (0448).
-- Outside `config.yml`, written by `jocasta setup` as a diff after your `y` (0451, 0479): `~/.omp/agent/keybindings.yml` gets `app.live.toggle: []` (Ctrl+L no longer starts omp's live voice), `~/.omp/agent/lsp.json` gets `"idleTimeoutMs": 300000` (your other keys kept in both, and your own value for Jocasta's key kept and shown); `~/.omp/agent/WATCHDOG.md` (the advisor's brief) comes from `config/WATCHDOG.md` when missing, and one you changed is shown and kept, never overwritten. `jocasta uninstall` takes out only the keys setup added, and `WATCHDOG.md` only while it is still Jocasta's text. By hand: your own `~/.omp/agent/secrets.yml`, never in a repo.
-- Each project and thread pane also gets `config/guard.yml` (approvals: `bash.gitGuard`, 75 deny rules, then 49 prompt rules; 0450, 0476, 0485) and the project's overlay `<data>/projects/<pid>/omp.yml` (its own memory file, compaction, `AGENTS.local.md`, the lessons skill, and the privacy settings `dev.autoqa: false`, `disabledProviders: [claude-plugins]`, `modelRoles.web: web/duckduckgo` whatever your global config says; 0447–0449, 0459, 0478; the reviewer runs on your `slow` role, 0488); the boss's `config/boss.yml` sets the same privacy settings. What the guard doesn't stop is in its own section below.
+- Outside `config.yml`, written by `jocasta setup` as a diff after your `y` (0451, 0479, 0556): `~/.omp/agent/keybindings.yml` gets `app.live.toggle: []` (Ctrl+L no longer starts omp's live voice) and `app.stt.toggle: f9` (the key Right Ctrl sends), `~/.omp/agent/lsp.json` gets `"idleTimeoutMs": 300000` (your other keys kept in both, and your own value for Jocasta's key kept and shown); `~/.omp/agent/WATCHDOG.md` (the advisor's brief) comes from `config/WATCHDOG.md` when missing, and one you changed is shown and kept, never overwritten. `jocasta uninstall` takes out only the keys setup added, and `WATCHDOG.md` only while it is still Jocasta's text. By hand: your own `~/.omp/agent/secrets.yml`, never in a repo.
+- Each project and thread pane also gets `config/guard.yml` (approvals: `bash.gitGuard`, 75 deny rules, then 49 prompt rules; 0450, 0476, 0485) and the project's overlay `<data>/projects/<pid>/omp.yml` (its own memory file, compaction, `AGENTS.local.md`, the lessons skill, and the privacy settings `dev.autoqa: false`, `disabledProviders: [claude-plugins]`, `modelRoles.web: web/duckduckgo` whatever your global config says; 0447–0449, 0459, 0478; the reviewer runs on your `slow` role, 0488). The boss's `config/boss.yml` sets the same privacy settings and omp's dictation (`stt.enabled`, `stt.submitTrigger: release`, `modelRoles.dictation: local/parakeet-tdt-0.6b-v3`, no fallback; 0556). Every pane's overlay hosts its session in Jocasta's collab relay on `ws://127.0.0.1:47499` and keeps `/share` on that port, and a pane starts only if its omp resolves the relay to loopback (0536, 0561). What the guard doesn't stop is in its own section below.
 - Private project notes go in `AGENTS.local.md` at the project root, gitignored; every pane reads it (0449).
-- Jocasta's files are in `~/.jocasta/agent/` (`JOCASTA_CODING_AGENT_DIR` overrides it): `jocasta.yaml` (settings), `projects.yaml` (watched roots), `herdr.toml` (written by setup), `setup/` (setup's markers) and `compose.yaml` (written by Jocasta for the containers).
-- `jocasta.yaml` keys: `frontier.port` (default 47400), `frontier.autostart` (on unless `false`), `frontier.quietHours`, `frontier.dashboard.display` (`secondary` or `primary`), `dashboard.weather` (a place or `latitude, longitude`), `pollers.github.everyMinutes`, `pollers.azureDevOps.orgs|everyMinutes`, `pollers.calendar.everyMinutes`, `pollers.news.everyMinutes` and `pollers.news.feeds` (brutalist.report lists; by default every Hacker News and LWN link and the newest 10 gaming; 0442), `graph.main` and `graph.small` (an omp `provider/id` for the graph's model calls; omp's roles by default).
+- Jocasta's files are in `~/.jocasta/agent/` (`JOCASTA_CODING_AGENT_DIR` overrides it): `jocasta.yaml` (settings), `projects.yaml` (watched roots), `herdr.toml` and `herdr-plugin/` (written by setup), `setup/` (setup's markers) and `compose.yaml` (written by Jocasta for the containers).
+- `jocasta.yaml` keys: `frontier.port` (default 47400), `frontier.quietHours`, `dashboard.weather` (a place or `latitude, longitude`, shown in `today`'s header), `pollers.github.everyMinutes`, `pollers.azureDevOps.orgs|everyMinutes`, `pollers.calendar.everyMinutes`, `pollers.news.everyMinutes` and `pollers.news.feeds` (brutalist.report lists; by default every Hacker News and LWN link and the newest 10 gaming; 0442), `graph.main` and `graph.small` (an omp `provider/id` for the graph's model calls; omp's roles by default). `frontier.autostart` and `frontier.dashboard.display` are gone; a file that still sets them is told so (0557).
 - mise (0473, 0476, 0477): with mise installed, each project can have a Jocasta-kept config `~/.config/mise/config.jocasta-<project id>.override.toml`, never committed; every pane of that project gets `MISE_ENV=jocasta-<project id>`. When a project has none, the boss offers a setup thread that writes it with `test` and `verify` tasks. A repo's own `mise.toml` is used only when trusted under mise's paranoid mode; Jocasta never runs `mise trust`.
-- Data: `%LOCALAPPDATA%\jocasta\data` (`JOCASTA_DATA_DIR` overrides it); the companion's log is `<data>\logs\companion-YYYY-MM-DD.log` (7 days kept; 0431).
+- Data: `%LOCALAPPDATA%\jocasta\data` (`JOCASTA_DATA_DIR` overrides it); Jocasta's log is `<data>\logs\jocasta-YYYY-MM-DD.log` (7 days kept; 0431). The service's lock is `<data>\service.lock` (0565), stored check results are in `<data>\checks\` (0542, 0546) and the code index keeps its data in `<data>\code-index\`, which codebase-memory-mcp refuses outside your user folder on Windows, so the data folder must be under it for the index to work (0562).
 
 ## What the guard doesn't stop
 
@@ -102,15 +116,17 @@ It guards the agent's commands only: a command you run yourself in a pane with o
 
 A thread that reads a prompt-injected README, test output or web page can therefore still do what you can do. Until thread panes run under an OS boundary (a restricted token, a separate user or a container, without your logins and with limited network; after v1, 0485), treat the guard as a seatbelt and plan approval as the real gate: read the plan before approving it, and keep client repos' own hooks and `.env` files in mind.
 
-The companion's page allows eval (`'unsafe-eval'`) so whiteboard's software maps can route their lines with libavoid (0493); inline scripts and other origins stay blocked. Content that reaches the canvas (a diagram or review an agent draws) is therefore easier to turn into running code than it was; rebuilding libavoid without eval is open for after v1.
+A thread can also drive herdr through its socket as you can: start the plugin's actions and press keys in an open popup (0552, 0568). It can open a question but not answer Allow, Merge, PR or Stop everything, which take letters only the popup shows; herdr's `pane read`, `agent read` and snapshot don't show a popup's screen (0558).
+
+The canvas page allows eval (`'unsafe-eval'`) so whiteboard's software maps can route their lines with libavoid (0493); inline scripts and origins other than the service and whiteboard's server on loopback stay blocked. Content that reaches the canvas (a diagram or review an agent draws) is therefore easier to turn into running code than it would be without eval; rebuilding libavoid without eval is open for after v1.
 
 ## `/share`
 
-`/share` is omp's. By default it uploads the session as an encrypted blob to `my.omp.sh/s`; with `--gist` it makes a GitHub gist. Either way the whole conversation leaves the machine, client code included (0047). Think before you run it.
+`/share` is omp's. In Jocasta's panes and the boss, `share.serverUrl` points at the local relay's port, which serves nothing but the relay's rooms, so a plain `/share` there never leaves the machine (0561). In an omp outside Jocasta it uploads the session as an encrypted blob to `my.omp.sh/s` by default; with `--gist` it makes a GitHub gist. Then the whole conversation leaves the machine, client code included (0047). Think before you run it.
 
 ## Linux and macOS
 
-Builds exist for linux-x64 and darwin-arm64 (`scripts/install.sh`, installing to `~/.local/share/jocasta/`), with no companion: `jocasta` opens herdr without it. They are untested.
+Builds exist for linux-x64 and darwin-arm64 (`scripts/install.sh`, installing to `~/.local/share/jocasta/`), with the same service and herdr plugin. Right Ctrl dictation, the terminal reopened for the close question (it waits for the next `jocasta` instead) and the calendar's Credential Manager entry are Windows-only. They compile but are untested (0481).
 
 ## Where things are
 
@@ -124,10 +140,10 @@ Requires Bun 1.4.3 (0036, 0042, 0435). With [mise](https://mise.jdx.dev) the rep
 
 ```powershell
 mise install --locked
-mise run check                       # typecheck, lint, the app's tsc and the tests
+mise run check                       # typecheck, lint and the tests
 mise run build                       # bun run build
 mise run evals                       # bun run evals
-mise run smoke                       # the herdr, Graphiti and dictation smokes on this machine
+mise run smoke                       # the herdr and Graphiti smokes on this machine
 ```
 
 Or with Bun directly:
@@ -137,26 +153,26 @@ bun install
 bun run typecheck                    # tsc --noEmit (0037)
 bun run lint                         # biome check
 bun run format                       # biome check --write
-bun test                             # page tests need Microsoft Edge; they skip without it
+bun test                             # the canvas page's tests need Microsoft Edge; they skip without it
 bun src/entry.ts                     # a dev run of the CLI
 bun run build --target windows-x64   # also linux-x64, darwin-arm64 (0043)
 ```
 
-Opt-in smokes: `JOCASTA_HERDR_SMOKE=1` (a real herdr), `JOCASTA_GRAPHITI_SMOKE=1` (Docker), `JOCASTA_OMP_GATEWAY_SMOKE=1` (a model call through your omp's `auth-gateway stdio`, 0463), `JOCASTA_DICTATION_SMOKE=1` (the real dictation model, 0440). Live checks set `JOCASTA_HERDR_SESSION` to a throwaway session name so they never touch session `jocasta` (0441). Evals run omp on real cases: `JOCASTA_EVALS_REAL=1 bun run evals` (0375).
+Opt-in smokes: `JOCASTA_HERDR_SMOKE=1` (a real herdr), `JOCASTA_GRAPHITI_SMOKE=1` (Docker), `JOCASTA_OMP_GATEWAY_SMOKE=1` (a model call through your omp's `auth-gateway stdio`, 0463). Live checks set `JOCASTA_HERDR_SESSION` to a throwaway session name so they never touch session `jocasta` (0441). Evals run omp on real cases: `JOCASTA_EVALS_REAL=1 bun run evals` (0375).
 
-`bun run build` writes `dist/<target>/` (`jocasta.exe`, `config/`, `node/`, `whiteboard/`, `hunk/`, and on Windows `app/`) plus `dist/jocasta-<target>.zip|.tar.gz` and its `.sha256` (0044). whiteboard is built from the clone in `forks/whiteboard` at v0.2.4 (0417). On Windows the build also makes the companion (0367) into `dist/windows-x64/app/`: its main process is `src/app/main.ts`, built by Hutch 0.27.1 for the exact `electrobun` 2.0.2 devDependency; on first use it downloads Hutch, Electrobun's runtime (with its own Bun 1.4.0, which the app runs on) and its toolchains into `node_modules/.cache/hutch` (override with `HUTCH_HOME`), and never touches PATH. `JOCASTA_APP_IDENTIFIER` gives a test build its own identifier, so it shares neither the installed app's WebView2 data nor its `Jocasta` autostart value. After a build, `bunx tsc -p src/app` type-checks the app's main process against Electrobun's SDK. Pushing a `v*` tag publishes a GitHub release (0051).
+`bun run build` writes `dist/<target>/` (`jocasta.exe`, `config/`, `node/`, `whiteboard/`, `whiteboard-canvas/`, `editor.worker.js`, `hunk/`) plus `dist/jocasta-<target>.zip|.tar.gz` and its `.sha256` (0044); for a target other than this machine's, `node/`, `whiteboard/` and `hunk/` are left out. whiteboard is built from the submodule `forks/whiteboard` at v0.2.4 (`git submodule update --init`; 0417, 0564). The `today` pane and the `ask` popup are compiled into `jocasta.exe` with OpenTUI. Pushing a `v*` tag publishes a GitHub release (0051).
 
 ## Credits
 
-- [herdr](https://github.com/herdrdev/herdr) (Apache-2.0): the work surface; its Tokyo Night is the companion's palette.
-- [oh-my-pi](https://github.com/can1357/oh-my-pi) (MIT): the agent in every pane.
+- [herdr](https://github.com/herdrdev/herdr) (Apache-2.0): the work surface; its Tokyo Night is Jocasta's palette.
+- [oh-my-pi](https://github.com/can1357/oh-my-pi) (MIT): the agent in every pane, and dictation with its local Parakeet TDT 0.6B v3 model (0556).
+- [OpenTUI](https://github.com/anomalyco/opentui) (`@opentui/core`, MIT): the `today` pane and the `ask` popup (0551).
 - [whiteboard](https://github.com/devdotfast/whiteboard) (MIT): the canvas and its server, shipped with its LICENSE (0393).
 - [hunk](https://github.com/modem-dev/hunk) (MIT): the review pane (0394).
-- [Electrobun](https://github.com/blackboardsh/electrobun) (MIT): the companion's shell (0367).
 - [Monaco Editor](https://github.com/microsoft/monaco-editor) (MIT): the canvas's code peeks and diffs (0411).
-- [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (Apache-2.0) with the [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M) voice and NVIDIA's Parakeet TDT 0.6B v3 for dictation (0330, 0418).
+- [codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) (MIT): the code index, installed through mise (0542, 0562).
 - [Graphiti](https://github.com/getzep/graphiti) (Apache-2.0) with [FalkorDB](https://github.com/FalkorDB/FalkorDB), in containers (0334).
 - [Node.js](https://nodejs.org) (MIT), shipped with its LICENSE to run whiteboard's server.
 - [Ponytail](https://github.com/DietrichGebert/ponytail) (MIT), in `config/ponytail.md` (0421).
-- [Mona Sans](https://github.com/github/mona-sans) by GitHub and [Geist Mono](https://github.com/vercel/geist-font) by Vercel, both under the SIL Open Font License 1.1; the font files and their licences ship in `src/frontier/ui/fonts/` (0369).
+- [Mona Sans](https://github.com/github/mona-sans) by GitHub and [Geist Mono](https://github.com/vercel/geist-font) by Vercel, both under the SIL Open Font License 1.1; the font files and their licences ship in `src/frontier/canvas/fonts/` (0369).
 - News headlines from [brutalist.report](https://brutalist.report) (0429); weather from [Open-Meteo](https://open-meteo.com) (CC BY 4.0).

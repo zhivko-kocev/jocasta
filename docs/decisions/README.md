@@ -578,3 +578,4 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0569](0569-finished-threads-chime.md) | Finished threads chime with herdr's done sound | product | v1 | program | 2026-11-09 |
 | [0570](0570-parallel-starts-share-the-overlay.md) | Parallel thread starts in one project no longer race on its omp.yml | product | v1 | program | 2026-11-09 |
 | [0571](0571-no-check-arm-in-the-follow-up.md) | The follow-up study drops f-check-off; A6's check stays as the product behaves | process | v1 | program | 2026-11-09 |
+| [0572](0572-linux-and-macos-pass-ci-now.md) | CI's Linux and macOS jobs pass before the benchmarks | process | v1 | program | 2026-11-09 |

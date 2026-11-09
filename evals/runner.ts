@@ -220,8 +220,10 @@ function validateChecks(
 
 export function loadCases(casesDir: string): EvalCase[] {
 	if (!existsSync(casesDir)) return [];
+	// Name order on every OS: Linux and macOS list a folder in no fixed order.
 	return readdirSync(casesDir, { withFileTypes: true })
 		.filter((entry) => entry.isDirectory() && existsSync(join(casesDir, entry.name, "case.yaml")))
+		.sort((a, b) => a.name.localeCompare(b.name))
 		.map((entry) => {
 			const dir = join(casesDir, entry.name);
 			const file = join(dir, "case.yaml");
