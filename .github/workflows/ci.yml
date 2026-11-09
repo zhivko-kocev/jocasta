@@ -13,6 +13,8 @@ permissions:
 jobs:
   check:
     strategy:
+      # Each OS reports its own result (0572): one failing job doesn't cancel the others.
+      fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}

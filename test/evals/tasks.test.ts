@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Arm, runBench, runValidation, type TrialJob, type TrialOutcome } from "../../evals/bench.ts";
@@ -485,7 +485,8 @@ describe("resume (0482)", () => {
 
 	test("a trial runs through runTrial in a worker thread with the fake omp, its root in --work, logs kept", async () => {
 		const out = join(tempDir(), "run");
-		const work = join(tempDir(), "w");
+		// The real path: macOS's temp folder is a link (/var → /private/var), and the harness reports where it runs.
+		const work = join(realpathSync.native(tempDir()), "w");
 		const ompLog = join(tempDir(), "omp.jsonl");
 		process.env.JOCASTA_TEST_OMP_LOG = ompLog;
 		const code = await runBench({

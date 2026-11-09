@@ -3067,7 +3067,9 @@ export class JocastaService {
 					if (error instanceof UserError) throw error;
 					throw new UserError(`remind: ${(error as Error).message}`);
 				}
-				const when = new Date(due).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" });
+				// Date and time apart: ICU joins dateStyle and timeStyle as "…, 15:00" or "… at 15:00" by version (macOS).
+				const at = new Date(due);
+				const when = `${at.toLocaleDateString("en-GB", { dateStyle: "medium" })}, ${at.toLocaleTimeString("en-GB", { timeStyle: "short" })}`;
 				return `Reminder ${id} at ${when}${project ? ` (${project.name})` : ""}; it shows in today.`;
 			}
 			case "inbox_done": {

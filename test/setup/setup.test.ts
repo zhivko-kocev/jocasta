@@ -698,19 +698,25 @@ test("WATCHDOG.md: written when missing, his own shown and kept, Jocasta's older
 });
 
 test("setupToast: one line when setup has changes waiting, none when everything is in place (0466)", async () => {
-	const saved = { ...process.env };
-	Object.assign(process.env, {
+	const set = {
 		PI_CODING_AGENT_DIR: paths.ompAgentDir,
 		JOCASTA_CODING_AGENT_DIR: paths.jocastaConfigDir,
 		JOCASTA_DATA_DIR: paths.dataDir,
 		LOCALAPPDATA: join(root, "local"),
 		MISE_CONFIG_DIR: paths.miseConfigDir,
-	});
+	};
+	const saved = Object.fromEntries(Object.keys(set).map((name) => [name, process.env[name]]));
+	Object.assign(process.env, set);
 	try {
 		expect(await setupToast()).toMatch(/^jocasta setup has \d+ changes waiting: run `jocasta setup` to see them\.$/);
 		expect(existsSync(paths.ompAgentDir)).toBe(false);
 	} finally {
-		process.env = saved;
+		// Key by key: a replaced `process.env` is a plain object, and later workers and children no longer see changes
+		// to it (the eval worker test's omp log on Linux CI).
+		for (const [name, value] of Object.entries(saved)) {
+			if (value === undefined) delete process.env[name];
+			else process.env[name] = value;
+		}
 	}
 });
 
