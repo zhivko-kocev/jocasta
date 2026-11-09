@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -10,6 +10,7 @@ import {
 	runDiagnose,
 } from "../../src/setup/diagnose.ts";
 import { UserError } from "../../src/shared/errors.ts";
+import { removeTree } from "../../src/shared/fsx.ts";
 import { FakeHerdr } from "../frontier/server/fake-herdr.ts";
 
 const ASSETS = resolve(import.meta.dir, "..", "..", "config");
@@ -20,7 +21,7 @@ beforeEach(() => {
 	root = realpathSync.native(mkdtempSync(join(tmpdir(), "jocasta-test-diagnose-")));
 	herdr = new FakeHerdr();
 });
-afterEach(() => rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
+afterEach(() => removeTree(root));
 
 function logs(files: Record<string, number>): void {
 	const dir = join(root, "data", "logs");

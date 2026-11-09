@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -16,7 +16,7 @@ import {
 	processStart,
 	processTree,
 } from "../../../src/frontier/server/proctree.ts";
-import { pidAlive } from "../../../src/shared/fsx.ts";
+import { pidAlive, removeTree } from "../../../src/shared/fsx.ts";
 import { type SleeperTree, settles, shimTree, sleeperTree } from "./sleepers.ts";
 
 const cleanup: (() => void | Promise<void>)[] = [];
@@ -27,7 +27,7 @@ afterEach(async () => {
 /** A temp dir with a sleeper tree working in its `wt` folder (`outlive`: its workers outlive the root). */
 async function treeIn(outlive = false): Promise<{ dir: string; folder: string; tree: SleeperTree }> {
 	const dir = mkdtempSync(join(tmpdir(), "jocasta-proctree-"));
-	cleanup.push(() => rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }));
+	cleanup.push(() => removeTree(dir));
 	const folder = join(dir, "wt");
 	mkdirSync(folder, { recursive: true });
 	const tree = await sleeperTree(folder, outlive);
@@ -147,7 +147,7 @@ test("a real tree whose root ended: leftoversOf finds the orphans by the root's 
 
 test("an omp behind a shim: the workers it starts on its way out, after the last read, end once shim and omp went (0490)", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "jocasta-proctree-"));
-	cleanup.push(() => rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }));
+	cleanup.push(() => removeTree(dir));
 	const tree = await shimTree(dir);
 	cleanup.push(tree.stop);
 	const shim = processIdOf(tree.shim);
@@ -172,7 +172,7 @@ test.if(process.platform === "win32")(
 		// A short %TEMP% (`C:\Users\ZHIVKO~1\…`) gives children a short working folder; seen on 2026-10-24 when two omp
 		// workers held a folder that processesIn, asked with the long name, didn't see.
 		const dir = mkdtempSync(join(tmpdir(), "jocasta-proctree-"));
-		cleanup.push(() => rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }));
+		cleanup.push(() => removeTree(dir));
 		const folder = join(dir, "A Long Folder Name");
 		mkdirSync(folder);
 		const fso = `(New-Object -ComObject Scripting.FileSystemObject).GetFolder('${folder}').ShortPath`;

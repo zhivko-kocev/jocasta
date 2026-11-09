@@ -25,6 +25,7 @@ import {
 	unsafeFolder,
 } from "../../src/setup/uninstall.ts";
 import { UserError } from "../../src/shared/errors.ts";
+import { removeTree } from "../../src/shared/fsx.ts";
 
 const ASSETS = resolve(import.meta.dir, "..", "..", "config");
 let root = "";
@@ -76,7 +77,7 @@ beforeEach(async () => {
 	put(join(setupPaths.miseConfigDir, "config.jocasta-p1.override.toml"), "[tools]\n");
 	put(join(setupPaths.miseConfigDir, "config.toml"), "# his\n");
 });
-afterEach(() => rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
+afterEach(() => removeTree(root));
 
 function install(): InstallRecord {
 	const dir = join(root, "Programs", "jocasta");

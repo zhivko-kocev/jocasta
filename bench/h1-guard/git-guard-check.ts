@@ -18,10 +18,11 @@
 // message, git-guard.ts's prediction, agreement) and `git-guard-check.json` (agreement per subcommand and per way of
 // writing, every disagreement listed). `omp-verdicts.ts --git-guard <git-guard-check.jsonl>` then uses the measured
 // refusals for these lines.
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { removeTree } from "../../src/shared/fsx.ts";
 import { BenchUsageError, flag, parseBenchArgs, runScript } from "../lib/args.ts";
 import { appendRow, conditions, printPlan, writeJson } from "../lib/output.ts";
 import { type CorpusEntry, parseCorpus } from "./evaluate.ts";
@@ -261,7 +262,7 @@ if (import.meta.main) {
 		const { executeBash } = await load("exec/bash-executor.ts");
 
 		const resetFixture = () => {
-			for (const dir of [FIXTURE, ORIGIN]) rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+			for (const dir of [FIXTURE, ORIGIN]) removeTree(dir);
 			mkdirSync(WORK_ROOT, { recursive: true });
 			for (const step of FIXTURE_RECIPE) {
 				if ("write" in step) {
@@ -326,7 +327,7 @@ if (import.meta.main) {
 				);
 			}
 		} finally {
-			for (const dir of [FIXTURE, ORIGIN]) rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+			for (const dir of [FIXTURE, ORIGIN]) removeTree(dir);
 		}
 		const bySubcommand = agreement(rows, (row) => row.subcommand);
 		const byVariant = agreement(rows, (row) => row.variant);
@@ -352,7 +353,7 @@ if (import.meta.main) {
 		});
 		console.log(`agreement ${measuredRows.filter((row) => row.agree).length}/${measuredRows.length}; wrote ${file}`);
 		try {
-			rmSync(temp, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+			removeTree(temp);
 		} catch (error) {
 			// Windows can hold a file there a while longer (seen in the VM with nothing working in the folder); the
 			// results are written by now, so the run still counts.

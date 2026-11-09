@@ -22,9 +22,10 @@
 // policy"), asked (print mode has no UI, so a prompt verdict fails the call with "requires approval but no interactive
 // UI available", `wrapper.ts:434-458`), ran (reached the interceptor), no-call, other. The git guard acts only when
 // the command runs, so the live check compares omp's approval verdict, not the git guard's.
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { removeTree } from "../../src/shared/fsx.ts";
 import { BenchUsageError, flag, parseBenchArgs, REPO_ROOT, runScript } from "../lib/args.ts";
 import { appendRow, conditions, printPlan, writeJson } from "../lib/output.ts";
 import { DEFAULT_SEED, rate, seededRandom } from "../lib/stats.ts";
@@ -345,7 +346,7 @@ if (import.meta.main) {
 			);
 		} finally {
 			try {
-				rmSync(fixture, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+				removeTree(fixture);
 			} catch (error) {
 				// Windows can hold a file there a while longer (seen in the VM after the last omp run); the results are
 				// written by now, so the run still counts.

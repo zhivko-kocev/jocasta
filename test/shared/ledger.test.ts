@@ -1,8 +1,9 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTree } from "../../src/shared/fsx.ts";
 import {
 	CACHE_MISS_WRITE_TOKENS,
 	ledgerLine,
@@ -60,7 +61,7 @@ beforeEach(() => {
 afterEach(() => {
 	if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
-	rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+	removeTree(root);
 });
 
 /** omp's model cache with `rows` (provider id → models). */

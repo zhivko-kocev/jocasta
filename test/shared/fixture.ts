@@ -1,8 +1,9 @@
 import { afterEach, beforeEach } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { removeTree } from "../../src/shared/fsx.ts";
 
 /** Runs git in `dir` with a throwaway identity; throws on failure. */
 export function sh(dir: string, ...args: string[]): string {
@@ -50,7 +51,8 @@ export function useTempJocasta(): { root: string; config: string; data: string; 
 		process.env.JOCASTA_DATA_DIR = saved.data;
 		if (saved.config === undefined) delete process.env.JOCASTA_CODING_AGENT_DIR;
 		if (saved.data === undefined) delete process.env.JOCASTA_DATA_DIR;
-		rmSync(env.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+		// Bun's rmSync ignores maxRetries; removeTree retries an entry a short-lived git or omp still holds (EBUSY).
+		removeTree(env.root);
 	});
 	return env;
 }

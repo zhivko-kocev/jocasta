@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -15,7 +15,7 @@ import {
 	stopHerdrSession,
 } from "../../src/frontier/server/herdr.ts";
 import { processesIn } from "../../src/frontier/server/proctree.ts";
-import { pidAlive } from "../../src/shared/fsx.ts";
+import { pidAlive, removeTree } from "../../src/shared/fsx.ts";
 import { killAll, type SleeperTree, settles, sleeperCommand, sleeperTree } from "../frontier/server/sleepers.ts";
 import { FakeHerdr } from "./fake-herdr.ts";
 
@@ -632,7 +632,7 @@ async function treeIn(name: string): Promise<SleeperTree> {
 	cleanup.push(async () => {
 		await tree.stop();
 		try {
-			rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+			removeTree(dir);
 		} catch {
 			// Under load Windows can hold a just-stopped sleeper's folder (EBUSY); a leftover temp folder is harmless.
 		}
@@ -819,7 +819,7 @@ test.skipIf(process.env.JOCASTA_HERDR_SMOKE !== "1")(
 					`herdr ${args.join(" ")} → exit ${run.exitCode} ${run.stdout.toString().trim()} ${run.stderr.toString().trim()}`,
 				);
 			}
-			rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+			removeTree(root);
 		}
 	},
 	30_000,
@@ -868,7 +868,7 @@ test.skipIf(process.env.JOCASTA_HERDR_SMOKE !== "1")(
 			killAll(started);
 			Bun.spawnSync([bin, "--session", session, "server", "stop"]);
 			Bun.spawnSync([bin, "session", "delete", session]);
-			rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+			removeTree(root);
 		}
 	},
 	60_000,

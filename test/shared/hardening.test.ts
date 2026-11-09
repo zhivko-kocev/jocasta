@@ -26,7 +26,7 @@ beforeEach(() => {
 	root = realpathSync.native(mkdtempSync(join(tmpdir(), "jocasta-test-hardening-")));
 });
 afterEach(() => {
-	rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+	removeTree(root);
 });
 
 /** A folder link at `link` to `target`: a junction on Windows (no admin needed), a symlink elsewhere. */

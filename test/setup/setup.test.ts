@@ -31,6 +31,7 @@ import {
 	TOKYO_NIGHT_SCHEME,
 } from "../../src/setup/setup.ts";
 import { UserError } from "../../src/shared/errors.ts";
+import { removeTree } from "../../src/shared/fsx.ts";
 
 const ASSETS = resolve(import.meta.dir, "..", "..", "config");
 let root = "";
@@ -62,7 +63,7 @@ beforeEach(() => {
 		return { code: 0, output: "" };
 	};
 });
-afterEach(() => rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
+afterEach(() => removeTree(root));
 
 const put = (path: string, text: string) => {
 	mkdirSync(dirname(path), { recursive: true });

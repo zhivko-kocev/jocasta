@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Arm, runBench, runValidation, type TrialJob, type TrialOutcome } from "../../evals/bench.ts";
@@ -23,10 +23,11 @@ import {
 	trialKey,
 } from "../../evals/tasks.ts";
 import { DEFAULT_VARIANT } from "../../evals/variants.ts";
+import { removeTree } from "../../src/shared/fsx.ts";
 
 const temps: string[] = [];
 afterEach(() => {
-	for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+	for (const dir of temps.splice(0)) removeTree(dir);
 	delete process.env.JOCASTA_TEST_OMP_LOG;
 });
 

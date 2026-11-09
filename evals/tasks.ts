@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { BenchUsageError } from "../bench/lib/args.ts";
+import { removeTree } from "../src/shared/fsx.ts";
 import type { TrialLedger } from "../src/shared/ledger.ts";
 import type { EvalCase, ResultRow } from "./runner.ts";
 
@@ -293,7 +294,7 @@ export function prepareTask(task: BenchTask, cacheDir: string): PreparedTask {
 			: undefined;
 	if (knownTag !== undefined && done?.patches_sha256 === stamp.patches_sha256)
 		return knownTag === null ? prepared : { ...prepared, tag: knownTag };
-	rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
+	removeTree(dir);
 	mkdirSync(dir, { recursive: true });
 
 	const bare = join(cacheDir, "repos", `${task.repo.replace("/", "__")}.git`);
@@ -332,7 +333,7 @@ export function prepareTask(task: BenchTask, cacheDir: string): PreparedTask {
 			throw new Error(`${task.instance_id}: the test patch deletes ${file}; grading can only add or replace files`);
 		cpSync(from, join(prepared.hidden, file));
 	}
-	rmSync(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
+	removeTree(scratch);
 	const tag = knownTag === undefined ? nearestTag(task, dir) : (knownTag ?? undefined);
 	writeFileSync(marker, `${JSON.stringify({ ...stamp, tag: tag ?? null })}\n`);
 	return tag === undefined ? prepared : { ...prepared, tag };
@@ -365,7 +366,7 @@ function nearestTag(task: BenchTask, dir: string): string | undefined {
 		});
 		return described.status === 0 && described.stdout.trim() !== "" ? described.stdout.trim() : undefined;
 	} finally {
-		rmSync(bare, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
+		removeTree(bare);
 	}
 }
 

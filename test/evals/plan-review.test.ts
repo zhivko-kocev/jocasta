@@ -1,15 +1,16 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { planReviewExtension, readPlanReviewLog } from "../../evals/plan-review.ts";
 import { type EvalCase, PLAN_REVIEW_OVERLAY, runTrial } from "../../evals/runner.ts";
 import { envDelta, type TerminalRunner } from "../../evals/terminal.ts";
 import { loadVariants } from "../../evals/variants.ts";
+import { removeTree } from "../../src/shared/fsx.ts";
 
 const temps: string[] = [];
 afterEach(() => {
-	for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+	for (const dir of temps.splice(0)) removeTree(dir);
 });
 const tempDir = () => {
 	const dir = mkdtempSync(join(tmpdir(), "jocasta-review-"));

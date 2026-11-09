@@ -22,6 +22,7 @@ import { benchPricing, ledgerOfDir } from "../bench/lib/ledger.ts";
 import { type Conditions, conditions } from "../bench/lib/output.ts";
 import { loadPriceTable, type PriceTable } from "../bench/lib/prices.ts";
 import { UserError } from "../src/shared/errors.ts";
+import { removeTree } from "../src/shared/fsx.ts";
 import type { TrialLedger } from "../src/shared/ledger.ts";
 import { parseRunArgs } from "./args.ts";
 import { FOLLOWUP_ARMS, FOLLOWUP_COMPARISONS, FOLLOWUP_REPS, FOLLOWUP_TASKS, pickFollowupTasks } from "./followup.ts";
@@ -527,7 +528,7 @@ export function validateTask(
 	} catch (error) {
 		row.error = (error as Error).message;
 	} finally {
-		rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 500 });
+		removeTree(root);
 	}
 	return row;
 }
