@@ -1,6 +1,7 @@
 # herdr config for Jocasta's session `jocasta` (0392, 0401–0408). `jocasta setup` copies it to
-# ~/.jocasta/agent/herdr.toml, replacing {{data}} with Jocasta's data dir; when that file differs from
-# this template, setup shows the diff and replaces it after `y` (0440). herdr reads it through HERDR_CONFIG_PATH.
+# ~/.jocasta/agent/herdr.toml, replacing {{hud}} with the command that prints Jocasta's <data>/hud.txt (cmd's `type` on
+# Windows, `cat` elsewhere); when that file differs from this template, setup shows the diff and replaces it after `y`
+# (0440). herdr reads it through HERDR_CONFIG_PATH.
 
 # No first-run overlay: `jocasta setup` already installs herdr's omp integration.
 onboarding = false
@@ -39,7 +40,7 @@ description = "Finish the focused thread"
 key = "prefix+alt+s"
 type = "plugin_action"
 command = "jocasta.stop"
-description = "Stop the focused thread"
+description = "Stop the focused thread's run"
 
 [[keys.command]]
 key = "prefix+alt+r"
@@ -69,7 +70,7 @@ window_title = "Jocasta · {workspace}"
 # The HUD: the blocked count and today's spend from hud.txt, which the service rewrites on every change and herdr
 # reads every 5 s, then the time; the quota is in `today` (0403, 0437, 0554).
 tab_bar_right = [
-  { type = "command", command = "type \"{{data}}\\hud.txt\"", interval_seconds = 5, timeout_seconds = 1 },
+  { type = "command", command = "{{hud}}", interval_seconds = 5, timeout_seconds = 1 },
   { type = "datetime", format = "%H:%M" },
 ]
 tab_bar_right_separator = " · "

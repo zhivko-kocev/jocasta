@@ -8,10 +8,11 @@
  */
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { FrontierFile } from "../frontier/server/frontier-file.ts";
 import type { Herdr, HerdrSnapshot, PaneInfo } from "../frontier/server/herdr.ts";
 import type { ServiceState } from "../frontier/server/launch.ts";
 import { UserError } from "../shared/errors.ts";
+import { LOG_DAYS, LOG_FILE } from "../shared/log.ts";
+import type { ServiceFile } from "../shared/service-file.ts";
 
 /** The boss's workspace (0392, 0404), where the diagnose pane opens. */
 const WORKSPACE = "Jocasta";
@@ -25,8 +26,6 @@ export const RECENT_LOG_LINES = 400;
  */
 const READ_ONLY_TOOLS = "read,grep,glob";
 
-const LOG_FILE = /^jocasta-\d{4}-\d{2}-\d{2}\.log$/;
-
 export interface DiagnoseDeps {
 	dataDir: string;
 	/** The shipped `config/`, whose `skills/` holds the diagnose skill. */
@@ -36,13 +35,13 @@ export interface DiagnoseDeps {
 	/** `jocasta --version`'s line. */
 	versions: string;
 	session: string;
-	service(): Promise<{ state: ServiceState; file: FrontierFile | undefined }>;
+	service(): Promise<{ state: ServiceState; file: ServiceFile | undefined }>;
 	/** Jocasta's herdr session, started when it isn't running. */
 	connect(): Promise<Herdr>;
 	/** Makes workspace "Jocasta" with its boss pane when it is missing. */
 	ensureBoss(herdr: Herdr): Promise<PaneInfo>;
-	/** Setup's start check (`setupToast`). */
-	setupWaiting(): Promise<string | undefined>;
+	/** Setup's start check (`setupCheck`): what waits, or why it couldn't check. */
+	setupCheck(): Promise<{ waiting?: string; failed?: string }>;
 	now?: Date;
 }
 
@@ -81,9 +80,9 @@ export function diagnoseOverlay(skillsDir: string): string {
 	].join("\n");
 }
 
-function serviceLine(state: ServiceState, file: FrontierFile | undefined): string {
-	if (!file) return `${state} (no frontier.json: it isn't running)`;
-	return `${state} (frontier.json names pid ${file.pid}, port ${file.port})`;
+function serviceLine(state: ServiceState, file: ServiceFile | undefined): string {
+	if (!file) return `${state} (no jocasta-service.json: it isn't running)`;
+	return `${state} (jocasta-service.json names pid ${file.pid}, port ${file.port})`;
 }
 
 function panesSection(snapshot: HerdrSnapshot): string[] {
@@ -118,8 +117,9 @@ export async function runDiagnose(deps: DiagnoseDeps, print: (line: string) => v
 	try {
 		const version = await herdr.ping();
 		const snapshot = await herdr.snapshot();
+		// Setup's check runs before the log is read, and a failed one is said as such (SET-14).
+		const setup = await deps.setupCheck();
 		const recent = recentLog(logsDir);
-		const waiting = await deps.setupWaiting();
 		const statePath = join(dir, "state.md");
 		const logPath = join(dir, "recent.log");
 		const overlay = join(dir, "omp.yml");
@@ -132,8 +132,8 @@ export async function runDiagnose(deps: DiagnoseDeps, print: (line: string) => v
 				`- Versions: ${deps.versions}`,
 				`- Service: ${serviceLine(state, file)}`,
 				`- herdr session \`${deps.session}\`: herdr ${version ?? "?"} answers; ${snapshot.workspaces.length} workspaces, ${snapshot.panes.length} panes`,
-				`- Setup: ${waiting ?? "nothing waiting"}`,
-				`- Logs: ${logsDir}, one file per day, 7 days kept; recent.log has the newest ${RECENT_LOG_LINES} lines${recent.files.length > 0 ? ` (from ${recent.files.join(", ")})` : " (there are none)"}`,
+				`- Setup: ${setup.failed !== undefined ? `couldn't check (${setup.failed})` : (setup.waiting ?? "nothing waiting")}`,
+				`- Logs: ${logsDir}, one file per day, ${LOG_DAYS} days kept; recent.log has the newest ${RECENT_LOG_LINES} lines${recent.files.length > 0 ? ` (from ${recent.files.join(", ")})` : " (there are none)"}`,
 				"",
 				"## herdr's workspaces and panes",
 				...panesSection(snapshot),

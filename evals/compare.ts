@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import {
 	holm,
@@ -11,6 +11,7 @@ import {
 	wilcoxonSignedRank,
 } from "../bench/lib/stats.ts";
 import { UserError } from "../src/shared/errors.ts";
+import { readJsonlFile } from "../src/shared/jsonl.ts";
 import { MEASUREMENT_NOTES, type ResultRow } from "./runner.ts";
 
 /**
@@ -254,10 +255,7 @@ export function renderComparison(comparison: Comparison, labelA: string, labelB:
 function readRows(dir: string): ResultRow[] {
 	const file = join(dir, "results.jsonl");
 	if (!existsSync(file)) throw new UserError(`no results.jsonl in ${dir}`);
-	return readFileSync(file, "utf8")
-		.split("\n")
-		.filter((line) => line.trim() !== "")
-		.map((line) => JSON.parse(line) as ResultRow);
+	return readJsonlFile<ResultRow>(file);
 }
 
 /** Compares two run folders; writes `<runDirB>/compare.md` and returns its text. */

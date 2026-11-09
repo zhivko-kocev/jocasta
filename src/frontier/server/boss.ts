@@ -5,14 +5,14 @@
  * herdr restores or he starts by hand still has it; the procedures it rarely needs are skills in
  * `<data>/home/.omp/skills/` (0465). Both the service and bare `jocasta` ensure it.
  */
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { asObject, writeAtomically } from "../../shared/fsx.ts";
-import { normalizePathKey } from "../../shared/identity.ts";
+import { asObject, readJsonObject, writeAtomically } from "../../shared/fsx.ts";
 import { shippedConfigDir } from "../../shared/install.ts";
+import { sameDir, samePath } from "../../shared/pathkey.ts";
 import { dataDir } from "../../shared/paths.ts";
-import { realPath } from "../../shared/projects.ts";
 import type { Herdr, HerdrSnapshot, PaneInfo } from "./herdr.ts";
 
 /** The boss's workspace label (0392, 0404). */
@@ -46,12 +46,7 @@ export function bossCommand(omp: string[], configDir = shippedConfigDir()): stri
  */
 export function bossToolsMissing(home = bossHome()): string | undefined {
 	const file = join(home, ".omp", "mcp.json");
-	let server: Record<string, unknown> | undefined;
-	try {
-		server = asObject(asObject(asObject(JSON.parse(readFileSync(file, "utf8")))?.mcpServers)?.jocasta);
-	} catch {
-		// Missing or not JSON: no server either way.
-	}
+	const server = asObject(asObject(readJsonObject(file)?.mcpServers)?.jocasta);
 	if (server && server.enabled !== false) return undefined;
 	return `The boss has no tools: ${file} has no "jocasta" MCP server. Run \`jocasta setup\`, then close Jocasta and run \`jocasta\` again.`;
 }
@@ -80,8 +75,20 @@ function installBossFiles(home = bossHome(), configDir = shippedConfigDir()): vo
 }
 
 /**
- * `<data>/panes.json`: the panes Jocasta started omp in (the boss, project and thread panes), each with its folder and
- * herdr's terminal behind it once seen. herdr keeps pane ids across a restart but gives each pane a new terminal, and
+ * The variable that carries a launched pane's own key into its environment (0578, SEC-NET-6): `jocasta mcp` sends it,
+ * and the service knows the pane by it, never by a pane id the caller states.
+ */
+export const PANE_KEY_ENV = "JOCASTA_PANE_KEY";
+
+/** A new pane key: 32 random bytes, hex (0578). */
+export function newPaneKey(): string {
+	return randomBytes(32).toString("hex");
+}
+
+/**
+ * `<data>/panes.json`: the panes Jocasta started omp in (the boss, project and thread panes), each with its folder, its
+ * pane key (0578: kept, so a service restart knows the panes still working) and herdr's terminal
+ * behind it once seen. herdr keeps pane ids across a restart but gives each pane a new terminal, and
  * with `[session] resume_agents_on_restore = false` (`config/herdr.toml`) it restores them as shells: such a pane, in
  * the same folder and without omp, runs omp again with its own flags (its `--config`), which herdr's own resume
  * (`omp --resume=<session>`) would drop. A pane that kept its terminal runs omp again only once omp was seen running
@@ -90,7 +97,7 @@ function installBossFiles(home = bossHome(), configDir = shippedConfigDir()): vo
  * `--restore` and goes on with that turn.
  */
 export class LaunchedPanes {
-	private entries: Record<string, { cwd: string; terminal?: string; restore?: string }>;
+	private entries: Record<string, { cwd: string; terminal?: string; restore?: string; key?: string }>;
 	/**
 	 * The terminal each recorded pane's omp was seen running in (0521). Not kept in `panes.json`: an omp that ended
 	 * while no service watched (it stopped) isn't one this run saw end.
@@ -99,12 +106,7 @@ export class LaunchedPanes {
 
 	constructor(private readonly file = join(dataDir(), "panes.json")) {
 		this.entries = {};
-		let parsed: Record<string, unknown> | undefined;
-		try {
-			parsed = asObject(JSON.parse(readFileSync(file, "utf8")));
-		} catch {
-			return;
-		}
+		const parsed = readJsonObject(file);
 		// Only well-formed entries: a hand-edited or torn file must not throw on every refresh (CO-19).
 		for (const [paneId, entry] of Object.entries(parsed ?? {})) {
 			const fields = asObject(entry);
@@ -114,6 +116,7 @@ export class LaunchedPanes {
 				cwd: fields.cwd,
 				...(typeof fields.terminal === "string" ? { terminal: fields.terminal } : {}),
 				...(typeof fields.restore === "string" ? { restore: fields.restore } : {}),
+				...(typeof fields.key === "string" ? { key: fields.key } : {}),
 			};
 		}
 	}
@@ -132,11 +135,27 @@ export class LaunchedPanes {
 		return Object.keys(this.entries);
 	}
 
-	/** Jocasta started omp in `paneId`, in `cwd`: an omp not yet seen running (0521). */
-	add(paneId: string, cwd: string): void {
-		this.entries[paneId] = { cwd };
+	/** Jocasta started omp in `paneId`, in `cwd`, with pane key `key`: an omp not yet seen running (0521, 0578). */
+	add(paneId: string, cwd: string, key?: string): void {
+		this.entries[paneId] = { cwd, ...(key ? { key } : {}) };
 		this.ran.delete(paneId);
 		this.save();
+	}
+
+	/** The key `paneId` was started with (0578); undefined for a pane started before panes had keys, or not Jocasta's. */
+	keyOf(paneId: string): string | undefined {
+		return this.entries[paneId]?.key;
+	}
+
+	/** The pane started with `key` (0578), compared in constant time; undefined for any other key. */
+	paneOfKey(key: string | undefined): string | undefined {
+		if (!key) return undefined;
+		const given = Buffer.from(key);
+		for (const [paneId, entry] of Object.entries(this.entries)) {
+			const known = Buffer.from(entry.key ?? "");
+			if (known.length === given.length && timingSafeEqual(known, given)) return paneId;
+		}
+		return undefined;
 	}
 
 	/** `paneId`'s omp was mid-turn in session file `session` as Jocasta stopped (0549): its next start restores it. */
@@ -199,7 +218,7 @@ export class LaunchedPanes {
 	/** `pane` runs no agent, in folder `cwd`. */
 	private shellIn(pane: PaneInfo, cwd: string): boolean {
 		if (pane.agent || pane.agentState !== "unknown" || !pane.cwd) return false;
-		return normalizePathKey(realPath(pane.cwd)) === normalizePathKey(realPath(cwd));
+		return sameDir(pane.cwd, cwd);
 	}
 
 	private save(): void {
@@ -255,15 +274,18 @@ export async function ensureBossPane(herdr: Herdr, options: EnsureBossOptions): 
 		);
 	};
 	let pane = workspaceId ? await inBoss() : undefined;
-	const { command, env } = options;
+	const { command } = options;
+	// Each start of the boss's omp gets its own pane key (0578), kept with the pane.
+	const key = newPaneKey();
+	const env = { ...options.env, [PANE_KEY_ENV]: key };
 	if (!pane) {
-		await options.check?.(command, home, env ?? {});
+		await options.check?.(command, home, env);
 		if (workspaceId) {
 			const tab = await herdr.createTab(workspaceId, {
 				title: BOSS_WORKSPACE,
 				cwd: home,
 				command,
-				...(env ? { env } : {}),
+				env,
 			});
 			pane = (await herdr.panes()).find((p) => p.paneId === tab.paneId);
 		} else {
@@ -274,18 +296,18 @@ export async function ensureBossPane(herdr: Herdr, options: EnsureBossOptions): 
 			pane = await inBoss();
 		}
 		if (!pane) throw new Error(`herdr made workspace ${BOSS_WORKSPACE} without a pane`);
-		options.launched.add(pane.paneId, home);
+		options.launched.add(pane.paneId, home, key);
 		options.started?.(pane.paneId);
 	} else if (
 		options.launched.restored(pane) ||
 		(options.adopt && !pane.agent && pane.agentState === "unknown") ||
 		options.stale?.(pane)
 	) {
-		await options.check?.(command, home, env ?? {});
-		const respawned = await herdr.respawn(pane.paneId, { cwd: home, command, ...(env ? { env } : {}) });
+		await options.check?.(command, home, env);
+		const respawned = await herdr.respawn(pane.paneId, { cwd: home, command, env });
 		pane = (await herdr.panes()).find((p) => p.paneId === respawned.paneId);
 		if (!pane) throw new Error(`herdr's respawned boss pane ${respawned.paneId} is gone`);
-		options.launched.add(pane.paneId, home);
+		options.launched.add(pane.paneId, home, key);
 		options.started?.(pane.paneId);
 	}
 	if ((await herdr.workspaces())[0]?.id !== workspaceId) await herdr.moveWorkspace(workspaceId as string, 0);
@@ -328,7 +350,7 @@ export async function closeHerdrDefault(
 	const panes = snapshot.panes.filter((p) => p.workspaceId === first.id);
 	const pane = panes[0];
 	if (panes.length !== 1 || !pane?.cwd || pane.agent || pane.agentState !== "unknown") return "none";
-	if (normalizePathKey(pane.cwd) !== normalizePathKey(home)) return "none";
+	if (!samePath(pane.cwd, home)) return "none";
 	const lines = (await herdr.screen(pane.paneId))
 		.split("\n")
 		.map((line) => line.trimEnd())

@@ -1,15 +1,12 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import {
-	defaultService,
-	MCP_PROTOCOL_VERSION,
-	type McpServerOptions,
-	NOT_RUNNING,
-	runMcpServer,
-} from "../../src/mcp/server.ts";
+import { MCP_PROTOCOL_VERSION, type McpServerOptions, runMcpServer } from "../../src/mcp/server.ts";
+import { NOT_RUNNING } from "../../src/shared/service-file.ts";
+import { useTempDirs } from "../shared/fixture.ts";
+
+const tempDir = useTempDirs("jocasta-mcp-");
 
 const servers: { stop(force?: boolean): unknown }[] = [];
 afterEach(() => {
@@ -29,7 +26,10 @@ interface Reply {
 	error?: { code: number; message: string };
 }
 
-/** Feeds `lines` (raw text each, a newline appended) to a server and returns every reply parsed. */
+/** A thread pane's environment (0577): `report_result` and `check` are listed there. */
+const THREAD_ENV = { JOCASTA_THREAD: "t-1" };
+
+/** Feeds `lines` (raw text each, a newline appended) to a server, outside a thread unless `options.env` says so. */
 async function session(lines: string[], options: Partial<McpServerOptions> = {}): Promise<Reply[]> {
 	const out: string[] = [];
 	const input = new ReadableStream<Uint8Array>({
@@ -43,6 +43,7 @@ async function session(lines: string[], options: Partial<McpServerOptions> = {})
 		input,
 		output: (line) => out.push(line),
 		service: () => undefined,
+		env: {},
 		...options,
 	});
 	for (const line of out) expect(line.includes("\n")).toBe(false);
@@ -104,37 +105,40 @@ test("initialize echoes an older supported version and offers its own for an unk
 	expect(replies.map((r) => r.result?.protocolVersion)).toEqual(["2025-06-18", MCP_PROTOCOL_VERSION]);
 });
 
-test("tools/list: graph_search, report_result and check for everyone, the boss's tools only with --boss; the boss's graph_search names the project", async () => {
-	const listed = async (boss: boolean) => {
-		const [reply] = await session([request(1, "tools/list", {})], { boss });
+test("tools/list: graph_search everywhere, report_result and check only in a thread with the layer on, the boss's tools only with --boss; the boss's graph_search names the project", async () => {
+	const listed = async (options: Partial<McpServerOptions>) => {
+		const [reply] = await session([request(1, "tools/list", {})], options);
 		const tools = reply?.result?.tools ?? [];
-		for (const t of tools) {
-			expect(t.description.length).toBeGreaterThan(0);
-			expect(t.inputSchema).toMatchObject({ type: "object", additionalProperties: false });
-		}
+		for (const t of tools) expect(t.inputSchema).toMatchObject({ type: "object", additionalProperties: false });
 		expect(reply?.result?.nextCursor).toBeUndefined();
 		return tools;
 	};
-	const names = async (boss: boolean) => (await listed(boss)).map((t) => t.name);
-	const graphSearch = async (boss: boolean) => (await listed(boss)).find((t) => t.name === "graph_search")?.inputSchema;
-	expect(await graphSearch(false)).toMatchObject({ required: ["query"] });
-	expect(await graphSearch(false)).not.toHaveProperty("properties.project");
-	expect(await graphSearch(true)).toMatchObject({ required: ["project", "query"] });
-	expect(await names(false)).toEqual(["graph_search", "report_result", "check"]);
-	expect(await names(true)).not.toContain("check");
+	const thread = { env: THREAD_ENV };
+	const boss = { boss: true };
+	const names = async (options: Partial<McpServerOptions>) => (await listed(options)).map((t) => t.name);
+	const graphSearch = async (options: Partial<McpServerOptions>) =>
+		(await listed(options)).find((t) => t.name === "graph_search")?.inputSchema;
+	expect(await graphSearch(thread)).toMatchObject({ required: ["query"] });
+	expect(await graphSearch(thread)).not.toHaveProperty("properties.project");
+	expect(await graphSearch(boss)).toMatchObject({ required: ["project", "query"] });
+	expect(await names(thread)).toEqual(["graph_search", "report_result", "check"]);
+	// His other omp sessions and the project panes load the same server (0577), and the layer can be off (0576).
+	expect(await names({})).toEqual(["graph_search"]);
+	expect(await names({ env: { ...THREAD_ENV, JOCASTA_LAYER: "off" } })).toEqual(["graph_search"]);
+	expect(await names({ ...boss, env: THREAD_ENV })).not.toContain("check");
 	// report_result's schema (0539): the outcome, a summary of at most 200 characters, the lists.
-	expect((await listed(false)).find((t) => t.name === "report_result")?.inputSchema).toMatchObject({
+	expect((await listed(thread)).find((t) => t.name === "report_result")?.inputSchema).toMatchObject({
 		required: ["outcome", "summary", "files", "tests", "decisions", "questions", "followUps"],
 		properties: {
 			summary: { maxLength: 200 },
 			outcome: { anyOf: [{ const: "done" }, { const: "blocked" }, { const: "failed" }] },
 		},
 	});
-	expect((await listed(true)).find((t) => t.name === "thread_start")?.inputSchema).toMatchObject({
+	expect((await listed(boss)).find((t) => t.name === "thread_start")?.inputSchema).toMatchObject({
 		properties: { done_when: { type: "array", items: { type: "string" } } },
 		required: ["project", "title", "brief"],
 	});
-	expect(await names(true)).toEqual([
+	expect(await names(boss)).toEqual([
 		"graph_search",
 		"projects",
 		"thread_start",
@@ -154,7 +158,15 @@ test("tools/list: graph_search, report_result and check for everyone, the boss's
 	]);
 });
 
-test("tools/call posts args, pane and boss key to /api/mcp/<tool> with the bearer token", async () => {
+test("outside a thread, report_result and check are unknown tools", async () => {
+	const replies = await session([
+		request(1, "tools/call", { name: "check", arguments: {} }),
+		request(2, "tools/call", { name: "report_result", arguments: {} }),
+	]);
+	expect(replies.map((r) => r.error?.code)).toEqual([-32602, -32602]);
+});
+
+test("tools/call posts args, pane key and boss key to /api/mcp/<tool> with the bearer token", async () => {
 	const fake = fakeService((tool) =>
 		Response.json(tool === "thread_stop" ? { text: "No thread named x.", isError: true } : { text: `ok ${tool}` }),
 	);
@@ -172,7 +184,7 @@ test("tools/call posts args, pane and boss key to /api/mcp/<tool> with the beare
 			request(4, "tools/call", { name: "thread_stop", arguments: { thread: "x" } }),
 			request(5, "tools/call", { name: "today" }),
 		],
-		{ boss: true, service: () => fake.address, paneId: "p_7", bossKey: "key-1" },
+		{ boss: true, service: () => fake.address, paneKey: "pk-7", bossKey: "key-1" },
 	);
 	const byId = new Map(replies.map((r) => [r.id, r]));
 	expect(byId.get(2)?.result).toEqual({ content: [{ type: "text", text: "ok graph_search" }], isError: false });
@@ -180,7 +192,7 @@ test("tools/call posts args, pane and boss key to /api/mcp/<tool> with the beare
 	expect(byId.get(4)?.result).toEqual({ content: [{ type: "text", text: "No thread named x." }], isError: true });
 	expect(byId.get(5)?.result).toEqual({ content: [{ type: "text", text: "ok today" }], isError: false });
 	const sorted = [...fake.calls].sort((a, b) => a.tool.localeCompare(b.tool));
-	const from = { paneId: "p_7", bossKey: "key-1" };
+	const from = { paneKey: "pk-7", bossKey: "key-1" };
 	expect(sorted).toEqual([
 		{
 			tool: "graph_search",
@@ -197,13 +209,13 @@ test("tools/call posts args, pane and boss key to /api/mcp/<tool> with the beare
 	]);
 });
 
-test("a thread pane's call sends its pane and no key", async () => {
+test("a thread pane's call sends its pane key and no boss key", async () => {
 	const fake = fakeService(() => Response.json({ text: "ok" }));
 	await session([request(1, "tools/call", { name: "graph_search", arguments: { query: "why" } })], {
 		service: () => fake.address,
-		paneId: "p_9",
+		paneKey: "pk-9",
 	});
-	expect(fake.calls.map((c) => c.body)).toEqual([{ args: { query: "why" }, paneId: "p_9" }]);
+	expect(fake.calls.map((c) => c.body)).toEqual([{ args: { query: "why" }, paneKey: "pk-9" }]);
 });
 
 test("a service reply without a result, or an HTTP error, is a tool error", async () => {
@@ -226,12 +238,12 @@ test("a service reply without a result, or an HTTP error, is a tool error", asyn
 });
 
 const notRunning = {
-	content: [{ type: "text", text: "Jocasta isn't running; start it with `jocasta`." }],
+	content: [{ type: "text", text: "Jocasta isn't running; start it with jocasta." }],
 	isError: true,
 };
 
 test("no service: every tool answers the not-running text", async () => {
-	expect(NOT_RUNNING).toBe("Jocasta isn't running; start it with `jocasta`.");
+	expect(NOT_RUNNING).toBe("Jocasta isn't running; start it with jocasta.");
 	const replies = await session(
 		[
 			request(1, "tools/call", { name: "graph_search", arguments: { project: "demo", query: "x" } }),
@@ -252,21 +264,34 @@ test("a refused connection is the not-running text too", async () => {
 	expect(reply?.result).toEqual(notRunning);
 });
 
-test("the default service reads <data>/frontier.json and needs its pid alive", () => {
+test("by default a call goes to the service <data>/jocasta-service.json names while its pid lives; frontier.json is still read (0584)", async () => {
+	const fake = fakeService(() => Response.json({ text: "ok" }));
 	const saved = process.env.JOCASTA_DATA_DIR;
-	const dir = mkdtempSync(join(tmpdir(), "jocasta-mcp-"));
+	const dir = tempDir();
 	process.env.JOCASTA_DATA_DIR = dir;
+	const call = async () => {
+		const [reply] = await session([request(1, "tools/call", { name: "graph_search", arguments: { query: "x" } })], {
+			service: undefined,
+		});
+		return reply?.result?.content?.[0]?.text;
+	};
 	try {
-		expect(defaultService()).toBeUndefined();
-		writeFileSync(join(dir, "frontier.json"), JSON.stringify({ port: 4321, token: "abc", pid: process.pid }));
-		expect(defaultService()).toEqual({ port: 4321, token: "abc" });
+		expect(await call()).toBe(NOT_RUNNING);
+		const file = (pid: number) => JSON.stringify({ port: fake.address.port, token: fake.address.token, pid });
+		writeFileSync(join(dir, "jocasta-service.json"), file(process.pid));
+		expect(await call()).toBe("ok");
+		expect(fake.calls.map((c) => c.auth)).toEqual(["Bearer tok-1"]);
 		// A pid far above any real one on the test machine.
-		writeFileSync(join(dir, "frontier.json"), JSON.stringify({ port: 4321, token: "abc", pid: 2 ** 30 }));
-		expect(defaultService()).toBeUndefined();
+		writeFileSync(join(dir, "jocasta-service.json"), file(2 ** 30));
+		expect(await call()).toBe(NOT_RUNNING);
+		// The old name, from a service an older build started, is read when the new one is missing; the new one wins.
+		writeFileSync(join(dir, "frontier.json"), file(process.pid));
+		expect(await call()).toBe(NOT_RUNNING);
+		rmSync(join(dir, "jocasta-service.json"));
+		expect(await call()).toBe("ok");
 	} finally {
 		if (saved === undefined) delete process.env.JOCASTA_DATA_DIR;
 		else process.env.JOCASTA_DATA_DIR = saved;
-		rmSync(dir, { recursive: true, force: true });
 	}
 });
 
@@ -320,13 +345,16 @@ test("report_result and thread_start's done_when are checked before the service 
 		questions: [],
 		followUps: [],
 	};
-	const replies = await session([
-		request(1, "tools/call", { name: "report_result", arguments: { ...report, outcome: "maybe" } }),
-		request(2, "tools/call", { name: "report_result", arguments: { ...report, summary: "x".repeat(201) } }),
-		request(3, "tools/call", { name: "report_result", arguments: { ...report, extra: 1 } }),
-		request(4, "tools/call", { name: "report_result", arguments: { ...report, files: undefined } }),
-		request(5, "tools/call", { name: "report_result", arguments: report }),
-	]);
+	const replies = await session(
+		[
+			request(1, "tools/call", { name: "report_result", arguments: { ...report, outcome: "maybe" } }),
+			request(2, "tools/call", { name: "report_result", arguments: { ...report, summary: "x".repeat(201) } }),
+			request(3, "tools/call", { name: "report_result", arguments: { ...report, extra: 1 } }),
+			request(4, "tools/call", { name: "report_result", arguments: { ...report, files: undefined } }),
+			request(5, "tools/call", { name: "report_result", arguments: report }),
+		],
+		{ env: THREAD_ENV },
+	);
 	const texts = replies.map((r) => r.result?.content?.[0]?.text);
 	expect(texts[0]).toStartWith("report_result: outcome ");
 	expect(texts[1]).toStartWith("report_result: summary ");

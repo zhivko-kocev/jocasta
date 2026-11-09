@@ -1,37 +1,48 @@
-import { pidAlive } from "../../shared/fsx.ts";
-import { TOKEN_COOKIE } from "../protocol.ts";
-import type { FrontierFile } from "./frontier-file.ts";
+import { pidAlive } from "../../shared/proctree.ts";
+import type { ServiceFile } from "../../shared/service-file.ts";
 
 /**
- * What the service named by `frontier.json` is doing (0254, 0434): `up` answers as that process; `closing` answers but
+ * What the service named by `jocasta-service.json` is doing (0254, 0434): `up` answers as that process; `closing` answers but
  * is closing Jocasta; `busy` doesn't answer in time while its process lives (still starting, or hung, 0534); `down`
  * otherwise (no file, nothing listening, another process answering).
  */
 export type ServiceState = "up" | "busy" | "closing" | "down";
 
-/** `/health`'s answer as bare `jocasta` reads it. */
+/** `/health`'s answer as bare `jocasta` and the benchmarks read it. */
 export interface ServiceHealth {
 	state: ServiceState;
 	/** How many times the service started a stopped herdr server again (0431), while it answers (0534). */
 	herdrRevivals?: number;
+	/** The test-only switches as the service has them (0576), while it answers: `JOCASTA_LAYER`, `JOCASTA_HOSTS`. */
+	layer?: "on" | "off";
+	hosts?: "on" | "off";
 }
 
-/** Asks the service's `/health` (its token, 2 s) what it is doing (`ServiceState`). */
-export async function serviceHealth(file: FrontierFile | undefined): Promise<ServiceHealth> {
+/** "on" or "off" as `/health` says it, else undefined. */
+function onOff(value: unknown): "on" | "off" | undefined {
+	return value === "on" || value === "off" ? value : undefined;
+}
+
+/** Asks the service's `/health` (its token as a bearer, within `timeoutMs`) what it is doing (`ServiceState`). */
+export async function serviceHealth(file: ServiceFile | undefined, timeoutMs = 2_000): Promise<ServiceHealth> {
 	if (!file) return { state: "down" };
 	try {
 		const response = await fetch(`http://127.0.0.1:${file.port}/health`, {
-			headers: { cookie: `${TOKEN_COOKIE}=${file.token}` },
-			signal: AbortSignal.timeout(2_000),
+			headers: { authorization: `Bearer ${file.token}` },
+			signal: AbortSignal.timeout(timeoutMs),
 		});
 		if (response.status !== 200) return { state: "down" };
 		const body: unknown = await response.json();
 		if (body === null || typeof body !== "object" || !("pid" in body) || body.pid !== file.pid)
 			return { state: "down" };
 		const revivals = "herdrRevivals" in body && typeof body.herdrRevivals === "number" ? body.herdrRevivals : undefined;
+		const layer = "layer" in body ? onOff(body.layer) : undefined;
+		const hosts = "hosts" in body ? onOff(body.hosts) : undefined;
 		return {
 			state: "closing" in body && body.closing === true ? "closing" : "up",
 			...(revivals === undefined ? {} : { herdrRevivals: revivals }),
+			...(layer ? { layer } : {}),
+			...(hosts ? { hosts } : {}),
 		};
 	} catch (error) {
 		return { state: error instanceof Error && error.name === "TimeoutError" && pidAlive(file.pid) ? "busy" : "down" };
@@ -39,8 +50,8 @@ export async function serviceHealth(file: FrontierFile | undefined): Promise<Ser
 }
 
 /** `serviceHealth`'s state only. */
-export async function serviceState(file: FrontierFile | undefined): Promise<ServiceState> {
-	return (await serviceHealth(file)).state;
+export async function serviceState(file: ServiceFile | undefined, timeoutMs = 2_000): Promise<ServiceState> {
+	return (await serviceHealth(file, timeoutMs)).state;
 }
 
 /**
@@ -49,8 +60,8 @@ export async function serviceState(file: FrontierFile | undefined): Promise<Serv
  */
 export const SHUTDOWN_PATH = "/api/shutdown";
 
-/** Tells the service named by `frontier.json` that his client closed; true when it took it. */
-export async function askShutdown(file: FrontierFile): Promise<boolean> {
+/** Tells the service named by `jocasta-service.json` that his client closed; true when it took it. */
+export async function askShutdown(file: ServiceFile): Promise<boolean> {
 	try {
 		const response = await fetch(`http://127.0.0.1:${file.port}${SHUTDOWN_PATH}`, {
 			method: "POST",

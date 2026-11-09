@@ -1,5 +1,5 @@
-// H8 (0482, extended by 0543 K11): parallel isolation and overlap detection, in a sandbox Jocasta (VM: the threads'
-// agents call the model).
+// H8 (0482, extended by 0543 K11, 0576): parallel isolation and overlap detection, in a sandbox Jocasta (VM: the
+// threads' agents call the model).
 //
 //   bun bench/h8-parallel.ts --out <dir> --project <name> --repo <main checkout> [--threads 2,4,8] [--runs 1]
 //                            [--layer on|off] [--timeout 60] [--make-fixture] [--dry-run]
@@ -7,35 +7,44 @@
 // `--make-fixture` writes the fixture into `--repo` (an empty folder that becomes a git repo; register it as a sandbox
 // project before the run). Threads come in pairs: an even pair both edit the same file (`src/mod<k>.ts`), an odd pair
 // edits one interface from both sides (`src/shared.ts` and `src/use<k>.ts`), in the style of "Passes Alone, Fails
-// Together". Each thread starts with `thread_start` (boss key in JOCASTA_BOSS_KEY); threads open in plan mode, so he
-// approves each plan. The script polls `thread_status` until every thread of the run is finished (0529: idle or done
-// with a commit on its branch; a fresh thread reads idle before its brief lands and a waiting plan reads done), then
-// measures:
+// Together": the fixture's `test/pair<k>.test.ts` calls `show<k>(makeItem<k>())`, which passes with either side alone
+// and throws with both. Each thread starts as `jocasta thread new` does (no Allow, 0544); threads open in plan mode,
+// so he approves each plan. The script reads `jocasta thread list` until every thread of the run is finished (0529:
+// idle or done with a commit on its branch; a fresh thread reads idle before its brief lands and a waiting plan reads
+// done), then measures:
 //   wrong-thread edits  files a thread changed outside its own assignment, plus any change in the main checkout;
-//   flagged before merge  pairs whose `thread_status` line names the partner under "overlaps" (0456);
+//   flagged before merge  pairs whose `thread list` line names the partner under "overlaps" (0456);
 //   conflicts at merge  pairs whose branches conflict in `git merge-tree --write-tree`;
-//   found only at merge  conflicts the overlaps view didn't flag.
-// K11 (`--layer on|off`, 0543): 4 threads at once, 3 runs, with the harness-OS layer on and then off in the sandbox
-// (switched by hand; the flag labels the run). Each run also measures the cost per finished thread (each thread pane's
-// omp session file, as herdr reports it, priced by the benchmark's ledger at the pinned table), the peak working set
-// and private bytes of the service's and herdr's process trees (threads included; sampled every 10 s), and, layer on,
-// the run's shared check hits and index reuse, as the sandbox service counts them in its data dir.
+//   semantic failures  pairs that merge cleanly but whose merged tree, checked out in a temp worktree, fails `bun test`;
+//   found only at merge  conflicts and semantic failures the overlaps view didn't flag.
+// K11 (`--layer on|off`, 0543, 0576): 4 threads at once, 3 runs, with the harness-OS layer on and then off: the sandbox
+// service is started with `JOCASTA_LAYER=off` for `--layer off`, and H8 reads the layer's state from `/health` and
+// refuses a mismatch. Each run also measures the cost per finished thread (every omp session of each thread since the
+// run started, its planning session included, with their subagents, priced by the benchmark's ledger at the pinned
+// table), the peak working set and private bytes of Jocasta's processes (the service's, herdr's server's with the
+// threads, and the attached surfaces' trees; sampled every 10 s), and, layer on, the run's shared check hits and index
+// reuse, as the sandbox service counts them in its data dir.
 // Writes h8-parallel.jsonl (one row per thread count and run) and h8-parallel.json.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { checksDir, readCheckHits } from "../src/frontier/server/checks.ts";
 import { readIndexReuse } from "../src/frontier/server/code-index.ts";
-import { readFrontierFile } from "../src/frontier/server/frontier-file.ts";
-import { connectHerdr, type PaneInfo } from "../src/frontier/server/herdr.ts";
-import { readOmpSession, trialLedger } from "../src/shared/ledger.ts";
+import type { PaneInfo } from "../src/frontier/server/herdr.ts";
+import { SessionIndex } from "../src/frontier/server/sessions.ts";
+import { removeTree } from "../src/shared/fsx.ts";
+import { threadSessionRecords, trialLedger } from "../src/shared/ledger.ts";
+import { samePath } from "../src/shared/pathkey.ts";
+import { runProgramSync } from "../src/shared/process.ts";
 import { BenchUsageError, flag, numberListFlag, parseBenchArgs, runScript } from "./lib/args.ts";
-import { herdrRequest, paneShellPid } from "./lib/herdr.ts";
+import { openSandbox } from "./lib/jocasta.ts";
 import { benchPricing } from "./lib/ledger.ts";
-import { appendRow, conditions, printPlan, writeJson } from "./lib/output.ts";
+import { appendRow, claimRows, conditions, printPlan, writeJson } from "./lib/output.ts";
 import { loadPriceTable } from "./lib/prices.ts";
-import { snapshotProcesses, treeMemory, treeOf } from "./lib/proctree.ts";
-import { callTool, requireSandbox } from "./lib/sandbox.ts";
+import { jocastaProcesses, snapshotProcesses, treeMemory } from "./lib/proctree.ts";
+import { requireServiceSwitch } from "./lib/sandbox.ts";
+import { listThreads, startThread, type ThreadLine, waitForEnter } from "./lib/threads.ts";
 
 /** K11's run (0543): 4 threads at once, 3 runs per layer state. */
 export const K11_THREADS = 4;
@@ -57,45 +66,60 @@ export function readLayerCounters(dataDir: string): LayerCounters {
 	return { checkHits: readCheckHits(checksDir(dataDir)), indexReuse: readIndexReuse(dataDir) };
 }
 
-const samePath = (a: string, b: string) =>
-	resolve(a).replaceAll("\\", "/").toLowerCase() === resolve(b).replaceAll("\\", "/").toLowerCase();
-
 /**
- * Each thread's omp session files: the session file herdr reports for the pane whose folder is the thread's worktree,
- * and its subagents' files in the folder beside it (`<session>/…/*.jsonl`).
+ * Each thread's omp session files since `since` (epoch ms), as the service's own ledger finds them (0538, 0546): the
+ * session herdr reports for the pane in the thread's worktree, followed where omp moved it, and every other session in
+ * its folder that began since, oldest first. omp starts a new session on "Approve and execute", so the session herdr
+ * reports at the end is only the execution's; the planning one sits beside it.
  */
 export function threadSessionFiles(
 	panes: readonly Pick<PaneInfo, "cwd" | "sessionPath">[],
 	worktrees: ReadonlyMap<string, string>,
+	since: number,
+	index: SessionIndex = new SessionIndex(),
 ): Map<string, string[]> {
 	const files = new Map<string, string[]>();
 	for (const [branch, worktree] of worktrees) {
 		const pane = panes.find((p) => p.cwd !== undefined && p.sessionPath !== undefined && samePath(p.cwd, worktree));
 		if (!pane?.sessionPath) continue;
-		const beside = pane.sessionPath.replace(/\.jsonl$/, "");
-		const subagents = existsSync(beside)
-			? readdirSync(beside, { recursive: true, encoding: "utf8" })
-					.filter((name) => name.endsWith(".jsonl"))
-					.map((name) => join(beside, name))
-			: [];
-		files.set(branch, [pane.sessionPath, ...subagents]);
+		files.set(branch, index.sessionsSince(index.moved(pane.sessionPath), since));
 	}
 	return files;
 }
-/** The fixture: one shared interface file, a module and a user per pair, and a package file. */
+
+/**
+ * The fixture: one shared interface file with each odd pair's `makeItem<k>()`, a module and a user per pair, a test per
+ * odd pair that calls `show<k>(makeItem<k>())` (it passes with either side of the pair alone and throws with both:
+ * the semantic break, 0576), and a package file.
+ */
 export function fixtureFiles(maxThreads: number): Record<string, string> {
 	const pairs = Math.ceil(maxThreads / 2);
 	const files: Record<string, string> = {
 		"package.json": `${JSON.stringify({ name: "acme-parallel", private: true, type: "module" }, null, 2)}\n`,
-		"src/shared.ts": Array.from(
-			{ length: pairs },
-			(_, k) => `export interface Item${k} {\n\tid: string;\n\tlabel: string;\n}\n`,
+		"src/shared.ts": Array.from({ length: pairs }, (_, k) =>
+			[
+				`export interface Item${k} {\n\tid: string;\n\tlabel: string;\n}\n`,
+				...(k % 2 === 1
+					? [`\nexport function makeItem${k}(): Item${k} {\n\treturn { id: "${k}", label: "item ${k}" };\n}\n`]
+					: []),
+			].join(""),
 		).join("\n"),
 	};
 	for (let k = 0; k < pairs; k++) {
 		files[`src/mod${k}.ts`] = `export function base${k}(value: number): number {\n\treturn value;\n}\n`;
 		files[`src/use${k}.ts`] =
 			`import type { Item${k} } from "./shared.ts";\n\nexport function show${k}(item: Item${k}): string {\n\treturn item.label;\n}\n`;
+		if (k % 2 === 1)
+			files[`test/pair${k}.test.ts`] = [
+				'import { expect, test } from "bun:test";',
+				`import { makeItem${k} } from "../src/shared.ts";`,
+				`import { show${k} } from "../src/use${k}.ts";`,
+				"",
+				`test("show${k} shows a made item", () => {`,
+				`\texpect(() => show${k}(makeItem${k}())).not.toThrow();`,
+				"});",
+				"",
+			].join("\n");
 	}
 	return files;
 }
@@ -144,31 +168,6 @@ export function assignments(n: number, run: number): Assignment[] {
 	});
 }
 
-export interface ThreadLine {
-	title: string;
-	branch: string;
-	state: string;
-	overlaps: string[];
-}
-
-/** One `thread_status` line: `<project>/<title> [<branch>] <state>[ — …][ · overlaps <title>: files; …]`. */
-export function parseThreadLine(line: string): ThreadLine | null {
-	const match = /^[^/]+\/(.+?) \[([^\]]+)\] (done|plan ready|awaiting you|idle|working|blocked|unknown)(.*)$/.exec(
-		line.trim(),
-	);
-	if (!match) return null;
-	const overlapsAt = (match[4] ?? "").indexOf(" · overlaps ");
-	const overlaps =
-		overlapsAt < 0
-			? []
-			: (match[4] ?? "")
-					.slice(overlapsAt + " · overlaps ".length)
-					.split("; ")
-					.map((part) => part.slice(0, part.lastIndexOf(": ")).trim())
-					.filter((title) => title !== "");
-	return { title: match[1] ?? "", branch: match[2] ?? "", state: match[3] ?? "", overlaps };
-}
-
 /**
  * A thread is finished when it is idle or done and its branch has a commit beyond `main` (0529): each brief ends
  * "Commit when done", while a fresh thread reads idle before its brief lands and a waiting plan reads done.
@@ -181,6 +180,8 @@ export interface PairResult {
 	pair: number;
 	flagged: boolean;
 	conflict: boolean;
+	/** The pair merged cleanly and the merged tree failed `bun test` (0576). */
+	semanticFailure: boolean;
 }
 
 export interface RunScore {
@@ -190,6 +191,7 @@ export interface RunScore {
 	pairs: PairResult[];
 	flaggedBeforeMerge: number;
 	conflictsAtMerge: number;
+	semanticFailures: number;
 	foundOnlyAtMerge: number;
 }
 
@@ -214,6 +216,7 @@ export function score(
 	changed: ReadonlyMap<string, readonly string[]>,
 	conflicts: ReadonlyMap<number, boolean>,
 	mainChanges: number,
+	semanticFailures: ReadonlyMap<number, boolean> = new Map(),
 ): RunScore {
 	const byTitle = new Map(lines.map((line) => [line.title, line]));
 	let wrong = 0;
@@ -228,7 +231,12 @@ export function score(
 			b !== undefined &&
 			((byTitle.get(a.title)?.overlaps.includes(b.title) ?? false) ||
 				(byTitle.get(b.title)?.overlaps.includes(a.title) ?? false));
-		return { pair, flagged, conflict: conflicts.get(pair) ?? false };
+		return {
+			pair,
+			flagged,
+			conflict: conflicts.get(pair) ?? false,
+			semanticFailure: semanticFailures.get(pair) ?? false,
+		};
 	});
 	return {
 		threads: work.length,
@@ -237,8 +245,45 @@ export function score(
 		pairs,
 		flaggedBeforeMerge: pairs.filter((p) => p.flagged).length,
 		conflictsAtMerge: pairs.filter((p) => p.conflict).length,
-		foundOnlyAtMerge: pairs.filter((p) => p.conflict && !p.flagged).length,
+		semanticFailures: pairs.filter((p) => p.semanticFailure).length,
+		foundOnlyAtMerge: pairs.filter((p) => (p.conflict || p.semanticFailure) && !p.flagged).length,
 	};
+}
+
+type Git = (cwd: string, args: string[]) => { status: number | null; stdout: string };
+
+/**
+ * Whether two branches that merge cleanly break the fixture's tests together (0576): the merged tree as a commit,
+ * checked out in a temp worktree, and `bun test` run there; false when they conflict or the tree has no tests.
+ */
+export function mergedTestsFail(git: Git, repo: string, a: string, b: string, bun = process.execPath): boolean {
+	const merged = git(repo, ["merge-tree", "--write-tree", a, b]);
+	if (merged.status !== 0) return false;
+	const tree = merged.stdout.split("\n")[0]?.trim() ?? "";
+	const commit = git(repo, [
+		"-c",
+		"user.name=Bench",
+		"-c",
+		"user.email=bench@example.org",
+		"commit-tree",
+		tree,
+		"-p",
+		a,
+		"-p",
+		b,
+		"-m",
+		"h8 merged pair",
+	]).stdout.trim();
+	const dir = join(mkdtempSync(join(tmpdir(), "h8-merge-")), "tree");
+	git(repo, ["worktree", "add", "--detach", dir, commit]);
+	try {
+		if (!existsSync(join(dir, "test"))) return false;
+		const run = spawnSync(bun, ["test"], { cwd: dir, encoding: "utf8", windowsHide: true, timeout: 120_000 });
+		return run.status !== 0;
+	} finally {
+		git(repo, ["worktree", "remove", "--force", dir]);
+		removeTree(join(dir, ".."));
+	}
 }
 
 if (import.meta.main) {
@@ -264,15 +309,15 @@ if (import.meta.main) {
 					args.flags.get("make-fixture") === true
 						? `write the fixture into ${repoFlag ?? "<--repo>"} for up to ${Math.max(...counts)} threads`
 						: "use the existing fixture",
-					`${counts.join(", ")} threads × ${runs} run(s) in ${project ?? "<--project>"} via thread_start (model calls; he approves each plan: VM only)`,
+					`${counts.join(", ")} threads × ${runs} run(s) in ${project ?? "<--project>"} via jocasta thread new (no Allow; model calls; he approves each plan: VM only)`,
 					...assignments(Math.min(4, Math.max(...counts)), 0).map((a) => `thread ${a.thread}: ${a.brief}`),
-					`poll thread_status up to ${timeoutMs / 60_000} min until all are idle or done with a commit on their branch`,
-					"measure wrong-thread edits, overlaps flagged before merge, merge-tree conflicts, conflicts found only at merge",
+					`read jocasta thread list up to ${timeoutMs / 60_000} min until all are idle or done with a commit on their branch`,
+					"measure wrong-thread edits, overlaps flagged before merge, merge-tree conflicts, semantic failures (a clean merge whose tree fails bun test), conflicts found only at merge",
 					...(layer
 						? [
-								`K11 (0543): the layer ${layer} in the sandbox (set by hand); cost per finished thread from each pane's omp session at the pinned price table; peak memory of the service's and herdr's trees every ${MEMORY_SAMPLE_MS / 1000} s`,
+								`K11 (0543): the layer ${layer} in the sandbox (the service started ${layer === "off" ? "with" : "without"} JOCASTA_LAYER=off; /health checked); cost per finished thread from every omp session of each thread since the run started at the pinned price table; peak memory of the service's, herdr's and the surfaces' trees every ${MEMORY_SAMPLE_MS / 1000} s`,
 								layer === "on"
-									? "shared check hits and index reuse from the layer build (needed: a layer-on run stops without it)"
+									? "shared check hits and index reuse from the service's logs in its data dir"
 									: "no shared check hits or index reuse with the layer off",
 							]
 						: []),
@@ -284,8 +329,10 @@ if (import.meta.main) {
 		const out = args.out as string;
 		if (!project || !repoFlag) throw new BenchUsageError("--project and --repo are required");
 		const repo = resolve(repoFlag);
-		const git = (cwd: string, gitArgs: string[]) =>
-			spawnSync("git", gitArgs, { cwd, encoding: "utf8", windowsHide: true });
+		const git: Git = (cwd, gitArgs) => {
+			const { code, stdout } = runProgramSync(["git", ...gitArgs], { cwd });
+			return { status: code, stdout };
+		};
 		if (args.flags.get("make-fixture") === true) {
 			for (const [path, text] of Object.entries(fixtureFiles(Math.max(...counts)))) {
 				mkdirSync(join(repo, path, ".."), { recursive: true });
@@ -302,15 +349,18 @@ if (import.meta.main) {
 			);
 			return;
 		}
-		const sandbox = requireSandbox();
-		const bossKey = process.env.JOCASTA_BOSS_KEY;
-		if (!bossKey) throw new BenchUsageError("thread_start and thread_status need the boss key in JOCASTA_BOSS_KEY");
+		const jocasta = openSandbox();
+		const { sandbox } = jocasta;
+		claimRows(out, "h8-parallel");
+		if (layer) await requireServiceSwitch("layer", layer);
 		const prices = layer ? loadPriceTable() : undefined;
-		const started = conditions(["omp", "herdr", "git"]);
+		const started = conditions(["omp", "herdr", "git", "jocasta"]);
+		const ahead = (branch: string) => Number(git(repo, ["rev-list", "--count", `main..${branch}`]).stdout.trim()) || 0;
 		const scores: (RunScore & { run: number } & Partial<K11Measures>)[] = [];
 		for (const n of counts) {
 			for (let run = 0; run < runs; run++) {
 				const work = assignments(n, run);
+				const runStartedAt = Date.now();
 				const countedBefore = layer === "on" ? readLayerCounters(sandbox.dataDir) : null;
 				let peakWorkingSet: number | null = null;
 				let peakPrivate: number | null = null;
@@ -318,19 +368,9 @@ if (import.meta.main) {
 				const sampler = (async () => {
 					while (sampling) {
 						try {
-							const frontier = readFrontierFile();
-							const { panes } = await herdrRequest<{ panes: { pane_id: string }[] }>(
-								sandbox.herdrSession,
-								"pane.list",
-								{},
-							);
-							const shell = panes[0] ? await paneShellPid(sandbox.herdrSession, panes[0].pane_id) : null;
 							const processes = snapshotProcesses();
-							const herdrServer = shell === null ? undefined : processes.find((info) => info.pid === shell)?.ppid;
-							const seen = new Map<number, (typeof processes)[number]>();
-							for (const root of [frontier?.pid, herdrServer])
-								if (root !== undefined) for (const info of treeOf(root, processes)) seen.set(info.pid, info);
-							const memory = treeMemory([...seen.values()]);
+							const { all } = jocastaProcesses(await jocasta.processes(processes), processes);
+							const memory = treeMemory(all);
 							peakWorkingSet = Math.max(peakWorkingSet ?? 0, memory.workingSet);
 							if (memory.privateBytes !== null) peakPrivate = Math.max(peakPrivate ?? 0, memory.privateBytes);
 						} catch (error) {
@@ -340,26 +380,11 @@ if (import.meta.main) {
 						await Bun.sleep(MEMORY_SAMPLE_MS);
 					}
 				})();
-				await Promise.all(
-					work.map(async (assignment) => {
-						const reply = await callTool(
-							"thread_start",
-							{ project, title: assignment.title, brief: assignment.brief },
-							{ bossKey },
-						);
-						if (reply.isError) throw new Error(`thread_start ${assignment.title}: ${reply.text}`);
-					}),
-				);
+				await Promise.all(work.map((assignment) => startThread(project, assignment.title, assignment.brief)));
 				const deadline = Date.now() + timeoutMs;
 				let lines: ThreadLine[] = [];
 				for (;;) {
-					const status = await callTool("thread_status", {}, { bossKey });
-					lines = status.text
-						.split("\n")
-						.map(parseThreadLine)
-						.filter((line): line is ThreadLine => line !== null && work.some((a) => a.title === line.title));
-					const ahead = (branch: string) =>
-						Number(git(repo, ["rev-list", "--count", `main..${branch}`]).stdout.trim()) || 0;
+					lines = (await listThreads(project)).filter((line) => work.some((a) => a.title === line.title));
 					const done = lines.filter((line) => finished(line, ahead(line.branch))).length;
 					if (lines.length === work.length && done === work.length) break;
 					if (Date.now() > deadline) {
@@ -390,32 +415,33 @@ if (import.meta.main) {
 					]);
 				}
 				const conflicts = new Map<number, boolean>();
+				const semantic = new Map<number, boolean>();
 				for (const pair of new Set(work.map((a) => a.pair))) {
 					const [a, b] = work.filter((x) => x.pair === pair).map((x) => lines.find((l) => l.title === x.title)?.branch);
 					if (!a || !b) continue;
-					conflicts.set(pair, git(repo, ["merge-tree", "--write-tree", a, b]).status === 1);
+					const conflict = git(repo, ["merge-tree", "--write-tree", a, b]).status === 1;
+					conflicts.set(pair, conflict);
+					semantic.set(pair, !conflict && mergedTestsFail(git, repo, a, b));
 				}
 				const mainChanges = git(repo, ["status", "--porcelain"])
 					.stdout.split("\n")
 					.filter((l) => l.trim() !== "").length;
 				const result: RunScore & { run: number } & Partial<K11Measures> = {
-					...score(work, lines, changed, conflicts, mainChanges),
+					...score(work, lines, changed, conflicts, mainChanges, semantic),
 					run,
 				};
 				sampling = false;
 				await sampler;
 				if (layer && prices) {
-					const ahead = (branch: string) =>
-						Number(git(repo, ["rev-list", "--count", `main..${branch}`]).stdout.trim()) || 0;
 					const finishedThreads = lines.filter((line) => finished(line, ahead(line.branch))).length;
-					const herdr = await connectHerdr({ session: sandbox.herdrSession });
-					const panes = await herdr.panes();
-					herdr.close();
+					const panes = await (await jocasta.herdr()).panes();
 					const ours = new Map([...worktrees].filter(([branch]) => lines.some((line) => line.branch === branch)));
-					const records = [...threadSessionFiles(panes, ours).values()]
-						.flat()
-						.map((path) => readOmpSession(readFileSync(path, "utf8"), benchPricing(prices)));
-					const ledger = trialLedger(records, benchPricing(prices));
+					const pricing = benchPricing(prices);
+					const files = [...threadSessionFiles(panes, ours, runStartedAt).values()];
+					const ledger = trialLedger(
+						files.flatMap((sessionFiles) => threadSessionRecords(sessionFiles, pricing)),
+						pricing,
+					);
 					const countedAfter = countedBefore ? readLayerCounters(sandbox.dataDir) : null;
 					Object.assign(result, {
 						layer,
@@ -432,12 +458,11 @@ if (import.meta.main) {
 				scores.push(result);
 				appendRow(out, "h8-parallel", result);
 				console.log(
-					`${n} threads, run ${run}: ${result.wrongThreadEdits} wrong-thread edits, ${result.flaggedBeforeMerge} flagged, ${result.conflictsAtMerge} conflicts`,
+					`${n} threads, run ${run}: ${result.wrongThreadEdits} wrong-thread edits, ${result.flaggedBeforeMerge} flagged, ${result.conflictsAtMerge} conflicts, ${result.semanticFailures} semantic failures`,
 				);
 				if (run < runs - 1 || n !== counts.at(-1)) {
-					// thread_finish and worktree_remove ask him first (0484); the bench leaves closing to him.
-					console.log("close this run's h8 threads, then press Enter");
-					for await (const _line of console) break;
+					// Stopping a thread and removing its worktree ask him first (0484); the bench leaves closing to him.
+					await waitForEnter("close this run's h8 threads, then press Enter");
 				}
 			}
 		}
@@ -455,6 +480,7 @@ if (import.meta.main) {
 						| "wrongThreadEdits"
 						| "flaggedBeforeMerge"
 						| "conflictsAtMerge"
+						| "semanticFailures"
 						| "foundOnlyAtMerge"
 						| "mainCheckoutChanges",
 				) => of.reduce((total, s) => total + s[key], 0);
@@ -466,6 +492,7 @@ if (import.meta.main) {
 					pairs: of.reduce((total, s) => total + s.pairs.length, 0),
 					flaggedBeforeMerge: sum("flaggedBeforeMerge"),
 					conflictsAtMerge: sum("conflictsAtMerge"),
+					semanticFailures: sum("semanticFailures"),
 					foundOnlyAtMerge: sum("foundOnlyAtMerge"),
 					...(layer
 						? {

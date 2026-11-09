@@ -1,4 +1,4 @@
-import { jsonLines } from "../bench/lib/timing.ts";
+import { jsonLines } from "../src/shared/jsonl.ts";
 
 /**
  * Answering omp's plan review for A6 and its follow-up arms (0567). omp 18.18.2 offers "Approve and execute" and

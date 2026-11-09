@@ -6,11 +6,12 @@
 //
 // reads `<runDir>/results.jsonl`, pairs each comparison's arm with A6 by task and rep, prints each verdict and writes
 // `<runDir>/keep.json` (a dry run prints the verdicts only).
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { BenchUsageError, flag, parseBenchArgs, runScript } from "../bench/lib/args.ts";
 import { writeJson } from "../bench/lib/output.ts";
 import { holm, mcnemarExact } from "../bench/lib/stats.ts";
+import { readJsonlFile } from "../src/shared/jsonl.ts";
 import { FOLLOWUP_BASELINE, FOLLOWUP_COMPARISONS } from "./followup.ts";
 import type { BenchRow } from "./tasks.ts";
 
@@ -124,10 +125,7 @@ if (import.meta.main)
 		if (!(alpha > 0 && alpha < 1)) throw new BenchUsageError("--alpha needs a number between 0 and 1");
 		const file = join(runDir, "results.jsonl");
 		if (!existsSync(file)) throw new BenchUsageError(`no results at ${file}`);
-		const rows = readFileSync(file, "utf8")
-			.split(/\r?\n/)
-			.filter((line) => line.trim() !== "")
-			.map((line) => JSON.parse(line) as BenchRow);
+		const rows = readJsonlFile<BenchRow>(file);
 		const verdicts = keepRule(followupInputs(rows), alpha);
 		for (const v of verdicts)
 			console.log(

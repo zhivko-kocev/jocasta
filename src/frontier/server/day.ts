@@ -1,10 +1,16 @@
 import type { Database } from "bun:sqlite";
 import { existsSync, statfsSync } from "node:fs";
 import { calendarSecret } from "../../shared/credentials.ts";
-import { dayStart, localDay } from "../../shared/day.ts";
+import { dayLabel, dayStart, hhmm, localDay, midnightOf } from "../../shared/day.ts";
 import { Inbox, type InboxItem } from "../../shared/events/inbox.ts";
-import { EventQueue, type EventRow, type EventSource, type NewEvent } from "../../shared/events/queue.ts";
-import { isQuiet, parseQuietHours, type QuietHours } from "../../shared/events/quiet.ts";
+import {
+	EventQueue,
+	type EventRow,
+	type EventSource,
+	type NewEvent,
+	type PollRound,
+} from "../../shared/events/queue.ts";
+import { isQuiet, type QuietHours, readQuietHours } from "../../shared/events/quiet.ts";
 import { log } from "../../shared/log.ts";
 import { dataDir } from "../../shared/paths.ts";
 import { AZURE_KINDS, pollAzure } from "../../shared/pollers/azure.ts";
@@ -13,11 +19,11 @@ import { type RunCli, runCli } from "../../shared/pollers/cli.ts";
 import { GITHUB_KINDS, pollGitHub } from "../../shared/pollers/github.ts";
 import { type CpuTimes, cpuTimes, sampleMachine } from "../../shared/pollers/machine.ts";
 import { pollNews } from "../../shared/pollers/news.ts";
-import { type PollerSettings, readPollerSettings } from "../../shared/pollers/settings.ts";
+import { type PollerSettings, readPoller } from "../../shared/pollers/settings.ts";
 import { findPlace, type Place, pollWeather, readWeatherPlace } from "../../shared/pollers/weather.ts";
 import type { Project } from "../../shared/projects.ts";
 import { openMeDb } from "../../shared/schema.ts";
-import { goneSettings, readSettings } from "../../shared/settings.ts";
+import { goneSettings, readSettings, SettingsError } from "../../shared/settings.ts";
 import {
 	type Dashboard,
 	type Leftover,
@@ -33,10 +39,10 @@ import {
 	waitLabel,
 } from "../protocol.ts";
 import { ompUsage, quotaWarning, readQuota } from "./quota.ts";
+import { graphSpentOn } from "./spend.ts";
 import {
 	commitsAsync,
-	type GitPlace,
-	gitPlace,
+	GitPlaces,
 	projectDay,
 	projectDayLine,
 	type WorklogSession,
@@ -69,7 +75,7 @@ const LEFTOVER_MINUTES = 10;
 const WEEKLY_REVIEW_DAY = 1;
 const WEEKLY_REVIEW_HOUR = 10;
 
-/** Test seams; Frontier's server runs with the defaults. */
+/** Test seams; the service's server runs with the defaults. */
 export interface DayOptions {
 	/** Whether the pollers run (0301); tests turn them off and call `poll()` themselves. Default true. */
 	pollers?: boolean;
@@ -146,12 +152,13 @@ interface DayHooks {
 
 type PollerName = "github" | "azureDevOps" | "calendar" | "news" | "weather";
 
+/** Whether `error` is a settings problem the service already said at start (0584, C7). */
+const said = (error: unknown) => error instanceof SettingsError && error.said;
+
 function diskFreeOfData(): number {
 	const stats = statfsSync(dataDir());
 	return stats.blocks > 0 ? stats.bavail / stats.blocks : 1;
 }
-
-const hhmm = (at: Date) => `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
 
 /**
  * When a reminder is due (0302), from the boss: `HH:MM` (today, or tomorrow once that time passed), `YYYY-MM-DD HH:MM`
@@ -210,9 +217,10 @@ export class Day {
 	/** The poller rounds under way, awaited by `stop()` before the databases close (F7). */
 	private readonly rounds = new Map<PollerName, Promise<void>>();
 	private readonly lastError = new Map<string, string>();
-	private quietNow = false;
 	private todaySent = "";
 	private worklogDay = "";
+	/** The local day of the last minute tick: a new one checks yesterday's worklog was written (SRV-B-5). */
+	private tickDay = "";
 	/** The worklog being written (yesterday's at start, today's at day's end): its sessions are read in steps first. */
 	worklogWriting: Promise<void> = Promise.resolve();
 	private stopped = false;
@@ -235,8 +243,10 @@ export class Day {
 	private worklogReady = false;
 	/** The worklog so far's pass running now (it runs git off the event loop, CO-12). */
 	private worklogSoFar: Promise<void> | undefined;
-	/** Each project's git email and origin for the worklog so far, kept for one local day (CO-12). */
-	private gitPlaces = { day: "", byProject: new Map<string, GitPlace>() };
+	/** Each project's git email and origin for the worklogs, kept for one local day (CO-12). */
+	private readonly gitPlaces = new GitPlaces();
+	/** What Graphiti's model calls cost today (0582), for today's activity; 0 hides its line. */
+	private graphToday = 0;
 	private dashboardSent = "";
 	/** The subscription windows (0456), as `omp usage` last reported them. */
 	private quotaWindows: QuotaWindow[] = [];
@@ -268,6 +278,7 @@ export class Day {
 		this.queue = new EventQueue(catalog, this.now);
 		this.me = openMeDb();
 		this.inbox = new Inbox(this.me, this.now);
+		this.tickDay = localDay(this.now().getTime());
 	}
 
 	/**
@@ -276,10 +287,7 @@ export class Day {
 	 * in steps, CO-11).
 	 */
 	start(): void {
-		this.quietNow = this.quiet();
-		// The calendar's day before, not 24 hours back: right after a spring-forward day those differ (CO-17).
-		const yesterday = localDay(dayStart(localDay(this.now().getTime()), -1));
-		if (!existsSync(worklogPath(yesterday))) this.worklogWriting = this.writeWorklogFor(yesterday);
+		this.catchUpWorklog();
 		// Nothing thrown in a tick may escape the timer: that would end the service (CO-1).
 		this.timers.push(setInterval(() => this.guard("tick", () => this.tick()), MINUTE));
 		this.refreshActivity({ worklog: false });
@@ -298,29 +306,43 @@ export class Day {
 		this.timers.push(setInterval(() => void this.readQuota(), QUOTA_MINUTES * MINUTE));
 		void this.refreshLeftovers();
 		this.timers.push(setInterval(() => void this.refreshLeftovers(), LEFTOVER_MINUTES * MINUTE));
-		let settings: PollerSettings;
+		let settings: Record<string, unknown>;
 		try {
-			settings = readPollerSettings(readSettings());
-		} catch (error) {
-			this.hooks.notify(`Pollers are off: ${(error as Error).message}`, "error");
+			settings = readSettings();
+		} catch {
+			// A jocasta.yaml that isn't YAML turns off all its settings, the pollers and weather with them; the service
+			// said it at start (0584).
 			return;
 		}
+		// Each poller reads only its own keys: a bad value turns that poller alone off (0584).
+		const poller = <K extends keyof PollerSettings>(name: K): PollerSettings[K] | undefined => {
+			try {
+				return readPoller(settings, name);
+			} catch (error) {
+				this.reportOnce(name, (error as Error).message, said(error));
+				return undefined;
+			}
+		};
 		const every = (name: PollerName, minutes: number) => {
 			void this.poll(name);
 			this.timers.push(setInterval(() => void this.poll(name), minutes * MINUTE));
 		};
-		every("github", settings.github.everyMinutes);
-		if (settings.azureDevOps.orgs.length > 0) every("azureDevOps", settings.azureDevOps.everyMinutes);
-		if (this.secret()) every("calendar", settings.calendar.everyMinutes);
-		if (settings.news.feeds.length > 0) every("news", settings.news.everyMinutes);
+		const github = poller("github");
+		if (github) every("github", github.everyMinutes);
+		const azure = poller("azureDevOps");
+		if (azure && azure.orgs.length > 0) every("azureDevOps", azure.everyMinutes);
+		const calendar = poller("calendar");
+		if (calendar && this.secret()) every("calendar", calendar.everyMinutes);
+		const news = poller("news");
+		if (news && news.feeds.length > 0) every("news", news.everyMinutes);
 		// Reads `dashboard.weather` each round: hidden until set, picked up within 30 minutes once he sets it.
 		every("weather", WEATHER_MINUTES);
 	}
 
 	/**
 	 * Stops every timer and ends the poller rounds under way, awaiting them before its database closes (the service
-	 * closes the catalog after this, F7); resolves once a worklog-so-far pass under way let go of its project folders
-	 * (git).
+	 * closes the catalog after this, F7); resolves once a worklog-so-far pass and a worklog being written let go of
+	 * their project folders (git) and wrote nothing more.
 	 */
 	async stop(): Promise<void> {
 		this.stopped = true;
@@ -330,6 +352,7 @@ export class Day {
 		if (this.rounds.size > 0) await Promise.allSettled(this.rounds.values());
 		this.me.close();
 		await this.worklogSoFar;
+		await this.worklogWriting;
 	}
 
 	private secret(): string | undefined {
@@ -341,22 +364,26 @@ export class Day {
 		return isQuiet(this.quietHours(), this.now());
 	}
 
-	/** `frontier.quietHours`, read live; a malformed value is reported once and counts as none. */
+	/** `service.quietHours`, read live; a malformed value is reported once and counts as none. */
 	private quietHours(): QuietHours | undefined {
 		try {
-			const hours = parseQuietHours((readSettings().frontier as { quietHours?: unknown } | undefined)?.quietHours);
+			const hours = readQuietHours(readSettings());
 			this.lastError.delete("quietHours");
 			return hours;
 		} catch (error) {
-			this.reportOnce("quietHours", (error as Error).message);
+			this.reportOnce("quietHours", (error as Error).message, said(error));
 			return undefined;
 		}
 	}
 
-	/** A failure is shown as a toast and logged once until it changes or clears, not every round. */
-	private reportOnce(key: string, message: string): void {
+	/**
+	 * A failure is shown as a toast and logged once until it changes or clears, not every round. A settings problem
+	 * the service said at start (`said`) is only remembered, so it is said once (0584).
+	 */
+	private reportOnce(key: string, message: string, said = false): void {
 		if (this.lastError.get(key) === message) return;
 		this.lastError.set(key, message);
+		if (said) return;
 		log("warn", "day", message);
 		this.hooks.notify(message, "warning");
 	}
@@ -383,17 +410,25 @@ export class Day {
 
 	private async round(name: PollerName): Promise<void> {
 		try {
-			if (name === "github") this.ingest("github", GITHUB_KINDS, await pollGitHub(this.run));
-			else if (name === "azureDevOps") {
-				const { orgs } = readPollerSettings(readSettings()).azureDevOps;
-				this.ingest("azure", AZURE_KINDS, await pollAzure(this.run, orgs));
+			if (name === "github" || name === "azureDevOps") {
+				const round =
+					name === "github"
+						? await pollGitHub(this.run)
+						: await pollAzure(this.run, readPoller(readSettings(), "azureDevOps").orgs);
+				this.ingest(name === "github" ? "github" : "azure", name === "github" ? GITHUB_KINDS : AZURE_KINDS, round);
+				// A part of the round that failed (one org or project) is said once; the rest was taken (SHR-8).
+				if (round.failures.length > 0) {
+					this.reportOnce(name, `Poller ${name} failed: ${round.failures.join("; ")}`);
+					if (!this.stopped) this.pushToday();
+					return;
+				}
 			} else if (name === "calendar") {
 				const url = this.secret();
 				if (!url) throw new Error("calendar: no secret iCal URL; `jocasta setup` saves it");
 				this.meetings = await pollCalendar(url, this.now(), this.fetchUrl);
 				this.meetingsSoon();
 			} else if (name === "news") {
-				this.news = await pollNews(readPollerSettings(readSettings()).news.feeds, this.fetchUrl);
+				this.news = await pollNews(readPoller(readSettings(), "news").feeds, this.fetchUrl);
 				this.newsError = null;
 			} else await this.pollWeather();
 			this.lastError.delete(name);
@@ -404,7 +439,11 @@ export class Day {
 			const message = (error as Error).message;
 			if (name === "news") this.newsError = message;
 			if (name === "weather") this.weatherError = message;
-			this.reportOnce(name, name === "news" || name === "weather" ? message : `Poller ${name} failed: ${message}`);
+			this.reportOnce(
+				name,
+				name === "news" || name === "weather" ? message : `Poller ${name} failed: ${message}`,
+				said(error),
+			);
 		} finally {
 			if (!this.stopped) this.pushDashboard();
 		}
@@ -568,10 +607,13 @@ export class Day {
 		}
 	}
 
-	/** A poller's current set: what went away is resolved; what is new is delivered. Nothing once the day stopped. */
-	private ingest(source: EventSource, kinds: readonly string[], events: readonly NewEvent[]): void {
+	/**
+	 * A poller's round: what went away from the part it saw is resolved; what is new is delivered. Nothing once the day
+	 * stopped.
+	 */
+	private ingest(source: EventSource, kinds: readonly string[], round: PollRound): void {
 		if (this.stopped) return;
-		for (const row of this.queue.sync(source, kinds, events)) this.deliver(row);
+		for (const row of this.queue.sync(source, kinds, round.events, round.observed)) this.deliver(row);
 	}
 
 	/** Adds an event and delivers it when new. */
@@ -642,16 +684,18 @@ export class Day {
 	}
 
 	/**
-	 * Every minute: quiet-hour changes, meetings starting in 5 minutes, due reminders, disk space, the one reminder of
-	 * unresolved events (0303), the thread lines held in quiet hours once they end, the day's-end worklog, today's
-	 * activity, and the open `today` view.
+	 * Every minute: meetings starting in 5 minutes, due reminders, disk space, the one reminder of unresolved events
+	 * (0303), the thread lines held in quiet hours once they end, the day's-end worklog, today's activity, and the open
+	 * `today` view.
 	 */
 	tick(): void {
-		const quiet = this.quiet();
-		if (quiet !== this.quietNow) {
-			this.quietNow = quiet;
-			this.hooks.send({ type: "quiet", quiet });
+		// A tick on a new day (the machine may have slept through the day's end): yesterday's worklog, if missing.
+		const day = localDay(this.now().getTime());
+		if (day !== this.tickDay) {
+			this.tickDay = day;
+			this.catchUpWorklog();
 		}
+		const quiet = this.quiet();
 		this.meetingsSoon();
 		for (const item of this.inbox.due()) {
 			this.raise({
@@ -722,7 +766,24 @@ export class Day {
 		const ended = hours && hours.from >= 12 * 60 ? quiet && now.getHours() >= 12 : now.getHours() >= WORKLOG_HOUR;
 		if (!ended) return;
 		this.worklogDay = day;
-		this.worklogWriting = this.writeWorklogFor(day);
+		this.queueWorklog(day);
+	}
+
+	/**
+	 * Yesterday's worklog when it is missing (0302): at start, and at the first tick of a new day, which catches a day
+	 * whose end the machine slept through (SRV-B-5). The calendar's day before, not 24 hours back: right after a
+	 * spring-forward day those differ (CO-17).
+	 */
+	private catchUpWorklog(): void {
+		const yesterday = localDay(dayStart(localDay(this.now().getTime()), -1));
+		if (this.worklogDay === yesterday || existsSync(worklogPath(yesterday))) return;
+		this.worklogDay = yesterday;
+		this.queueWorklog(yesterday);
+	}
+
+	/** Writes `day`'s worklog after any one being written. */
+	private queueWorklog(day: string): void {
+		this.worklogWriting = this.worklogWriting.then(() => this.writeWorklogFor(day));
 	}
 
 	/** Writes a day's worklog (0302) once its sessions were read in steps; a failure is said once. */
@@ -733,25 +794,35 @@ export class Day {
 			// The worklog then reads what it needs itself.
 		}
 		if (this.stopped) return;
-		this.guard("worklog", () => {
+		try {
 			const byProject = this.hooks.sessionsByProject(day);
-			writeWorklog(this.hooks.projects(), day, (p) => byProject.get(p.id) ?? []);
-		});
+			await writeWorklog(
+				this.hooks.projects(),
+				day,
+				(p) => byProject.get(p.id) ?? [],
+				this.gitPlaces,
+				() => this.stopped,
+			);
+			this.lastError.delete("worklog");
+		} catch (error) {
+			this.reportOnce("worklog", `worklog: ${(error as Error).message}`);
+		}
 	}
 
 	// ---- the dashboard's third column (0429) ----
 
 	/**
-	 * Today's activity (0429): the latest delivered `[event]` lines, the worklog so far and the compaction and handoff
-	 * summaries saved today, each with its project. The worklog so far is recomputed every 10 minutes off the event
-	 * loop (it reads every project's sessions and git log, CO-12), and only once today's sessions were read in steps:
-	 * `worklog: true` allows it from now on, `false` holds it (CO-11).
+	 * Today's activity (0429): the latest delivered `[event]` lines, the worklog so far, what Graphiti's model calls
+	 * cost today (0582) and the compaction and handoff summaries saved today, each with its project. The worklog so far
+	 * is recomputed every 10 minutes off the event loop (it reads every project's sessions and git log, CO-12), and only
+	 * once today's sessions were read in steps: `worklog: true` allows it from now on, `false` holds it (CO-11).
 	 */
 	refreshActivity({ worklog }: { worklog?: boolean } = {}): void {
 		if (worklog !== undefined) this.worklogReady = worklog;
 		this.guard("activity", () => {
 			const now = this.now();
-			const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+			const midnight = new Date(midnightOf(now.getTime()));
+			this.graphToday = graphSpentOn(localDay(now.getTime()));
 			const stored = this.catalog
 				.query<{ text: string; raised_at: string }, [string, number]>(
 					"SELECT text, raised_at FROM events WHERE raised_at >= ? ORDER BY raised_at DESC, id DESC LIMIT ?",
@@ -796,17 +867,11 @@ export class Day {
 		try {
 			const projects = this.hooks.projects();
 			const byProject = this.hooks.sessionsByProject(day);
-			if (this.gitPlaces.day !== day) this.gitPlaces = { day, byProject: new Map() };
 			const lines: string[] = [];
 			for (const project of projects) {
 				if (this.stopped) return;
-				let place = this.gitPlaces.byProject.get(project.id);
-				if (!place) {
-					place = gitPlace(project);
-					this.gitPlaces.byProject.set(project.id, place);
-				}
-				const mine = await commitsAsync(project, day, place);
-				const found = projectDay(project, day, byProject.get(project.id) ?? [], mine);
+				const mine = await commitsAsync(project, day, await this.gitPlaces.of(project, day));
+				const found = projectDay(day, byProject.get(project.id) ?? [], mine);
 				if (found) lines.push(projectDayLine(project.name, found));
 			}
 			if (this.stopped) return;
@@ -821,6 +886,8 @@ export class Day {
 	}
 
 	dashboard(): Dashboard {
+		// The graph's share of "$ today" (0582) is named under the worklog so far, once it spent anything.
+		const graph = this.graphToday > 0 ? [`graph memory · $${this.graphToday.toFixed(2)}`] : [];
 		return {
 			news: this.news,
 			newsError: this.newsError,
@@ -828,7 +895,7 @@ export class Day {
 			weatherError: this.weatherError,
 			machine: this.machine,
 			services: this.services,
-			activity: this.activity,
+			activity: { ...this.activity, worklog: [...this.activity.worklog, ...graph] },
 			leftovers: this.leftoverList,
 		};
 	}
@@ -853,14 +920,21 @@ export class Day {
 
 	today(): Today {
 		const now = this.now();
-		const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-		const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-		const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1).getTime();
+		const today = localDay(now.getTime());
+		const start = new Date(dayStart(today));
+		const end = new Date(dayStart(today, 1));
+		const yesterday = dayStart(today, -1);
 		const meetings = this.meetings.filter((m) => m.start < end && m.end > start);
-		const entry = (time: string, m: Meeting) => ({ time, title: m.title, ...(m.url ? { url: m.url } : {}) });
+		const entry = (time: string, m: Meeting, ends?: string) => ({
+			time,
+			title: m.title,
+			...(m.url ? { url: m.url } : {}),
+			...(ends ? { end: ends } : {}),
+		});
+		// A timed meeting carries its end (C9, 0581): `today` keeps a started one as "now" until then.
 		const calendar = [
 			...meetings.filter((m) => m.allDay).map((m) => entry("all day", m)),
-			...meetings.filter((m) => !m.allDay && m.start >= start).map((m) => entry(hhmm(m.start), m)),
+			...meetings.filter((m) => !m.allDay && m.start >= start).map((m) => entry(hhmm(m.start), m, hhmm(m.end))),
 		];
 		const needsYou: Today["needsYou"] = [];
 		for (const row of this.queue.open()) {
@@ -880,8 +954,14 @@ export class Day {
 			...(t.project ? { project: t.project } : {}),
 			...(t.overlaps?.length ? { overlaps: t.overlaps } : {}),
 		});
+		// A blocked thread says since when it waits (UX-4, 0581): its last state change.
 		for (const t of threads.filter((t) => t.state === "blocked")) {
-			needsYou.push({ kind: "blocked", text: `${t.title} — ${t.line || "awaiting you"}`, ...thread(t) });
+			needsYou.push({
+				kind: "blocked",
+				text: `${t.title} — ${t.line || "awaiting you"}`,
+				since: new Date(t.changedAt).toISOString(),
+				...thread(t),
+			});
 		}
 		// Reviewed and not finished (0456): they wait on him, oldest first, for as long as it takes.
 		const reviewed = threads
@@ -978,9 +1058,7 @@ export class Day {
 	/** `today` as text for the boss (0300's layout). */
 	todayText(): string {
 		const t = this.today();
-		const [y, m, d] = t.date.split("-").map(Number) as [number, number, number];
-		const date = new Date(y, m - 1, d);
-		const label = `${date.toLocaleDateString("en-GB", { weekday: "short" })} ${d} ${date.toLocaleDateString("en-GB", { month: "short" })}`;
+		const label = dayLabel(t.date);
 		const row = (name: string, items: string[]) =>
 			`${name.padEnd(12)} ${items.length > 0 ? items.join(" · ") : "nothing"}`;
 		const now = this.now();
@@ -1058,6 +1136,6 @@ export class Day {
 		}
 		await this.hooks.prepareSessions(wanted);
 		const byProject = this.hooks.sessionsByProject(wanted);
-		return writeWorklog(projects, wanted, (p) => byProject.get(p.id) ?? []);
+		return writeWorklog(projects, wanted, (p) => byProject.get(p.id) ?? [], this.gitPlaces);
 	}
 }

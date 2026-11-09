@@ -1,13 +1,14 @@
 // One Jocasta service at a time (0362, 0549): `<data>/service.lock` names the service that holds it by pid and start
-// time. A start that finds it held by a live service that answers leaves; one that is closing is waited for; one that
-// doesn't answer within a bound is hung: its process tree is ended and the lock taken over (0534), so a hung service
-// never blocks every later start, as a hung service did (0530).
-import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeSync } from "node:fs";
+// time, and the herdr server that service started, if any (0582). A start that finds it held by a live service that
+// answers leaves; one that is closing is waited for; one that doesn't answer within a bound is hung: its process tree,
+// all but herdr's server and what runs under it, is ended and the lock taken over (0534, 0582), so a hung service never
+// blocks every later start, as a hung service did (0530), and the threads keep working.
+import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
 import { asObject } from "../../shared/fsx.ts";
 import { log } from "../../shared/log.ts";
+import { type ProcessId, processIdOf } from "../../shared/proctree.ts";
 import type { ServiceState } from "./launch.ts";
-import { type ProcessId, processIdOf } from "./proctree.ts";
 
 /** How long a live holder may go without answering before it counts as hung (0534). */
 export const HUNG_MS = 15_000;
@@ -17,12 +18,12 @@ export const CLOSING_MS = 60_000;
 export interface InstanceOptions {
 	/** `<data>/service.lock`. */
 	lockFile: string;
-	/** What the service `frontier.json` names is doing (`serviceState`). */
+	/** What the service `jocasta-service.json` names is doing (`serviceState`). */
 	state(): Promise<ServiceState>;
 	/** This process (test seam): `process.pid` as it runs now. */
 	self?: ProcessId;
-	/** Ends a hung holder with every process under it (`killTree`). */
-	kill(pid: number): Promise<unknown>;
+	/** Ends a hung holder with every process under it but `spare` and what runs under it (`endProcesses`). */
+	kill(holder: ProcessId, spare: ProcessId[]): Promise<unknown>;
 	hungMs?: number;
 	closingMs?: number;
 	sleep?(ms: number): Promise<void>;
@@ -31,9 +32,23 @@ export interface InstanceOptions {
 export interface Instance {
 	/** Gives the lock up (the service has stopped); only while it still names this process. */
 	release(): void;
+	/** Records the herdr server this service started beside the lock (0582), while the lock names this process. */
+	noteHerdr(server: ProcessId): void;
 }
 
-function readHolder(file: string): ProcessId | undefined | "unreadable" {
+/** What the lock says: its holder and the herdr server that holder started. */
+interface Holder extends ProcessId {
+	herdr?: ProcessId;
+}
+
+function processId(value: unknown): ProcessId | undefined {
+	const object = asObject(value);
+	return typeof object?.pid === "number" && typeof object.start === "number"
+		? { pid: object.pid, start: object.start }
+		: undefined;
+}
+
+function readHolder(file: string): Holder | undefined | "unreadable" {
 	let text: string;
 	try {
 		text = readFileSync(file, "utf8");
@@ -42,8 +57,9 @@ function readHolder(file: string): ProcessId | undefined | "unreadable" {
 	}
 	try {
 		const value = asObject(JSON.parse(text));
-		if (typeof value?.pid === "number" && typeof value.start === "number")
-			return { pid: value.pid, start: value.start };
+		const holder = processId(value);
+		const herdr = processId(value?.herdr);
+		if (holder) return herdr ? { ...holder, herdr } : holder;
 	} catch {
 		// Being written, or torn.
 	}
@@ -72,7 +88,7 @@ function create(file: string, self: ProcessId): boolean {
  * Takes the single-instance lock (0362, 0534): resolves the held lock, or undefined when another service holds it and
  * answers (this start then leaves). A dead holder's lock (crash; Windows reuses pids, so pid and start time both
  * count) is taken at once; a closing one is waited for up to `closingMs`; a live holder that doesn't answer for
- * `hungMs` is ended with its whole tree and its lock taken.
+ * `hungMs` is ended with its whole tree but the herdr server it recorded (0582), and its lock taken.
  */
 export async function takeInstance(options: InstanceOptions): Promise<Instance | undefined> {
 	const self = options.self ?? processIdOf(process.pid);
@@ -81,13 +97,20 @@ export async function takeInstance(options: InstanceOptions): Promise<Instance |
 	const file = options.lockFile;
 	let silentSince: number | undefined;
 	let closingSince: number | undefined;
-	const release = () => {
+	const mine = () => {
 		const holder = readHolder(file);
-		if (typeof holder === "object" && holder.pid === self.pid && holder.start === self.start)
-			rmSync(file, { force: true });
+		return typeof holder === "object" && holder.pid === self.pid && holder.start === self.start;
+	};
+	const instance: Instance = {
+		release: () => {
+			if (mine()) rmSync(file, { force: true });
+		},
+		noteHerdr: (server) => {
+			if (mine()) writeFileSync(file, `${JSON.stringify({ ...self, herdr: server })}\n`, { mode: 0o600 });
+		},
 	};
 	for (;;) {
-		if (create(file, self)) return { release };
+		if (create(file, self)) return instance;
 		const holder = readHolder(file);
 		if (holder === undefined) continue;
 		if (holder !== "unreadable" && processIdOf(holder.pid)?.start !== holder.start) {
@@ -108,8 +131,12 @@ export async function takeInstance(options: InstanceOptions): Promise<Instance |
 			(closingSince !== undefined && now - closingSince >= (options.closingMs ?? CLOSING_MS)) ||
 			(silentSince !== undefined && now - silentSince >= (options.hungMs ?? HUNG_MS));
 		if (hung && holder !== "unreadable") {
-			log("warn", "instance", `the service ${holder.pid} holds the lock but doesn't answer; ending it and starting`);
-			await options.kill(holder.pid);
+			log(
+				"warn",
+				"instance",
+				`the service ${holder.pid} holds the lock but doesn't answer; ending it (herdr's session keeps running) and starting`,
+			);
+			await options.kill({ pid: holder.pid, start: holder.start }, holder.herdr ? [holder.herdr] : []);
 			rmSync(file, { force: true });
 			silentSince = closingSince = undefined;
 			continue;

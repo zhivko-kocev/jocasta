@@ -1,5 +1,14 @@
 import { expect, test } from "bun:test";
-import { POPUP_PATH, type PopupView, TOKEN_COOKIE } from "../../../src/frontier/protocol.ts";
+import type { Server } from "bun";
+import {
+	POPUP_HOLD,
+	POPUP_PATH,
+	POPUP_READER_HEADER,
+	type PopupView,
+	tokenCookie,
+} from "../../../src/frontier/protocol.ts";
+import type { AskPopups } from "../../../src/frontier/server/plugin.ts";
+import { type PopupParts, popupRoutes } from "../../../src/frontier/server/popup-routes.ts";
 import type { Popup } from "../../../src/frontier/server/popups.ts";
 import {
 	ALLOW,
@@ -18,7 +27,7 @@ import {
 	WRONG_CODES,
 } from "../../../src/frontier/server/popups.ts";
 import { useTempJocasta } from "../../shared/fixture.ts";
-import { Page, startTestServer, type TestServer, withServer } from "./helpers.ts";
+import { Page, startTestServer, type TestServer, until, withServer } from "./helpers.ts";
 
 useTempJocasta();
 
@@ -30,25 +39,30 @@ const ALLOW_BOX: PopupView = {
 	fallback: "Deny",
 };
 
-/** Fetches a question route as what shows it would: with the service's token, as a bearer or the cookie. */
+/** Fetches a question route as what shows it would: the service's token as a bearer, and the reader secret if given. */
 function popupFetch(
 	server: TestServer,
 	path: string,
-	init: { method?: string; body?: string; token?: string; bearer?: boolean } = {},
+	init: { method?: string; body?: string; token?: string; reader?: string | null; cookie?: boolean } = {},
 ): Promise<Response> {
-	const { token = server.token, bearer = false, ...rest } = init;
+	const { token = server.token, reader, cookie = false, ...rest } = init;
 	return fetch(`http://127.0.0.1:${server.port}${POPUP_PATH}${path}`, {
 		...rest,
 		headers: {
-			...(bearer ? { authorization: `Bearer ${token}` } : { cookie: `${TOKEN_COOKIE}=${token}` }),
+			...(cookie ? { cookie: `${tokenCookie(server.port)}=${token}` } : { authorization: `Bearer ${token}` }),
+			...(reader ? { [POPUP_READER_HEADER]: reader } : {}),
 			"content-type": "application/json",
 		},
 	});
 }
 
-const choose = (choice: unknown) => ({ method: "POST", body: JSON.stringify({ choice }) });
+const choose = (choice: unknown, reader?: string | null, typed?: string) => ({
+	method: "POST",
+	body: JSON.stringify({ choice, ...(typed ? { typed } : {}) }),
+	reader,
+});
 
-test("a question's texts and answer need the service's token and its one-time code; the answer is taken once (0519)", async () => {
+test("a question's texts and answer need the service's token, its one-time code and its reader secret; the answer is taken once (0519, 0578)", async () => {
 	const shown: Popup[] = [];
 	await withServer(
 		async (server) => {
@@ -59,30 +73,38 @@ test("a question's texts and answer need the service's token and its one-time co
 			expect(shown).toEqual([popup]);
 			expect(server.question(ALLOW_BOX).code).not.toBe(popup.code);
 
-			// Without the token, with a wrong code or none, nothing is served.
+			// Without the token (the bearer only: a cookie is no token here), with a wrong code or none, nothing is served.
 			expect((await popupFetch(server, popup.code, { token: "wrong" })).status).toBe(403);
+			expect((await popupFetch(server, popup.code, { cookie: true })).status).toBe(403);
 			expect((await popupFetch(server, "0".repeat(64))).status).toBe(403);
 			expect((await popupFetch(server, "")).status).toBe(403);
 			// One character off: the first one changed, whatever it was.
 			const nearMiss = `${popup.code.startsWith("0") ? "1" : "0"}${popup.code.slice(1)}`;
 			expect((await popupFetch(server, nearMiss, choose("Allow"))).status).toBe(403);
 			expect((await popupFetch(server, popup.code, { ...choose("Allow"), token: "wrong" })).status).toBe(403);
+			// Not read yet: no reader secret, no answer.
+			expect((await popupFetch(server, popup.code, choose("Deny"))).status).toBe(403);
 			expect(popup.open).toBe(true);
 
-			// With both: its texts, by cookie or bearer.
-			const texts = await popupFetch(server, popup.code, { bearer: true });
+			// With both: its texts and the reader secret.
+			const texts = await popupFetch(server, popup.code);
 			expect(texts.status).toBe(200);
 			expect(await texts.json()).toEqual(ALLOW_BOX);
+			const reader = texts.headers.get(POPUP_READER_HEADER);
+			expect(reader).toMatch(/^[0-9a-f]{64}$/);
 
+			// The answer carries the reader secret; another one is refused.
+			expect((await popupFetch(server, popup.code, choose("Deny", "f".repeat(64)))).status).toBe(403);
 			// Only its own choices answer it; a choice it doesn't offer leaves it waiting.
-			expect((await popupFetch(server, popup.code, choose(STOP))).status).toBe(400);
-			expect((await popupFetch(server, popup.code, choose(true))).status).toBe(400);
+			expect((await popupFetch(server, popup.code, choose(STOP, reader))).status).toBe(400);
+			expect((await popupFetch(server, popup.code, choose(true, reader))).status).toBe(400);
 			expect(popup.open).toBe(true);
-			expect((await popupFetch(server, popup.code, choose("Allow"))).status).toBe(204);
+			expect((await popupFetch(server, popup.code, choose("Allow", reader))).status).toBe(204);
 			expect(await popup.answer).toBe("Allow");
+			expect(await popup.how).toBe("answered");
 
 			// The code dies with its answer: no second answer, no texts.
-			expect((await popupFetch(server, popup.code, choose("Deny"))).status).toBe(403);
+			expect((await popupFetch(server, popup.code, choose("Deny", reader))).status).toBe(403);
 			expect((await popupFetch(server, popup.code)).status).toBe(403);
 			expect(await popup.answer).toBe("Allow");
 
@@ -94,6 +116,82 @@ test("a question's texts and answer need the service's token and its one-time co
 	);
 });
 
+test("a second read of an open question ends it as Deny and warns him (0578, SEC-NET-1)", async () => {
+	await withServer(async (server) => {
+		const popup = server.question(allowQuestion({ message: "Merge acme-api/retry into main?", detail: "d" }, "KQX"));
+		const first = await popupFetch(server, popup.code);
+		expect(first.status).toBe(200);
+		// Another program, with the code from the popup's environment, reads it too: it gets nothing, and the question ends.
+		expect((await popupFetch(server, popup.code)).status).toBe(410);
+		expect(await popup.answer).toBe(DENY);
+		expect(await popup.how).toBe("second-reader");
+		const reader = first.headers.get(POPUP_READER_HEADER);
+		expect((await popupFetch(server, popup.code, choose(ALLOW, reader, "KQX"))).status).toBe(403);
+		await until(() => server.herdr.of("notify").length > 0);
+		expect(server.herdr.of("notify")).toContainEqual([
+			{
+				title: "Jocasta",
+				body: 'Another program read your question "Merge acme-api/retry into main?"; it counted as Deny.',
+				sound: "none",
+			},
+		]);
+	});
+});
+
+test("a hold without the reader secret ends an open question as Deny and warns him (0578, SEC-NET-1)", async () => {
+	const popups = new Popups();
+	const notes: unknown[] = [];
+	const service = { notify: async (note: unknown) => void notes.push(note) } as unknown as PopupParts["service"];
+	const { hold } = popupRoutes({ token: "t", popups, askPopups: {} as AskPopups, service });
+	const holdOf = (code: string, headers: Record<string, string>) => {
+		const url = new URL(`http://127.0.0.1${POPUP_PATH}${code}${POPUP_HOLD}`);
+		return hold.handle(new Request(url, { headers }), url, undefined as unknown as Server<undefined>) as Response;
+	};
+	const popup = popups.open(allowQuestion({ message: "Merge acme-api/retry into main?", detail: "d" }, "KQX"));
+	// The popup's own first read.
+	popups.read(popup.code);
+	// Without the service's token: refused, and the question stays open.
+	expect(holdOf(popup.code, {}).status).toBe(403);
+	expect(popup.open).toBe(true);
+	// The token without the first reader's secret: another program holds the code, and the question ends.
+	expect(holdOf(popup.code, { authorization: "Bearer t", [POPUP_READER_HEADER]: "f".repeat(64) }).status).toBe(410);
+	expect(await popup.answer).toBe(DENY);
+	expect(await popup.how).toBe("second-reader");
+	expect(notes).toEqual([
+		{
+			type: "toast",
+			reason: "failed",
+			level: "warning",
+			text: 'Jocasta — Another program read your question "Merge acme-api/retry into main?"; it counted as Deny.',
+		},
+	]);
+	// Once ended, its code holds nothing.
+	expect(holdOf(popup.code, { authorization: "Bearer t" }).status).toBe(403);
+});
+
+test("wrong codes answer 409 with the tries left; the third is 410 and takes the fallback (0578)", async () => {
+	await withServer(async (server) => {
+		const popup = server.question(allowQuestion({ message: "m", detail: "d" }, "KQX"));
+		const reader = (await popupFetch(server, popup.code)).headers.get(POPUP_READER_HEADER);
+		const first = await popupFetch(server, popup.code, choose(ALLOW, reader, "AAA"));
+		expect(first.status).toBe(409);
+		expect(await first.json()).toEqual({ left: 2 });
+		const second = await popupFetch(server, popup.code, choose(ALLOW, reader, "BBB"));
+		expect(await second.json()).toEqual({ left: 1 });
+		expect((await popupFetch(server, popup.code, choose(ALLOW, reader, "CCC"))).status).toBe(410);
+		expect(await popup.answer).toBe(DENY);
+		expect(await popup.how).toBe("wrong-codes");
+	});
+});
+
+test("a question's texts lose their control characters before anything reads them (SEC-NET-3)", async () => {
+	await withServer(async (server) => {
+		const popup = server.question({ ...ALLOW_BOX, detail: "run \x1b]52;c;ZXZpbA==\x07this\x1b[2J" });
+		const view = (await (await popupFetch(server, popup.code)).json()) as PopupView;
+		expect(view.detail).toBe("run ]52;c;ZXZpbA==this[2J");
+	});
+});
+
 test("a question closed unanswered is its fallback, and so is every open one when the server stops (0519)", async () => {
 	const server = await startTestServer();
 	let stopped = false;
@@ -101,6 +199,7 @@ test("a question closed unanswered is its fallback, and so is every open one whe
 		const cancel = server.question(stopQuestion({ working: 1, awaiting: 0 }));
 		cancel.close();
 		expect(await cancel.answer).toBe(CANCEL);
+		expect(await cancel.how).toBe("withdrawn");
 		expect(cancel.open).toBe(false);
 		expect((await popupFetch(server, cancel.code, choose(STOP))).status).toBe(403);
 
@@ -117,11 +216,15 @@ test("a question closed unanswered is its fallback, and so is every open one whe
 	}
 });
 
-test("the close question counts working and awaiting threads, Stop everything or Cancel (0438, 0549)", () => {
-	expect(closeQuestion({ working: 1, awaiting: 0 })).toBe("Stop 1 working thread? Their sessions are saved.");
-	expect(closeQuestion({ working: 0, awaiting: 2 })).toBe("Stop 2 threads awaiting you? Their sessions are saved.");
+test("the close question counts working and awaiting threads, Stop everything or Cancel (0438, 0549, 0581)", () => {
+	expect(closeQuestion({ working: 1, awaiting: 0 })).toBe(
+		"Stop 1 working thread? They pick up where they left off next time.",
+	);
+	expect(closeQuestion({ working: 0, awaiting: 2 })).toBe(
+		"Stop 2 threads awaiting you? They pick up where they left off next time.",
+	);
 	expect(closeQuestion({ working: 2, awaiting: 1 })).toBe(
-		"Stop 2 working threads and 1 awaiting you? Their sessions are saved.",
+		"Stop 2 working threads and 1 awaiting you? They pick up where they left off next time.",
 	);
 	expect(stopQuestion({ working: 1, awaiting: 1 }, "ABC")).toMatchObject({
 		choices: [STOP, CANCEL],
@@ -162,7 +265,7 @@ test("Allow takes its three letters only: Enter's bare Allow and wrong letters d
 
 	const guessed = popups.open(view);
 	for (const typed of ["AAA", "BBB"]) expect(popups.answer(guessed.code, { choice: ALLOW, typed })).toBe("wrong");
-	expect(popups.answer(guessed.code, { choice: ALLOW, typed: "CCC" })).toBe("taken");
+	expect(popups.answer(guessed.code, { choice: ALLOW, typed: "CCC" })).toBe("exhausted");
 	expect(await guessed.answer).toBe(DENY);
 	expect(WRONG_CODES).toBe(3);
 });
@@ -179,7 +282,7 @@ test("Finish's Merge and PR and the close question's Stop everything take the co
 
 	const guessed = popups.open(finishQuestion("acme-api/retry", "d", "KQX"));
 	for (const typed of ["AAA", "BBB"]) expect(popups.answer(guessed.code, { choice: MERGE, typed })).toBe("wrong");
-	expect(popups.answer(guessed.code, { choice: MERGE, typed: "CCC" })).toBe("taken");
+	expect(popups.answer(guessed.code, { choice: MERGE, typed: "CCC" })).toBe("exhausted");
 	expect(await guessed.answer).toBe(CANCEL);
 
 	const cancel = popups.open(finishQuestion("acme-api/retry", "d", "KQX"));

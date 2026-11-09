@@ -41,3 +41,4 @@ K7 nothing to build; K8 omp's roles; K9 no scheduler; K10 warn at $25.
 - Differs from the recommendation on K8 and K9 (measured first) and K10 ($50).
 - Amends 0187: a warning (never a stop) on the subscription.
 - The arm set (a later record) carries the prewalk and keep-alive comparisons.
+- Amended by 0586 (2026-11-09): K9 isn't measured; omp's own warming answers it (1-hour entries on his subscription, never refreshed while idle; a ping elsewhere only when it should save at least $0.05).

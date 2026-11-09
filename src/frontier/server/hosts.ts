@@ -9,7 +9,8 @@ import { readdirSync, readFileSync, rmSync } from "node:fs";
 import { connect } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { asObject, pidAlive } from "../../shared/fsx.ts";
+import { asObject } from "../../shared/fsx.ts";
+import { pidAlive } from "../../shared/proctree.ts";
 
 /** The registry protocol Jocasta speaks (`COLLAB_REGISTRY_VERSION`). */
 const REGISTRY_VERSION = 1;

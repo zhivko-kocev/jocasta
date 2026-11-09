@@ -1,7 +1,7 @@
 # The `jocasta` herdr plugin (0553, 0554, 0558). `jocasta setup` writes it to ~/.jocasta/agent/herdr-plugin/,
 # replacing {{jocasta}} with how herdr starts this Jocasta (`jocasta.exe`, or Bun and the repo's entry in a source run),
 # and links that folder with `herdr plugin link`; `jocasta uninstall` unlinks it. Every command talks to the running
-# Jocasta service over its localhost API with the token from <data>/frontier.json.
+# Jocasta service over its localhost API with the token from <data>/jocasta-service.json.
 id = "jocasta"
 name = "Jocasta"
 version = "0.1.0"

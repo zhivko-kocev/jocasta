@@ -23,10 +23,13 @@
  * ("the", "function", "changing", …). A dotted name keeps its last part. Anything else is not a relationship
  * question (undefined): `graph_search` answers it with facts only.
  */
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
+import { LineRpc } from "../../shared/line-rpc.ts";
 import { log as sharedLog } from "../../shared/log.ts";
+import { isInside, pathKey, realPath, samePath } from "../../shared/pathkey.ts";
+import { onPath, runProgram } from "../../shared/process.ts";
 
 export interface CodeLocation {
 	/** Relative to the main checkout, forward slashes. */
@@ -44,6 +47,8 @@ export interface CodeIndexOptions {
 	server?: string[] | null;
 	/** mise's argv; default the one on PATH; null = none. */
 	mise?: string[] | null;
+	/** Test seam: how long a project's server may sit unused before it is closed; an hour by default. */
+	idleMs?: number;
 	log?(line: string): void;
 }
 
@@ -61,6 +66,8 @@ const QUERY_MS = 60_000;
 const STOP_MS = 3_000;
 /** How long a failed lookup of the binary is remembered before mise is asked again. */
 const MISSING_RETRY_MS = 60_000;
+/** A project's stdio server unused this long is closed (about 35 MB each serving, 0562); the next question starts it. */
+const IDLE_MS = 3_600_000;
 
 // ── Classification ──────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -144,36 +151,6 @@ export function readIndexReuse(dataDir: string): number {
 	}
 }
 
-// ── Paths ───────────────────────────────────────────────────────────────────────────────────────────────────────
-
-/** `path` with 8.3 short names expanded (`C:\Users\ZHIVKO~1` in %TEMP%) through its nearest existing ancestor. */
-function longPath(path: string): string {
-	const rest: string[] = [];
-	let current = resolve(path);
-	for (;;) {
-		try {
-			return join(realpathSync.native(current), ...rest.reverse());
-		} catch {
-			const parent = dirname(current);
-			if (parent === current) return resolve(path);
-			rest.push(basename(current));
-			current = parent;
-		}
-	}
-}
-
-/** The key two spellings of one folder share: long names, forward slashes, no trailing slash, lowercase on Windows. */
-function folderKey(path: string): string {
-	const key = path.replaceAll("\\", "/").replace(/\/+$/, "");
-	return process.platform === "win32" ? key.toLowerCase() : key;
-}
-
-function underProfile(dir: string): boolean {
-	const home = folderKey(longPath(homedir()));
-	const target = folderKey(longPath(dir));
-	return target === home || target.startsWith(`${home}/`);
-}
-
 // ── One CBM stdio server ────────────────────────────────────────────────────────────────────────────────────────
 
 interface Rpc {
@@ -183,69 +160,25 @@ interface Rpc {
 }
 
 class StdioServer {
-	readonly pid: number;
-	readonly exited: Promise<number>;
-	private readonly child: Bun.Subprocess<"pipe", "pipe", "pipe">;
-	private readonly pending = new Map<number, PromiseWithResolvers<Rpc>>();
-	private nextId = 1;
-	private gone: Error | undefined;
+	private readonly rpc: LineRpc<Rpc>;
 
 	constructor(argv: string[], cwd: string, env: Record<string, string | undefined>, onExit: () => void) {
-		const child = Bun.spawn(argv, { cwd, env, stdin: "pipe", stdout: "pipe", stderr: "pipe", windowsHide: true });
-		this.child = child;
-		this.pid = child.pid;
-		let stderrTail = "";
-		const answers = (async () => {
-			const decoder = new TextDecoder();
-			let buffered = "";
-			for await (const chunk of child.stdout) {
-				buffered += decoder.decode(chunk, { stream: true });
-				let newline = buffered.indexOf("\n");
-				while (newline >= 0) {
-					const text = buffered.slice(0, newline).trim();
-					buffered = buffered.slice(newline + 1);
-					newline = buffered.indexOf("\n");
-					let message: Rpc | null;
-					try {
-						message = JSON.parse(text) as Rpc | null;
-					} catch {
-						continue;
-					}
-					if (typeof message?.id === "number") this.pending.get(message.id)?.resolve(message);
-				}
-			}
-		})().catch(() => undefined);
-		const errors = (async () => {
-			const decoder = new TextDecoder();
-			for await (const chunk of child.stderr) stderrTail = (stderrTail + decoder.decode(chunk)).slice(-500);
-		})().catch(() => undefined);
-		this.exited = Promise.all([child.exited, answers, errors]).then(([code]) => {
-			const tail = stderrTail.trim().split(/\r?\n/).at(-1) ?? "";
-			this.gone = new Error(`codebase-memory-mcp stopped (exit ${code})${tail ? `: ${tail}` : ""}`);
-			for (const waiter of this.pending.values()) waiter.reject(this.gone);
-			this.pending.clear();
-			onExit();
-			return code;
+		this.rpc = new LineRpc<Rpc>(argv, {
+			cwd,
+			env,
+			exitError: (code, stderr) => {
+				const tail = stderr.trim().split(/\r?\n/).at(-1) ?? "";
+				return new Error(`codebase-memory-mcp stopped (exit ${code})${tail ? `: ${tail}` : ""}`);
+			},
+			onExit,
 		});
 	}
 
-	async request(method: string, params: unknown, timeoutMs: number): Promise<Rpc> {
-		if (this.gone) throw this.gone;
-		const id = this.nextId++;
-		const waiter = Promise.withResolvers<Rpc>();
-		this.pending.set(id, waiter);
-		const timer = setTimeout(
-			() => waiter.reject(new Error(`codebase-memory-mcp didn't answer ${method} within ${timeoutMs / 1000} s`)),
+	request(method: string, params: unknown, timeoutMs: number): Promise<Rpc> {
+		return this.rpc.request((id) => ({ jsonrpc: "2.0", id, method, params }), {
 			timeoutMs,
-		);
-		try {
-			this.child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
-			void this.child.stdin.flush();
-			return await waiter.promise;
-		} finally {
-			clearTimeout(timer);
-			this.pending.delete(id);
-		}
+			timeoutMessage: `codebase-memory-mcp didn't answer ${method} within ${timeoutMs / 1000} s`,
+		});
 	}
 
 	async initialize(): Promise<void> {
@@ -256,8 +189,7 @@ class StdioServer {
 		);
 		if (answer.error)
 			throw new Error(`codebase-memory-mcp didn't start: ${answer.error.message ?? "initialize failed"}`);
-		this.child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} })}\n`);
-		void this.child.stdin.flush();
+		this.rpc.send({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
 	}
 
 	/** One tool call's structured answer; throws CBM's own error as one line. */
@@ -283,14 +215,10 @@ class StdioServer {
 
 	/** Closes stdin (the server leaves, and the daemon with its last client), killing it after `STOP_MS`. */
 	async close(): Promise<void> {
+		this.rpc.close();
+		const timer = setTimeout(() => this.rpc.kill(), STOP_MS);
 		try {
-			void this.child.stdin.end();
-		} catch {
-			// Already closed.
-		}
-		const timer = setTimeout(() => this.child.kill(), STOP_MS);
-		try {
-			await Promise.race([this.exited, Bun.sleep(STOP_MS + 2_000)]);
+			await Promise.race([this.rpc.exited, Bun.sleep(STOP_MS + 2_000)]);
 		} finally {
 			clearTimeout(timer);
 		}
@@ -308,8 +236,14 @@ interface Entry {
 	/** The first lookup or build, single-flight; `existed` = the index was there before. */
 	ready?: Promise<{ name: string; existed: boolean }>;
 	refreshing?: Promise<void>;
-	/** A merge happened while no index was known here: re-index before the next answer. */
+	/** A merge happened while no index was known here, or during the first lookup: re-index before the next answer. */
 	stale?: boolean;
+	/** Questions, builds and refreshes running on this entry; its server is never closed for idleness while any run. */
+	busy: number;
+	/** Closes the server after `IDLE_MS` without use; reset on each use. */
+	idleTimer?: Timer;
+	/** Dropped (`forget`, or its id now names another checkout): its server closes once the uses still running end. */
+	dropped?: boolean;
 }
 
 function cypherFor(relationship: Relationship, limit: number): string {
@@ -341,6 +275,8 @@ export class CodeIndex {
 	private readonly dir: string;
 	private readonly entries = new Map<string, Entry>();
 	private resolved: { argv?: string[]; reason?: string; at: number } | undefined;
+	/** The binary lookup in flight (`mise where`), shared by every caller while it runs. */
+	private resolving: Promise<{ argv?: string[]; reason?: string }> | undefined;
 	private configured: Promise<void> | undefined;
 	private reused = 0;
 
@@ -353,12 +289,20 @@ export class CodeIndex {
 		return this.reused;
 	}
 
-	unavailable(): string | undefined {
+	async unavailable(): Promise<string | undefined> {
 		if (this.options.server === null) return "The code index is off.";
-		if (process.platform === "win32" && !underProfile(this.dir)) {
+		if (process.platform === "win32" && !isInside(realPath(homedir()), realPath(this.dir))) {
 			return `The code index can't keep its data in ${this.dir}: codebase-memory-mcp refuses folders other users may write to (D:\\ lets them by default), so Jocasta's data folder must be under ${homedir()}.`;
 		}
-		return this.server().reason;
+		return (await this.server()).reason;
+	}
+
+	/** Builds (or finds) the project's index now, so its first answer doesn't wait on it (0575: the bench layer builds before a trial's clock). Throws `unavailable()`'s reason. */
+	async build(project: { id: string; mainPath: string }): Promise<void> {
+		const reason = await this.unavailable();
+		if (reason) throw new Error(reason);
+		const entry = this.entry(project);
+		await this.using(entry, () => this.ready(entry));
 	}
 
 	async locations(
@@ -368,36 +312,39 @@ export class CodeIndex {
 	): Promise<CodeLocation[] | undefined> {
 		const relationship = relationshipOf(query);
 		if (!relationship) return undefined;
-		const reason = this.unavailable();
+		const reason = await this.unavailable();
 		if (reason) throw new Error(reason);
 		const cap = Math.max(1, Math.min(MAX_LOCATIONS, Math.floor(limit)));
 		const entry = this.entry(project);
-		const { name, existed } = await this.ready(entry);
-		const server = await this.client(entry);
-		const answer = await server.call(
-			"query_graph",
-			{ project: name, query: cypherFor(relationship, cap), format: "json", max_rows: cap },
-			QUERY_MS,
-		);
-		const locations = this.rows(answer, entry, relationship).slice(0, cap);
-		if (existed) this.countReuse(project.id, relationship);
-		return locations;
+		return this.using(entry, async () => {
+			const { name, existed } = await this.ready(entry);
+			const server = await this.client(entry);
+			const answer = await server.call(
+				"query_graph",
+				{ project: name, query: cypherFor(relationship, cap), format: "json", max_rows: cap },
+				QUERY_MS,
+			);
+			const locations = this.rows(answer, entry, relationship).slice(0, cap);
+			if (existed) this.countReuse(project.id, relationship);
+			return locations;
+		});
 	}
 
 	async refresh(project: { id: string; mainPath: string }): Promise<void> {
 		const entry = this.entries.get(project.id);
-		if (!entry || folderKey(entry.root) !== folderKey(longPath(project.mainPath))) {
+		if (!entry || !samePath(entry.root, realPath(project.mainPath))) {
 			// Not looked up in this run: if an index exists it is brought up to date before its next answer.
 			this.entry(project).stale = true;
 			return;
 		}
 		if (entry.name === undefined) {
-			// The first build is running (it reads the merged files) or never ran: nothing to refresh.
-			if (!entry.ready) entry.stale = true;
+			// No index known yet: the lookup running now (or the next one) re-indexes before answering, since a lookup
+			// that finds an existing index never re-reads the files and a build may have read them before the merge.
+			entry.stale = true;
 			return;
 		}
 		if (entry.refreshing) return entry.refreshing;
-		entry.refreshing = (async () => {
+		entry.refreshing = this.using(entry, async () => {
 			try {
 				const server = await this.client(entry);
 				await server.call("index_repository", { repo_path: entry.root }, INDEX_MS);
@@ -406,12 +353,22 @@ export class CodeIndex {
 			} finally {
 				entry.refreshing = undefined;
 			}
-		})();
+		});
 		return entry.refreshing;
+	}
+
+	/** Closes the project's server and drops what is known of it: for a project no longer in projects.yaml. */
+	async forget(projectId: string): Promise<void> {
+		const entry = this.entries.get(projectId);
+		if (!entry) return;
+		this.entries.delete(projectId);
+		await this.drop(entry);
 	}
 
 	async stop(): Promise<void> {
 		const servers = [...this.entries.values()].flatMap((entry) => {
+			clearTimeout(entry.idleTimer);
+			entry.idleTimer = undefined;
 			const server = entry.server;
 			entry.server = undefined;
 			return server ? [server] : [];
@@ -430,44 +387,81 @@ export class CodeIndex {
 
 	/** The project's entry; a different main checkout for the same id starts over. */
 	private entry(project: { id: string; mainPath: string }): Entry {
-		const root = longPath(project.mainPath);
+		const root = realPath(project.mainPath);
 		const known = this.entries.get(project.id);
-		if (known && folderKey(known.root) === folderKey(root)) return known;
-		if (known?.server) void known.server.then((server) => server.close()).catch(() => undefined);
-		const fresh: Entry = { root };
+		if (known && samePath(known.root, root)) return known;
+		if (known) void this.drop(known);
+		const fresh: Entry = { root, busy: 0 };
 		this.entries.set(project.id, fresh);
 		return fresh;
 	}
 
-	/** The stdio server's argv, or why there is none. */
-	private server(): { argv?: string[]; reason?: string } {
-		if (this.resolved?.argv || (this.resolved && Date.now() - this.resolved.at < MISSING_RETRY_MS)) {
-			return this.resolved;
+	/** Runs `work` as a use of the entry's server: the idle clock stops while it runs and restarts when the last use ends. */
+	private async using<T>(entry: Entry, work: () => Promise<T>): Promise<T> {
+		entry.busy++;
+		clearTimeout(entry.idleTimer);
+		entry.idleTimer = undefined;
+		try {
+			return await work();
+		} finally {
+			entry.busy--;
+			if (entry.busy === 0 && entry.dropped) void this.closeServer(entry);
+			else if (entry.busy === 0) {
+				// Unref'd: an idle clock never keeps the process alive.
+				entry.idleTimer = setTimeout(() => {
+					entry.idleTimer = undefined;
+					if (entry.busy === 0) void this.closeServer(entry);
+				}, this.options.idleMs ?? IDLE_MS);
+				entry.idleTimer.unref();
+			}
 		}
-		this.resolved = { ...this.lookup(), at: Date.now() };
-		return this.resolved;
 	}
 
-	private lookup(): { argv?: string[]; reason?: string } {
+	/** An entry no longer in `entries`: its server closes now, or when its last running use ends. */
+	private async drop(entry: Entry): Promise<void> {
+		entry.dropped = true;
+		if (entry.busy === 0) await this.closeServer(entry);
+	}
+
+	/** Closes the entry's server, if one runs or starts; the entry keeps its CBM name, so the next use starts a fresh one. */
+	private async closeServer(entry: Entry): Promise<void> {
+		clearTimeout(entry.idleTimer);
+		entry.idleTimer = undefined;
+		const server = entry.server;
+		entry.server = undefined;
+		await server?.then((started) => started.close()).catch(() => undefined);
+	}
+
+	/** The stdio server's argv, or why there is none; one lookup at a time, a missing binary remembered for a minute. */
+	private server(): Promise<{ argv?: string[]; reason?: string }> {
+		const resolved = this.resolved;
+		if (resolved?.argv || (resolved && Date.now() - resolved.at < MISSING_RETRY_MS)) return Promise.resolve(resolved);
+		this.resolving ??= this.lookup()
+			.then((found) => {
+				this.resolved = { ...found, at: Date.now() };
+				return this.resolved;
+			})
+			.finally(() => {
+				this.resolving = undefined;
+			});
+		return this.resolving;
+	}
+
+	private async lookup(): Promise<{ argv?: string[]; reason?: string }> {
 		const missing = `codebase-memory-mcp ${CBM_VERSION} isn't installed: run \`jocasta setup\`, then \`mise install\`.`;
 		const given = this.options.server;
 		if (given) {
 			const [program = ""] = given;
-			return existsSync(program) || Bun.which(program) ? { argv: given } : { reason: missing };
+			return existsSync(program) || onPath(program) ? { argv: given } : { reason: missing };
 		}
-		const onPath = Bun.which("mise");
-		const mise = this.options.mise === undefined ? (onPath ? [onPath] : null) : this.options.mise;
+		const found = onPath("mise");
+		const mise = this.options.mise === undefined ? (found ? [found] : null) : this.options.mise;
 		if (!mise) return { reason: "codebase-memory-mcp can't be found: mise isn't on PATH." };
 		try {
-			const run = Bun.spawnSync([...mise, "where", `${CBM_TOOL}@${CBM_VERSION}`], {
-				stdin: "ignore",
-				stdout: "pipe",
-				stderr: "pipe",
-				windowsHide: true,
-				timeout: CONFIG_MS,
-			});
-			const folder = run.stdout.toString().trim();
-			if (run.exitCode !== 0 || !folder) return { reason: missing };
+			// Async, so a slow mise (up to `CONFIG_MS`) never blocks the service's event loop.
+			const run = await runProgram([...mise, "where", `${CBM_TOOL}@${CBM_VERSION}`], { timeoutMs: CONFIG_MS });
+			const folder = run.stdout.trim();
+			if (run.code !== 0 || !folder) return { reason: missing };
 			const exe = join(folder, process.platform === "win32" ? "codebase-memory-mcp.exe" : "codebase-memory-mcp");
 			return existsSync(exe) ? { argv: [exe] } : { reason: missing };
 		} catch {
@@ -489,16 +483,9 @@ export class CodeIndex {
 				["ui_enabled", "false"],
 				["auto_index", "false"],
 			] as const) {
-				const run = Bun.spawn([...argv, "config", "set", key, value], {
-					env: this.env(),
-					stdin: "ignore",
-					stdout: "ignore",
-					stderr: "pipe",
-					windowsHide: true,
-					timeout: CONFIG_MS,
-				});
-				const [stderr, code] = await Promise.all([new Response(run.stderr).text(), run.exited]);
-				if (code !== 0) this.warn(`codebase-memory-mcp config set ${key} failed (${code}): ${stderr.trim()}`);
+				const run = await runProgram([...argv, "config", "set", key, value], { env: this.env(), timeoutMs: CONFIG_MS });
+				if (run.code !== 0)
+					this.warn(`codebase-memory-mcp config set ${key} failed (${run.code ?? "timed out"}): ${run.stderr.trim()}`);
 			}
 		})();
 		return this.configured;
@@ -507,9 +494,9 @@ export class CodeIndex {
 	/** The project's running stdio server, started (cwd = its main checkout) when there is none. */
 	private client(entry: Entry): Promise<StdioServer> {
 		if (entry.server) return entry.server;
-		const { argv, reason } = this.server();
-		if (!argv) return Promise.reject(new Error(reason));
 		const starting = (async () => {
+			const { argv, reason } = await this.server();
+			if (!argv) throw new Error(reason);
 			await this.configure(argv);
 			const server = new StdioServer(argv, entry.root, this.env(), () => {
 				if (entry.server === starting) entry.server = undefined;
@@ -532,35 +519,47 @@ export class CodeIndex {
 	/** CBM's name for the checkout: found among its projects (re-indexed if a merge came first), else built now. */
 	private ready(entry: Entry): Promise<{ name: string; existed: boolean }> {
 		if (entry.name !== undefined && !entry.stale) return Promise.resolve({ name: entry.name, existed: true });
-		entry.ready ??= (async () => {
-			const server = await this.client(entry);
-			const found = await this.findProject(server, entry.root);
-			if (found && !entry.stale) return { name: found, existed: true };
-			const built = await server.call("index_repository", { repo_path: entry.root }, INDEX_MS);
-			if (typeof built.project !== "string" || !built.project) {
-				throw new Error("codebase-memory-mcp indexed the checkout but didn't name its project");
-			}
-			return { name: built.project, existed: found !== undefined };
-		})()
-			.then((result) => {
-				entry.name = result.name;
-				entry.stale = false;
-				return result;
-			})
-			.finally(() => {
-				entry.ready = undefined;
-			});
+		entry.ready ??= this.lookUpIndex(entry).finally(() => {
+			entry.ready = undefined;
+		});
 		return entry.ready;
 	}
 
+	/**
+	 * One lookup or build. The stale flag is taken when it starts, so a merge reported while it runs (`refresh`) stays
+	 * set and the next answer re-indexes; a failed lookup puts back the flag it took.
+	 */
+	private async lookUpIndex(entry: Entry): Promise<{ name: string; existed: boolean }> {
+		const stale = entry.stale === true;
+		entry.stale = false;
+		try {
+			const server = await this.client(entry);
+			const found = await this.findProject(server, entry.root);
+			let result: { name: string; existed: boolean };
+			if (found && !stale) result = { name: found, existed: true };
+			else {
+				const built = await server.call("index_repository", { repo_path: entry.root }, INDEX_MS);
+				if (typeof built.project !== "string" || !built.project) {
+					throw new Error("codebase-memory-mcp indexed the checkout but didn't name its project");
+				}
+				result = { name: built.project, existed: found !== undefined };
+			}
+			entry.name = result.name;
+			return result;
+		} catch (error) {
+			if (stale) entry.stale = true;
+			throw error;
+		}
+	}
+
 	private async findProject(server: StdioServer, root: string): Promise<string | undefined> {
-		const want = folderKey(root);
+		const want = pathKey(root);
 		for (let offset = 0; ; ) {
 			const page = await server.call("list_projects", { format: "json", limit: 500, offset }, QUERY_MS);
 			const projects = Array.isArray(page.projects) ? (page.projects as Record<string, unknown>[]) : [];
 			for (const project of projects) {
 				if (typeof project.name === "string" && typeof project.root_path === "string") {
-					if (folderKey(project.root_path) === want) return project.name;
+					if (pathKey(project.root_path) === want) return project.name;
 				}
 			}
 			if (page.has_more !== true || projects.length === 0) return undefined;
@@ -584,7 +583,7 @@ export class CodeIndex {
 			if (!file || !symbol) continue;
 			const line = Number(at(row, "r.line") ?? at(row, "c.start_line"));
 			out.push({
-				path: (isAbsolute(file) ? relative(entry.root, longPath(file)) : file).replaceAll("\\", "/"),
+				path: (isAbsolute(file) ? relative(entry.root, realPath(file)) : file).replaceAll("\\", "/"),
 				line: Number.isFinite(line) ? line : 0,
 				symbol,
 				relation: relationText(relationship, at(row, "type(r)")),

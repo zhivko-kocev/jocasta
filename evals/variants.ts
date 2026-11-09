@@ -3,6 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { type Static, Type } from "typebox";
 import { UserError } from "../src/shared/errors.ts";
 import { parseYamlFile, YamlFileError } from "../src/shared/yaml.ts";
+import { HARNESSES, OMP_KEYS, type OmpKey } from "./harness.ts";
 
 /**
  * Eval variants (0375): `evals/variants/<name>.yaml` changes how each trial's omp starts (0386). Every key is
@@ -171,20 +172,20 @@ export function loadVariants(dir: string, names: readonly string[]): Variant {
 		throw new UserError(
 			`${variant.label}: plan_first (--plan-yolo) and plan_review are two ways to plan first; set plan_first: false`,
 		);
-	if (variant.harness !== "omp") {
-		const ompOnly = [
-			variant.planFirst && "plan_first",
-			variant.planReview !== undefined && "plan_review",
-			variant.configs.length > 0 && "configs",
-			variant.extensions.length > 0 && "extensions",
-			variant.tools !== undefined && "tools",
-			variant.settings !== undefined && "settings",
-			variant.layer !== undefined && "layer",
-			variant.harness === "opencode" && variant.appendSystemPrompt !== undefined && "append_system_prompt",
-		].filter((key): key is string => typeof key === "string");
-		if (ompOnly.length > 0)
-			throw new UserError(`${variant.label}: ${ompOnly.join(", ")} apply to omp only, not ${variant.harness}`);
-	}
+	const set: Record<OmpKey, boolean> = {
+		plan_first: variant.planFirst,
+		plan_review: variant.planReview !== undefined,
+		configs: variant.configs.length > 0,
+		extensions: variant.extensions.length > 0,
+		tools: variant.tools !== undefined,
+		settings: variant.settings !== undefined,
+		layer: variant.layer !== undefined,
+		append_system_prompt: variant.appendSystemPrompt !== undefined,
+	};
+	const { accepts } = HARNESSES[variant.harness];
+	const ompOnly = OMP_KEYS.filter((key) => set[key] && !accepts.includes(key));
+	if (ompOnly.length > 0)
+		throw new UserError(`${variant.label}: ${ompOnly.join(", ")} apply to omp only, not ${variant.harness}`);
 	return variant;
 }
 

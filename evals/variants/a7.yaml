@@ -7,3 +7,7 @@
 harness: opencode
 model: anthropic/claude-opus-5-5
 args: [--variant, high, --auto]
+# opencode stays the version the run started on (0482 pins 1.18.22; 0574): its self-update is off, and the bench stops
+# the arm if `opencode --version` changes anyway.
+env:
+  OPENCODE_DISABLE_AUTOUPDATE: "1"

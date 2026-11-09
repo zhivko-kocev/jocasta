@@ -6,9 +6,6 @@
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
-/** Compiled into `jocasta.exe`, modules live in Bun's embedded file system. */
-export const COMPILED = /\$bunfs|~BUN|%7EBUN/.test(import.meta.url);
-
 /** The repo root in a source run (this file is `src/shared/install.ts`). */
 export const REPO = resolve(import.meta.dir, "..", "..");
 

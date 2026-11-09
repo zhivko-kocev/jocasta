@@ -5,11 +5,14 @@
  * - **Key:** the tree git would commit from the worktree as it is (a copy of its index, `git add -A`, `git write-tree`,
  *   the real index untouched), plus the tool versions (`mise current`) and the check's command. A key that already has
  *   a result answers from it, PASS and FAIL alike, so a check on an unchanged tree costs the key computation only.
- * - **Store:** `<data>/checks/<tree 12>/<name>.json` (`{command, versions, exit, ms, at}`) beside `<name>.log` (stdout
- *   and stderr as they interleaved); a failing mise task's own lines also go to `<task>.log` in the same folder.
- * - **Single flight:** one run per key, across processes: `<name>.lock` taken exclusively with the runner's pid in it;
- *   a caller finding it waits for the result (joins), and a lock whose process is gone is taken over. In one process a
- *   second caller joins the first's promise.
+ * - **Store:** `<data>/checks/<tree 12>/<name>.json` (`{command, versions, exit, ms, at, gates}`) beside `<name>.log`
+ *   (stdout and stderr as they interleaved); a failing mise task's own lines also go to `<task>.log` in the same
+ *   folder. A name's `/`, `\` and `:` become `-` in its file names. Folders untouched for 14 days are removed once a
+ *   day (0582 PERF-11); `hits.log` stays.
+ * - **Single flight:** one run per key, across processes: `<name>.lock` taken exclusively with the runner's pid and
+ *   start time in it; a caller finding it waits for the result (joins), and a lock whose process is gone (or whose
+ *   pid now names a process started at another time), or held past the check's time plus a grace, is taken over. In
+ *   one process a second caller joins the first's promise. A run's checks run one after another.
  * - **mise:** the project's check runs as `mise run -c <task>`, so a failing task doesn't abort its siblings; mise's
  *   own artifact cache replays unchanged tasks underneath only when the project's `mise.toml` switches it on. Jocasta
  *   never writes a project's files.
@@ -25,17 +28,22 @@ import {
 	closeSync,
 	copyFileSync,
 	existsSync,
+	linkSync,
 	mkdirSync,
 	openSync,
 	readFileSync,
+	renameSync,
 	rmSync,
 	writeFileSync,
 } from "node:fs";
+import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
-import { asObject, pidAlive, writeAtomically } from "../../shared/fsx.ts";
+import { localDay } from "../../shared/day.ts";
+import { readJsonObject, removeTreeAsync, writeAtomically } from "../../shared/fsx.ts";
 import { gitAsync } from "../../shared/git.ts";
 import { log } from "../../shared/log.ts";
-import { killTree } from "./proctree.ts";
+import { onPath, runProgram } from "../../shared/process.ts";
+import { killTree, pidAlive, processStart } from "../../shared/proctree.ts";
 
 /** One check to run: its gate name (`verify`, `done_when`, `done_when-2`) and its shell command. */
 export interface CheckSpec {
@@ -97,6 +105,20 @@ export interface CheckRunnerOptions {
 
 const CHECK_TIMEOUT_MS = 30 * 60_000;
 const POLL_MS = 250;
+/** How long past the check's own time a waiter gives a live lock holder before taking its lock over. */
+const LOCK_GRACE_MS = 60_000;
+/** How long one git call of the tree key may take. */
+const GIT_TIMEOUT_MS = 30_000;
+const DAY_MS = 24 * 60 * 60_000;
+/** Days a stored result is kept after its folder was last touched (0582 PERF-11). */
+const RESULT_DAYS = 14;
+const PRUNE_EVERY_MS = DAY_MS;
+/** The file in the checks folder holding the local day the last prune pass ran (once a day, 0582 PERF-11). */
+const PRUNED_ON = "pruned-on";
+/** Index copies in `tmp` older than this are a crash's leftovers. */
+const TMP_MAX_AGE_MS = 60 * 60_000;
+/** A result folder's name: the tree's first 12 hex digits. */
+const RESULT_FOLDER = /^[0-9a-f]{12}$/;
 
 /** Stored with each result. */
 interface Stored {
@@ -105,6 +127,8 @@ interface Stored {
 	exit: number;
 	ms: number;
 	at: number;
+	/** The result's gates; absent from results stored before they were kept, whose log is read instead. */
+	gates?: Gate[];
 }
 
 /** The argv that runs one shell command line: cmd.exe on Windows (`/s /c "<line>"`, verbatim), else `sh -c`. */
@@ -117,19 +141,11 @@ function shellArgv(command: string): { argv: string[]; verbatim: boolean } {
 
 /** `mise current` in `cwd` (the resolved tool versions), "" when mise isn't there or fails. */
 async function miseCurrent(cwd: string, env: Record<string, string | undefined>): Promise<string> {
-	const mise = Bun.which("mise", { PATH: env.PATH ?? env.Path ?? process.env.PATH ?? "" });
+	const mise = onPath("mise", env);
 	if (!mise) return "";
 	try {
-		const proc = Bun.spawn([mise, "current"], {
-			cwd,
-			env,
-			stdin: "ignore",
-			stdout: "pipe",
-			stderr: "ignore",
-			timeout: 15_000,
-		});
-		const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-		return code === 0 ? out.trim() : "";
+		const run = await runProgram([mise, "current"], { cwd, env, timeoutMs: 15_000 });
+		return run.code === 0 ? run.stdout.trim() : "";
 	} catch {
 		return "";
 	}
@@ -215,12 +231,13 @@ export function gatesOf(spec: CheckSpec, exit: number | null, text: string, logF
 	const gate = (name: string, command: string, pass: boolean, lines: string, logPath: string): Gate => {
 		const failures = pass ? [] : bunFailures(lines, cwd);
 		const files = [...new Set(failures.map((f) => f.file))];
+		const rerun = files.map((file) => (file.includes(" ") ? `"${file}"` : file)).join(" ");
 		return {
 			name,
 			command,
 			pass,
 			failures,
-			...(pass ? {} : { log: logPath, rerun: files.length > 0 ? `bun test ${files.join(" ")}` : command }),
+			...(pass ? {} : { log: logPath, rerun: files.length > 0 ? `bun test ${rerun}` : command }),
 		};
 	};
 	const tasks = spec.mise ? miseTasks(text) : [];
@@ -230,7 +247,7 @@ export function gatesOf(spec: CheckSpec, exit: number | null, text: string, logF
 		return named.map((task) => {
 			// A failing run whose log names no failed task: every task it named is said as failing.
 			const pass = exit === 0 || (anyFailed && !task.failed);
-			const taskLog = join(logFile, "..", `${task.name}.log`);
+			const taskLog = join(logFile, "..", `${fileName(task.name)}.log`);
 			return gate(task.name, `mise run ${task.name}`, pass, text, pass ? logFile : taskLog);
 		});
 	}
@@ -280,10 +297,13 @@ export class CheckRunner {
 	hits = 0;
 	/** Checks run here. */
 	runs = 0;
+	/** The day's prune pass, started with the runner unless one already ran today (0582 PERF-11). */
+	readonly pruning: Promise<void>;
 	private readonly inFlight = new Map<string, Promise<CheckResult>>();
 	/** The checks running here, by pid: `stop` ends their trees. */
 	private readonly children = new Set<number>();
 	private stopped = false;
+	private readonly pruneTimer: Timer;
 	private readonly options: Required<Pick<CheckRunnerOptions, "dir" | "timeoutMs" | "pollMs" | "versions">>;
 
 	constructor(options: CheckRunnerOptions) {
@@ -293,21 +313,106 @@ export class CheckRunner {
 			pollMs: options.pollMs ?? POLL_MS,
 			versions: options.versions ?? miseCurrent,
 		};
+		// Stored results age out (0582 PERF-11): once a day, at the service's first start that day and daily while it runs.
+		this.pruning = this.pruneDaily();
+		this.pruneTimer = setInterval(() => void this.pruneDaily(), PRUNE_EVERY_MS);
+		this.pruneTimer.unref();
 	}
 
 	/** Ends every check running here (their results aren't stored); later runs answer from stored results only. */
 	async stop(): Promise<void> {
 		this.stopped = true;
+		clearInterval(this.pruneTimer);
 		await Promise.allSettled([...this.children].map((pid) => killTree(pid)));
 		await Promise.allSettled([...this.inFlight.values()]);
 	}
 
+	/** `prune`, unless a pass already ran today; the day is kept in `<dir>/pruned-on`. */
+	private async pruneDaily(): Promise<void> {
+		const stamp = join(this.options.dir, PRUNED_ON);
+		const today = localDay(Date.now());
+		try {
+			if ((await readFile(stamp, "utf8")).trim() === today) return;
+		} catch {
+			// Never pruned here, or the stamp can't be read: prune.
+		}
+		await this.prune();
+		if (this.stopped) return;
+		try {
+			await writeFile(stamp, `${today}\n`);
+		} catch (error) {
+			// No checks folder yet means nothing was stored to prune.
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+				log("warn", "checks", `couldn't note today's prune: ${(error as Error).message}`);
+			}
+		}
+	}
+
+	/**
+	 * Removes the result folders untouched for 14 days (the newest mtime of the folder and its files) and `tmp`
+	 * entries older than an hour; `hits.log` stays (H8, K11). One log line when something was removed (0582 PERF-11).
+	 * Never throws: a failure is logged.
+	 */
+	async prune(now = Date.now()): Promise<void> {
+		let names: string[];
+		try {
+			names = await readdir(this.options.dir);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+				log("warn", "checks", `couldn't prune stored results: ${(error as Error).message}`);
+			}
+			return;
+		}
+		let removed = 0;
+		let bytes = 0;
+		for (const name of names) {
+			if (this.stopped) return;
+			if (!RESULT_FOLDER.test(name)) continue;
+			const folder = join(this.options.dir, name);
+			try {
+				const age = await folderAge(folder);
+				if (!age || now - age.newest < RESULT_DAYS * DAY_MS) continue;
+				await removeTreeAsync(folder);
+				removed++;
+				bytes += age.bytes;
+			} catch (error) {
+				log("warn", "checks", `couldn't remove stored results ${folder}: ${(error as Error).message}`);
+			}
+		}
+		await this.pruneTmp(now);
+		if (removed > 0) {
+			log("info", "checks", `removed ${removed} stored results older than ${RESULT_DAYS} days (${sizeSaid(bytes)})`);
+		}
+	}
+
+	/** Removes `tmp` entries (index copies a crash left) older than an hour. */
+	private async pruneTmp(now: number): Promise<void> {
+		const tmpDir = join(this.options.dir, "tmp");
+		let names: string[];
+		try {
+			names = await readdir(tmpDir);
+		} catch {
+			return;
+		}
+		for (const name of names) {
+			const entry = join(tmpDir, name);
+			try {
+				if (now - (await stat(entry)).mtimeMs >= TMP_MAX_AGE_MS) await removeTreeAsync(entry);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+					log("warn", "checks", `couldn't remove ${entry}: ${(error as Error).message}`);
+				}
+			}
+		}
+	}
+
 	/**
 	 * The tree git would commit from `cwd` as it is now: tracked and untracked files not ignored, edits included,
-	 * written through a copy of the worktree's index so the real one is never touched. Undefined outside git.
+	 * written through a copy of the worktree's index so the real one is never touched. Undefined outside git, or when
+	 * git fails or runs past its time.
 	 */
 	async treeKey(cwd: string): Promise<string | undefined> {
-		const indexPath = await gitAsync(cwd, ["rev-parse", "--git-path", "index"], 30_000);
+		const indexPath = await gitAsync(cwd, ["rev-parse", "--git-path", "index"], GIT_TIMEOUT_MS);
 		if (indexPath.code !== 0) return undefined;
 		const index = indexPath.stdout.trim();
 		const real = isAbsolute(index) ? index : join(cwd, index);
@@ -317,24 +422,14 @@ export class CheckRunner {
 		try {
 			if (existsSync(real)) copyFileSync(real, temp);
 			const env = { ...process.env, GIT_INDEX_FILE: temp };
-			const add = Bun.spawn(["git", "-C", cwd, "add", "-A"], {
-				env,
-				stdin: "ignore",
-				stdout: "ignore",
-				stderr: "pipe",
-			});
-			if ((await add.exited) !== 0) {
-				log("warn", "checks", `git add -A for the tree key failed in ${cwd}: ${await new Response(add.stderr).text()}`);
+			const add = await gitAsync(cwd, ["add", "-A"], GIT_TIMEOUT_MS, { env });
+			if (add.code !== 0) {
+				log("warn", "checks", `git add -A for the tree key failed in ${cwd}: ${add.stderr || `exit ${add.code}`}`);
 				return undefined;
 			}
-			const write = Bun.spawn(["git", "-C", cwd, "write-tree"], {
-				env,
-				stdin: "ignore",
-				stdout: "pipe",
-				stderr: "ignore",
-			});
-			const [tree, code] = await Promise.all([new Response(write.stdout).text(), write.exited]);
-			return code === 0 && /^[0-9a-f]{40,64}$/.test(tree.trim()) ? tree.trim() : undefined;
+			const write = await gitAsync(cwd, ["write-tree"], GIT_TIMEOUT_MS, { env });
+			const tree = write.stdout.trim();
+			return write.code === 0 && /^[0-9a-f]{40,64}$/.test(tree) ? tree : undefined;
 		} finally {
 			rmSync(temp, { force: true });
 		}
@@ -342,15 +437,23 @@ export class CheckRunner {
 
 	/**
 	 * Runs `specs` on `cwd`'s tree with `env`, each answered from its stored result when the key has one; undefined
-	 * outside git or without specs.
+	 * outside git or without specs. `tree` is the caller's own {@link treeKey} of `cwd`, when it has one. The specs run
+	 * one after another: a project's tests and a `done_when` in one worktree may share ports, temp and build files,
+	 * and a clash would be stored as the tree's FAIL (0559).
 	 */
-	async run(cwd: string, specs: CheckSpec[], env: Record<string, string | undefined>): Promise<CheckRun | undefined> {
+	async run(
+		cwd: string,
+		specs: CheckSpec[],
+		env: Record<string, string | undefined>,
+		tree?: string,
+	): Promise<CheckRun | undefined> {
 		if (specs.length === 0) return undefined;
-		const tree = await this.treeKey(cwd);
-		if (!tree) return undefined;
+		const key = tree ?? (await this.treeKey(cwd));
+		if (!key) return undefined;
 		const versions = await this.options.versions(cwd, env);
-		const results = await Promise.all(specs.map((spec) => this.one(cwd, tree, versions, spec, env)));
-		return { tree, results, passed: results.every((r) => r.gates.every((g) => g.pass)) };
+		const results: CheckResult[] = [];
+		for (const spec of specs) results.push(await this.one(cwd, key, versions, spec, env));
+		return { tree: key, results, passed: results.every((r) => r.gates.every((g) => g.pass)) };
 	}
 
 	private one(
@@ -382,27 +485,19 @@ export class CheckRunner {
 	}
 
 	private stored(file: string, spec: CheckSpec, versions: string): Stored | undefined {
-		try {
-			const value = asObject(JSON.parse(readFileSync(file, "utf8")));
-			if (!value || value.command !== spec.command || value.versions !== versions) return undefined;
-			if (typeof value.exit !== "number") return undefined;
-			return value as unknown as Stored;
-		} catch {
-			return undefined;
-		}
+		const value = readJsonObject(file);
+		if (!value || value.command !== spec.command || value.versions !== versions) return undefined;
+		if (typeof value.exit !== "number") return undefined;
+		return value as unknown as Stored;
 	}
 
+	/** A stored result as this caller's; its gates as stored, or read from its log when stored without them. */
 	private answer(cwd: string, folder: string, spec: CheckSpec, stored: Stored, how: CheckResult["how"]): CheckResult {
-		const logFile = join(folder, `${spec.name}.log`);
-		const text = existsSync(logFile) ? readFileSync(logFile, "utf8") : "";
-		return {
-			spec,
-			exit: stored.exit,
-			log: logFile,
-			ms: stored.ms,
-			how,
-			gates: gatesOf(spec, stored.exit, text, logFile, cwd),
-		};
+		const logFile = join(folder, `${fileName(spec.name)}.log`);
+		const gates = Array.isArray(stored.gates)
+			? stored.gates
+			: gatesOf(spec, stored.exit, existsSync(logFile) ? readFileSync(logFile, "utf8") : "", logFile, cwd);
+		return { spec, exit: stored.exit, log: logFile, ms: stored.ms, how, gates };
 	}
 
 	private async keyed(
@@ -414,60 +509,75 @@ export class CheckRunner {
 	): Promise<CheckResult> {
 		const folder = join(this.options.dir, tree.slice(0, 12));
 		mkdirSync(folder, { recursive: true });
-		const resultFile = join(folder, `${spec.name}.json`);
-		const lockFile = join(folder, `${spec.name}.lock`);
+		const resultFile = join(folder, `${fileName(spec.name)}.json`);
+		const lockFile = join(folder, `${fileName(spec.name)}.lock`);
 		for (;;) {
 			const done = this.stored(resultFile, spec, versions);
 			if (done) {
 				this.hit();
 				return this.answer(cwd, folder, spec, done, "hit");
 			}
+			if (this.stopped) throw new Error("the check runner has stopped");
 			let fd: number | undefined;
 			try {
 				fd = openSync(lockFile, "wx");
 			} catch {
 				// Someone runs this key: wait for its result, or take the lock over once its process is gone.
-				const holder = Number.parseInt(readText(lockFile) ?? "", 10);
-				if (Number.isInteger(holder) && holder > 0 && !pidAlive(holder)) {
+				const held = readText(lockFile);
+				if (held !== undefined && holderGone(held)) {
+					const pid = lockHolder(held).pid;
+					log("info", "checks", `taking over ${spec.name}'s lock on tree ${shortTree(tree)}: process ${pid} is gone`);
+					takeOver(lockFile, held);
+					continue;
+				}
+				const waited = await this.waitFor(resultFile, lockFile, spec, versions);
+				if (waited.stored) {
+					this.hit();
+					return this.answer(cwd, folder, spec, waited.stored, "joined");
+				}
+				if (waited.overdue !== undefined) {
+					const pid = lockHolder(waited.overdue).pid;
 					log(
 						"info",
 						"checks",
-						`taking over ${spec.name}'s lock on tree ${shortTree(tree)}: process ${holder} is gone`,
+						`taking over ${spec.name}'s lock on tree ${shortTree(tree)}: process ${pid} held it past the check's time`,
 					);
-					rmSync(lockFile, { force: true });
-					continue;
-				}
-				const joined = await this.waitFor(resultFile, lockFile, spec, versions);
-				if (joined) {
-					this.hit();
-					return this.answer(cwd, folder, spec, joined, "joined");
+					takeOver(lockFile, waited.overdue);
 				}
 				continue;
 			}
+			const own = lockToken();
 			try {
-				writeFileSync(fd, String(process.pid));
+				writeFileSync(fd, own);
 				closeSync(fd);
 				return await this.execute(cwd, folder, spec, versions, env);
 			} finally {
-				rmSync(lockFile, { force: true });
+				// Only our own lock: one taken over past its time is another runner's now.
+				if (readText(lockFile) === own) rmSync(lockFile, { force: true });
 			}
 		}
 	}
 
-	/** Waits while the lock is held by a live process; the stored result, or undefined once the lock went without one. */
+	/**
+	 * Waits while the lock is held by a live process. `stored` once the result is there (or the lock went without
+	 * one: undefined); `overdue` with the lock's text once it was held past the check's time plus a grace; neither
+	 * once the holder is gone or this runner stopped.
+	 */
 	private async waitFor(
 		resultFile: string,
 		lockFile: string,
 		spec: CheckSpec,
 		versions: string,
-	): Promise<Stored | undefined> {
+	): Promise<{ stored?: Stored; overdue?: string }> {
+		const deadline = Date.now() + this.options.timeoutMs + LOCK_GRACE_MS;
 		for (;;) {
 			const done = this.stored(resultFile, spec, versions);
-			if (done) return done;
-			const holder = Number.parseInt(readText(lockFile) ?? "", 10);
-			if (!existsSync(lockFile) || (Number.isInteger(holder) && holder > 0 && !pidAlive(holder))) {
-				return this.stored(resultFile, spec, versions);
-			}
+			if (done) return { stored: done };
+			if (this.stopped) return {};
+			const held = readText(lockFile);
+			if (held === undefined) return { stored: this.stored(resultFile, spec, versions) };
+			if (holderGone(held)) return {};
+			if (Date.now() >= deadline) return { overdue: held };
 			await Bun.sleep(this.options.pollMs);
 		}
 	}
@@ -481,7 +591,7 @@ export class CheckRunner {
 	): Promise<CheckResult> {
 		this.runs++;
 		if (this.stopped) throw new Error("the check runner has stopped");
-		const logFile = join(folder, `${spec.name}.log`);
+		const logFile = join(folder, `${fileName(spec.name)}.log`);
 		const out = openSync(logFile, "w");
 		const started = Date.now();
 		let exit: number | null = null;
@@ -525,15 +635,94 @@ export class CheckRunner {
 		if (spec.mise) {
 			for (const task of miseTasks(text)) {
 				if (task.failed && task.name !== spec.name)
-					writeFileSync(join(folder, `${task.name}.log`), taskLines(text, task.name));
+					writeFileSync(join(folder, `${fileName(task.name)}.log`), taskLines(text, task.name));
 			}
 		}
+		const gates = gatesOf(spec, exit, text, logFile, cwd);
 		if (exit !== null) {
-			const stored: Stored = { command: spec.command, versions, exit, ms, at: Date.now() };
-			writeAtomically(join(folder, `${spec.name}.json`), `${JSON.stringify(stored)}\n`);
+			// The gates go with the result, so a hit answers without reading the log again.
+			const stored: Stored = { command: spec.command, versions, exit, ms, at: Date.now(), gates };
+			writeAtomically(join(folder, `${fileName(spec.name)}.json`), `${JSON.stringify(stored)}\n`);
 		}
-		return { spec, exit, log: logFile, ms, how: "ran", gates: gatesOf(spec, exit, text, logFile, cwd) };
+		return { spec, exit, log: logFile, ms, how: "ran", gates };
 	}
+}
+
+/** This process's lock text: its pid and start time (`processStart`), so a reused pid doesn't pass for it. */
+function lockToken(): string {
+	const start = processStart(process.pid);
+	return start === undefined ? String(process.pid) : `${process.pid} ${start}`;
+}
+
+/** The holder a lock's text names: `<pid>` or `<pid> <start>`. */
+function lockHolder(text: string): { pid: number; start?: number } {
+	const [pid, start] = text.trim().split(/\s+/);
+	const started = start === undefined ? Number.NaN : Number(start);
+	return { pid: Number.parseInt(pid ?? "", 10), ...(Number.isFinite(started) ? { start: started } : {}) };
+}
+
+/**
+ * Whether a lock's holder is gone: its process isn't running, or the pid now belongs to a process that started at
+ * another time. A lock still being written (no pid yet) has a holder.
+ */
+function holderGone(text: string): boolean {
+	const holder = lockHolder(text);
+	if (!Number.isInteger(holder.pid) || holder.pid <= 0) return false;
+	if (!pidAlive(holder.pid)) return true;
+	return holder.start !== undefined && processStart(holder.pid) !== holder.start;
+}
+
+/**
+ * Takes a stale lock over: renames it aside (only one of two takers can) and removes it. When what was renamed isn't
+ * the lock judged stale (another taker's new lock in between), it is put back unless a lock is there again.
+ */
+function takeOver(lockFile: string, stale: string): void {
+	const aside = `${lockFile}.${process.pid}-${crypto.randomUUID().slice(0, 8)}.stale`;
+	try {
+		renameSync(lockFile, aside);
+	} catch {
+		// Gone already, or another taker had it first: the caller looks again.
+		return;
+	}
+	try {
+		if (readText(aside) !== stale) linkSync(aside, lockFile);
+	} catch {
+		// A new lock is there already.
+	} finally {
+		rmSync(aside, { force: true });
+	}
+}
+
+/** A name as a file name: `/`, `\` and `:` (a mise task's `ci:lint`, `test/unit`) become `-`. */
+function fileName(name: string): string {
+	return name.replaceAll(/[/\\:]/g, "-");
+}
+
+/** The newest mtime of `folder` and its files, and their total size; undefined when it isn't a folder. */
+async function folderAge(folder: string): Promise<{ newest: number; bytes: number } | undefined> {
+	const own = await stat(folder);
+	if (!own.isDirectory()) return undefined;
+	let newest = own.mtimeMs;
+	let bytes = 0;
+	for (const name of await readdir(folder)) {
+		const entry = await stat(join(folder, name));
+		newest = Math.max(newest, entry.mtimeMs);
+		bytes += entry.size;
+	}
+	return { newest, bytes };
+}
+
+/** A byte count as `512 B`, `4.2 KB`, `380 MB`: whole numbers from 10 up, one decimal below. */
+export function sizeSaid(bytes: number): string {
+	const units = ["B", "KB", "MB", "GB"];
+	let value = bytes;
+	let unit = 0;
+	while (value >= 1024 && unit < units.length - 1) {
+		value /= 1024;
+		unit++;
+	}
+	const said = unit === 0 || value >= 10 ? String(Math.round(value)) : value.toFixed(1);
+	return `${said} ${units[unit]}`;
 }
 
 function readText(file: string): string | undefined {

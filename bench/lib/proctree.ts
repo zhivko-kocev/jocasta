@@ -1,10 +1,12 @@
 import { spawnSync } from "node:child_process";
+import { readdirSync } from "node:fs";
 import { join } from "node:path";
 
 /**
- * Process trees for H3, H5 and H6: one snapshot of every process (pid, parent, name, command line, working set and
- * private bytes), a tree under a root, and the tree's memory. Windows reads `Win32_Process` through PowerShell's CIM;
- * POSIX reads `ps` (RSS only; private bytes are unknown there).
+ * Process trees for H3, H6 and K11: one snapshot of every process (pid, parent, name, command line, working set and
+ * private bytes), a tree under a root, and the tree's memory, which the product's process code doesn't read. Windows
+ * reads `Win32_Process` through PowerShell's CIM; POSIX reads `ps` (RSS only; private bytes are unknown there). Ending
+ * a tree is the product's `killTree` (src/shared/proctree.ts), and liveness its `pidAlive` (EVL-14).
  */
 
 export interface ProcessInfo {
@@ -103,12 +105,15 @@ export function treeOf(rootPid: number, processes: readonly ProcessInfo[]): Proc
 	return tree;
 }
 
-/** A tree's memory: working set and private bytes summed (private null when any member lacks it). */
-export function treeMemory(tree: readonly ProcessInfo[]): {
+/** A set of processes' memory: their count, working set and private bytes in bytes (private null where unknown). */
+export interface Memory {
 	processes: number;
 	workingSet: number;
 	privateBytes: number | null;
-} {
+}
+
+/** A tree's memory: working set and private bytes summed (private null when any member lacks it). */
+export function treeMemory(tree: readonly ProcessInfo[]): Memory {
 	let workingSet = 0;
 	let privateBytes: number | null = 0;
 	for (const info of tree) {
@@ -118,33 +123,48 @@ export function treeMemory(tree: readonly ProcessInfo[]): {
 	return { processes: tree.length, workingSet, privateBytes };
 }
 
-/** Kills a process and its tree: `taskkill /T /F` on Windows, SIGKILL to the pid (and its group) on POSIX. */
-export function killTree(pid: number): void {
-	if (process.platform === "win32") {
-		spawnSync(
-			join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"),
-			["/F", "/T", "/PID", String(pid)],
-			{
-				stdio: "ignore",
-				windowsHide: true,
-			},
-		);
-		return;
+/** The pids of the bare `jocasta` surfaces attached to the sandbox: `<data>/surfaces/<pid>` (`attachedSurface`). */
+export function surfacePids(dataDir: string): number[] {
+	let names: string[];
+	try {
+		names = readdirSync(join(dataDir, "surfaces"));
+	} catch {
+		return [];
 	}
-	for (const target of [-pid, pid]) {
-		try {
-			process.kill(target, "SIGKILL");
-		} catch {
-			// Not a group leader, or already gone.
-		}
-	}
+	return names.map(Number).filter((pid) => Number.isInteger(pid) && pid > 0);
 }
 
-export function isAlive(pid: number): boolean {
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch {
-		return false;
-	}
+/** The roots of Jocasta's process trees (0552): the service, herdr's server, and each attached surface. */
+export interface JocastaRoots {
+	service?: number;
+	herdrServer?: number;
+	surfaces: readonly number[];
+}
+
+/**
+ * Jocasta's processes for H6 and K11 (0552's shape): the service's tree, herdr's server tree (every pane with its omp
+ * and MCP processes), and each attached surface's tree (bare `jocasta` and its herdr client; the surface started the
+ * service, so its tree's part leaves the service's out). Each process counts once in `all`; `parts` are disjoint.
+ */
+export function jocastaProcesses(
+	roots: JocastaRoots,
+	processes: readonly ProcessInfo[],
+): { all: ProcessInfo[]; parts: { service: Memory; herdr: Memory; surfaces: Memory } } {
+	const service = roots.service === undefined ? [] : treeOf(roots.service, processes);
+	const taken = new Set(service.map((info) => info.pid));
+	const herdr = (roots.herdrServer === undefined ? [] : treeOf(roots.herdrServer, processes)).filter(
+		(info) => !taken.has(info.pid),
+	);
+	for (const info of herdr) taken.add(info.pid);
+	const surfaces: ProcessInfo[] = [];
+	for (const root of roots.surfaces)
+		for (const info of treeOf(root, processes)) {
+			if (taken.has(info.pid)) continue;
+			taken.add(info.pid);
+			surfaces.push(info);
+		}
+	return {
+		all: [...service, ...herdr, ...surfaces],
+		parts: { service: treeMemory(service), herdr: treeMemory(herdr), surfaces: treeMemory(surfaces) },
+	};
 }

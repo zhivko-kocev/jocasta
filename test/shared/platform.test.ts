@@ -8,9 +8,10 @@ import {
 	takeCalendarEnv,
 	writeCredential,
 } from "../../src/shared/credentials.ts";
-import { pidAlive, processStartedAt, sameToken, writeAtomically } from "../../src/shared/fsx.ts";
+import { sameToken, writeAtomically } from "../../src/shared/fsx.ts";
 import { installDir, selfCommand, shippedConfigDir } from "../../src/shared/install.ts";
 import { LOG_DAYS, log, logsDir } from "../../src/shared/log.ts";
+import { pidAlive, processStartedAt } from "../../src/shared/proctree.ts";
 import { useTempJocasta } from "./fixture.ts";
 
 const env = useTempJocasta();

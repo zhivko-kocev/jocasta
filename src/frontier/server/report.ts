@@ -1,5 +1,5 @@
 import { type Static, Type } from "typebox";
-import { Value } from "typebox/value";
+import type * as TypeboxValue from "typebox/value";
 
 /**
  * `report_result` (0539, K4): what a thread hands in when its task ends, one schema that `jocasta mcp` lists as the
@@ -45,12 +45,19 @@ export type ThreadReport = Static<typeof ReportSchema>;
 
 /** The tool's description as thread panes see it. */
 export const REPORT_DESCRIPTION =
-	"Hand in this task's report once its work is committed: outcome, a summary of at most 200 characters, the files changed, the tests you ran, the decisions you settled, open questions for him and follow-ups. Jocasta stores it with the thread and its review reads it; a test you mark passed is your claim, the review runs its own.";
+	"Hand in this task's report once its work is committed.\nGive the outcome, a summary of at most 200 characters, the files changed, the tests you ran, the decisions you settled, open questions for him and follow-ups. Jocasta stores it with the thread and its review reads it; a test you mark passed is your claim, the review runs its own.";
+
+/**
+ * typebox's value module, loaded on the first report checked (PERF-6): `jocasta mcp` and the plugin roles import this
+ * file for the schema and texts, and shouldn't parse the validator at start.
+ */
+let values: typeof TypeboxValue.Value | undefined;
 
 /** The report, or the first reason it doesn't fit the schema (`report_result: <path> <message>`). */
 export function parseReport(value: unknown): { report: ThreadReport } | { problem: string } {
-	if (Value.Check(ReportSchema, value)) return { report: value };
-	const errors = [...Value.Errors(ReportSchema, value)];
+	values ??= (require("typebox/value") as typeof TypeboxValue).Value;
+	if (values.Check(ReportSchema, value)) return { report: value };
+	const errors = [...values.Errors(ReportSchema, value)];
 	// An unknown key yields a bare "schema is false" for the key and a clearer error for its parent; report the latter.
 	const first = errors.find((e) => e.keyword !== "boolean") ?? errors[0];
 	if (!first) return { problem: `${REPORT_RESULT}: the report doesn't fit its schema` };

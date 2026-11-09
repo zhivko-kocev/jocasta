@@ -1,11 +1,13 @@
-/** Small file and process helpers shared by the service, setup and the CLI (one copy each). */
-import { dlopen, FFIType, type Library, ptr } from "bun:ffi";
+/** Small file helpers shared by the service, setup and the CLI (one copy each). */
 import { timingSafeEqual } from "node:crypto";
 import {
 	chmodSync,
 	lstatSync,
 	mkdirSync,
 	readdirSync,
+	readFileSync,
+	readlinkSync,
+	realpathSync,
 	renameSync,
 	rmdirSync,
 	rmSync,
@@ -13,18 +15,66 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { chmod, lstat, readdir, rmdir, unlink } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+
+/**
+ * The file a write to `file` lands in: a symlink's target (a dotfile manager's link stays a link), else `file`; the
+ * existing file's permission bits, so a private `config.yml` or `mcp.json` stays private (SEC-LOC-9).
+ */
+function writeTarget(file: string): { path: string; mode: number | undefined } {
+	let stat: Stats;
+	try {
+		stat = lstatSync(file);
+	} catch {
+		return { path: file, mode: undefined };
+	}
+	if (!stat.isSymbolicLink()) return { path: file, mode: stat.mode & 0o777 };
+	let path: string;
+	try {
+		path = realpathSync(file);
+	} catch {
+		// A dangling link: its target is made.
+		return { path: resolve(dirname(file), readlinkSync(file)), mode: undefined };
+	}
+	try {
+		return { path, mode: lstatSync(path).mode & 0o777 };
+	} catch {
+		return { path, mode: undefined };
+	}
+}
+
+/** Errors Windows gives a rename over a file another process has open (omp reading its overlay, herdr `hud.txt`). */
+const RENAME_BUSY: Record<string, true> = { EPERM: true, EBUSY: true, EACCES: true };
+
+/** How often, and how far apart, a refused rename is tried again (0534): 10 times, 100 ms apart. */
+const RENAME_TRIES = 10;
+const RENAME_RETRY_MS = 100;
 
 /**
  * Writes `file` through a temp file in the same folder and a rename, so a crash or a full disk never leaves it torn.
- * `mode` applies to the new file (POSIX only; Windows ignores it).
+ * A symlinked `file` writes its target; an existing file keeps its permission bits. `mode` applies to a new file
+ * (POSIX only; Windows ignores it). A rename Windows refuses while another process has the file open is tried again
+ * for about a second (0534).
  */
 export function writeAtomically(file: string, data: string | Uint8Array, mode?: number): void {
-	mkdirSync(dirname(file), { recursive: true });
-	const temp = `${file}.${process.pid}.tmp`;
+	const target = writeTarget(file);
+	mkdirSync(dirname(target.path), { recursive: true });
+	const temp = `${target.path}.${process.pid}.tmp`;
 	try {
 		writeFileSync(temp, data, mode === undefined ? undefined : { mode });
-		renameSync(temp, file);
+		// Past the umask: the bits the file had.
+		if (mode === undefined && target.mode !== undefined && process.platform !== "win32") chmodSync(temp, target.mode);
+		for (let attempt = 1; ; attempt++) {
+			try {
+				renameSync(temp, target.path);
+				break;
+			} catch (error) {
+				const busy = process.platform === "win32" && RENAME_BUSY[(error as NodeJS.ErrnoException).code ?? ""];
+				if (!busy || attempt >= RENAME_TRIES) throw error;
+				Bun.sleepSync(RENAME_RETRY_MS);
+			}
+		}
 	} catch (error) {
 		rmSync(temp, { force: true });
 		throw error;
@@ -34,17 +84,40 @@ export function writeAtomically(file: string, data: string | Uint8Array, mode?: 
 /** Errors a delete on Windows meets while another process still has the entry open, or while it is read-only. */
 const RETRIED: Record<string, true> = { EBUSY: true, EPERM: true, EACCES: true, ENOTEMPTY: true };
 
+/** How many times a busy entry's delete is tried, and how far apart. */
+const DELETE_TRIES = 5;
+const DELETE_RETRY_MS = 200;
+
+/** A failed delete's `error` on try `attempt`: `gone` when the entry already is, `again` while busy; else it throws. */
+function deleteFailed(error: unknown, attempt: number): "gone" | "again" {
+	const code = (error as NodeJS.ErrnoException).code ?? "";
+	if (code === "ENOENT") return "gone";
+	if (attempt >= DELETE_TRIES || !RETRIED[code]) throw error;
+	return "again";
+}
+
 /** `remove()`, tried again a few times while the entry is busy; an entry already gone counts as removed. */
-function retried(remove: () => void, attempts = 5): void {
+function retried(remove: () => void): void {
 	for (let attempt = 1; ; attempt++) {
 		try {
 			remove();
 			return;
 		} catch (error) {
-			const code = (error as NodeJS.ErrnoException).code ?? "";
-			if (code === "ENOENT") return;
-			if (attempt >= attempts || !RETRIED[code]) throw error;
-			Bun.sleepSync(200);
+			if (deleteFailed(error, attempt) === "gone") return;
+			Bun.sleepSync(DELETE_RETRY_MS);
+		}
+	}
+}
+
+/** `retried` without holding the event loop: the waits between tries are timers (DUP-13). */
+async function retriedAsync(remove: () => Promise<void>): Promise<void> {
+	for (let attempt = 1; ; attempt++) {
+		try {
+			await remove();
+			return;
+		} catch (error) {
+			if (deleteFailed(error, attempt) === "gone") return;
+			await Bun.sleep(DELETE_RETRY_MS);
 		}
 	}
 }
@@ -92,6 +165,48 @@ export function removeTree(path: string): void {
 }
 
 /**
+ * `removeTree` for the service's event loop (DUP-13): the same removal, links never followed and read-only files made
+ * writable first, with the file system asked asynchronously and the waits between a busy entry's tries as timers. The
+ * CLI, setup and tests keep the synchronous one.
+ */
+export async function removeTreeAsync(path: string): Promise<void> {
+	let stat: Stats;
+	try {
+		stat = await lstat(path);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+		throw error;
+	}
+	if (stat.isSymbolicLink()) {
+		await retriedAsync(async () => {
+			try {
+				await unlink(path);
+			} catch (error) {
+				const code = (error as NodeJS.ErrnoException).code;
+				if (code !== "EPERM" && code !== "EISDIR") throw error;
+				await rmdir(path);
+			}
+		});
+		return;
+	}
+	if (stat.isDirectory()) {
+		for (const name of await readdir(path)) await removeTreeAsync(join(path, name));
+		await retriedAsync(() => rmdir(path));
+		return;
+	}
+	await retriedAsync(async () => {
+		try {
+			await unlink(path);
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code !== "EPERM" && code !== "EACCES") throw error;
+			await chmod(path, 0o666);
+			await unlink(path);
+		}
+	});
+}
+
+/**
  * Makes folder `path` (and its missing parents) and, on Linux and macOS, sets it to 0700 so other local users can't
  * read what is in it (0484). Windows keeps the folder's inherited ACL (`%LOCALAPPDATA%` and the profile are private).
  */
@@ -111,15 +226,12 @@ export function asObject(value: unknown): Record<string, unknown> | undefined {
 		: undefined;
 }
 
-/** Whether process `pid` is alive (signal 0 only checks). */
-export function pidAlive(pid: number): boolean {
-	if (!Number.isInteger(pid) || pid <= 0) return false;
+/** `file` parsed as a JSON object; undefined when it is missing, unreadable, not JSON or not an object. */
+export function readJsonObject(file: string): Record<string, unknown> | undefined {
 	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (error) {
-		// EPERM: it exists but belongs to someone else.
-		return (error as NodeJS.ErrnoException).code === "EPERM";
+		return asObject(JSON.parse(readFileSync(file, "utf8")));
+	} catch {
+		return undefined;
 	}
 }
 
@@ -127,42 +239,6 @@ export function pidAlive(pid: number): boolean {
 export function sameToken(given: string | null | undefined, token: string): boolean {
 	if (!given || Buffer.byteLength(given) !== Buffer.byteLength(token)) return false;
 	return timingSafeEqual(Buffer.from(given), Buffer.from(token));
-}
-
-const KERNEL32 = {
-	OpenProcess: { args: [FFIType.u32, FFIType.i32, FFIType.u32], returns: FFIType.ptr },
-	GetProcessTimes: { args: [FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
-	CloseHandle: { args: [FFIType.ptr], returns: FFIType.i32 },
-} as const;
-/** kernel32, opened on the first `processStartedAt` (Windows only). */
-let kernel32: Library<typeof KERNEL32> | undefined;
-
-/** `PROCESS_QUERY_LIMITED_INFORMATION`: enough for `GetProcessTimes` on another user's process too. */
-const QUERY_LIMITED = 0x1000;
-/** FILETIME's epoch (1601-01-01) in Unix epoch milliseconds. */
-const FILETIME_EPOCH_MS = 11_644_473_600_000;
-
-/**
- * When process `pid` started, in epoch ms (Windows, from `GetProcessTimes`); undefined elsewhere or when the process
- * can't be opened. Tells a reused pid from the process that wrote a pid file (LC-4).
- */
-export function processStartedAt(pid: number): number | undefined {
-	if (process.platform !== "win32" || !Number.isInteger(pid) || pid <= 0) return undefined;
-	try {
-		kernel32 ??= dlopen("kernel32.dll", KERNEL32);
-		const handle = kernel32.symbols.OpenProcess(QUERY_LIMITED, 0, pid);
-		if (!handle) return undefined;
-		try {
-			const times = new BigUint64Array(4);
-			const at = (i: number) => ptr(times, i * 8);
-			if (!kernel32.symbols.GetProcessTimes(handle, at(0), at(1), at(2), at(3))) return undefined;
-			return Number((times[0] as bigint) / 10_000n) - FILETIME_EPOCH_MS;
-		} finally {
-			kernel32.symbols.CloseHandle(handle);
-		}
-	} catch {
-		return undefined;
-	}
 }
 
 /** A loopback port the OS says is free now. */

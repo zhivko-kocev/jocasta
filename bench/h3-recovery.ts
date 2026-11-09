@@ -1,64 +1,60 @@
 // H3 (0482): crash and restart recovery, in a sandbox Jocasta with thread panes open.
 //
-//   bun bench/h3-recovery.ts --out <dir> [--runs 20] [--faults herdr,companion,pane] [--timeout 120]
+//   bun bench/h3-recovery.ts --out <dir> [--runs 20] [--faults herdr,service,pane] [--timeout 120]
 //                            [--restart "jocasta"] [--dry-run]
 //
-// Each run snapshots the sandbox herdr session's panes and every pane folder's git state, injects one fault and polls
-// until the work is back, then compares:
-//   herdr      kills the session's herdr server (the parent of a pane's shell, `pane.process_info`); recovered when
-//              every workspace that had an omp pane before has an omp pane again (0522: the service relaunches the
-//              panes under new ids). Each row also gives the ms until herdr first listed exactly the old pane ids
-//              (`oldPaneIdsMs`, null when no poll saw them).
-//   companion  kills the companion that `<data>/frontier.json` names and runs `--restart` (default `jocasta`);
-//              recovered when a new companion answers and every workspace that had an omp pane before has one
-//              again (0528; the new companion relaunches the boss pane under a new id). Each restart's client ends
-//              after its run, root first and never the new companion's tree, so one client is attached at a time.
-//   pane       kills the process tree of one omp pane, the one in the folder it killed longest ago (one at work first
-//              among equals), waiting when it must so one kill per folder per 10 minutes (0528): each kill then meets
-//              0521's first ending, not its restart wait. Recovered when every workspace that had an omp pane before
-//              has one again (0522; 0521's restart gives the pane a new id).
-// Jocasta closing itself (0530): a run that didn't recover, after which no companion answers and herdr lists no panes,
-//              counts not recovered with `stoppedItself`. `--restart` then starts Jocasta again, its client staying
-//              attached in place of the terminal's, and the next run starts once a companion answers and every
-//              workspace that had an omp pane before has one again (`restartMs`); not within 5 minutes, H3 ends there.
-// Lost work: each pane folder's `git status --porcelain` and `git diff` hash before and after; each pane's session file
+// Each run snapshots the sandbox herdr session's panes and every pane folder's git state, finds its target, injects one
+// fault and polls until the work is back, then compares. Recovery time runs from the moment the kill returned (the
+// lookups come before it):
+//   herdr    kills the session's herdr server (the parent of a pane's process, `pane.process_info`); recovered when
+//            every workspace that had an omp pane before has an omp pane again (0522: the service relaunches the
+//            panes under new ids). Each row also gives the ms until herdr first listed exactly the old pane ids
+//            (`oldPaneIdsMs`, null when no poll saw them).
+//   service  kills the service that `<data>/jocasta-service.json` names and runs `--restart` (default `jocasta`); recovered
+//            when a new service answers and every workspace that had an omp pane before has one again (0528; the new
+//            service relaunches the boss pane under a new id). Each restart's client ends after its run, root first
+//            and never the new service's tree, so one client is attached at a time. Rows of runs before 0576 named
+//            this fault `companion` (h3-recovery.json's `renamed` says so).
+//   pane     kills the process tree herdr started for one omp pane (omp itself), the one in the folder it killed
+//            longest ago (one at work first among equals), waiting when it must so one kill per folder per 10 minutes
+//            (0528): each kill then meets 0521's first ending, not its restart wait. Recovered when omp runs again in
+//            that workspace under another pane id (0521's restart gives the pane a new id) and every workspace that
+//            had an omp pane before has one again (0522).
+// Jocasta closing itself (0530): a run that didn't recover, after which no service answers (one still closing is
+//            waited for) and herdr lists no panes, counts not recovered with `stoppedItself`. `--restart` then starts
+//            Jocasta again, its client staying attached in place of the terminal's, and the next run starts once a
+//            service answers and every workspace that had an omp pane before has one again (`restartMs`); not within 5
+//            minutes, H3 ends there.
+// Lost work: each pane folder's `git status --porcelain` and `git diff` hash before and after, for the folders in a git
+// work tree (the boss's home has no git state to lose); a git that fails there fails the run. Each pane's session file
 // still parses (every non-empty line JSON, a `session` entry anywhere, 0523). Logging off and on (fault 4) can't be
 // scripted; it is run by hand with the same checks (README).
 // Writes h3-recovery.jsonl (one row per run) and h3-recovery.json (rates with CIs and recovery-time summaries).
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { TOKEN_COOKIE } from "../src/frontier/protocol.ts";
 import { isTodayPane } from "../src/frontier/server/boss.ts";
-import { type FrontierFile, readFrontierFile } from "../src/frontier/server/frontier-file.ts";
+import type { PaneInfo } from "../src/frontier/server/herdr.ts";
+import { git as gitRead } from "../src/shared/git.ts";
+import { jsonLines } from "../src/shared/jsonl.ts";
+import { pathKey } from "../src/shared/pathkey.ts";
+import { killTree, pidAlive } from "../src/shared/proctree.ts";
+import { readServiceFile } from "../src/shared/service-file.ts";
 import { BenchUsageError, flag, listFlag, parseBenchArgs, runScript } from "./lib/args.ts";
-import { herdrRequest, paneShellPid } from "./lib/herdr.ts";
-import { appendRow, conditions, printPlan, writeJson } from "./lib/output.ts";
-import { isAlive, killTree, type ProcessInfo, snapshotProcesses, treeOf } from "./lib/proctree.ts";
-import { requireSandbox } from "./lib/sandbox.ts";
+import { git } from "./lib/git.ts";
+import { openSandbox, type SandboxJocasta } from "./lib/jocasta.ts";
+import { appendRow, claimRows, conditions, printPlan, writeJson } from "./lib/output.ts";
+import { type ProcessInfo, snapshotProcesses, treeOf } from "./lib/proctree.ts";
 import { rate, summarize } from "./lib/stats.ts";
-import { jsonLines, waitFor } from "./lib/timing.ts";
+import { waitFor } from "./lib/timing.ts";
 
-export const FAULTS = ["herdr", "companion", "pane"] as const;
+export const FAULTS = ["herdr", "service", "pane"] as const;
 export type Fault = (typeof FAULTS)[number];
 
-export interface WirePane {
-	pane_id: string;
-	workspace_id?: string | null;
-	cwd?: string | null;
-	label?: string | null;
-	agent?: string | null;
-	agent_status?: string;
-	agent_session?: { kind?: string; value?: string } | null;
-}
+/** The faults renamed since earlier runs' rows (0576, 0584): new name → old name. */
+export const RENAMED_FAULTS: Partial<Record<Fault, string>> = { service: "companion" };
 
-export interface PaneState {
-	paneId: string;
-	workspaceId: string | null;
-	cwd: string | null;
-	agent: string | null;
-	status: string | null;
-	sessionPath: string | null;
-}
+/** A pane as H3 compares it: the fields of the product client's `PaneInfo` it reads. */
+export type PaneState = Pick<PaneInfo, "paneId" | "workspaceId" | "cwd" | "agent" | "agentState" | "sessionPath">;
 
 export interface FolderState {
 	status: string;
@@ -75,9 +71,9 @@ export interface H3Row {
 	samePanes: boolean;
 	foldersIntact: boolean;
 	sessionsParse: boolean;
-	/** Jocasta had closed itself (0530): the run didn't recover, no companion answered and herdr listed no panes. */
+	/** Jocasta had closed itself (0530): the run didn't recover, no service answered and herdr listed no panes. */
 	stoppedItself: boolean;
-	/** ms from `--restart` until a companion answered and omp was back everywhere (0530); null when not started again. */
+	/** ms from `--restart` until a service answered and omp was back everywhere (0530); null when not started again. */
 	restartMs: number | null;
 	target: string | null;
 }
@@ -86,32 +82,26 @@ export interface H3Row {
  * herdr's panes as H3 compares them, the plugin's `today` pane left out (0553): it is no thread, and the service opens
  * it again under a new id.
  */
-export function paneStates(list: readonly WirePane[]): PaneState[] {
-	return list
-		.filter((pane) => !isTodayPane({ label: pane.label ?? undefined, agent: pane.agent ?? undefined }))
-		.map((pane) => ({
-			paneId: pane.pane_id,
-			workspaceId: pane.workspace_id ?? null,
-			cwd: pane.cwd ?? null,
-			agent: pane.agent ?? null,
-			status: pane.agent_status ?? null,
-			sessionPath: pane.agent_session?.kind === "path" ? (pane.agent_session.value ?? null) : null,
-		}));
+export function threadPanes<T extends Pick<PaneInfo, "label" | "agent">>(list: readonly T[]): T[] {
+	return list.filter((pane) => !isTodayPane(pane));
 }
 
-async function panes(session: string): Promise<PaneState[] | null> {
+/** How long one of H3's pane listings may take before the poll counts herdr as not answering. */
+const LIST_MS = 3_000;
+
+async function panes(jocasta: SandboxJocasta): Promise<PaneState[] | null> {
 	try {
-		return paneStates((await herdrRequest<{ panes: WirePane[] }>(session, "pane.list", {}, 3_000)).panes);
+		return threadPanes(await (await jocasta.herdr()).panes());
 	} catch {
 		return null;
 	}
 }
 
+/** A folder's git state; a git that fails throws, so a broken check never compares two empty outputs. */
 function folderState(cwd: string): FolderState {
-	const run = (args: string[]) => spawnSync("git", args, { cwd, encoding: "utf8" }).stdout ?? "";
 	return {
-		status: run(["status", "--porcelain"]),
-		diffHash: new Bun.CryptoHasher("sha256").update(run(["diff", "HEAD"])).digest("hex"),
+		status: git(cwd, ["status", "--porcelain"]),
+		diffHash: new Bun.CryptoHasher("sha256").update(git(cwd, ["diff", "HEAD"])).digest("hex"),
 	};
 }
 
@@ -128,40 +118,66 @@ export function ompBack(before: readonly PaneState[], after: readonly PaneState[
 	return before.filter((pane) => pane.agent === "omp").every((pane) => back.has(pane.workspaceId));
 }
 
+/**
+ * The pane fault's own pane is back (0521, 0522): omp runs again in the killed pane's workspace under another pane id
+ * (0521's restart gives it a new one), so the dying omp, still listed under the old id, never counts.
+ */
+export function paneBack(killed: PaneState, now: readonly PaneState[]): boolean {
+	return now.some(
+		(pane) => pane.workspaceId === killed.workspaceId && pane.agent === "omp" && pane.paneId !== killed.paneId,
+	);
+}
+
 /** How long a Jocasta that closed itself has to come back before H3 ends (0530). */
 const RESTART_BOUND_MS = 5 * 60_000;
 
-/** The companion `frontier` names answers `/health`; a missing file or a companion that hangs doesn't (5 s). */
-async function companionAnswers(frontier: FrontierFile | undefined = readFrontierFile()): Promise<boolean> {
-	if (!frontier) return false;
-	const health = await fetch(`http://127.0.0.1:${frontier.port}/health`, {
-		headers: { cookie: `${TOKEN_COOKIE}=${frontier.token}` },
-		signal: AbortSignal.timeout(5_000),
-	}).catch(() => undefined);
-	return health?.ok === true;
+/** How long a service that is closing Jocasta gets to finish before H3 judges whether Jocasta closed itself (0530). */
+const CLOSING_BOUND_MS = 60_000;
+
+/**
+ * Whether the service `jocasta-service.json` names answers as itself (`serviceState`: `up`, or `busy` while its process
+ * lives); one that is closing Jocasta answers `/health` until its last step, so it is waited for (`CLOSING_BOUND_MS`)
+ * and then doesn't count.
+ */
+async function serviceAnswers(jocasta: SandboxJocasta): Promise<boolean> {
+	let state = await jocasta.health();
+	if (state === "closing") {
+		await waitFor(
+			async () => {
+				state = await jocasta.health();
+				return state !== "closing";
+			},
+			{ timeoutMs: CLOSING_BOUND_MS, intervalMs: 500 },
+		);
+	}
+	return state === "up" || state === "busy";
 }
 
 /**
- * Jocasta closed itself during a run (0530): the run didn't recover, no companion answers, and herdr lists no panes
- * (or doesn't answer). A companion killed by the companion fault leaves herdr's panes, so that run isn't one.
+ * Jocasta closed itself during a run (0530): the run didn't recover, no service answers, and herdr lists no panes
+ * (or doesn't answer). A service killed by the service fault leaves herdr's panes, so that run isn't one.
  */
-export function closedItself(recovered: boolean, companionUp: boolean, listed: readonly PaneState[] | null): boolean {
-	return !recovered && !companionUp && (listed === null || listed.length === 0);
+export function closedItself(recovered: boolean, serviceUp: boolean, listed: readonly PaneState[] | null): boolean {
+	return !recovered && !serviceUp && (listed === null || listed.length === 0);
 }
 
 /**
  * Starts a Jocasta that closed itself again (0530) with `restart`, whose client stays attached in place of the
- * terminal's; the ms until a companion answers and every workspace that had an omp pane before has one again, or
+ * terminal's; the ms until a service answers and every workspace that had an omp pane before has one again, or
  * null when that takes longer than `RESTART_BOUND_MS`.
  */
-async function startAgain(restart: string, before: readonly PaneState[], session: string): Promise<number | null> {
+async function startAgain(
+	restart: string,
+	before: readonly PaneState[],
+	jocasta: SandboxJocasta,
+): Promise<number | null> {
 	const t0 = performance.now();
 	const again = spawn(restart, { shell: true, detached: true, stdio: "ignore", windowsHide: true });
 	again.unref();
 	const back = await waitFor(
 		async () => {
-			if (!(await companionAnswers())) return false;
-			const now = await panes(session);
+			if ((await jocasta.health()) !== "up") return false;
+			const now = await panes(jocasta);
 			return now !== null && ompBack(before, now);
 		},
 		{ timeoutMs: RESTART_BOUND_MS, intervalMs: 1_000 },
@@ -175,10 +191,9 @@ async function startAgain(restart: string, before: readonly PaneState[], session
  */
 export const FOLDER_SPACING_MS = 10 * 60_000 + 30_000;
 
-/** A folder as 0521 keys it: case and slashes don't matter on Windows. */
-export function folderKey(pane: PaneState, platform: NodeJS.Platform = process.platform): string {
-	const path = pane.cwd ?? pane.paneId;
-	return platform === "win32" ? path.replaceAll("\\", "/").toLowerCase() : path;
+/** A folder as 0521 keys it (`pathKey`): case and slashes don't matter on Windows. */
+export function folderKey(pane: PaneState): string {
+	return pathKey(pane.cwd ?? pane.paneId);
 }
 
 /**
@@ -200,7 +215,7 @@ export function pickPane(
 		if (
 			!best ||
 			ready(pane) < ready(best) ||
-			(ready(pane) === ready(best) && pane.status === "working" && best.status !== "working")
+			(ready(pane) === ready(best) && pane.agentState === "working" && best.agentState !== "working")
 		) {
 			best = pane;
 		}
@@ -210,7 +225,7 @@ export function pickPane(
 
 /**
  * Ends a restart's process tree root first, so `jocasta` is gone before it can see its herdr client exit and ask to
- * close (0434); never a process in `keep` (the new companion's tree). Returns the pids it ended.
+ * close (0434); never a process in `keep` (the new service's tree). Returns the pids it ended.
  */
 export function endRestart(
 	rootPid: number,
@@ -277,7 +292,7 @@ if (import.meta.main) {
 		});
 		const faults = listFlag(args, "faults", FAULTS) as Fault[];
 		for (const fault of faults)
-			if (!FAULTS.includes(fault)) throw new BenchUsageError(`unknown fault ${fault} (herdr, companion, pane)`);
+			if (!FAULTS.includes(fault)) throw new BenchUsageError(`unknown fault ${fault} (herdr, service, pane)`);
 		const timeoutMs = Number(flag(args, "timeout", "120")) * 1000;
 		if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new BenchUsageError("--timeout needs seconds above 0");
 		const restart = flag(args, "restart", "jocasta");
@@ -287,11 +302,11 @@ if (import.meta.main) {
 				[
 					`${args.runs} runs of each fault: ${faults.join(", ")} (log off/on is by hand)`,
 					"before each: herdr's panes, each pane folder's git status and diff hash, each session file",
-					"herdr: kill the session's herdr server; recovered when every workspace with an omp pane has one again",
+					"herdr: kill the session's herdr server; recovered when every workspace with an omp pane has one again; timed from the kill",
 					"herdr: also the time until herdr first lists exactly the old pane ids (a second figure)",
-					`companion: kill the companion in frontier.json, run \`${restart}\`; recovered when a new one answers and every workspace with an omp pane has one again; then the restart's client ends`,
-					"pane: kill the omp pane in the folder killed longest ago (one at work first), once per folder in 10.5 min; recovered when every workspace with an omp pane has one again",
-					`Jocasta closing itself (no companion, no panes after a run that didn't recover): not recovered, \`${restart}\` starts it again and its client stays; the next run once omp is back everywhere, at most 5 min, else H3 ends`,
+					`service: kill the service in jocasta-service.json, run \`${restart}\`; recovered when a new one answers and every workspace with an omp pane has one again; then the restart's client ends`,
+					"pane: kill the process tree of the omp pane in the folder killed longest ago (one at work first), once per folder in 10.5 min; recovered when omp runs again in its workspace under another pane id and every workspace with an omp pane has one again",
+					`Jocasta closing itself (no service, after one closing is waited for, and no panes after a run that didn't recover): not recovered, \`${restart}\` starts it again and its client stays; the next run once omp is back everywhere, at most 5 min, else H3 ends`,
 					"lost work: git status and diff hash unchanged; each session file all JSON with a session entry",
 					`poll every 250 ms for up to ${timeoutMs / 1000} s; report recovery rate, time to recovery and lost work`,
 				],
@@ -300,15 +315,17 @@ if (import.meta.main) {
 			return;
 		}
 		const out = args.out as string;
-		const { herdrSession } = requireSandbox();
-		const started = conditions(["herdr", "omp"]);
+		const jocasta = openSandbox({ herdrTimeoutMs: LIST_MS });
+		const { herdrSession } = jocasta.sandbox;
+		claimRows(out, "h3-recovery");
+		const started = conditions(["herdr", "omp", "jocasta"]);
 		const rows: H3Row[] = [];
 		// The pane fault's folders: when each one's last run ended (0528).
 		const lastEnded = new Map<string, number>();
 		for (const fault of faults) {
 			for (let run = 0; run < args.runs; run++) {
 				if (fault === "pane") {
-					const listed = await panes(herdrSession);
+					const listed = await panes(jocasta);
 					const next = listed ? pickPane(listed, lastEnded, Date.now()) : undefined;
 					if (next && next.waitMs > 0) {
 						console.log(
@@ -317,11 +334,20 @@ if (import.meta.main) {
 						await Bun.sleep(next.waitMs);
 					}
 				}
-				const before = await panes(herdrSession);
+				const before = await panes(jocasta);
 				if (!before || before.length === 0) throw new Error(`herdr session ${herdrSession} lists no panes`);
 				const folders = new Map(
 					[
-						...new Set(before.map((pane) => pane.cwd).filter((cwd): cwd is string => cwd !== null && existsSync(cwd))),
+						...new Set(
+							before
+								.map((pane) => pane.cwd)
+								.filter(
+									(cwd): cwd is string =>
+										cwd !== undefined &&
+										existsSync(cwd) &&
+										gitRead(cwd, ["rev-parse", "--is-inside-work-tree"]) === "true",
+								),
+						),
 					].map((cwd) => [cwd, folderState(cwd)]),
 				);
 				let target: string | null = null;
@@ -329,31 +355,33 @@ if (import.meta.main) {
 				let restartPid: number | undefined;
 				let recoveredAfter: () => Promise<boolean>;
 				let oldPaneIdsMs: () => number | null = () => null;
-				const t0 = performance.now();
+				// Each fault's lookups come first; `t0` is when its kill returned (0522's time to recovery).
+				let t0: number;
 				if (fault === "herdr") {
-					const shell = await paneShellPid(herdrSession, before[0]?.paneId ?? "");
-					const server = snapshotProcesses().find((info) => info.pid === shell)?.ppid;
-					if (!server) throw new Error("couldn't find herdr's server process (parent of a pane's shell)");
+					const { herdrServer: server } = await jocasta.processes(snapshotProcesses());
+					if (!server) throw new Error("couldn't find herdr's server process (parent of a pane's process)");
 					target = String(server);
-					killTree(server);
+					await killTree(server);
+					t0 = performance.now();
 					const watch = herdrRecovery(before, t0);
 					oldPaneIdsMs = watch.oldPaneIdsMs;
-					recoveredAfter = async () => watch.check(await panes(herdrSession));
-				} else if (fault === "companion") {
-					const frontier = readFrontierFile();
-					if (!frontier) throw new Error("no companion: <data>/frontier.json is missing");
-					target = String(frontier.pid);
-					// The companion alone: its panes live in herdr's process tree, not under it.
-					process.kill(frontier.pid, "SIGKILL");
-					await waitFor(() => !isAlive(frontier.pid), { timeoutMs: 10_000 });
+					recoveredAfter = async () => watch.check(await panes(jocasta));
+				} else if (fault === "service") {
+					const running = readServiceFile();
+					if (!running) throw new Error("no service: <data>/jocasta-service.json is missing");
+					target = String(running.pid);
+					// The service alone: its panes live in herdr's process tree, not under it.
+					process.kill(running.pid, "SIGKILL");
+					t0 = performance.now();
+					await waitFor(() => !pidAlive(running.pid), { timeoutMs: 10_000 });
 					const restarted = spawn(restart, { shell: true, detached: true, stdio: "ignore", windowsHide: true });
 					restarted.unref();
 					restartPid = restarted.pid;
 					recoveredAfter = async () => {
-						const next = readFrontierFile();
-						if (!next || next.pid === frontier.pid) return false;
-						const now = await panes(herdrSession);
-						return (await companionAnswers(next)) && now !== null && ompBack(before, now);
+						const next = readServiceFile();
+						if (!next || next.pid === running.pid) return false;
+						const now = await panes(jocasta);
+						return (await jocasta.health(next)) === "up" && now !== null && ompBack(before, now);
 					};
 				} else {
 					const picked = pickPane(before, lastEnded, Date.now());
@@ -361,33 +389,33 @@ if (import.meta.main) {
 					const pane = picked.pane;
 					target = pane.paneId;
 					killedFolder = folderKey(pane);
-					const shell = await paneShellPid(herdrSession, pane.paneId);
-					if (!shell) throw new Error(`herdr gave no process for pane ${pane.paneId}`);
-					const tree = treeOf(shell, snapshotProcesses());
-					// The pane's shell stays; omp and what it started go.
-					for (const info of tree.slice(1).filter((p) => /omp|bun/i.test(p.name))) killTree(info.pid);
-					await Bun.sleep(1_000);
+					const herdr = await jocasta.herdr();
+					const root = await herdr.paneRoot(pane.paneId, 10_000).catch(() => undefined);
+					if (!root) throw new Error(`herdr gave no process for pane ${pane.paneId}`);
+					// herdr started omp itself in the pane (no shell to keep): its whole tree goes, whatever omp's binary is.
+					await killTree(root);
+					t0 = performance.now();
 					recoveredAfter = async () => {
-						const now = await panes(herdrSession);
-						return now !== null && ompBack(before, now);
+						const now = await panes(jocasta);
+						return now !== null && paneBack(pane, now) && ompBack(before, now);
 					};
 				}
 				const waited = await waitFor(recoveredAfter, { timeoutMs, intervalMs: 250 });
 				const recoveryMs = waited === null ? null : Math.round(performance.now() - t0);
-				const listed = await panes(herdrSession);
+				const listed = await panes(jocasta);
 				const after = listed ?? [];
 				const checks = {
 					samePanes: samePaneIds(before, after),
 					foldersIntact: foldersIntact(folders, new Map([...folders.keys()].map((cwd) => [cwd, folderState(cwd)]))),
 					sessionsParse: before
 						.map((pane) => pane.sessionPath)
-						.filter((path): path is string => path !== null && existsSync(path))
+						.filter((path): path is string => path !== undefined && existsSync(path))
 						.every((path) => sessionParses(readFileSync(path, "utf8"))),
 				};
 				// 0530: Jocasta closed itself (0518's heal can take herdr started again for him quitting): started again.
-				const stoppedItself = closedItself(waited !== null, await companionAnswers(), listed);
+				const stoppedItself = closedItself(waited !== null, await serviceAnswers(jocasta), listed);
 				if (stoppedItself) console.log(`${fault} run ${run}: Jocasta closed itself; starting it again (0530)`);
-				const restartMs = stoppedItself ? await startAgain(restart, before, herdrSession) : null;
+				const restartMs = stoppedItself ? await startAgain(restart, before, jocasta) : null;
 				const row: H3Row = {
 					fault,
 					run,
@@ -415,12 +443,12 @@ if (import.meta.main) {
 				}
 				if (killedFolder) lastEnded.set(killedFolder, Date.now());
 				if (restartPid !== undefined) {
-					// One client at a time (0528): the restart's tree goes, root first; the new companion's stays.
+					// One client at a time (0528): the restart's tree goes, root first; the new service's stays.
 					const processes = snapshotProcesses();
-					const companion = readFrontierFile();
-					const keep = new Set(companion ? treeOf(companion.pid, processes).map((info) => info.pid) : []);
+					const service = readServiceFile();
+					const keep = new Set(service ? treeOf(service.pid, processes).map((info) => info.pid) : []);
 					const ended = endRestart(restartPid, keep, processes);
-					console.log(`companion run ${run}: ended the restart's client (${ended.length} processes)`);
+					console.log(`service run ${run}: ended the restart's client (${ended.length} processes)`);
 				}
 				// Settle before the next fault.
 				await Bun.sleep(5_000);
@@ -451,6 +479,7 @@ if (import.meta.main) {
 		const file = writeJson(out, "h3-recovery", {
 			benchmark: "H3",
 			conditions: { ...started, finishedAt: new Date().toISOString() },
+			renamed: RENAMED_FAULTS,
 			byFault,
 		});
 		console.log(`wrote ${file}`);

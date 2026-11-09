@@ -32,22 +32,35 @@ export function openDb(
 	try {
 		db = new Database(path, { create: true, strict: true });
 		db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
+		const handle = db;
+		const readVersion = () =>
+			handle.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version ?? 0;
+		const refuseNewer = (version: number) => {
+			if (version > migrations.length) {
+				throw new DbError(
+					`${path} is schema ${version}; this Jocasta knows up to ${migrations.length}. Update Jocasta.`,
+				);
+			}
+		};
 		// The version is read before anything writes, so a newer file is refused untouched (0101).
-		const row = db.query<{ user_version: number }, []>("PRAGMA user_version").get();
-		const version = row?.user_version ?? 0;
-		if (version > migrations.length) {
-			throw new DbError(`${path} is schema ${version}; this Jocasta knows up to ${migrations.length}. Update Jocasta.`);
-		}
+		const version = readVersion();
+		refuseNewer(version);
 		db.exec("PRAGMA journal_mode = WAL");
 		db.exec("PRAGMA synchronous = NORMAL");
 		db.exec("PRAGMA foreign_keys = ON");
 		for (let next = version; next < migrations.length; next++) {
 			const sql = migrations[next] as string;
-			const handle = db;
-			handle.transaction(() => {
-				handle.exec(sql);
-				handle.exec(`PRAGMA user_version = ${next + 1}`);
-			})();
+			// Each step takes the write lock first and reads the version again under it: another process opening the same
+			// old file at once may have run this step already (SHR-13), and then it is skipped.
+			handle
+				.transaction(() => {
+					const now = readVersion();
+					refuseNewer(now);
+					if (now !== next) return;
+					handle.exec(sql);
+					handle.exec(`PRAGMA user_version = ${next + 1}`);
+				})
+				.immediate();
 		}
 		return db;
 	} catch (error) {

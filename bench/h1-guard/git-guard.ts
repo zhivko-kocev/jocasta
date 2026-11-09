@@ -1,11 +1,16 @@
 // omp's `bash.gitGuard` as H1 reads it: a REIMPLEMENTATION, the one part of omp-verdicts.ts that isn't omp's own code,
 // until git-guard-check.ts has measured the real guard in the VM (its lines then replace this for the lines it ran).
 //
-// omp 18.13.1 enforces the git guard inside its embedded shell, not in the bash tool's approval: with
-// `bash.gitGuard: true` the tool passes `PI_GIT_GUARD=1` to the native shell (`exec/bash-executor.ts:669`) and that
-// shell's `git` builtin refuses the command when it runs (`exec/settings.ts:143-155`). The builtin lives in
+// omp 18.18.2 enforces the git guard inside its embedded shell, not in the bash tool's approval: with
+// `bash.gitGuard: true` the tool passes `PI_GIT_GUARD=1` to the native shell (`exec/bash-executor.ts:737-739`) and that
+// shell's `git` builtin refuses the command when it runs (`exec/settings.ts:143-154`). The builtin lives in
 // pi-natives' Rust binary and exports no check that doesn't run the command, so H1 reads its rules from the setting's
-// description and the refusal messages in `pi_natives.win32-x64-baseline.node`:
+// description and the refusal messages in `pi_natives.win32-x64-baseline.node`. It first tells whose checkout git is
+// in. In a checkout of the session's own (a linked worktree from `git worktree add`, or an ovnfs checkout) the forms
+// below run after the guard saves the uncommitted changes they would discard, refused when saving fails or the
+// command recurses into submodules, and stash forms that could touch another session's entry stay refused (every
+// worktree shares one stash list) [inference from the messages]. In a repository's main checkout, which other
+// sessions may share, it refuses:
 // - `git stash`, except `stash list`, `stash show` and `stash create`;
 // - `git reset --hard`, and `git reset` to another commit (`HEAD~1`, a sha, a branch); bare `git reset` and
 //   `git reset [--] <path>` (unstaging) run;
@@ -13,11 +18,13 @@
 //   outside a merge or rebase conflict (H1's pane is in none); `--force`/`--discard-changes` and whole-tree pathspecs
 //   always; `git restore --staged <path>` (unstaging) runs;
 // - any of those when `--git-dir`, `--work-tree`, `GIT_DIR`, `GIT_WORK_TREE` or `GIT_INDEX_FILE` points git elsewhere.
+// This reimplements the main-checkout rules, as H1's lines run in one (git-guard-check.ts's fixture at C:\work\demo).
 // Only a word that is exactly `git` reaches the builtin [inference]: `git.exe`, a full path to git, and git inside
 // `pwsh -c`/`cmd /c` start the external binary, which the embedded shell doesn't guard. Telling a commit from a path
 // in `git reset <x>` needs the repository; here only revision-shaped words count as commits (H1's corpus resets all
 // carry `--hard`, so this never decides a corpus line).
 import { BenchUsageError } from "../lib/args.ts";
+import { strictJsonLines } from "../lib/jsonl.ts";
 
 const GUARDED: Record<string, true> = { stash: true, reset: true, checkout: true, switch: true, restore: true };
 const REDIRECTING_ENV = /^(GIT_DIR|GIT_WORK_TREE|GIT_INDEX_FILE)=/;
@@ -144,14 +151,7 @@ export interface MeasuredGitGuardLine {
 /** Reads `git-guard-check.jsonl`: by id, the lines that were measured (a line whose fixture failed is left out). */
 export function parseMeasuredGitGuard(text: string, file = "git-guard-check"): Map<string, MeasuredGitGuardLine> {
 	const lines = new Map<string, MeasuredGitGuardLine>();
-	text.split(/\r?\n/).forEach((line, i) => {
-		if (line.trim() === "") return;
-		let row: Record<string, unknown>;
-		try {
-			row = JSON.parse(line);
-		} catch {
-			throw new BenchUsageError(`${file}:${i + 1}: not JSON`);
-		}
+	for (const { row, where } of strictJsonLines(text, file)) {
 		const { id, command, measured, refusal } = row;
 		if (
 			typeof id !== "string" ||
@@ -159,8 +159,8 @@ export function parseMeasuredGitGuard(text: string, file = "git-guard-check"): M
 			typeof measured !== "boolean" ||
 			(refusal !== null && typeof refusal !== "string")
 		)
-			throw new BenchUsageError(`${file}:${i + 1}: needs id, command, measured and refusal (string or null)`);
+			throw new BenchUsageError(`${where}: needs id, command, measured and refusal (string or null)`);
 		if (measured) lines.set(id, { command, refusal });
-	});
+	}
 	return lines;
 }

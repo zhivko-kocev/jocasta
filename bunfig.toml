@@ -1,3 +1,5 @@
 # Eval case fixtures under evals/cases/ hold failing tests on purpose; Jocasta's own tests live in test/.
 [test]
 root = "test"
+# Every test process gets its own Jocasta and omp dirs before any test file loads (test/preload.ts).
+preload = ["./test/preload.ts"]

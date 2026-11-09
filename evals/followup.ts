@@ -2,10 +2,11 @@ import { BenchUsageError } from "../bench/lib/args.ts";
 import { type BenchTask, shuffle, type TaskLanguage } from "./tasks.ts";
 
 /**
- * The follow-up study (0543, amended by 0545), run after the main run: each comparison is one arm paired against A6
- * on the same 10 main tasks × 2 reps, A6 itself run again in the same seeded order so the pairs share the hours and
- * the build. Reported as exploratory (20 trials per comparison show only large differences); each part is kept by the
- * keep rule (`keep.ts`). pitchfork is no comparison (0560).
+ * The follow-up study (0543, amended by 0545 and 0575), run after the main run: each comparison is one arm paired
+ * against A6 on the same 10 main tasks × 2 reps, A6 itself run again in the same seeded order so the pairs share the
+ * hours and the build. Reported as exploratory (20 trials per comparison show only large differences); each part is
+ * kept by the keep rule (`keep.ts`). pitchfork is no comparison (0560), and neither are keep-alive pings (0575): a
+ * trial has no idle gap for them to fill.
  */
 
 export const FOLLOWUP_BASELINE = "a6";
@@ -30,12 +31,6 @@ export const FOLLOWUP_COMPARISONS: readonly FollowupComparison[] = [
 		feature: "baseline",
 	},
 	{ arm: "f-prewalk", change: "prewalk on (`omp --prewalk`)", records: "0541", feature: "arm" },
-	{
-		arm: "f-keepalive",
-		change: "keep-alive pings on (`providers.cacheWarming: idle` in place of A6's `streaming`)",
-		records: "0541",
-		feature: "arm",
-	},
 	{
 		arm: "f-keep-context",
 		change: 'omp\'s "Approve and keep context" in place of "Approve and execute"',

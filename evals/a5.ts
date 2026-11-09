@@ -2,30 +2,26 @@
 // his.
 //
 //   bun evals/a5.ts record --out <dir> [--dry-run]
-//     appends the companion's feed (toasts and every other broadcast) to <dir>/companion-feed.jsonl until Ctrl+C.
-//   bun evals/a5.ts report --feed <companion-feed.jsonl> --boss <boss session.jsonl> --threads <session.jsonl,…>
+//     appends the service's feed (toasts and every other broadcast) to <dir>/service-feed.jsonl until Ctrl+C.
+//   bun evals/a5.ts report --feed <service-feed.jsonl> --boss <boss session.jsonl> --threads <session.jsonl,…>
 //                          [--cap <minutes>] [--out <dir>] [--dry-run]
 //     interventions per thread, attention minutes (each urgent toast to his next response) and the batch time.
 //
 // His responses: his user messages in the boss session (not the service's `[event]` lines) and in thread sessions
-// (not each thread's brief, the review prompt or `/handoff`, which the service types), and plan approvals (leaving
-// plan mode after a plan was ready). A boss relay of his words into a thread (`thread_send`) counts in both sessions.
+// (not each thread's brief, nor any line the service types into a pane: the review prompt, `/handoff`, the report
+// steer, a failed check on idle, `/plan-review`, the PR request), and plan approvals (leaving plan mode after a plan was
+// ready). A boss relay of his words into a thread (`thread_send`) counts in both sessions.
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { BenchUsageError, flag, listFlag, parseBenchArgs, runScript } from "../bench/lib/args.ts";
-import { type FeedEntry, parseFeed, recordFeed, toastsOf } from "../bench/lib/companion-feed.ts";
 import { appendRow, printPlan, writeJson } from "../bench/lib/output.ts";
+import { type FeedEntry, parseFeed, recordFeed, toastsOf } from "../bench/lib/service-feed.ts";
 import { planApprovalTimes, sessionStart, type UserMessage, userMessages } from "../bench/lib/sessions.ts";
 import { type Summary, summarize } from "../bench/lib/stats.ts";
+import { byService as typedByService } from "../src/frontier/server/wording.ts";
 
-/**
- * Lines the service itself sends into panes: `[event]` lines into the boss (`service.ts` `event`/`alert`), the review
- * prompt (`hunk.ts` `reviewPrompt`) and the handoff (`service.ts` `HANDOFF_PROMPT`) into threads.
- */
-const SERVICE_PREFIXES = ["[event]", "Check this task's work.", "/handoff"];
-
-const byService = (message: UserMessage) =>
-	SERVICE_PREFIXES.some((prefix) => message.text.trimStart().startsWith(prefix));
+/** A message the service typed into a pane (SVC-1): one list, `wording.ts`'s, beside the texts themselves. */
+const byService = (message: UserMessage) => typedByService(message.text);
 
 export interface ThreadInput {
 	name: string;
@@ -103,12 +99,12 @@ if (import.meta.main) {
 		const [mode, ...rest] = process.argv.slice(2);
 		if (mode === "record") {
 			const args = parseBenchArgs(rest, { defaultRuns: 1 });
-			const file = args.out === undefined ? "<out>/companion-feed.jsonl" : join(args.out, "companion-feed.jsonl");
+			const file = args.out === undefined ? "<out>/service-feed.jsonl" : join(args.out, "service-feed.jsonl");
 			if (args.dryRun) {
 				printPlan(
 					"A5 record",
 					[
-						"connect to the companion that <data>/frontier.json names, as the capsule view (his window stays)",
+						"connect to the state feed of the service <data>/jocasta-service.json names, as a page does",
 						`append every broadcast with its arrival time to ${file} until Ctrl+C`,
 					],
 					args.out,
@@ -116,7 +112,7 @@ if (import.meta.main) {
 				return;
 			}
 			const recorder = await recordFeed(file);
-			console.log(`recording the companion's feed into ${file}; Ctrl+C stops`);
+			console.log(`recording the service's feed into ${file}; Ctrl+C stops`);
 			process.on("SIGINT", () => recorder.stop());
 			await recorder.closed;
 			return;

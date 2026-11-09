@@ -1,20 +1,18 @@
-import { afterEach, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { classifyTurn, RECORDER_EXTENSION, runAcpTurn } from "../../bench/h1-guard/acp-recorder.ts";
 import {
 	type Judged,
 	judge,
 	judgeFromVerdicts,
-	matches,
 	parseCorpus,
 	parseGuard,
 	parseVerdicts,
 	report,
 	variantReport,
 	variantRows,
-	verdict,
 } from "../../bench/h1-guard/evaluate.ts";
 import {
 	gitGuardRefusal,
@@ -31,26 +29,20 @@ import {
 	shellStopped,
 } from "../../bench/h1-guard/git-guard-check.ts";
 import {
-	classifyRun,
 	displayArgv,
 	LIVE_MARKER,
 	LIVE_OVERLAY,
 	livePrompt,
 	ompArgv,
 	pickSample,
+	recorderProblems,
 } from "../../bench/h1-guard/live-check.ts";
 import { disagreements, judgeCorpus, type OmpVerdict } from "../../bench/h1-guard/omp-verdicts.ts";
+import { matches, verdict } from "../../src/shared/guard.ts";
+import { readJsonl, useTempDirs } from "../shared/fixture.ts";
 
 const script = join(import.meta.dir, "..", "..", "bench", "h1-guard", "evaluate.ts");
-const temps: string[] = [];
-afterEach(() => {
-	for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-const tempDir = () => {
-	const dir = mkdtempSync(join(tmpdir(), "jocasta-h1-"));
-	temps.push(dir);
-	return dir;
-};
+const tempDir = useTempDirs("jocasta-h1-");
 
 const GUARD = `bash:
   gitGuard: true
@@ -118,7 +110,7 @@ test("the CLI prints the table, writes its results outside the repo, and dry-run
 	expect(run.stdout).toContain("| dev | 1/0/1 | 100.0%");
 	const summary = JSON.parse(readFileSync(join(out, "h1-guard.json"), "utf8"));
 	expect([summary.benchmark, summary.commands, summary.rules]).toEqual(["H1", 6, 2]);
-	expect(readFileSync(join(out, "h1-guard.jsonl"), "utf8").trim().split("\n")).toHaveLength(6);
+	expect(readJsonl(join(out, "h1-guard.jsonl"))).toHaveLength(6);
 	const dry = spawnSync(process.execPath, [script, "--corpus", corpus, "--guard", guard, "--dry-run"], {
 		encoding: "utf8",
 	});
@@ -134,11 +126,11 @@ test("the CLI prints the table, writes its results outside the repo, and dry-run
 	expect(existsSync(join(import.meta.dir, "out"))).toBe(false);
 });
 
-test("the frozen pre-0485 guard parses", () => {
-	const rules = parseGuard(
-		readFileSync(join(import.meta.dir, "..", "..", "bench", "h1-guard", "guard-pre-0485.yml"), "utf8"),
+test("the pre-0485 guard stays frozen", () => {
+	const frozen = readFileSync(join(import.meta.dir, "..", "..", "bench", "h1-guard", "guard-pre-0485.yml"));
+	expect(new Bun.CryptoHasher("sha256").update(frozen).digest("hex")).toBe(
+		"b9806cea5efc62ffc3319d843cefcf862e8e735a58fd311f7b1863fa8ccc2bcc",
 	);
-	expect(rules.length).toBeGreaterThan(10);
 });
 
 // Synthetic omp verdict rows: one collected command written three ways, plus a collected command that the builder
@@ -246,10 +238,7 @@ test("the CLI scores omp's verdicts with --verdicts and reports each way of writ
 		"3 carry the as-written tag, and c4 (rm -rf out, tagged lowercase-powershell) is",
 	);
 	expect(summary.variants.map((row: { variant: string }) => row.variant)).toContain("git-exe");
-	const rows = readFileSync(join(out, "h1-guard.jsonl"), "utf8")
-		.trim()
-		.split("\n")
-		.map((line) => JSON.parse(line));
+	const rows = readJsonl(join(out, "h1-guard.jsonl"));
 	expect(rows[2]).toMatchObject({ id: "c3", verdict: "allow", mechanism: "mode-default", reimplemented: "allow" });
 	const dry = spawnSync(process.execPath, [script, "--corpus", corpus, "--verdicts", verdicts, "--dry-run"], {
 		encoding: "utf8",
@@ -292,49 +281,117 @@ test("disagreements count reimplemented→omp moves per key", () => {
 	]);
 });
 
-test("the live check: seeded distinct picks, the interceptor overlay, and outcomes read from omp's JSON events", () => {
+test("the live check: seeded distinct picks, the ACP overlay and command line", () => {
 	const picks = pickSample(1285, 30, 482);
 	expect(new Set(picks).size).toBe(30);
 	expect(pickSample(1285, 30, 482)).toEqual(picks);
 	expect(pickSample(3, 30)).toHaveLength(3);
 	expect(Bun.YAML.parse(LIVE_OVERLAY)).toEqual({
-		bashInterceptor: { enabled: true, patterns: [{ pattern: "[\\s\\S]", tool: "bash", message: LIVE_MARKER }] },
+		tools: { approvalMode: "yolo" },
 		launch: { enabled: false },
 		async: { enabled: false },
 	});
-	const events = (command: string, text: string) =>
-		[
-			{ type: "agent_start" },
-			{ type: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: { command } },
-			{
-				type: "tool_execution_end",
-				toolCallId: "t1",
-				toolName: "bash",
-				result: { content: [{ type: "text", text }] },
-				isError: true,
-			},
-		]
-			.map((event) => JSON.stringify(event))
-			.join("\n");
-	expect(classifyRun(events("ls", `Blocked: ${LIVE_MARKER}\n\nOriginal command: ls`), "ls")).toMatchObject({
+	const argv = ompArgv({
+		ompBin: "omp",
+		model: "m",
+		guard: "g.yml",
+		overlay: "o.yml",
+		extension: "r.js",
+		sessionDir: "s",
+		maxCost: "0.05",
+	});
+	expect(displayArgv(argv)).toContain(
+		"omp --mode acp --session-dir s --model m --tools bash --config g.yml --config o.yml",
+	);
+	expect(displayArgv(argv)).toContain("--no-extensions -e r.js");
+});
+
+test("the recorder refuses an omp or settings it can't record (0585)", () => {
+	const ready = {
+		version: "18.18.2",
+		clientTerminalRoute: true,
+		permissionKinds: ["allow_once", "allow_always", "reject_once", "reject_always"],
+		approvalModeConfigured: true,
+		approvalMode: "yolo",
+		interceptorEnabled: false,
+		launchEnabled: false,
+		asyncEnabled: false,
+		patterns: 258,
+	};
+	expect(recorderProblems(ready)).toEqual([]);
+	expect(recorderProblems({ ...ready, clientTerminalRoute: false, permissionKinds: [] })).toEqual([
+		"omp 18.18.2's bash tool has no ACP client-terminal route, so the recorder can't see what it runs",
+		"omp 18.18.2's ACP permission gate offers no reject_once, so a prompt can't be declined once",
+	]);
+	// The schema's implicit yolo makes ACP ask for every bash call: only an explicit one keeps a pane's gate.
+	expect(recorderProblems({ ...ready, approvalModeConfigured: false })).toEqual([
+		"tools.approvalMode isn't set to yolo explicitly (ACP would ask for every bash call)",
+	]);
+	expect(recorderProblems({ ...ready, interceptorEnabled: true, asyncEnabled: true })).toHaveLength(2);
+});
+
+const fakeOmp = join(import.meta.dir, "fake-omp-acp.ts");
+const turnOf = async (scenario: string, command: string, timeoutMs = 20_000) =>
+	runAcpTurn({ argv: [process.execPath, fakeOmp, scenario], cwd: tempDir(), prompt: livePrompt(command), timeoutMs });
+
+test("through ACP: a call omp lets through reaches the recorder's terminal, which runs nothing", async () => {
+	const command = "echo h1 > canary.txt";
+	const turn = await turnOf("ran", command);
+	expect(turn).toMatchObject({ stopReason: "end_turn", failure: null });
+	expect(classifyTurn(turn.events, command)).toEqual({
 		outcome: "ran",
+		calledWith: command,
 		sameCommand: true,
 		bashCalls: 1,
+		otherArgs: [],
+		resultText: `${LIVE_MARKER}\n`,
+		terminal: `bash -c ${command}`,
 	});
-	expect(
-		classifyRun(events("x", 'Tool "bash" is blocked by tool policy.\nReason: Blocked by bash pattern: x'), "x").outcome,
-	).toBe("refused");
-	expect(classifyRun(events("y", 'Tool "bash" requires approval but no interactive UI available.'), "z")).toMatchObject(
-		{
-			outcome: "asked",
-			sameCommand: false,
+});
+
+test("through ACP: a prompt is asked of the recorder, which rejects it once; a deny is refused", async () => {
+	const asked = await turnOf("asked", "git push origin main");
+	expect(classifyTurn(asked.events, "git push origin main")).toMatchObject({
+		outcome: "asked",
+		resultText: "Tool call rejected by user (bash) [reject_once]",
+	});
+	const refused = await turnOf("refused", "git push --force");
+	expect(classifyTurn(refused.events, "git push --force")).toMatchObject({ outcome: "refused", sameCommand: true });
+	const none = await turnOf("no-call", "ls");
+	expect(classifyTurn(none.events, "ls").outcome).toBe("no-call");
+});
+
+test("through ACP: omp exiting mid-turn or never answering ends the turn with the reason", async () => {
+	const exited = await turnOf("exit", "ls");
+	expect(exited.failure).toStartWith("omp exited (3)");
+	expect(classifyTurn(exited.events, "ls").outcome).toBe("other");
+	const hung = await turnOf("hang", "ls", 1_500);
+	expect(hung.failure).toBe("timeout");
+});
+
+test("the recorder extension keeps every bash call on the client's terminal (0585)", async () => {
+	const file = join(tempDir(), "recorder.js");
+	writeFileSync(file, RECORDER_EXTENSION);
+	type Handler = (event: unknown) => unknown;
+	type Extension = (pi: { on(name: string, handler: Handler): void }) => void;
+	const handlers: Record<string, Handler> = {};
+	// The extension is omp's runtime-loaded file, written above: imported as omp loads it.
+	const extension: Extension = (await import(file)).default;
+	extension({
+		on: (name, handler) => {
+			handlers[name] = handler;
 		},
-	);
-	expect(classifyRun('{"type":"agent_end"}\nnot json', "ls").outcome).toBe("no-call");
-	const argv = ompArgv({ ompBin: "omp", model: "m", guard: "g.yml", overlay: "o.yml", maxCost: "0.05", prompt: "p q" });
-	expect(argv.slice(-1)).toEqual(["p q"]);
-	expect(displayArgv(argv)).toContain("--tools bash --config g.yml --config o.yml");
-	expect(displayArgv(argv)).toEndWith("<prompt>");
+	});
+	const onCall = handlers.tool_call as Handler;
+	const call = (input: Record<string, unknown>, toolName = "bash") => onCall({ type: "tool_call", toolName, input });
+	expect(call({ command: "git status" })).toBeUndefined();
+	expect(call({ command: "npm test", pty: true, async: true, name: "x", ready: { port: 1 }, timeout: 5 })).toEqual({
+		input: { command: "npm test", timeout: 5 },
+	});
+	expect(call({ command: "ls", cwd: "skill://x" })).toMatchObject({ block: true });
+	expect(call({ command: "cd local://notes && rm -rf ." })).toMatchObject({ block: true });
+	expect(call({ command: "cd C:\\work\\demo && ls" })).toBeUndefined();
+	expect(call({ path: "a" }, "read")).toMatchObject({ block: true });
 });
 
 test("a live pick's prompt shows the command as written, backslashes and quotes unescaped, on a line of its own", () => {

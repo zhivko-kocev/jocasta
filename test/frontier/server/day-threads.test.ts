@@ -1,8 +1,10 @@
 // What his day shows about threads and quota (0456) and the weekly review's schedule (0470), on a Day with stand-in
 // hooks: the service fills them from herdr and git.
 import { expect, test } from "bun:test";
+import { existsSync, readFileSync } from "node:fs";
 import type { Leftover, ServerMessage } from "../../../src/frontier/protocol.ts";
 import { Day, type DayThread } from "../../../src/frontier/server/day.ts";
+import { type WorklogSession, worklogPath } from "../../../src/frontier/server/worklog.ts";
 import type { Project } from "../../../src/shared/projects.ts";
 import { openCatalog } from "../../../src/shared/schema.ts";
 import { useTempJocasta } from "../../shared/fixture.ts";
@@ -26,6 +28,8 @@ interface Stand {
 	review: (p: Project) => Promise<string | null>;
 	usage: string;
 	at: Date;
+	/** Each project's sessions on a day, as the service lists them for the worklog. */
+	sessions: (day: string) => ReadonlyMap<string, WorklogSession[]>;
 }
 
 /** A Day on a fake clock with stand-in hooks; stopped when the test ends. */
@@ -40,6 +44,7 @@ function stand(at: Date, projects: Project[] = [project("p1", "acme-api")]): Sta
 		review: async () => null,
 		usage: JSON.stringify({ reports: [] }),
 		at,
+		sessions: () => new Map(),
 	} as unknown as Stand;
 	s.day = new Day(
 		catalog,
@@ -49,7 +54,7 @@ function stand(at: Date, projects: Project[] = [project("p1", "acme-api")]): Sta
 			notify: () => {},
 			projects: () => projects,
 			threads: () => s.threads,
-			sessionsByProject: () => new Map(),
+			sessionsByProject: (day) => s.sessions(day),
 			prepareSessions: async () => {},
 			services: async () => [],
 			projectName: () => null,
@@ -177,7 +182,7 @@ test("a thread merged or sent as a PR stays in Landed since yesterday, saying ho
 });
 
 test("thread lines held in quiet hours wait in the queue across a restart and go to the boss oldest first once they end (0298, 0470)", () => {
-	writeSettings(env.config, { frontier: { quietHours: "22:00-08:00" } });
+	writeSettings(env.config, { service: { quietHours: "22:00-08:00" } });
 	const night = stand(new Date(2026, 9, 24, 23, 0));
 	night.day.hold("client-a/Add farewell — he committed by hand on its branch (1 commit) · offer once to save a lesson");
 	night.at = new Date(2026, 9, 24, 23, 30);
@@ -281,4 +286,22 @@ test("the weekly review runs from Monday 10:00 outside quiet hours, once per pro
 	s.day.tick();
 	await Bun.sleep(0);
 	expect(s.reviews).toEqual(["acme-api", "client-a", "acme-api", "client-a"]);
+});
+
+test("a day whose end the machine slept through gets its worklog at the first tick of the next day (0302, SRV-B-5)", async () => {
+	const p1 = { ...project("p1", "acme-api"), git: false };
+	// Monday 9 Nov 2026, 21:30: the lid closes before the day's end (23:00) and opens at 08:00 the next day.
+	const s = stand(new Date(2026, 10, 9, 21, 30), [p1]);
+	const day = "2026-11-09";
+	const worked = [new Date(2026, 10, 9, 10, 0).getTime(), new Date(2026, 10, 9, 10, 10).getTime()];
+	s.sessions = (asked) => new Map(asked === day ? [["p1", [{ label: "Retry flake", times: worked }]]] : []);
+	s.day.tick();
+	await s.day.worklogWriting;
+	expect(existsSync(worklogPath(day))).toBe(false);
+	s.at = new Date(2026, 10, 10, 8, 0);
+	s.day.tick();
+	await s.day.worklogWriting;
+	const text = readFileSync(worklogPath(day), "utf8");
+	expect(text).toContain("## acme-api · 10m");
+	expect(text).toContain("- Retry flake · 10m");
 });

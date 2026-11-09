@@ -21,7 +21,8 @@ export type Route =
 	| { role: "plugin"; part: "action"; action: PluginAction }
 	| { role: "version" }
 	| { role: "help" }
-	| { role: "usage" };
+	/** An invocation error; `unknown` is the word when it names no command (0581). */
+	| { role: "usage"; unknown?: string };
 
 export const USAGE = [
 	"usage: jocasta                  open the work surface (herdr session `jocasta`; starts the Jocasta service)",
@@ -30,14 +31,14 @@ export const USAGE = [
 	"                               reset one Jocasta-owned file to the shipped version, keeping a backup",
 	"       jocasta uninstall        remove what install and setup added, after `y`",
 	"       jocasta diagnose         a read-only pane that explains what went wrong from Jocasta's log",
-	"       jocasta mcp [--boss]     the MCP server omp starts (graph_search and report_result; the boss's tools with --boss)",
+	"       jocasta mcp [--boss]     the MCP server omp starts (graph_search, report_result and check; the boss's tools with --boss)",
 	"       jocasta project list | add <path> | remove <name|id>",
 	'       jocasta thread new <project> "<brief>" [--title <t>] [--done-when "<cmd>"]...',
 	'       jocasta thread list [<project>] | status <thread> | send <thread> "<text>" | stop <thread>',
 	"       jocasta thread finish <thread> merge|pr",
 	"       jocasta worktree list | remove <path>",
 	"                               threads and leftover worktrees through the running service; changes ask you first",
-	"       jocasta --version",
+	"       jocasta --version | --help",
 ].join("\n");
 
 /** Routes argv (0387); anything else is an invocation error (exit 2, 0140). */
@@ -65,5 +66,22 @@ export function route(args: string[]): Route {
 		const known = PLUGIN_ACTIONS.find((a) => a === action);
 		if (part === "action" && known && more.length === 0) return { role: "plugin", part, action: known };
 	}
-	return { role: "usage" };
+	return COMMANDS.includes(word) ? { role: "usage" } : { role: "usage", unknown: word };
 }
+
+/** The words that name a command, routed above. */
+const COMMANDS = [
+	"--version",
+	"-v",
+	"--help",
+	"-h",
+	"setup",
+	"uninstall",
+	"service",
+	"diagnose",
+	"mcp",
+	"project",
+	"thread",
+	"worktree",
+	"plugin",
+];

@@ -8,6 +8,7 @@
  */
 import { asObject } from "../../shared/fsx.ts";
 import { log } from "../../shared/log.ts";
+import { onPath, runProgram } from "../../shared/process.ts";
 
 /** How long one mise call may take before it counts as failed. */
 const MISE_TIMEOUT_MS = 15_000;
@@ -16,28 +17,17 @@ type Env = Record<string, string | undefined>;
 
 /** mise's argv prefix: the one on PATH, or none. */
 function findMise(): string[] | null {
-	const found = Bun.which("mise");
+	const found = onPath("mise");
 	return found ? [found] : null;
 }
 
 /** One mise call in `cwd`; undefined when it fails or times out. */
 async function runMise(mise: string[], args: string[], cwd: string, env: Env): Promise<string | undefined> {
 	try {
-		const proc = Bun.spawn([...mise, ...args], {
-			cwd,
-			env,
-			stdin: "ignore",
-			stdout: "pipe",
-			stderr: "pipe",
-			timeout: MISE_TIMEOUT_MS,
-		});
-		const [stdout, stderr, code] = await Promise.all([
-			new Response(proc.stdout).text(),
-			new Response(proc.stderr).text(),
-			proc.exited,
-		]);
-		if (code === 0) return stdout;
-		log("warn", "mise", `mise ${args.join(" ")} in ${cwd} failed (${code}): ${stderr.trim().split("\n")[0] ?? ""}`);
+		const run = await runProgram([...mise, ...args], { cwd, env, timeoutMs: MISE_TIMEOUT_MS });
+		if (run.code === 0) return run.stdout;
+		const why = run.code ?? "timed out";
+		log("warn", "mise", `mise ${args.join(" ")} in ${cwd} failed (${why}): ${run.stderr.trim().split("\n")[0] ?? ""}`);
 	} catch (error) {
 		log("warn", "mise", `mise ${args.join(" ")} in ${cwd} failed: ${String(error)}`);
 	}
@@ -61,8 +51,10 @@ function withJocastaEnv(projectId: string, base: Env): string {
  * no repo config to say anything about.
  */
 async function distrust(mise: string[], cwd: string, env: Env): Promise<string | undefined> {
-	const paranoid = await runMise(mise, ["settings", "get", "paranoid"], cwd, env);
-	const show = await runMise(mise, ["trust", "--show"], cwd, env);
+	const [paranoid, show] = await Promise.all([
+		runMise(mise, ["settings", "get", "paranoid"], cwd, env),
+		runMise(mise, ["trust", "--show"], cwd, env),
+	]);
 	const configs = [...(show ?? "").matchAll(/^(.+): (trusted|untrusted)\s*$/gm)];
 	if (paranoid === undefined || !/\btrue\b|"config"/.test(paranoid)) {
 		return configs.length > 0 ? "mise's paranoid config trust is off" : "";

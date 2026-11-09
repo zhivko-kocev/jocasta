@@ -17,7 +17,7 @@ import { fakeCompleter, graphitiResponder, serveLlmEndpoint } from "./helpers.ts
  * Opt-in smoke (`JOCASTA_GRAPHITI_SMOKE=1`): builds and runs the real FalkorDB and Graphiti containers on this machine
  * (Docker Desktop, 0071) under a separate Compose project on a free port (never `jocasta` or 47380, F-04), adds an
  * episode whose extraction comes back through the callback endpoint to a fake completer, and searches it; and restarts
- * the companion's container logic with a new token while the container runs (0430). The project and its volume are
+ * the service's container logic with a new token while the container runs (0430). The project and its volume are
  * removed afterwards.
  */
 const SMOKE = process.env.JOCASTA_GRAPHITI_SMOKE === "1";
@@ -97,11 +97,11 @@ describe.skipIf(!SMOKE)("Graphiti in Docker (smoke)", () => {
 		}
 	}, 3_600_000);
 
-	test("a restarted companion brings the running container onto its token, at start and on a 401", async () => {
+	test("a restarted service brings the running container onto its token, at start and on a 401", async () => {
 		const resource = graphitiResource();
 		const baseUrl = `http://127.0.0.1:${graphitiPort()}`;
-		// One companion run: its own token, container manager and service client, as `jocastaContainers` builds them.
-		const companion = (token: string) => {
+		// One service run: its own token, container manager and service client, as `jocastaContainers` builds them.
+		const serviceRun = (token: string) => {
 			const containers = new Containers([resource], { run: smokeRun, env: () => ({ [GRAPHITI_TOKEN_ENV]: token }) });
 			const deps: GraphDeps = {
 				service: graphitiService(baseUrl, token),
@@ -120,13 +120,13 @@ describe.skipIf(!SMOKE)("Graphiti in Docker (smoke)", () => {
 				body: JSON.stringify({ group_id: "p-5e0ce5e0ce5e0ce5", query: "x" }),
 			}).then((r) => r.status);
 		try {
-			const first = companion("token-a");
+			const first = serviceRun("token-a");
 			expect(await first()).toEqual([]);
 			const falkordb = await falkordbId();
 			expect(falkordb).not.toBe("");
-			// The companion restarts with a new token while the container still runs with the old one: its first use
+			// The service restarts with a new token while the container still runs with the old one: its first use
 			// recreates Graphiti (Compose sees the environment changed), and FalkorDB stays the same container.
-			const second = companion("token-b");
+			const second = serviceRun("token-b");
 			expect(await second()).toEqual([]);
 			expect(await status("token-a")).toBe(401);
 			expect((await fetch(`${baseUrl}/health`)).ok).toBe(true);

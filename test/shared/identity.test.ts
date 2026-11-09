@@ -18,22 +18,24 @@ test.each([
 	["git@ssh.dev.azure.com:v3/acme/Web/api", "dev.azure.com/acme/web/api"],
 	["acme@vs-ssh.visualstudio.com:v3/acme/Web/api", "dev.azure.com/acme/web/api"],
 	["https://dev.azure.com/acme/My%20Project/_git/api", "dev.azure.com/acme/my project/api"],
+	// A stray `%` keeps the path as written instead of throwing out of the catalog's sync (SHR-1).
+	["https://dev.azure.com/acme/50%-off/_git/web", "dev.azure.com/acme/50%-off/web"],
 ])("normalizes origin %s (0103)", (url, key) => {
 	expect(normalizeOrigin(url)).toBe(key);
 });
 
-test("identity precedence: origin, then the first root commit, then the path (0103)", () => {
+test("identity precedence: origin, then the first root commit, then the path (0103)", async () => {
 	const withOrigin = makeRepo(join(env.root, "a"), { origin: "https://github.com/example-org/demo.git" });
-	expect(identityKey(withOrigin)).toBe("github.com/example-org/demo");
+	expect(await identityKey(withOrigin)).toBe("github.com/example-org/demo");
 
 	const noOrigin = makeRepo(join(env.root, "b"));
 	const root = sh(noOrigin, "rev-list", "--max-parents=0", "HEAD");
-	expect(identityKey(noOrigin)).toBe(`root:${root}`);
+	expect(await identityKey(noOrigin)).toBe(`root:${root}`);
 
 	const empty = join(env.root, "c");
 	mkdirSync(empty);
 	sh(empty, "init", "-q");
-	expect(identityKey(empty)).toMatch(/^path:.*\/c$/);
+	expect(await identityKey(empty)).toMatch(/^path:.*\/c$/);
 });
 
 test("project ids are p- plus 16 hex of SHA-256 of the key; names come from origin, else the folder (0107, 0110)", () => {

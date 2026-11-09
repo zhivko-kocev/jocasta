@@ -48,7 +48,7 @@ function deps(over: Partial<DiagnoseDeps> = {}): DiagnoseDeps {
 			const id = await h.ensureWorkspace("Jocasta", join(root, "data", "home"), ["omp", "--continue"]);
 			return (await h.panes()).find((p) => p.workspaceId === id) as never;
 		},
-		setupWaiting: async () => "jocasta setup has 2 changes waiting: run `jocasta setup` to see them.",
+		setupCheck: async () => ({ waiting: "jocasta setup has 2 changes waiting: run `jocasta setup` to see them." }),
 		now: new Date("2026-10-23T10:30:00Z"),
 		...over,
 	};
@@ -97,12 +97,12 @@ test("jocasta diagnose opens a read-only omp pane in workspace Jocasta with the 
 	const state = readFileSync(join(dir, "state.md"), "utf8");
 	expect(state).toContain("(2026-10-23T10:30:00.000Z)");
 	expect(state).toContain("- Versions: jocasta 0.1.0 (omp 18.12.6, herdr 0.9.5, bun 1.4.3)");
-	expect(state).toContain("- Service: busy (frontier.json names pid 42, port 47615)");
+	expect(state).toContain("- Service: busy (jocasta-service.json names pid 42, port 47615)");
 	expect(state).toContain("- herdr session `jocasta-test`: herdr 0.9.4 answers; 1 workspaces, 1 panes");
 	expect(state).toContain("- Setup: jocasta setup has 2 changes waiting");
 	expect(state).toContain("(from jocasta-2026-10-23.log)");
 	expect(state).toMatch(/^- Jocasta \(w_\d+\)/m);
-	// The companion's token never reaches the pane.
+	// The service's token never reaches the pane.
 	expect(state).not.toContain("secret");
 	expect(readFileSync(join(dir, "recent.log"), "utf8")).toContain("2026-10-23 line 2");
 	const overlay = Bun.YAML.parse(readFileSync(join(dir, "omp.yml"), "utf8"));
@@ -127,6 +127,19 @@ test("without workspace Jocasta diagnose makes it first; a herdr that can't star
 		() => {},
 	);
 	await expect(failing).rejects.toBeInstanceOf(UserError);
+});
+
+test("state.md says setup couldn't check rather than nothing waiting, and nothing waiting when that is so (SET-14)", async () => {
+	const state = () => readFileSync(join(root, "data", "diagnose", "state.md"), "utf8");
+	await runDiagnose(
+		deps({ setupCheck: async () => ({ failed: "C:\\omp\\lsp.json is not JSON (bad); fix it and run setup again" }) }),
+		() => {},
+	);
+	expect(state()).toContain(
+		"- Setup: couldn't check (C:\\omp\\lsp.json is not JSON (bad); fix it and run setup again)",
+	);
+	await runDiagnose(deps({ setupCheck: async () => ({}) }), () => {});
+	expect(state()).toContain("- Setup: nothing waiting");
 });
 
 test("the shipped diagnose skill is one omp finds in the overlay's folder: name and description", () => {

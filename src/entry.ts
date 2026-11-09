@@ -10,15 +10,16 @@ import jocastaPackage from "../package.json" with { type: "json" };
 import { CALENDAR_ENV, takeCalendarEnv } from "./shared/credentials.ts";
 import { DbError } from "./shared/db.ts";
 import { UserError } from "./shared/errors.ts";
+import type { runProgramSync as RunProgramSync } from "./shared/process.ts";
 import { route, USAGE } from "./shared/route.ts";
 
-/** `<program> --version`'s version (`omp/18.10.3`, `herdr 0.9.5`), or "not found". */
-function versionOf(program: string | undefined): string {
+/** `<program> --version`'s version (`omp/18.10.3`, `herdr 0.9.5`), or "not found"; `runSync` is process.ts's. */
+function versionOf(runSync: typeof RunProgramSync, program: string | null): string {
 	if (!program) return "not found";
 	try {
-		const out = Bun.spawnSync([program, "--version"], { stdout: "pipe", stderr: "ignore", timeout: 10_000 });
-		const text = out.stdout.toString().trim();
-		return out.exitCode === 0 && text ? (text.split(/[\s/]/).pop() ?? text) : "not found";
+		const out = runSync([program, "--version"], { timeoutMs: 10_000 });
+		const text = out.stdout.trim();
+		return out.code === 0 && text ? (text.split(/[\s/]/).pop() ?? text) : "not found";
 	} catch {
 		return "not found";
 	}
@@ -26,30 +27,41 @@ function versionOf(program: string | undefined): string {
 
 /** Runs a program to completion with its output captured. */
 async function run(argv: string[]): Promise<{ code: number; output: string }> {
-	const child = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
-	const [stdout, stderr, code] = await Promise.all([
-		new Response(child.stdout).text(),
-		new Response(child.stderr).text(),
-		child.exited,
-	]);
-	return { code, output: `${stdout}${stderr}` };
+	const { runProgram } = await import("./shared/process.ts");
+	const { code, stdout, stderr } = await runProgram(argv);
+	return { code: code ?? 1, output: `${stdout}${stderr}` };
 }
 
 /** `jocasta --version`'s line: Jocasta's, omp's, herdr's and Bun's versions. */
 async function versionLine(): Promise<string> {
-	const { findHerdr } = await import("./frontier/server/herdr.ts");
-	return `jocasta ${jocastaPackage.version} (omp ${versionOf(Bun.which("omp") ?? undefined)}, herdr ${versionOf(findHerdr())}, bun ${Bun.version})`;
+	const [{ findHerdr }, { onPath, runProgramSync }] = await Promise.all([
+		import("./frontier/server/herdr.ts"),
+		import("./shared/process.ts"),
+	]);
+	return `jocasta ${jocastaPackage.version} (omp ${versionOf(runProgramSync, onPath("omp"))}, herdr ${versionOf(runProgramSync, findHerdr() ?? null)}, bun ${Bun.version})`;
 }
 
 /** Lines to the console and questions from it: one reader for every question a command asks. */
 function consoleIo() {
 	const lines = console[Symbol.asyncIterator]();
+	const ask = async (question: string) => {
+		process.stdout.write(question);
+		const next = await lines.next();
+		return next.done ? undefined : next.value;
+	};
 	return {
 		print: (line: string) => console.log(line),
-		ask: async (question: string) => {
-			process.stdout.write(question);
+		ask,
+		// A secret (the calendar's address, SEC-LOC-12): typed in concealed text, then its rows erased and the question
+		// shown again, so neither the screen nor the scrollback keeps it.
+		askSecret: async (question: string) => {
+			if (!process.stdout.isTTY) return ask(question);
+			process.stdout.write(`${question}\x1b[8m`);
 			const next = await lines.next();
-			return next.done ? undefined : next.value;
+			const answer = next.done ? undefined : next.value;
+			const rows = Math.max(1, Math.ceil((question.length + (answer?.length ?? 0)) / (process.stdout.columns || 80)));
+			process.stdout.write(`\x1b[28m${"\x1b[1A\r\x1b[2K".repeat(rows)}${question}\n`);
+			return answer;
 		},
 	};
 }
@@ -66,18 +78,23 @@ try {
 			console.log(USAGE);
 			break;
 		case "usage":
+			// A word that is no command is named first (0581).
+			if (target.unknown !== undefined) console.error(`jocasta: unknown command "${target.unknown}".`);
 			console.error(USAGE);
 			process.exitCode = 2;
 			break;
 		case "project": {
-			const { projectCommand } = await import("./shared/cli.ts");
-			for (const line of projectCommand(target.args)) console.log(line);
+			const { projectCommand } = await import("./shared/project-cli.ts");
+			for (const line of await projectCommand(target.args)) console.log(line);
 			break;
 		}
 		case "thread":
 		case "worktree": {
 			// Through the running service, which asks him first for the changes (0544).
-			const { cliRequest, runCliCommand, runningService } = await import("./shared/thread-cli.ts");
+			const [{ cliRequest, runCliCommand }, { runningService }] = await Promise.all([
+				import("./shared/thread-cli.ts"),
+				import("./shared/service-file.ts"),
+			]);
 			process.exitCode = await runCliCommand(cliRequest(target.role, target.args), {
 				service: runningService,
 				print: (line) => console.log(line),
@@ -86,41 +103,50 @@ try {
 			break;
 		}
 		case "mcp": {
-			const { runMcpServer } = await import("./mcp/server.ts");
+			const [{ runMcpServer }, { BOSS_KEY_ENV }] = await Promise.all([
+				import("./mcp/server.ts"),
+				import("./shared/boss-key.ts"),
+			]);
+			const bossKey = process.env[BOSS_KEY_ENV];
 			// stdout carries only MCP messages.
 			await runMcpServer({
 				boss: target.boss,
 				input: process.stdin,
 				output: (line) => process.stdout.write(`${line}\n`),
-				paneId: process.env.HERDR_PANE_ID,
+				// The pane's own key (0578): the service knows the pane by it, never by a pane id it is told.
+				paneKey: process.env.JOCASTA_PANE_KEY,
 				// Only the boss pane's environment has it (0484); a thread's `jocasta mcp` has none to send.
-				...(target.boss && process.env.JOCASTA_BOSS_KEY ? { bossKey: process.env.JOCASTA_BOSS_KEY } : {}),
+				...(target.boss && bossKey ? { bossKey } : {}),
 			});
 			break;
 		}
 		case "service": {
 			const { runService } = await import("./frontier/server/run.ts");
-			process.exitCode = await runService();
+			// Ends here: no stray handle keeps a stopped or failed service holding the relay port.
+			process.exit(await runService());
 			break;
 		}
 		case "plugin": {
-			// What the `jocasta` herdr plugin runs (0553): its panes, its startup hook and its actions.
+			// What the `jocasta` herdr plugin runs (0553): its panes, its startup hook and its actions. A pane's process ends
+			// once it returns, so no leftover handle keeps a closed popup alive.
 			if (target.part === "today") {
 				const { runToday } = await import("./frontier/today/main.ts");
-				process.exitCode = await runToday();
+				process.exit(await runToday());
 			} else if (target.part === "ask") {
 				const { runAsk } = await import("./frontier/ask/main.ts");
-				process.exitCode = await runAsk();
+				process.exit(await runAsk());
 			} else if (target.part === "startup") {
 				const [{ connectHerdr, herdrPipe }, { applyAgentView }, { herdrSession }] = await Promise.all([
 					import("./frontier/server/herdr.ts"),
 					import("./frontier/server/plugin.ts"),
-					import("./shared/cli.ts"),
+					import("./shared/herdr-session.ts"),
 				]);
 				// herdr names its socket file for its plugin commands; on Windows that is a pipe name.
 				const socketFile = process.env.HERDR_SOCKET_PATH;
+				// Only a running server: the hook never starts a second one (so there is nothing to revive either).
 				const herdr = await connectHerdr({
 					session: herdrSession(),
+					start: false,
 					...(socketFile ? { socketPath: herdrPipe(socketFile) } : {}),
 				});
 				herdr.keepDown();
@@ -130,7 +156,7 @@ try {
 				herdr.close();
 			} else if (target.part === "action") {
 				// The focused pane from herdr's invocation context (`focused_pane_id`), else the pane it ran in.
-				const { postAction } = await import("./frontier/today/api.ts");
+				const { postAction } = await import("./frontier/client.ts");
 				let paneId = process.env.HERDR_PANE_ID;
 				try {
 					const context: unknown = JSON.parse(process.env.HERDR_PLUGIN_CONTEXT_JSON ?? "{}");
@@ -148,18 +174,20 @@ try {
 			break;
 		}
 		case "setup": {
-			const [setup, { findHerdr }, { selfCommand, shippedConfigDir }, { herdrSession }, runValue] = await Promise.all([
-				import("./setup/setup.ts"),
-				import("./frontier/server/herdr.ts"),
-				import("./shared/install.ts"),
-				import("./shared/cli.ts"),
-				import("./setup/run-value.ts"),
-			]);
+			const [setup, { findHerdr }, { selfCommand, shippedConfigDir }, { herdrSession }, runValue, { onPath }] =
+				await Promise.all([
+					import("./setup/setup.ts"),
+					import("./frontier/server/herdr.ts"),
+					import("./shared/install.ts"),
+					import("./shared/herdr-session.ts"),
+					import("./setup/run-value.ts"),
+					import("./shared/process.ts"),
+				]);
 			const herdr = findHerdr();
 			const paths = setup.defaultSetupPaths(shippedConfigDir(), selfCommand());
 			const deps = {
 				herdr,
-				mise: Bun.which("mise") ?? undefined,
+				mise: onPath("mise") ?? undefined,
 				run,
 				calendar: setup.defaultCalendarStore(calendarEnv),
 				...(herdr ? { reloadHerdr: () => run([herdr, "--session", herdrSession(), "server", "reload-config"]) } : {}),
@@ -178,7 +206,7 @@ try {
 				{ defaultSetupPaths, miseConfigDir, setupUndo },
 				uninstall,
 				{ connectHerdr, findHerdr },
-				{ readFrontierFile },
+				{ readServiceFile },
 				{ serviceState },
 				{ herdrSession },
 				{ installDir, selfCommand, shippedConfigDir },
@@ -189,9 +217,9 @@ try {
 				import("./setup/setup.ts"),
 				import("./setup/uninstall.ts"),
 				import("./frontier/server/herdr.ts"),
-				import("./frontier/server/frontier-file.ts"),
+				import("./shared/service-file.ts"),
 				import("./frontier/server/launch.ts"),
-				import("./shared/cli.ts"),
+				import("./shared/herdr-session.ts"),
 				import("./shared/install.ts"),
 				import("./shared/containers/index.ts"),
 				import("./shared/credentials.ts"),
@@ -207,10 +235,11 @@ try {
 					miseConfigDir: miseConfigDir(),
 					composeFile: composeFile(),
 					install,
-					runningFromInstall: install !== undefined,
+					// Windows holds the running jocasta.exe: its files go after this exits. POSIX removes them at once.
+					runningFromInstall: install !== undefined && process.platform === "win32",
 				},
 				{
-					serviceState: () => serviceState(readFrontierFile()),
+					serviceState: () => serviceState(readServiceFile()),
 					herdr: findHerdr(),
 					session: herdrSession(),
 					run,
@@ -235,6 +264,7 @@ try {
 					removeRunValue: uninstall.removeRunValueFor,
 					deleteCredential,
 					removeAfterExit: uninstall.removeAfterExit,
+					processesUnder: uninstall.processesUnder,
 					// A headless server for `plugin unlink` (0558); the session's own step stops it.
 					startHerdr: async () => {
 						const herdr = await connectHerdr({ session: herdrSession() });
@@ -249,10 +279,10 @@ try {
 		case "diagnose": {
 			const [
 				{ runDiagnose },
-				{ setupToast },
+				{ setupCheck },
 				{ bossCommand, ensureBossPane, LaunchedPanes },
 				{ connectHerdr },
-				{ readFrontierFile },
+				{ readServiceFile },
 				{ serviceState },
 				{ herdrSession },
 				{ shippedConfigDir },
@@ -262,13 +292,13 @@ try {
 				import("./setup/setup.ts"),
 				import("./frontier/server/boss.ts"),
 				import("./frontier/server/herdr.ts"),
-				import("./frontier/server/frontier-file.ts"),
+				import("./shared/service-file.ts"),
 				import("./frontier/server/launch.ts"),
-				import("./shared/cli.ts"),
+				import("./shared/herdr-session.ts"),
 				import("./shared/install.ts"),
 				import("./shared/paths.ts"),
 			]);
-			const file = readFrontierFile();
+			const file = readServiceFile();
 			const herdrConfig = join(configDir(), "herdr.toml");
 			process.exitCode = await runDiagnose(
 				{
@@ -286,7 +316,7 @@ try {
 							configDir: shippedConfigDir(),
 							launched: new LaunchedPanes(),
 						}),
-					setupWaiting: setupToast,
+					setupCheck,
 				},
 				(line) => console.log(line),
 			);
@@ -294,37 +324,46 @@ try {
 		}
 		case "surface": {
 			const [
-				{ readFrontierFile },
+				{ readServiceFile },
 				{ findHerdr, herdrSessionAnswers, stopHerdrSession },
 				{ askShutdown, serviceHealth, serviceState },
-				{ attachedSurface, herdrSession, openSurface, serviceStopped },
+				{ herdrSession },
+				{ attachedSurface, lastLoggedError, openSurface, serviceStopped },
 				{ stopJocastaContainersDetached },
 				{ selfCommand },
 				{ configDir, dataDir },
+				{ logsDir },
 			] = await Promise.all([
-				import("./frontier/server/frontier-file.ts"),
+				import("./shared/service-file.ts"),
 				import("./frontier/server/herdr.ts"),
 				import("./frontier/server/launch.ts"),
-				import("./shared/cli.ts"),
+				import("./shared/herdr-session.ts"),
+				import("./shared/surface.ts"),
 				import("./shared/containers/resources.ts"),
 				import("./shared/install.ts"),
 				import("./shared/paths.ts"),
+				import("./shared/log.ts"),
 			]);
 			process.exitCode = await openSurface({
-				serviceHealth: () => serviceHealth(readFrontierFile()),
+				serviceHealth: () => serviceHealth(readServiceFile()),
 				// A plain Bun process outside this terminal (0552): closing the terminal mustn't end it before it has
 				// stopped everything. The service takes the calendar's env fallback for itself; nothing else this command
 				// starts gets it.
 				startService: () => {
-					const [program, ...args] = selfCommand();
-					if (!program) return;
-					spawn(program, [...args, "service"], {
+					const [program = process.execPath, ...args] = selfCommand();
+					const child = spawn(program, [...args, "service"], {
 						detached: true,
 						stdio: "ignore",
 						windowsHide: true,
 						env: { ...process.env, ...(calendarEnv ? { [CALENDAR_ENV]: calendarEnv } : {}) },
-					}).unref();
+					});
+					const { promise: exited, resolve } = Promise.withResolvers<number>();
+					child.once("exit", (code) => resolve(code ?? 1));
+					child.once("error", () => resolve(1));
+					child.unref();
+					return { exited };
 				},
+				lastError: (since) => lastLoggedError(logsDir(), since),
 				herdr: findHerdr(),
 				herdrConfig: join(configDir(), "herdr.toml"),
 				attach: (argv, env) =>
@@ -336,7 +375,7 @@ try {
 					return () => process.off("SIGHUP", handler);
 				},
 				tellServiceClosed: async () => {
-					const file = readFrontierFile();
+					const file = readServiceFile();
 					return file !== undefined && (await askShutdown(file));
 				},
 				// A closing console leaves seconds (LC-7): herdr gets 3 of them.
@@ -346,8 +385,8 @@ try {
 				stopContainers: stopJocastaContainersDetached,
 				exit: () => process.exit(0),
 				watchServiceStop: () => {
-					const before = readFrontierFile();
-					return () => serviceStopped(before, readFrontierFile(), serviceState);
+					const before = readServiceFile();
+					return () => serviceStopped(before, readServiceFile(), serviceState);
 				},
 				// 0518: a ping that never starts herdr; the service starts a dead server again (0431).
 				herdrUp: () => herdrSessionAnswers({ session: herdrSession(), timeoutMs: 1_000 }),
@@ -358,7 +397,8 @@ try {
 } catch (error) {
 	// Loud one-line failures (0101): DB failures exit 1; refusals exit with their code, 2 for an invocation error (0140).
 	if (error instanceof DbError || error instanceof UserError) {
-		console.error(`jocasta: ${error.message}`);
+		// A usage is printed as it is, its lines aligned (0581).
+		console.error(error.message.startsWith("usage: ") ? error.message : `jocasta: ${error.message}`);
 		process.exitCode = error instanceof UserError ? error.exitCode : 1;
 	} else {
 		throw error;

@@ -13,8 +13,11 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { git } from "../../shared/git.ts";
+import { gitAsync } from "../../shared/git.ts";
 import { installDir } from "../../shared/install.ts";
+import { waitFor } from "../../shared/poll.ts";
+import { runProgram } from "../../shared/process.ts";
+import { REVIEW_LEAD } from "./wording.ts";
 
 /** The loopback port of Jocasta's hunk session daemon (`HUNK_MCP_PORT`; hunk's own default is 47657). */
 export const HUNK_PORT = 47658;
@@ -121,7 +124,7 @@ export function reviewPrompt(hunk: string[], range: string, context: ReviewConte
 		? `Jocasta ran the task's checks on this tree and they failed; give the reviewer these gates too:\n\n${context.gates}\n\n`
 		: undefined;
 	return [
-		"Check this task's work.",
+		REVIEW_LEAD,
 		...(failed ? [failed] : []),
 		ranTests
 			? "First run the project's tests the way its AGENTS.md or package scripts say, as one bash command;"
@@ -177,27 +180,15 @@ const HUNK_COMMAND_MS = 20_000;
 
 /** Runs hunk from the home folder (never inside a worktree) with Jocasta's hunk environment; stdout, or throws. */
 async function runHunk(hunk: string[], args: string[], port: number): Promise<string> {
-	const proc = Bun.spawn([...hunk, ...args], {
+	const run = await runProgram([...hunk, ...args], {
 		cwd: homedir(),
 		env: { ...process.env, ...hunkEnv(port) },
-		stdin: "ignore",
-		stdout: "pipe",
-		stderr: "pipe",
-		windowsHide: true,
+		timeoutMs: HUNK_COMMAND_MS,
 	});
-	const timer = setTimeout(() => proc.kill(), HUNK_COMMAND_MS);
-	try {
-		const [out, err, code] = await Promise.all([
-			new Response(proc.stdout).text(),
-			new Response(proc.stderr).text(),
-			proc.exited,
-		]);
-		if (proc.signalCode) throw new Error(`hunk ${args.slice(0, 3).join(" ")} took over ${HUNK_COMMAND_MS / 1000} s`);
-		if (code !== 0) throw new Error(`hunk ${args.slice(0, 3).join(" ")} failed (${code}): ${err.trim() || out.trim()}`);
-		return out;
-	} finally {
-		clearTimeout(timer);
-	}
+	const what = `hunk ${args.slice(0, 3).join(" ")}`;
+	if (run.timedOut || run.signal) throw new Error(`${what} took over ${HUNK_COMMAND_MS / 1000} s`);
+	if (run.code !== 0) throw new Error(`${what} failed (${run.code}): ${run.stderr.trim() || run.stdout.trim()}`);
+	return run.stdout;
 }
 
 /** Counts the worktree's live notes made since `since` (`hunk session comment list --repo <worktree> --json`). */
@@ -227,31 +218,47 @@ const TEST_FILE =
 const SKIP_MARK =
 	/\b(it|test|describe|context|suite)\.(skip|only|todo)\s*\(|\b(xit|xdescribe|xtest|fit|fdescribe)\s*\(|@pytest\.mark\.(skip|xfail)|@unittest\.skip|#\[ignore\]|\bt\.Skip(Now|f)?\s*\(/;
 
+/** One git call of the proof (CO-10): 30 s at most, off the event loop. */
+const PROOF_GIT_MS = 30_000;
+
+/** Test files per `git diff` call, well inside Windows' 32K command line. */
+const PROOF_FILES_PER_CALL = 100;
+
 /**
- * The proof line's facts for `range` (`<trunk>...<branch>`) in `cwd`, from git: `--numstat` for the size and the files,
- * and the test files' added lines for skip/only markers. Undefined when git can't tell.
+ * The proof line's facts for `range` (`<trunk>...<branch>`) in `cwd`, from git without holding the event loop: one
+ * `--numstat` for the size and the files, and one `-U0` diff of the test files (split at its `diff --git` headers)
+ * for added skip/only markers. Undefined when git can't tell.
  */
-export function reviewProof(cwd: string, range: string): ReviewProof | undefined {
-	const numstat = git(cwd, ["diff", "--numstat", "--no-renames", range]);
-	if (numstat === undefined) return undefined;
+export async function reviewProof(cwd: string, range: string): Promise<ReviewProof | undefined> {
+	// Paths as they are (no C-quoting of non-ASCII), so the test files' names match and split back out.
+	const unquoted = ["-c", "core.quotePath=false"];
+	const numstat = await gitAsync(cwd, [...unquoted, "diff", "--numstat", "--no-renames", range], PROOF_GIT_MS);
+	if (numstat.code !== 0) return undefined;
 	let added = 0;
 	let deleted = 0;
 	const paths: string[] = [];
-	for (const line of numstat.split("\n").filter(Boolean)) {
+	for (const line of numstat.stdout.split("\n").filter(Boolean)) {
 		const [plus = "0", minus = "0", ...path] = line.split("\t");
 		added += Number(plus) || 0;
 		deleted += Number(minus) || 0;
 		paths.push(path.join("\t"));
 	}
 	const testFiles = paths.filter((path) => TEST_FILE.test(path));
-	const skipped: string[] = [];
-	for (const file of testFiles) {
-		const diff = git(cwd, ["diff", "-U0", "--no-color", range, "--", file]) ?? "";
-		const marked = diff
-			.split("\n")
-			.some((line) => line.startsWith("+") && !line.startsWith("+++") && SKIP_MARK.test(line));
-		if (marked) skipped.push(file);
+	const marked = new Set<string>();
+	for (let at = 0; at < testFiles.length; at += PROOF_FILES_PER_CALL) {
+		const files = testFiles.slice(at, at + PROOF_FILES_PER_CALL);
+		const args = [...unquoted, "diff", "-U0", "--no-color", "--no-renames", range, "--", ...files];
+		const diff = await gitAsync(cwd, args, PROOF_GIT_MS);
+		for (const part of diff.stdout.split(/^diff --git /m)) {
+			const file = /^\+\+\+ b\/(.+)$/m.exec(part)?.[1];
+			if (!file) continue;
+			const skips = part
+				.split("\n")
+				.some((line) => line.startsWith("+") && !line.startsWith("+++") && SKIP_MARK.test(line));
+			if (skips) marked.add(file);
+		}
 	}
+	const skipped = testFiles.filter((file) => marked.has(file));
 	return { added, deleted, files: paths.length, testFiles, skipped };
 }
 
@@ -297,10 +304,8 @@ export async function ensureHunkDaemon(
 	});
 	child.unref();
 	if (child.pid !== undefined) started?.(child.pid);
-	const end = Date.now() + 5_000;
-	while (Date.now() < end) {
-		await Bun.sleep(100);
-		if (await daemonUp(port)) return;
-	}
+	// The first look after 100 ms: the daemon was just started.
+	await Bun.sleep(100);
+	if (await waitFor(() => daemonUp(port), { timeoutMs: 4_900, intervalMs: 100 })) return;
 	throw new Error(`hunk's session daemon didn't start on 127.0.0.1:${port}`);
 }

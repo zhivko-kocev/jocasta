@@ -15,6 +15,16 @@ export interface RunSettings {
 export const RUN_DEFAULTS: RunSettings = { reps: 3, timeoutMinutes: 10 };
 
 /**
+ * `value` as omp's `--profile` name (pi-utils `dirs.ts`'s rule), for `bun run evals` and the task benchmark alike; any
+ * other text throws a `UserError` (exit 2).
+ */
+export function profileName(value: string): string {
+	if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(value) || value.endsWith("."))
+		throw new UserError(`--profile needs an omp profile name (a-z, 0-9, ".", "_", "-"), not "${value}"`);
+	return value;
+}
+
+/**
  * Parses `bun evals/run.ts [--reps <n>] [--timeout <minutes>] [--profile <name>] [--dry-run]` (0318, 0482). Bad values
  * throw a `UserError` (exit 2). `bun run evals --reps 5` passes the flags through (0317).
  */
@@ -32,10 +42,7 @@ export function parseRunArgs(argv: string[]): RunSettings {
 		if (value === undefined) throw new UserError(`${flag} needs a value`);
 		const number = Number(value);
 		if (flag === "--profile") {
-			// omp's profile names (pi-utils `dirs.ts`).
-			if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(value) || value.endsWith("."))
-				throw new UserError(`--profile needs an omp profile name (a-z, 0-9, ".", "_", "-"), not "${value}"`);
-			settings.profile = value;
+			settings.profile = profileName(value);
 		} else if (flag === "--reps") {
 			if (!/^\d+$/.test(value) || number < 1)
 				throw new UserError(`--reps needs a whole number of 1 or more, not "${value}"`);

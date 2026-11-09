@@ -1,7 +1,7 @@
 {
 	"$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
 	"files": {
-		"includes": ["**", "!node_modules", "!dist", "!.impeccable", "!.claude", "!forks"]
+		"includes": ["**", "!node_modules", "!dist", "!.claude", "!forks"]
 	},
 	"formatter": {
 		"lineWidth": 120

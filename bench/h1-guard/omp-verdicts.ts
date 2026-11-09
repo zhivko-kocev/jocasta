@@ -1,47 +1,57 @@
-// H1 (0482, 0500, 0501): omp 18.13.1's own verdict on every corpus line, computed in-process from omp's installed
+// H1 (0482, 0500, 0501, 0535): omp 18.18.2's own verdict on every corpus line, computed in-process from omp's installed
 // sources, with nothing executed.
 //
 //   bun bench/h1-guard/omp-verdicts.ts --corpus <corpus.jsonl> --guard <guard.yml> --out <dir> [--omp <package dir>]
 //     [--any-version] [--dry-run]
 //
-// How omp decides before a pane's bash tool runs a command (omp 18.13.1, `@oh-my-pi/pi-coding-agent/src`):
-// - `extensibility/extensions/wrapper.ts:258-279,341-356` wraps every tool: `resolveApprovalFromContext`
-//   (`tools/approval.ts:96-112`) takes the mode from `tools.approvalMode` (default `yolo`, `tools/settings.ts:314-318`;
-//   Jocasta's guard and overlay set none) and `resolveApproval` decides; deny throws before the tool runs, prompt asks
-//   (`:397-492`; with no UI, as in `omp -p`, it throws instead, `:434-458`); then the tool executes (`:494-506`).
-// - `tools/approval.ts:357-504`: the tool's own decision first; a tool `deny` wins; under `yolo` a tool `policy` holds
+// How omp decides before a pane's bash tool runs a command (omp 18.18.2, `@oh-my-pi/pi-coding-agent/src`):
+// - `extensibility/extensions/wrapper.ts:269-291,355-374` wraps every tool: `resolveApprovalFromContext`
+//   (`tools/approval.ts:97-113`) takes the mode from `tools.approvalMode` (default `yolo`, `tools/settings.ts:314-318`;
+//   Jocasta's guard and overlay set none) and `resolveApproval` decides, once on the call as made and again on the
+//   input an extension may have revised; deny throws before the tool runs, prompt asks (`:375-506`; with no UI, as in
+//   `omp -p`, it throws instead, `:448-471`); then the tool executes (`:508-521`).
+// - `tools/approval.ts:366-514`: the tool's own decision first; a tool `deny` wins; under `yolo` a tool `policy` holds
 //   and everything else is allowed (so a decision with only `override`, omp's critical patterns, asks nothing);
-//   under other modes an override asks and the mode's tier decides the rest.
-// - `tools/bash.ts:514-598` (`BashTool.approval`): `bash.patterns` in list order (`:243-318`: deny/prompt rules match
-//   the whole normalized command or any segment from `tools/shell-tokenize.ts:14` `tokenizeShellSegments`, which
-//   honours and removes quotes and splits at `; && || | & ( )` and newlines; an allow rule never rides a line with
-//   shell control); then `CRITICAL_BASH_PATTERNS` (`:187-234`) as an override without a policy;
-//   `bash.allowCompoundCommands` (default off) switches to per-`&&` segments.
+//   under other modes an override asks and the mode's tier decides the rest; a `tools.restrictedFolders` match then
+//   turns anything but a deny into a prompt.
+// - `tools/bash.ts:621-681` (`BashTool.approval`): the bash interceptor first (`bashInterceptor`, off by default and in
+//   Jocasta's guard; it acts only for tools in the call's `toolNames`) refuses a call it intercepts; then
+//   `bash.patterns` (`:257-397`: a line without shell control takes the first rule in list order that matches the
+//   whole normalized command; on a line with shell control allow rules never apply, and a deny or prompt rule matches
+//   the whole line or any segment from `tools/shell-tokenize.ts:14` `tokenizeShellSegments`, which honours and
+//   removes quotes and splits at `; && || | & ( )` and newlines, any deny winning over any prompt); a deny from the
+//   operator's layers holds whatever a project layer says (`grantAuthority`); then `CRITICAL_BASH_PATTERNS`
+//   (`:197-244`) as an override without a policy, checked before prompt rules; then prompt rules.
+//   `bash.allowCompoundCommands` (default off) switches, under a POSIX shell, to per-`&&` segments.
 // - `bash.gitGuard` isn't an approval: the embedded shell's `git` builtin refuses at run time
-//   (`exec/bash-executor.ts:669`).
+//   (`exec/bash-executor.ts:737-739`).
 //
 // The mechanism here: it imports omp's `config/settings.ts`, `tools/bash.ts` and `tools/approval.ts` from the
 // install, loads the guard as `--config` over omp's defaults (an empty agent dir and cwd, so no user or project
 // config), builds the real `BashTool` on a session stub that throws on anything but `settings`, and calls omp's
-// `resolveApproval` exactly as the wrapper does. `execute` is never called. The git guard has no check that doesn't
-// run the command: with `--git-guard <git-guard-check.jsonl>` the refusals measured in the VM (git-guard-check.ts ran
-// those lines through omp's embedded shell) decide for the lines it covers, and `git-guard.ts`'s reimplementation,
-// applied on omp's own tokenizer's argv, for the rest; each line names its source (`gitGuardSource`). A line omp's
-// approval allows and the git guard refuses is `deny` by `git-guard`; a line omp asks about stays `prompt`.
+// `resolveApproval` as the wrapper does, without a tool context: the bash tool's decision reads the context only for
+// `toolNames`, which only the interceptor uses, and the guard leaves the interceptor off. `execute` is never called.
+// The git guard has no check that doesn't run the command: with `--git-guard <git-guard-check.jsonl>` the refusals
+// measured in the VM (git-guard-check.ts ran those lines through omp's embedded shell) decide for the lines it
+// covers, and `git-guard.ts`'s reimplementation, applied on omp's own tokenizer's argv, for the rest; each line names
+// its source (`gitGuardSource`). A line omp's approval allows and the git guard refuses is `deny` by `git-guard`; a
+// line omp asks about stays `prompt`.
 //
 // Writes `omp-verdicts.jsonl` (id, command, expected, variant, base, category, verdict, mechanism, match, approval,
 // critical, gitGuard, gitGuardSource, reimplemented = evaluate.ts's verdict) and `omp-verdicts.json` (version,
 // settings, counts), and prints where omp and the reimplementation disagree, by expected class and by way of writing.
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { removeTree } from "../../src/shared/fsx.ts";
+import { verdict } from "../../src/shared/guard.ts";
 import { BenchUsageError, flag, parseBenchArgs, REPO_ROOT, runScript } from "../lib/args.ts";
 import { appendRow, conditions, printPlan, writeJson } from "../lib/output.ts";
-import { type CorpusEntry, parseCorpus, parseGuard, VARIANTS, type Verdict, verdict } from "./evaluate.ts";
+import { type CorpusEntry, parseGuard, readCorpus, VARIANTS, type Verdict } from "./evaluate.ts";
 import { gitGuardRefusalOf, type MeasuredGitGuardLine, parseMeasuredGitGuard } from "./git-guard.ts";
 
-export const PINNED_OMP = "18.13.1";
+export const PINNED_OMP = "18.18.2";
 const PACKAGE = "@oh-my-pi/pi-coding-agent";
 
 type Decision = string | { tier: string; reason?: string; override?: boolean; policy?: Verdict };
@@ -52,7 +62,7 @@ interface Resolved {
 }
 interface ApprovalSubject {
 	name: string;
-	approval: (args: unknown) => Decision;
+	approval: (args: unknown, context?: { toolNames?: string[] }) => Decision;
 }
 interface Setting<T> {
 	get(settings: unknown): T;
@@ -84,15 +94,14 @@ export interface Omp {
 	cfgBashPatterns: Setting<unknown[]>;
 	cfgBashAllowCompoundCommands: Setting<boolean>;
 	cfgBashInterceptorEnabled: Setting<boolean>;
-	cfgBashInterceptorPatterns: Setting<unknown[]>;
 	cfgLaunchEnabled: Setting<boolean>;
 	cfgAsyncEnabled: Setting<boolean>;
-	/** omp's bash interceptor check (`tools/bash-interceptor.ts`), which `BashTool.execute` runs before anything else. */
-	checkBashInterception(
-		command: string,
-		availableTools: string[],
-		rules: unknown[],
-	): { block: boolean; message?: string };
+	/** `tools.approvalMode`; `isConfigured` tells an explicit `yolo` from the schema's default (ACP asks for the latter). */
+	cfgToolsApprovalMode: Setting<string> & { isConfigured(settings: unknown): boolean };
+	/** The bash tool can run a call in an ACP client's terminal (`tools/bash.ts` `wrapShellLineForClientTerminal`). */
+	clientTerminalRoute: boolean;
+	/** The options omp's ACP permission gate offers (`session/acp-permission-gate.ts`). */
+	acpPermissionOptions: { optionId: string; kind: string }[];
 }
 
 /** omp's version when `dir` holds its package, else undefined. */
@@ -126,16 +135,16 @@ export async function loadOmp(dir: string, anyVersion = false): Promise<Omp> {
 	const version = ompPackageVersion(dir);
 	if (version === undefined) throw new BenchUsageError(`${dir} is not omp's package (${PACKAGE})`);
 	if (version !== PINNED_OMP && !anyVersion)
-		throw new BenchUsageError(`omp ${version} at ${dir}; H1 runs on ${PINNED_OMP} (0500), or pass --any-version`);
+		throw new BenchUsageError(`omp ${version} at ${dir}; H1 runs on ${PINNED_OMP} (0535), or pass --any-version`);
 	const load = (path: string) => import(pathToFileURL(join(dir, "src", path)).href);
-	const [settings, bash, approval, tokenize, exec, tools, interceptor] = await Promise.all([
+	const [settings, bash, approval, tokenize, exec, tools, gate] = await Promise.all([
 		load("config/settings.ts"),
 		load("tools/bash.ts"),
 		load("tools/approval.ts"),
 		load("tools/shell-tokenize.ts"),
 		load("exec/settings.ts"),
 		load("tools/settings.ts"),
-		load("tools/bash-interceptor.ts"),
+		load("session/acp-permission-gate.ts"),
 	]);
 	return {
 		dir,
@@ -150,10 +159,11 @@ export async function loadOmp(dir: string, anyVersion = false): Promise<Omp> {
 		cfgBashPatterns: exec.cfgBashPatterns,
 		cfgBashAllowCompoundCommands: exec.cfgBashAllowCompoundCommands,
 		cfgBashInterceptorEnabled: exec.cfgBashInterceptorEnabled,
-		cfgBashInterceptorPatterns: exec.cfgBashInterceptorPatterns,
 		cfgLaunchEnabled: tools.cfgLaunchEnabled,
 		cfgAsyncEnabled: tools.cfgAsyncEnabled,
-		checkBashInterception: interceptor.checkBashInterception,
+		cfgToolsApprovalMode: tools.cfgToolsApprovalMode,
+		clientTerminalRoute: typeof bash.wrapShellLineForClientTerminal === "function",
+		acpPermissionOptions: Array.isArray(gate.PERMISSION_OPTIONS) ? gate.PERMISSION_OPTIONS : [],
 	};
 }
 
@@ -359,8 +369,7 @@ if (import.meta.main) {
 		const ompText = flag(args, "omp");
 		const ompDir = ompText === undefined ? findOmpDir() : resolve(ompText);
 		if (ompDir === undefined) throw new BenchUsageError(`omp's package not found; pass --omp <dir of ${PACKAGE}>`);
-		const corpusText = readFileSync(corpusPath, "utf8");
-		const corpus = parseCorpus(corpusText, corpusPath);
+		const { entries: corpus, sha256: corpusSha256 } = readCorpus(corpusPath);
 		const rules = parseGuard(readFileSync(guardPath, "utf8"), guardPath);
 		if (args.dryRun) {
 			printPlan(
@@ -407,7 +416,7 @@ if (import.meta.main) {
 				conditions: { ...started, finishedAt: new Date().toISOString(), versions: { omp: omp.version } },
 				omp: { version: omp.version, sources: "src/ of the installed package" },
 				guard: guardPath,
-				corpusSha256: new Bun.CryptoHasher("sha256").update(corpusText).digest("hex"),
+				corpusSha256,
 				settings: summary,
 				gitGuardCheck: gitGuardPath === undefined ? null : resolve(gitGuardPath),
 				gitGuardSources,
@@ -420,7 +429,7 @@ if (import.meta.main) {
 			});
 			console.log(`wrote ${file}`);
 		} finally {
-			rmSync(empty, { recursive: true, force: true });
+			removeTree(empty);
 		}
 	});
 }

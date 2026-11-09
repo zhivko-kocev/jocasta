@@ -4,29 +4,8 @@
 // module holds none of its own.
 import paletteCss from "./palette.css" with { type: "text" };
 
-/** The palette's colours, by name, as `#rrggbb`. */
-export interface Palette {
-	bg0: string;
-	bg1: string;
-	bg2: string;
-	bg3: string;
-	fg: string;
-	fg2: string;
-	fg3: string;
-	mark3: string;
-	comment: string;
-	brightBlack: string;
-	blue: string;
-	cyan: string;
-	yellow: string;
-	red: string;
-	green: string;
-	purple: string;
-	orange: string;
-}
-
-/** Each palette name's custom property in palette.css. */
-const PROPERTIES: Record<keyof Palette, string> = {
+/** Each palette colour's custom property in palette.css, by the name the code uses. */
+const PROPERTIES = {
 	bg0: "--bg-0",
 	bg1: "--bg-1",
 	bg2: "--bg-2",
@@ -44,7 +23,10 @@ const PROPERTIES: Record<keyof Palette, string> = {
 	green: "--green",
 	purple: "--purple",
 	orange: "--orange",
-};
+} as const;
+
+/** The palette's colours, by name, as `#rrggbb`. */
+export type Palette = Record<keyof typeof PROPERTIES, string>;
 
 /** Reads the palette's hex custom properties from palette.css's text; a missing one is a broken palette file. */
 export function readPalette(css: string): Palette {
@@ -81,6 +63,18 @@ export const TOKYO_NIGHT: Readonly<Palette> = Object.freeze(readPalette(paletteT
 export function withAlpha(colour: string, alpha: number): string {
 	return `${colour}${Math.round(alpha).toString(16).padStart(2, "0")}`;
 }
+
+/** A palette colour at an opacity in percent, as palette.css writes its translucent colours (`/ 22%`). */
+export const withOpacity = (colour: string, percent: number): string => withAlpha(colour, (percent * 255) / 100);
+
+/**
+ * The opacities, in percent, of palette.css's hairlines `--line-1` and `--line-2` (the comment colour at 22% and
+ * 40%), so Monaco's guides and borders match the page's lines (0474).
+ */
+export const LINE_OPACITY = { line1: 22, line2: 40 } as const;
+
+/** page.css's `--mono`, for Monaco, which takes its font as an option rather than from the page's CSS. */
+export const MONO_FONT = '"Geist Mono", "Cascadia Mono", Consolas, ui-monospace, monospace';
 
 /** The colours of code drawn outside CSS: the canvas's Monaco theme. */
 export const CODE = {

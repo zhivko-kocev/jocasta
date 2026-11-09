@@ -14,7 +14,7 @@ description: Explain why Jocasta misbehaved from its own evidence (its log and t
 
 1. Start from what went wrong in his words. If he hasn't said, ask once: what he did, what he expected, what happened instead, and roughly when.
 2. Read `state.md` first: it rules causes in or out (a service that is down, a herdr session that doesn't answer, setup changes waiting).
-3. In the log, find the first `WARN` or `ERROR` near that time, then read the lines before it. Each line is `<time> <LEVEL> [<scope>] <message>`; the scope (`service`, `herdr`, `graph`, `day`, …) names the part that wrote it. Older days' logs are there when the trouble started earlier.
+3. In the log, find the first `WARN` or `ERROR` near that time, then read the lines before it. Each line is `<UTC time> <LEVEL> [<scope>] <message>`; his times are local, so convert before you look. The scope (`service`, `herdr`, `graph`, `day`, …) names the part that wrote it. Older days' logs are there when the trouble started earlier.
 4. Follow the evidence with read, grep and glob only: the log, `state.md`, the shipped config, Jocasta's source when it is on this machine.
 5. Explain: the cause in one or two sentences, the evidence (quote the log lines with their times), how sure you are, and what he can do about it (a command he runs, a setting he changes). When the evidence doesn't settle it, say what is missing and how he could capture it.
 

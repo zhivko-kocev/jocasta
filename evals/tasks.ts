@@ -1,10 +1,15 @@
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { BenchUsageError } from "../bench/lib/args.ts";
+import { git } from "../bench/lib/git.ts";
+import { strictJsonLines } from "../bench/lib/jsonl.ts";
+import { seededRandom } from "../bench/lib/stats.ts";
 import { removeTree } from "../src/shared/fsx.ts";
+import { git as gitRead } from "../src/shared/git.ts";
+import { readJsonlFile } from "../src/shared/jsonl.ts";
 import type { TrialLedger } from "../src/shared/ledger.ts";
+import { HARNESSES } from "./harness.ts";
 import type { EvalCase, ResultRow } from "./runner.ts";
 
 /**
@@ -55,38 +60,28 @@ const STRING_FIELDS = [
 export function loadTasks(file: string): BenchTask[] {
 	if (!existsSync(file)) throw new BenchUsageError(`no tasks file at ${file}`);
 	const tasks: BenchTask[] = [];
-	readFileSync(file, "utf8")
-		.split(/\r?\n/)
-		.forEach((line, i) => {
-			if (line.trim() === "") return;
-			const where = `${file}:${i + 1}`;
-			let value: Record<string, unknown>;
-			try {
-				value = JSON.parse(line) as Record<string, unknown>;
-			} catch (error) {
-				throw new BenchUsageError(`${where}: not JSON (${(error as Error).message})`);
-			}
-			for (const key of STRING_FIELDS)
-				if (typeof value[key] !== "string" || value[key] === "")
-					throw new BenchUsageError(`${where}: \`${key}\` must be a non-empty string`);
-			for (const key of ["hidden_test_files", "issue_urls"] as const) {
-				const list = value[key];
-				if (!Array.isArray(list) || !list.every((item) => typeof item === "string" && item !== ""))
-					throw new BenchUsageError(`${where}: \`${key}\` must be a list of strings`);
-			}
-			if (value.set !== "main" && value.set !== "spare")
-				throw new BenchUsageError(`${where}: \`set\` must be main or spare`);
-			if (!TASK_LANGUAGES.includes(value.language as TaskLanguage))
-				throw new BenchUsageError(`${where}: \`language\` must be one of ${TASK_LANGUAGES.join(", ")}`);
-			if (!/^[\w.-]+\/[\w.-]+$/.test(value.repo as string))
-				throw new BenchUsageError(`${where}: \`repo\` must be <owner>/<name>`);
-			if (!/^[0-9a-f]{40}$/.test(value.base_commit as string) || !/^[0-9a-f]{40}$/.test(value.merge_commit as string))
-				throw new BenchUsageError(`${where}: \`base_commit\` and \`merge_commit\` must be full commit SHAs`);
-			const task = value as unknown as BenchTask;
-			if (tasks.some((other) => other.instance_id === task.instance_id))
-				throw new BenchUsageError(`${where}: ${task.instance_id} is in the file twice`);
-			tasks.push(task);
-		});
+	for (const { row: value, where } of strictJsonLines(readFileSync(file, "utf8"), file, { reason: true })) {
+		for (const key of STRING_FIELDS)
+			if (typeof value[key] !== "string" || value[key] === "")
+				throw new BenchUsageError(`${where}: \`${key}\` must be a non-empty string`);
+		for (const key of ["hidden_test_files", "issue_urls"] as const) {
+			const list = value[key];
+			if (!Array.isArray(list) || !list.every((item) => typeof item === "string" && item !== ""))
+				throw new BenchUsageError(`${where}: \`${key}\` must be a list of strings`);
+		}
+		if (value.set !== "main" && value.set !== "spare")
+			throw new BenchUsageError(`${where}: \`set\` must be main or spare`);
+		if (!TASK_LANGUAGES.includes(value.language as TaskLanguage))
+			throw new BenchUsageError(`${where}: \`language\` must be one of ${TASK_LANGUAGES.join(", ")}`);
+		if (!/^[\w.-]+\/[\w.-]+$/.test(value.repo as string))
+			throw new BenchUsageError(`${where}: \`repo\` must be <owner>/<name>`);
+		if (!/^[0-9a-f]{40}$/.test(value.base_commit as string) || !/^[0-9a-f]{40}$/.test(value.merge_commit as string))
+			throw new BenchUsageError(`${where}: \`base_commit\` and \`merge_commit\` must be full commit SHAs`);
+		const task = value as unknown as BenchTask;
+		if (tasks.some((other) => other.instance_id === task.instance_id))
+			throw new BenchUsageError(`${where}: ${task.instance_id} is in the file twice`);
+		tasks.push(task);
+	}
 	return tasks;
 }
 
@@ -94,18 +89,6 @@ export function loadTasks(file: string): BenchTask[] {
 export const TASK_PROMPT_PREFIX = "Fix the issue below in the repository in the current folder.\n\n";
 
 export const taskPrompt = (task: BenchTask): string => `${TASK_PROMPT_PREFIX}${task.problem_statement}`;
-
-/** mulberry32: a small seeded PRNG, so a seed gives the same order on every machine. */
-export function seededRandom(seed: number): () => number {
-	let state = seed >>> 0;
-	return () => {
-		state = (state + 0x6d2b79f5) >>> 0;
-		let t = state;
-		t = Math.imul(t ^ (t >>> 15), t | 1);
-		t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-	};
-}
 
 /** A Fisher–Yates shuffle of a copy of `items` with {@link seededRandom}. */
 export function shuffle<T>(items: readonly T[], seed: number): T[] {
@@ -199,25 +182,13 @@ export interface ResumeState {
 	failures: Map<string, number>;
 }
 
-function readJsonl<T>(file: string): T[] {
-	if (!existsSync(file)) return [];
-	return readFileSync(file, "utf8")
-		.split(/\r?\n/)
-		.filter((line) => line.trim() !== "")
-		.map((line) => JSON.parse(line) as T);
-}
-
-export function appendJsonl(file: string, row: unknown): void {
-	appendFileSync(file, `${JSON.stringify(row)}\n`);
-}
-
 /** What a run folder already holds: done trials and each trial's infra errors. */
 export function readResumeState(outDir: string): ResumeState {
 	const done = new Set(
-		readJsonl<{ task: string; arm: string; rep: number }>(join(outDir, "results.jsonl")).map(trialKey),
+		readJsonlFile<{ task: string; arm: string; rep: number }>(join(outDir, "results.jsonl")).map(trialKey),
 	);
 	const failures = new Map<string, number>();
-	for (const row of readJsonl<{ task: string; arm: string; rep: number }>(join(outDir, "errors.jsonl"))) {
+	for (const row of readJsonlFile<{ task: string; arm: string; rep: number }>(join(outDir, "errors.jsonl"))) {
 		const key = trialKey(row);
 		failures.set(key, (failures.get(key) ?? 0) + 1);
 	}
@@ -250,13 +221,6 @@ export interface PreparedTask {
 	testPatch: string;
 	/** Upstream's nearest tag at the base commit, which the trial repo's fixture commit carries; none when no tag is reachable. */
 	tag?: string;
-}
-
-function git(cwd: string, args: string[], env?: Record<string, string | undefined>): string {
-	const result = spawnSync("git", args, { cwd, env, encoding: "utf8", windowsHide: true, maxBuffer: 1 << 28 });
-	if (result.status !== 0)
-		throw new Error(`git ${args.join(" ")} failed in ${cwd}: ${result.stderr || result.error?.message}`);
-	return result.stdout;
 }
 
 /** Git without line-ending conversion, so the cache holds the commit's bytes on Windows too; long paths allowed. */
@@ -302,8 +266,7 @@ export function prepareTask(task: BenchTask, cacheDir: string): PreparedTask {
 		mkdirSync(bare, { recursive: true });
 		git(bare, ["init", "-q", "--bare"]);
 	}
-	const has = spawnSync("git", ["cat-file", "-e", `${task.base_commit}^{commit}`], { cwd: bare, stdio: "ignore" });
-	if (has.status !== 0)
+	if (gitRead(bare, ["cat-file", "-e", `${task.base_commit}^{commit}`]) === undefined)
 		git(bare, ["fetch", "-q", "--depth", "1", task.repo_url, `${task.base_commit}:refs/tasks/${task.instance_id}`]);
 
 	mkdirSync(prepared.fixture);
@@ -359,31 +322,34 @@ function nearestTag(task: BenchTask, dir: string): string | undefined {
 	try {
 		git(bare, ["init", "-q", "--bare"]);
 		git(bare, ["fetch", "-q", "--filter=tree:0", task.repo_url, task.base_commit, "+refs/tags/*:refs/tags/*"]);
-		const described = spawnSync("git", ["describe", "--tags", "--abbrev=0", task.base_commit], {
-			cwd: bare,
-			encoding: "utf8",
-			windowsHide: true,
-		});
-		return described.status === 0 && described.stdout.trim() !== "" ? described.stdout.trim() : undefined;
+		return gitRead(bare, ["describe", "--tags", "--abbrev=0", task.base_commit]) || undefined;
 	} finally {
 		removeTree(bare);
 	}
 }
 
 /**
- * A Python task's setup (0482): a venv at the trial root's `venv/` (made once: grading's setup, in `<root>/grade`, finds
- * it and re-points the editable install to the clean clone), pip upgraded, then the task's setup. cmd.exe resolves
- * `python` per command, so once the venv exists every later `python` is the venv's ({@link PYTHON_PATH_PREFIX}).
+ * A Python task's setup (0482): a venv at the trial root's `venv/` (made once), pip upgraded, then the task's setup.
+ * cmd.exe resolves `python` per command, so once the venv exists every later `python` is the venv's
+ * ({@link PYTHON_PATH_PREFIX}).
  */
 export const PYTHON_SETUP_PREFIX =
 	"(if not exist ..\\venv\\Scripts\\python.exe python -m venv ..\\venv) && python -m pip install -q --upgrade pip && ";
 export const PYTHON_PATH_PREFIX = ["venv/Scripts"];
+/**
+ * Hidden grading's Python setup (0574): a fresh venv at the trial root's `gvenv/` for every grading, so nothing the
+ * agent installed or upgraded in `venv/` during the trial reaches the hidden tests. The old one is removed first, so
+ * `python` is the system's again when the new one is made.
+ */
+export const PYTHON_GRADE_SETUP_PREFIX =
+	"(if exist ..\\gvenv rmdir /s /q ..\\gvenv) && python -m venv ..\\gvenv && python -m pip install -q --upgrade pip && ";
+export const PYTHON_GRADE_PATH_PREFIX = ["gvenv/Scripts"];
 
 /**
- * The task as the runner's case: the fixed prompt, the task's setup (wrapped in a venv for Python), no visible checks
- * and the task's test command as the one hidden check, run on the clean clone with `hidden/` overlaid; the fixture
- * commit tagged with upstream's nearest tag. Node's and Go's setups run as they are: their package and module caches are
- * safe to share between trials.
+ * The task as the runner's case: the fixed prompt, the task's setup (wrapped in a venv for Python, a fresh grading
+ * venv for its grading), no visible checks and the task's test command as the one hidden check, run on the clean
+ * clone with `hidden/` overlaid; the fixture commit tagged with upstream's nearest tag. Node's and Go's setups run as
+ * they are: their package and module caches are safe to share between trials.
  */
 export function taskCase(task: BenchTask, prepared: PreparedTask): EvalCase {
 	const python = task.language === "Python";
@@ -398,7 +364,13 @@ export function taskCase(task: BenchTask, prepared: PreparedTask): EvalCase {
 		fixture: prepared.fixture,
 		hidden: prepared.hidden,
 		...(prepared.tag === undefined ? {} : { fixtureTag: prepared.tag }),
-		...(python ? { pathPrefix: [...PYTHON_PATH_PREFIX] } : {}),
+		...(python
+			? {
+					pathPrefix: [...PYTHON_PATH_PREFIX],
+					gradeSetup: `${PYTHON_GRADE_SETUP_PREFIX}${task.setup_command}`,
+					gradePathPrefix: [...PYTHON_GRADE_PATH_PREFIX],
+				}
+			: {}),
 	};
 }
 
@@ -441,17 +413,31 @@ export function scanLeaks(task: BenchTask, transcript: string, prompt?: string):
 
 export type InfraKind = "setup" | "auth" | "rate-limit" | "no-response" | "error";
 
+// Status codes count only with an error's context: bare 401 or 429 are token counts, line numbers and sizes (EVL-2).
 const AUTH =
-	/\b40[13]\b|unauthori[sz]ed|forbidden|not logged in|not signed in|please (?:log|sign) ?in|\/login\b|oauth|refresh(?:ing)? (?:the )?token|token refresh|invalid[_ ]grant|authentication (?:failed|error)|invalid api key/i;
-const RATE = /rate[ _-]?limit|\b429\b|too many requests|overloaded|\b529\b|usage limit|quota exceeded/i;
+	/\b(?:status|error|code)[:= ]+40[13]\b|\b40[13] (?:unauthori[sz]ed|forbidden)|unauthori[sz]ed|forbidden|not logged in|not signed in|please (?:log|sign) ?in|\/login\b|oauth|refresh(?:ing)? (?:the )?token|token refresh|invalid[_ ]grant|authentication[_ ](?:failed|error)|invalid api key/i;
+const RATE =
+	/rate[ _-]?limit|\b(?:status|error|code)[:= ]+(?:429|529)\b|\b(?:429|529) (?:too many requests|overloaded)|too many requests|overloaded|usage limit|quota exceeded/i;
+
+/**
+ * The error a harness's own records say the trial ended on, or "" (EVL-2), as its adapter reads them: omp's last
+ * assistant message (a `--mode json` `message_end`, or a session file's `message`) when its `stopReason` is `error`,
+ * with its `errorMessage`; Claude Code's `result` with `is_error` (its text and `api_error_status`) and a
+ * `rate_limit_event` whose status isn't `allowed`; opencode's `error` events. Never the run's free text: a tool
+ * result's line numbers or a token count.
+ */
+export function endSignal(transcript: string, harness: ResultRow["harness"]): string {
+	return HARNESSES[harness].endSignal(transcript);
+}
 
 /**
  * Whether a trial failed for infrastructure, not the task (0482): retried later instead of graded. A thrown error is
- * `setup` (the task's setup failed) or `error`; a sign-in failure (401/403, "not logged in", OAuth or token refresh in
- * stderr or the transcript's end, the harness exiting non-zero) is `auth`; a rate-limit or overloaded error without a
- * tool call is `rate-limit`, and so is one in stderr or at the transcript's end, after any number of tool calls, when
- * an account was full (0543: `accountFull`, the pacer's last reading); a harness that ended before its first model
- * response is `no-response`. Null: the trial counts.
+ * `setup` (the task's setup failed) or `error`. The rest reads only stderr and the harness's own end signal
+ * ({@link endSignal}): a sign-in failure there ("not logged in", OAuth or token refresh, `status 401`) with the
+ * harness ending on an error (non-zero, not timed out) or before any response is `auth`; a rate-limit or overloaded
+ * error there without a tool call is `rate-limit`, and so is one after any number of tool calls when the harness
+ * ended on it while an account was full (0543: `accountFull`, the pacer's last reading); a harness that ended before
+ * its first model response, not timed out, is `no-response`. Null: the trial counts.
  */
 export function classifyInfra(outcome: {
 	error?: string;
@@ -467,16 +453,15 @@ export function classifyInfra(outcome: {
 		return { kind: /: setup `/.test(outcome.error) ? "setup" : "error", message: cut(outcome.error) };
 	const row = outcome.row;
 	if (row === undefined) return { kind: "error", message: "no result" };
-	const transcript = withoutPrompt(outcome.transcript ?? "", outcome.prompt);
-	const tail = transcript.trimEnd().split("\n").slice(-20).join("\n");
-	const exitedOk = row.grade[`${row.harness} exited 0`] === 1;
-	const detail = cut([stderr.trim(), tail.trim()].filter((part) => part !== "").join("\n"));
-	if ((!exitedOk || row.turns === 0) && (AUTH.test(stderr) || AUTH.test(tail)))
-		return { kind: "auth", message: detail };
-	if (row.toolCalls === 0 && (RATE.test(stderr) || RATE.test(transcript)))
-		return { kind: "rate-limit", message: detail };
-	if (outcome.accountFull === true && (RATE.test(stderr) || RATE.test(tail)))
-		return { kind: "rate-limit", message: detail };
-	if (row.turns === 0) return { kind: "no-response", message: detail };
+	const end = [stderr.trim(), endSignal(withoutPrompt(outcome.transcript ?? "", outcome.prompt), row.harness)]
+		.filter((part) => part !== "")
+		.join("\n");
+	const timedOut = row.grade.timeout !== undefined;
+	const endedOnError = row.grade[`${row.harness} exited 0`] !== 1 && !timedOut;
+	const detail = cut(end);
+	if ((endedOnError || row.turns === 0) && AUTH.test(end)) return { kind: "auth", message: detail };
+	if (row.toolCalls === 0 && RATE.test(end)) return { kind: "rate-limit", message: detail };
+	if (outcome.accountFull === true && endedOnError && RATE.test(end)) return { kind: "rate-limit", message: detail };
+	if (row.turns === 0 && !timedOut) return { kind: "no-response", message: detail };
 	return null;
 }

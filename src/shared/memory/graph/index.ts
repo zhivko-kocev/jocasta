@@ -1,5 +1,6 @@
+import { nativeLinuxDocker } from "../../containers/index.ts";
 import { graphitiPort, graphitiResource, graphitiToken, jocastaContainers } from "../../containers/resources.ts";
-import { type LlmCallback, llmCallback } from "./callback.ts";
+import { CALLBACK_UNREACHABLE, type LlmCallback, llmCallback } from "./callback.ts";
 
 /** One fact from the graph's search: an edge Graphiti extracted, with when it held. */
 export interface GraphFact {
@@ -124,12 +125,18 @@ export function graphitiService(
 	};
 }
 
-/** The real Graphiti service, behind the shared container manager, with the service's callback. */
+/**
+ * The real Graphiti service, behind the shared container manager, with the service's callback. On Linux's own Docker
+ * engine memory stays off (SEC-LOC-10, 0584): every call fails at once and no container starts.
+ */
 export function defaultGraphDeps(): GraphDeps {
 	const name = graphitiResource().name;
 	return {
 		service: graphitiService(),
-		use: (fn) => jocastaContainers().use(name, fn),
+		use: (fn) => {
+			if (nativeLinuxDocker()) return Promise.reject(new GraphError(`Graphiti ${CALLBACK_UNREACHABLE}`));
+			return jocastaContainers().use(name, fn);
+		},
 		callback: llmCallback,
 	};
 }

@@ -4,19 +4,25 @@
 //                             [--roots <dir,…>] [--runs 1] [--dry-run]
 //
 // Snapshots the file system under `--roots` (default: %LOCALAPPDATA%, %APPDATA%, %USERPROFILE%\.jocasta,
-// %USERPROFILE%\.omp, %USERPROFILE%\.herdr, %USERPROFILE%\.local, %ProgramData%) and the registry (`reg export` of HKCU
+// %USERPROFILE%\.omp, %USERPROFILE%\.herdr, %USERPROFILE%\.local, %USERPROFILE%\.config (setup's mise files, 0468),
+// %ProgramData%) and the registry (`reg export` of HKCU
 // and HKLM\SOFTWARE), runs `--install` (timed), snapshots again, runs `--between` when given (setup and use: 0481's
 // run does setup, a first run and a thread here) and snapshots again, runs `--uninstall` (timed) and snapshots a last
 // time. Reports what install added, what setup and use added, and what uninstall left behind (files and registry
 // values), all of it and the part naming jocasta, herdr, omp or mise. Prerequisites and minutes to the first task are
-// noted by hand in the run's notes (README). Writes h9-footprint.json, h9-install-added.jsonl, h9-use-added.jsonl and
-// h9-uninstall-left.jsonl.
+// noted by hand in the run's notes (README). h9-footprint.json's conditions carry the installed jocasta.exe's
+// `--version` line and `jocastaSha256`, read after the first install (0576). Writes h9-footprint.json,
+// h9-install-added.jsonl, h9-use-added.jsonl and
+// h9-uninstall-left.jsonl. It refuses to run anywhere but the VM, before anything runs: it runs the given uninstall
+// and writes the machine's registry values and paths into its rows.
 import { spawnSync } from "node:child_process";
-import { type Dirent, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { type Dirent, existsSync, mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTree } from "../src/shared/fsx.ts";
 import { BenchUsageError, flag, listFlag, parseBenchArgs, runScript } from "./lib/args.ts";
-import { appendRow, conditions, printPlan, writeJson } from "./lib/output.ts";
+import { appendRow, claimRows, conditions, printPlan, programSha256, toolVersion, writeJson } from "./lib/output.ts";
+import { requireVm } from "./lib/sandbox.ts";
 
 /** What a snapshot holds: file paths with size, and registry lines `key\value=data`. */
 export interface Snapshot {
@@ -55,7 +61,7 @@ export function diffSets<T>(before: Iterable<T>, after: Iterable<T>): { added: T
 	return { added: [...b].filter((x) => !a.has(x)), removed: [...a].filter((x) => !b.has(x)) };
 }
 
-const NAMED = /jocasta|jarvis|herdr|\bomp\b|oh-my-pi|mise/i;
+const NAMED = /jocasta|jarvis|herdr|\bomp\b|oh-my-pi|\bmise\b/i;
 
 export const named = (entries: readonly string[]) => entries.filter((entry) => NAMED.test(entry));
 
@@ -96,7 +102,7 @@ function snapshot(roots: readonly string[]): Snapshot {
 			for (const line of parseRegExport(readFileSync(file, "utf16le"))) registry.add(line);
 		}
 	} finally {
-		rmSync(dir, { recursive: true, force: true });
+		removeTree(dir);
 	}
 	return { files, registry };
 }
@@ -105,6 +111,19 @@ function timed(command: string): { exitCode: number | null; seconds: number } {
 	const started = performance.now();
 	const result = spawnSync(command, { shell: true, stdio: "inherit", windowsHide: false });
 	return { exitCode: result.status, seconds: (performance.now() - started) / 1000 };
+}
+
+/**
+ * The `jocasta.exe` an install put in place (0576 BEN-22): the one on PATH, else the one in the installer's folder
+ * (`JOCASTA_INSTALL_DIR`, else `%LOCALAPPDATA%\Programs\jocasta`, as install.ps1 picks it), since this process's PATH
+ * predates the user PATH entry the install adds. Undefined when there is neither.
+ */
+export function installedJocasta(env: Record<string, string | undefined> = process.env): string | undefined {
+	const onPath = Bun.which("jocasta", { PATH: env.PATH ?? "" });
+	if (onPath) return onPath;
+	const local = env.LOCALAPPDATA ?? join(env.USERPROFILE ?? "", "AppData", "Local");
+	const exe = join(env.JOCASTA_INSTALL_DIR ?? join(local, "Programs", "jocasta"), "jocasta.exe");
+	return existsSync(exe) ? exe : undefined;
 }
 
 if (import.meta.main) {
@@ -121,6 +140,7 @@ if (import.meta.main) {
 			join(profile, ".omp"),
 			join(profile, ".herdr"),
 			join(profile, ".local"),
+			join(profile, ".config"),
 			process.env.ProgramData ?? "C:\\ProgramData",
 		]);
 		const install = flag(args, "install");
@@ -131,7 +151,7 @@ if (import.meta.main) {
 				"H9 install footprint",
 				[
 					`snapshot files under ${roots.join(", ")} and the registry (reg export HKCU, HKLM\\SOFTWARE)`,
-					`run and time: ${install ?? "<--install>"}; snapshot`,
+					`run and time: ${install ?? "<--install>"}; snapshot; record the installed jocasta.exe's --version and SHA-256`,
 					...(between ? [`run and time: ${between}; snapshot`] : []),
 					`run and time: ${uninstall ?? "<--uninstall>"}; snapshot`,
 					"report added by install, added by setup and use, and left after uninstall, all and those naming jocasta, herdr, omp or mise",
@@ -142,14 +162,22 @@ if (import.meta.main) {
 			return;
 		}
 		if (process.platform !== "win32") throw new BenchUsageError("H9 runs on Windows (0481's VM)");
+		requireVm(hostname(), "install and uninstall Jocasta");
 		if (!install || !uninstall) throw new BenchUsageError("--install and --uninstall are required");
 		const out = args.out as string;
+		claimRows(out, "h9-install-added", "h9-use-added", "h9-uninstall-left");
 		const started = conditions(["git", "docker"]);
+		// The build measured, read once after the first install, before its uninstall removes it (0576 BEN-22).
+		let build: { version: string | null; sha256: string | null } | undefined;
 		const runs = [];
 		for (let run = 0; run < args.runs; run++) {
 			const before = snapshot(roots);
 			const installed = timed(install);
 			const afterInstall = snapshot(roots);
+			if (build === undefined) {
+				const exe = installedJocasta();
+				build = exe ? { version: toolVersion(exe), sha256: programSha256(exe) } : { version: null, sha256: null };
+			}
 			const used = between ? timed(between) : undefined;
 			const afterUse = between ? snapshot(roots) : afterInstall;
 			const removed = timed(uninstall);
@@ -206,7 +234,12 @@ if (import.meta.main) {
 		}
 		const file = writeJson(out, "h9-footprint", {
 			benchmark: "H9",
-			conditions: { ...started, finishedAt: new Date().toISOString() },
+			conditions: {
+				...started,
+				versions: { ...started.versions, jocasta: build?.version ?? null },
+				jocastaSha256: build?.sha256 ?? null,
+				finishedAt: new Date().toISOString(),
+			},
 			roots,
 			runs,
 		});

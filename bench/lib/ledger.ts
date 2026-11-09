@@ -1,10 +1,10 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { extname, join, relative } from "node:path";
+import { jsonLines } from "../../src/shared/jsonl.ts";
 import {
 	type LedgerHarness,
 	type LedgerPricing,
 	newRecord,
-	parseLines,
 	pushTool,
 	readOmpSession,
 	requestRow,
@@ -42,7 +42,7 @@ export function benchPricing(prices: PriceTable): LedgerPricing {
  * `tool_result` blocks in user lines carry results; a `compact_boundary` system line is a compaction.
  */
 export function readClaudeTranscript(text: string, pricing: LedgerPricing, agent = "main"): SessionRecord {
-	const entries = parseLines(text);
+	const entries = jsonLines(text);
 	const sessionId = entries.find((entry) => typeof entry.sessionId === "string")?.sessionId;
 	const record = newRecord("claude", typeof sessionId === "string" ? sessionId : agent, agent);
 	const results = new Map<string, { bytes: number; error: boolean }>();

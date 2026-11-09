@@ -1,3 +1,5 @@
+import { checkSettings, type Settings } from "../settings.ts";
+
 /** `pollers` in `jocasta.yaml` (0301, 0387; news 0429, 0442). */
 export interface PollerSettings {
 	github: { everyMinutes: number };
@@ -11,74 +13,39 @@ export interface PollerSettings {
 export type NewsFeed = ({ source: string } | { topic: string }) & { limit?: number };
 
 /** 0301's intervals: GitHub 2, Azure DevOps 5, Calendar 10 minutes; 0429's news 15. */
-export const DEFAULT_MINUTES = { github: 2, azureDevOps: 5, calendar: 10, news: 15 } as const;
+const DEFAULT_MINUTES = { github: 2, azureDevOps: 5, calendar: 10, news: 15 } as const;
 
 /** 0442: every Hacker News and LWN link, the newest 10 gaming headlines. */
 const DEFAULT_FEEDS: readonly NewsFeed[] = [{ source: "hn" }, { source: "lwn" }, { topic: "gaming", limit: 10 }];
 
-const FEEDS_SHAPE =
-	"settings: pollers.news.feeds must be a list of {source: <name>} or {topic: <name>} (a-z), each with an optional limit from 1 to 200";
+type Pollers = NonNullable<Settings["pollers"]>;
 
-function feeds(value: unknown): NewsFeed[] {
-	if (value === undefined) return DEFAULT_FEEDS.map((feed) => ({ ...feed }));
-	if (!Array.isArray(value)) throw new Error(FEEDS_SHAPE);
-	return value.map((entry): NewsFeed => {
-		if (entry === null || typeof entry !== "object" || Array.isArray(entry)) throw new Error(FEEDS_SHAPE);
-		const { source, topic, limit, ...rest } = entry as Record<string, unknown>;
-		const name = source ?? topic;
-		if (
-			Object.keys(rest).length > 0 ||
-			(source !== undefined) === (topic !== undefined) ||
-			typeof name !== "string" ||
-			!/^[a-z]+$/.test(name) ||
-			(limit !== undefined && (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 200))
-		) {
-			throw new Error(FEEDS_SHAPE);
-		}
-		const feed: NewsFeed = source !== undefined ? { source: name } : { topic: name };
-		return limit === undefined ? feed : { ...feed, limit: limit as number };
-	});
-}
+/** Each poller's settings out of its schema-checked `pollers.<name>`, with 0301's and 0442's defaults. */
+const READERS: { [K in keyof PollerSettings]: (pollers: Pollers) => PollerSettings[K] } = {
+	github: (pollers) => ({ everyMinutes: pollers.github?.everyMinutes ?? DEFAULT_MINUTES.github }),
+	azureDevOps: (pollers) => ({
+		orgs: pollers.azureDevOps?.orgs ?? [],
+		everyMinutes: pollers.azureDevOps?.everyMinutes ?? DEFAULT_MINUTES.azureDevOps,
+	}),
+	calendar: (pollers) => ({ everyMinutes: pollers.calendar?.everyMinutes ?? DEFAULT_MINUTES.calendar }),
+	news: (pollers) => ({
+		feeds: (pollers.news?.feeds ?? DEFAULT_FEEDS).map((feed): NewsFeed => {
+			const named: NewsFeed = "source" in feed ? { source: feed.source } : { topic: feed.topic };
+			return feed.limit === undefined ? named : { ...named, limit: feed.limit };
+		}),
+		everyMinutes: pollers.news?.everyMinutes ?? DEFAULT_MINUTES.news,
+	}),
+};
 
-function minutes(value: unknown, key: string, fallback: number): number {
-	if (value === undefined) return fallback;
-	if (typeof value !== "number" || !Number.isFinite(value) || value < 1) {
-		throw new Error(`settings: pollers.${key}.everyMinutes must be a number of minutes, 1 or more`);
-	}
-	return value;
-}
-
-function section(pollers: Record<string, unknown>, key: string): Record<string, unknown> {
-	const value = pollers[key];
-	if (value === undefined) return {};
-	if (typeof value !== "object" || value === null || Array.isArray(value)) {
-		throw new Error(`settings: pollers.${key} must be an object`);
-	}
-	return value as Record<string, unknown>;
-}
-
-/** Reads `pollers` (0301); a malformed value throws, naming the key (principle 2). */
-export function readPollerSettings(settings: Record<string, unknown>): PollerSettings {
-	const raw = settings.pollers;
-	if (raw !== undefined && (typeof raw !== "object" || raw === null || Array.isArray(raw))) {
-		throw new Error("settings: pollers must be an object");
-	}
-	const pollers = (raw ?? {}) as Record<string, unknown>;
-	const github = section(pollers, "github");
-	const azure = section(pollers, "azureDevOps");
-	const calendar = section(pollers, "calendar");
-	const news = section(pollers, "news");
-	const orgs = azure.orgs ?? [];
-	if (!Array.isArray(orgs) || !orgs.every((o) => typeof o === "string" && /^https:\/\/[^\s"%]+$/.test(o))) {
-		throw new Error("settings: pollers.azureDevOps.orgs must be a list of https:// org URLs");
-	}
-	if (news.topics !== undefined || news.limit !== undefined) {
-		throw new Error("settings: pollers.news.topics and pollers.news.limit are gone; use pollers.news.feeds (0442)");
-	}
-	return {
-		github: { everyMinutes: minutes(github.everyMinutes, "github", DEFAULT_MINUTES.github) },
-		azureDevOps: { orgs, everyMinutes: minutes(azure.everyMinutes, "azureDevOps", DEFAULT_MINUTES.azureDevOps) },
-		calendar: { everyMinutes: minutes(calendar.everyMinutes, "calendar", DEFAULT_MINUTES.calendar) },
-		news: { feeds: feeds(news.feeds), everyMinutes: minutes(news.everyMinutes, "news", DEFAULT_MINUTES.news) },
-	};
+/**
+ * Reads one poller's `pollers.<name>` (0301) as `jocasta.yaml`'s schema checked it (0584): a bad value there (or a
+ * bad `pollers`) throws a `SettingsError` naming the file, line and key (principle 2) and turns that poller alone off;
+ * the other pollers' keys aren't looked at. Unknown keys are ignored here and said by `settingsProblems`.
+ */
+export function readPoller<K extends keyof PollerSettings>(
+	settings: Record<string, unknown>,
+	name: K,
+): PollerSettings[K] {
+	checkSettings(settings, `pollers.${name}`);
+	return READERS[name]((settings as Settings).pollers ?? {});
 }

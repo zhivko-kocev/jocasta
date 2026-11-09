@@ -1,26 +1,40 @@
 // The canvas page (0552) in his browser: whiteboard's canvas at `/?review=<id>` or Home at `/`, its plain trouble line
 // (0432), Jocasta's empty state (0419) and Monaco on Tokyo Night (0411), against a stand-in service in headless Edge
-// (skipped where Edge isn't installed).
-import { afterEach, expect, test } from "bun:test";
+// (skipped where Edge isn't installed). One Edge serves the file; each test gets a tab in a context of its own.
+import { afterAll, afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { canvasTrouble } from "../../../src/frontier/canvas/trouble.ts";
-import { TOKEN_COOKIE } from "../../../src/frontier/protocol.ts";
 import { contentPolicy } from "../../../src/frontier/server/server.ts";
 import { canvasDir, startWhiteboard, type Whiteboard } from "../../../src/frontier/server/whiteboard.ts";
 import { useTempJocasta } from "../../shared/fixture.ts";
 import { withServer } from "../server/helpers.ts";
-import { Browser, EDGE } from "./cdp.ts";
-import { type PageServer, startPageServer } from "./page-server.ts";
+import { EDGE, Edge, type Tab } from "./cdp.ts";
+import { DIFF_PATH, type PageServer, startPageServer } from "./page-server.ts";
 
 const env = useTempJocasta();
 
-let open: { server?: PageServer; browser?: Browser } = {};
+let edge: Edge | undefined;
+// Edge.close waits on real processes: up to 5 s for Edge to exit, then up to 30 s for its helpers to let go of the
+// profile, which under a loaded suite outlasts the hook's default 5 s.
+afterAll(async () => {
+	await edge?.close();
+}, 60_000);
+
+let open: { server?: PageServer; browser?: Tab } = {};
 afterEach(async () => {
 	await open.browser?.close();
 	open.server?.stop();
 	open = {};
 });
+
+/** A fresh tab of the file's Edge (launched by the first test that needs one), closed after the test. */
+async function newTab(): Promise<Tab> {
+	edge ??= await Edge.launch();
+	const tab = await edge.tab();
+	open.browser = tab;
+	return tab;
+}
 
 /** Why whiteboard's server couldn't start, as `/whiteboard/connection` relays it to the page. */
 async function readyError(whiteboard: Whiteboard): Promise<string> {
@@ -38,7 +52,7 @@ test("the canvas's trouble line follows the service's real failures: off, not in
 	// The service runs without whiteboard: retrying can't help, a restart can.
 	await withServer(async (server) => {
 		const response = await fetch(`http://127.0.0.1:${server.port}/whiteboard/connection`, {
-			headers: { cookie: `${TOKEN_COOKIE}=${server.token}` },
+			headers: { authorization: `Bearer ${server.token}` },
 		});
 		const off = canvasTrouble((await response.json()).error);
 		expect(off.reason).toBe("The canvas is off for this run of Jocasta.");
@@ -84,7 +98,7 @@ test.skipIf(!canvasDir())(
 			async (server) => {
 				const connection = () =>
 					fetch(`http://127.0.0.1:${server.port}/whiteboard/connection`, {
-						headers: { cookie: `${TOKEN_COOKIE}=${server.token}` },
+						headers: { authorization: `Bearer ${server.token}` },
 					});
 				expect((await connection()).status).toBe(200);
 				// Its process ends (killed, as in the campaign); the discovery file stays behind.
@@ -109,8 +123,8 @@ test.skipIf(!existsSync(EDGE))(
 	"the boss's `show` link opens its review with the bar, and the Diff tab shows each changed file in Monaco on Tokyo Night, in the page's real bundle (0411, 0552)",
 	async () => {
 		const server = startPageServer({ whiteboard: { reviews: [] } });
-		const browser = await Browser.launch();
-		open = { server, browser };
+		open.server = server;
+		const browser = await newTab();
 		await browser.send("Page.navigate", { url: `${server.url}?review=diff` });
 		await browser.waitFor(
 			`document.querySelector('.review-canvas-root button')?.textContent === 'review:diff'`,
@@ -134,6 +148,12 @@ test.skipIf(!existsSync(EDGE))(
 			`[...document.querySelectorAll('.fake-diff-tab .view-lines')].map((v) => v.textContent.replace(/\\u00a0/g, ' ')).join('|').includes('attempts = 5')`,
 			"the head's text",
 		);
+		// A file name with markup in it is text, never HTML: no element made of it, nothing the policy blocked (0484).
+		expect(
+			await browser.eval<[string, number]>(
+				`(() => { const p = document.querySelector('.fake-diff-tab .wb-diff-file .path'); return [p.textContent, p.children.length]; })()`,
+			),
+		).toEqual([DIFF_PATH, 0]);
 		// The theme's ground is palette.css's --bg-0, read from the page (0401, 0474).
 		expect(
 			await browser.eval<string>(
@@ -152,13 +172,57 @@ test.skipIf(!existsSync(EDGE))(
 );
 
 test.skipIf(!existsSync(EDGE))(
+	"a code peek citing both sides of its file reads each range on its own side, find counts both, and reveal opens the base line (0393, 0411)",
+	async () => {
+		const server = startPageServer({ whiteboard: { reviews: [] } });
+		open.server = server;
+		const browser = await newTab();
+		await browser.send("Page.navigate", { url: `${server.url}?review=peek` });
+		await browser.waitFor(
+			`document.querySelector('.fake-peek .monaco-editor, .fake-peek.wb-error, .fake-peek .wb-error') !== null`,
+			"the peek",
+			60_000,
+		);
+		expect(
+			await browser.eval<string | null>(`document.querySelector('.fake-peek .wb-error')?.textContent ?? null`),
+		).toBe(null);
+		// The default side (head) first, then the base range, each numbered in its own file, a ⋯ line between.
+		await browser.waitFor(`document.querySelectorAll('.fake-peek .view-line').length === 3`, "the peek's lines");
+		expect(
+			await browser.eval<string[]>(
+				`[...document.querySelectorAll('.fake-peek .view-line')].sort((a, b) => parseFloat(a.style.top) - parseFloat(b.style.top)).map((v) => v.textContent.replace(/\\u00a0/g, ' '))`,
+			),
+		).toEqual(["export const attempts = 5;", "", "export const attempts = 3;"]);
+		expect(
+			await browser.eval<string[]>(
+				`[...document.querySelectorAll('.fake-peek .line-numbers')].map((n) => n.textContent)`,
+			),
+		).toEqual(["1", "⋯", "1"]);
+
+		await browser.waitFor(`window.__revealed !== undefined`, "the reveal");
+		expect(await browser.eval<number>(`window.__found`)).toBe(2);
+		expect(await browser.eval<boolean>(`window.__revealed`)).toBe(true);
+		expect(await browser.eval<string>(`document.querySelector('.wb-source .meta').textContent`)).toBe(
+			"line 1 · before the change",
+		);
+		await browser.waitFor(
+			`(document.querySelector('.wb-source .view-lines')?.textContent ?? '').replace(/\\u00a0/g, ' ').includes('attempts = 3')`,
+			"the base file in the panel",
+		);
+		expect(browser.errors).toEqual([]);
+		expect(await browser.cspViolations()).toEqual([]);
+	},
+	{ timeout: 120_000 },
+);
+
+test.skipIf(!existsSync(EDGE))(
 	"before the first review the page shows Jocasta's empty state with the tutorial, and none of the page's element rules reach whiteboard's canvas (0419)",
 	async () => {
 		const server = startPageServer({
 			whiteboard: { reviews: [{ reviewId: "s", title: "Scratchpad", kind: "scratchpad" }] },
 		});
-		const browser = await Browser.launch();
-		open = { server, browser };
+		open.server = server;
+		const browser = await newTab();
 		await browser.send("Page.navigate", { url: server.url });
 		await browser.waitFor(`document.querySelector('.wb-empty') !== null`, "the empty state");
 
@@ -224,8 +288,8 @@ test.skipIf(!existsSync(EDGE))(
 	"without whiteboard the page says plainly that the canvas couldn't start, and Try again asks once more (0432)",
 	async () => {
 		const server = startPageServer();
-		const browser = await Browser.launch();
-		open = { server, browser };
+		open.server = server;
+		const browser = await newTab();
 		await browser.send("Page.navigate", { url: `${server.url}?review=r-1` });
 		await browser.waitFor(`document.querySelector('.wb-unavailable h2') !== null`, "the canvas's trouble");
 		expect(await browser.eval<string>(`document.querySelector('.wb-unavailable h2').textContent`)).toBe(
@@ -245,6 +309,29 @@ test.skipIf(!existsSync(EDGE))(
 		);
 		expect(await browser.eval<number>(`document.querySelectorAll('.wb-unavailable').length`)).toBe(1);
 		expect(browser.errors).toEqual([]);
+		expect(await browser.cspViolations()).toEqual([]);
+	},
+	{ timeout: 60_000 },
+);
+
+test.skipIf(!existsSync(EDGE))(
+	"when whiteboard's canvas script doesn't load, the page says so, and Try again reloads the page (0581)",
+	async () => {
+		const server = startPageServer({ whiteboard: { reviews: [], brokenScript: true } });
+		open.server = server;
+		const browser = await newTab();
+		await browser.send("Page.navigate", { url: `${server.url}?review=r-1` });
+		await browser.waitFor(`document.querySelector('.wb-unavailable p') !== null`, "the canvas's trouble");
+		expect(await browser.eval<string>(`document.querySelector('.wb-unavailable p').textContent`)).toBe(
+			"Jocasta's whiteboard files didn't load. Try again; if it keeps failing, restart Jocasta.",
+		);
+		// The browser keeps the failed import for the page's life: Try again is a fresh page, not a second import.
+		await browser.eval(`window.__beforeReload = true`);
+		await browser.eval(`document.querySelector('.wb-unavailable .btn').click()`);
+		await browser.waitFor(
+			`window.__beforeReload === undefined && document.querySelector('.wb-unavailable p') !== null`,
+			"the reloaded page's trouble",
+		);
 		expect(await browser.cspViolations()).toEqual([]);
 	},
 	{ timeout: 60_000 },
@@ -271,8 +358,7 @@ try { window.__built = Function(tt ? tt.createScript("return 2") : "return 2")()
 			},
 		});
 		try {
-			const browser = await Browser.launch();
-			open = { browser };
+			const browser = await newTab();
 			await browser.send("Page.navigate", { url: `http://127.0.0.1:${srv.port}/` });
 			await browser.waitFor("window.__built !== undefined", "the glue's function");
 			expect(await browser.eval<unknown>("window.__built")).toBe(2);

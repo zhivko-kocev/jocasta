@@ -3,8 +3,8 @@
  * the files are a few hundred lines at most.
  */
 export function lineDiff(before: string, after: string): string[] {
-	const a = before.replace(/\n$/, "").split(/\r?\n/);
-	const b = after.replace(/\n$/, "").split(/\r?\n/);
+	const a = before.replace(/\r?\n$/, "").split(/\r?\n/);
+	const b = after.replace(/\r?\n$/, "").split(/\r?\n/);
 	// lcs[i][j] = longest common subsequence of a[i..] and b[j..].
 	const lcs = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0));
 	for (let i = a.length - 1; i >= 0; i--) {

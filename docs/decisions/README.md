@@ -579,3 +579,17 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0570](0570-parallel-starts-share-the-overlay.md) | Parallel thread starts in one project no longer race on its omp.yml | product | v1 | program | 2026-11-09 |
 | [0571](0571-no-check-arm-in-the-follow-up.md) | The follow-up study drops f-check-off; A6's check stays as the product behaves | process | v1 | program | 2026-11-09 |
 | [0572](0572-linux-and-macos-pass-ci-now.md) | CI's Linux and macOS jobs pass before the benchmarks | process | v1 | program | 2026-11-09 |
+| [0573](0573-full-review-before-the-benchmarks.md) | A full review and its fixes before the benchmarks; a week of use, then the benchmarks | process | v1 | program | 2026-11-09 |
+| [0574](0574-task-benchmark-grades-what-the-agent-broke.md) | The task benchmark grades what the agent broke, has limits, and holds its conditions | benchmark | v1 | program | 2026-11-09 |
+| [0575](0575-follow-up-drops-f-keepalive.md) | The follow-up drops f-keepalive; A6's layer builds its code index before the trial's clock | benchmark | v1 | program | 2026-11-09 |
+| [0576](0576-live-benchmarks-on-the-harness-os-build.md) | The live benchmarks on the harness-OS build | benchmark | v1 | program | 2026-11-09 |
+| [0577](0577-thread-prompts-and-tool-time-limits.md) | Thread prompts and the tools' time limits | product | v1 | program | 2026-11-09 |
+| [0578](0578-allow-popup-and-local-api.md) | The Allow popup and the service's local API | product, security | v1 | program | 2026-11-09 |
+| [0579](0579-install-folder-is-jocastas-alone.md) | The install folder is Jocasta's alone | product | v1 | program | 2026-11-09 |
+| [0580](0580-guard-covers-more-shapes.md) | The guard covers more shapes, and done_when goes through it | product, security | v1 | program | 2026-11-09 |
+| [0581](0581-today-keys-wording-and-canvas.md) | today, the keys, the wording and the canvas | product, ux | v1 | program | 2026-11-09 |
+| [0582](0582-starting-recovering-and-counting-cost.md) | Starting, recovering and counting cost | product | v1 | program | 2026-11-09 |
+| [0583](0583-boss-manual-and-shipped-prompt-texts.md) | The boss manual and shipped prompt texts | product, prompts | v1 | program | 2026-11-09 |
+| [0584](0584-setup-settings-tests-names-and-stale-files.md) | Setup, settings, tests, names and stale files | product, process | v1 | program | 2026-11-09 |
+| [0585](0585-h1-live-check-gets-a-new-recorder.md) | H1's live check gets a new recorder on omp 18.18.2 | benchmark | v1 | program | 2026-11-09 |
+| [0586](0586-keep-alive-pings-are-not-measured.md) | Keep-alive pings are not measured | benchmark | v1 | program | 2026-11-09 |

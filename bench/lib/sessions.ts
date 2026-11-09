@@ -1,19 +1,35 @@
-import { jsonLines } from "./timing.ts";
+import { jsonLines } from "../../src/shared/jsonl.ts";
 
 /**
- * omp session files (`~/.omp/agent/sessions/<cwd>/<time>_<id>.jsonl`, omp 18.12.6): one entry per line with an ISO
- * `timestamp`; `message` entries carry `{role, content, timestamp?}`. Times follow `sessions.ts` `entryTime`: the
- * message's own epoch-ms `timestamp` when non-zero, else the entry's ISO time.
+ * omp session files (`~/.omp/agent/sessions/<cwd>/<time>_<id>.jsonl`, omp 18.18.2): one entry per line with an ISO
+ * `timestamp`; `message` entries carry `{role, content, timestamp?, completedAt?}`. Times follow `sessions.ts`
+ * `entryTime`: the message's own epoch-ms `timestamp` when non-zero, else the entry's ISO time.
  */
 
 type Entry = Record<string, unknown> & { type?: string; timestamp?: unknown; mode?: unknown };
-type Message = Record<string, unknown> & { role?: string; content?: unknown; timestamp?: unknown };
+type Message = Record<string, unknown> & {
+	role?: string;
+	content?: unknown;
+	timestamp?: unknown;
+	completedAt?: unknown;
+};
 
 const asObject = (value: unknown): Record<string, unknown> | undefined =>
 	typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 
 function entryTime(entry: Entry, message?: Message): number {
 	if (typeof message?.timestamp === "number" && message.timestamp > 0) return message.timestamp;
+	return typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
+}
+
+/**
+ * When an assistant message was complete (0482's "needs you" moment for an ask): omp stamps the message's own
+ * `timestamp` when it builds the request, before the model streams (`anthropic.ts`), and `completedAt` at
+ * `message_end` (`agent-session.ts`), when the entry's ISO time is written too. So `completedAt`, else the entry's
+ * time, never `message.timestamp`, which would put the model's generation inside H2's t1−t0 and t3−t0.
+ */
+function completedTime(entry: Entry, message: Message): number {
+	if (typeof message.completedAt === "number" && message.completedAt > 0) return message.completedAt;
 	return typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
 }
 
@@ -31,7 +47,10 @@ export function sessionStart(text: string): number {
 	return header && typeof header.timestamp === "string" ? Date.parse(header.timestamp) : Number.NaN;
 }
 
-/** When the agent asked him something: assistant messages with an `ask` tool call (`sessions.ts` reads the same). */
+/**
+ * When the agent asked him something: assistant messages with an `ask` tool call (`sessions.ts` reads the same), at
+ * the message's completion (`completedTime`).
+ */
 export function askTimes(text: string): number[] {
 	return messages(text)
 		.filter(
@@ -40,7 +59,7 @@ export function askTimes(text: string): number[] {
 				Array.isArray(message.content) &&
 				message.content.some((part) => asObject(part)?.type === "toolCall" && asObject(part)?.name === "ask"),
 		)
-		.map(({ at }) => at);
+		.map(({ entry, message }) => completedTime(entry, message));
 }
 
 /** When a plan became ready for his review: a successful `write` result proposing the plan (`sessions.ts` `proposedPlan`). */

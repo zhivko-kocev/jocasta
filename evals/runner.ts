@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import {
 	appendFileSync,
 	cpSync,
@@ -7,16 +7,30 @@ import {
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
-	rmSync,
 	writeFileSync,
 } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { type Static, Type } from "typebox";
+import { git } from "../bench/lib/git.ts";
+import { readVersion } from "../bench/lib/output.ts";
+import { BENCH_PTY_SESSION } from "../bench/lib/sandbox.ts";
+import { removeTree } from "../src/shared/fsx.ts";
+import { endProcesses, killTree, processesIn, processIdOf } from "../src/shared/proctree.ts";
+import { withoutLeadingComment } from "../src/shared/prompt.ts";
 import { describe, parseYamlFile, YamlFileError } from "../src/shared/yaml.ts";
+import {
+	A7_API_KEY_ENV,
+	assistantText,
+	HARNESSES,
+	ompSessionText,
+	saveSessions,
+	type Turn,
+	type Usage,
+} from "./harness.ts";
 import { type LayerSetup, loadBenchLayer } from "./layer.ts";
 import { type PlanReviewSummary, planReviewExtension, readPlanReviewLog } from "./plan-review.ts";
-import { BENCH_PTY_SESSION, herdrTerminal, type TerminalRunner } from "./terminal.ts";
+import { herdrTerminal, type TerminalRunner } from "./terminal.ts";
 import { DEFAULT_VARIANT, deepMerge, type Harness, type Variant, variantArgs } from "./variants.ts";
 
 /**
@@ -31,12 +45,20 @@ import { DEFAULT_VARIANT, deepMerge, type Harness, type Variant, variantArgs } f
 /** The overlay every trial starts from: eval sessions never enter his memory. A variant's settings layer over it. */
 export const BASE_OVERLAY: Readonly<Record<string, unknown>> = { memory: { backend: "off" } };
 
+/** What A7's key becomes in its transcript and exports when an agent printed it (EVL-13). */
+export const A7_KEY_MARK = "<A7 key>";
+
 /**
- * Where A7's Anthropic API key waits (0537): the only API key of the run, given to opencode's process as
- * `ANTHROPIC_API_KEY` and removed from every other process a trial starts (and an `ANTHROPIC_API_KEY` of the bench's
- * own environment from every trial).
+ * The grading limit (0574): the end-state checks, and the hidden grading's setup and checks together, each get this
+ * long; a command still running then is ended with its process tree and its check grades 0.
  */
-export const A7_API_KEY_ENV = "JOCASTA_A7_ANTHROPIC_API_KEY";
+export const GRADING_LIMIT_MS = 60 * 60_000;
+
+/**
+ * The setup before the harness has its own limit (0574, amended): a setup still running then is ended with its process
+ * tree and the trial is an infra error (not the agent's doing), which the task bench retries.
+ */
+export const SETUP_LIMIT_MS = 60 * 60_000;
 
 /** An end-state check (0164): a command that exits 0, a file's content or absence, or whether git is clean. */
 const CheckSchema = Type.Object(
@@ -91,25 +113,10 @@ export interface EvalCase {
 	 * benchmark: a Python task's `venv/Scripts`, so every `python` is the trial's own).
 	 */
 	pathPrefix?: string[];
-}
-
-export interface Usage {
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
-	totalTokens: number;
-	cost: number;
-}
-
-/** What a trial's transcript says about its model, usage, turns and tool calls. */
-export interface HarnessResponse {
-	model: string | null;
-	usage: Usage;
-	totalUsage: Usage;
-	requests: number;
-	turns: number;
-	toolCalls: number;
+	/** Hidden grading's setup when it differs from `setup` (0574: a Python task's fresh grading venv). */
+	gradeSetup?: string;
+	/** Hidden grading's {@link pathPrefix} when it differs from the trial's (the grading venv's `Scripts`). */
+	gradePathPrefix?: string[];
 }
 
 /**
@@ -150,6 +157,10 @@ export interface ResultRow {
 	passed: boolean;
 	/** A plan-review trial's review (0567): requested, the choice given and taken, and why omp was shut down. */
 	planReview?: PlanReviewSummary;
+	/** A layered trial's code index build, done during setup before the trial's clock (0575); not in `wallMs`. */
+	layer?: { indexBuildMs: number };
+	/** A7's key was in the trial's output or exports; it was replaced there with {@link A7_KEY_MARK} (EVL-13). */
+	keyExposed?: true;
 }
 
 /** What one trial needs: {@link runEvals} passes its run's options, the task benchmark (`evals/bench.ts`, 0482) its own. */
@@ -185,6 +196,10 @@ export interface TrialOptions {
 	ptySession?: string;
 	/** Runs that turn instead of a herdr pane (tests; not passed to worker threads). */
 	runInTerminal?: TerminalRunner;
+	/** The grading limit; {@link GRADING_LIMIT_MS} when unset. */
+	gradingTimeoutMs?: number;
+	/** The limit of the setup before the harness; {@link SETUP_LIMIT_MS} when unset. */
+	setupTimeoutMs?: number;
 }
 
 export interface RunOptions extends TrialOptions {
@@ -280,63 +295,12 @@ export async function runEvals(options: RunOptions): Promise<ResultRow[]> {
 	return rows;
 }
 
-/** `<launcher> --version`'s first line, once per run. */
-export function readVersion(launcher: readonly string[]): string {
-	const [command = "", ...args] = launcher;
-	const result = spawnSync(command, [...args, "--version"], { encoding: "utf8", windowsHide: true, timeout: 30_000 });
-	const version = result.stdout?.trim().split(/\r?\n/)[0];
-	if (result.status !== 0 || !version)
-		throw new Error(`${launcher.join(" ")} --version failed: ${result.stderr || result.error?.message}`);
-	return version;
-}
-
 /**
- * One turn's harness arguments after the launcher. omp: `[--profile <p>] [-c] <variant flags> [--session-dir <dir>]
- * --config <overlay> -p <prompt> --mode json`; a follow-up continues the trial's session (`-c`) without plan-first.
- * An interactive omp turn (`extension` set: the plan-review extension, 0567) has no `-p`/`--mode`: `<flags>
- * [--session-dir <dir>] --config <overlay> -e <extension> <prompt>`. Claude Code: `[-c] <variant flags> -p <prompt>
- * --output-format stream-json --verbose` (stream-json needs `--verbose` in print mode). opencode: `run [--session <id>]
- * <variant flags> --format json <prompt>`; a follow-up names the first turn's session, since `--continue` takes the
- * machine's last session, which may be another trial's.
+ * One turn's harness arguments after the launcher, as the variant's harness builds them (its adapter's `args`); a
+ * follow-up never plans first.
  */
-export function trialArgs(
-	variant: Variant,
-	turn: {
-		prompt: string;
-		followUp: boolean;
-		overlay: string;
-		profile?: string;
-		sessionDir?: string;
-		session?: string;
-		extension?: string;
-	},
-): string[] {
-	const flags = variantArgs(turn.followUp ? { ...variant, planFirst: false } : variant);
-	const resume = turn.followUp ? ["-c"] : [];
-	if (variant.harness === "claude")
-		return [...resume, ...flags, "-p", turn.prompt, "--output-format", "stream-json", "--verbose"];
-	if (variant.harness === "opencode") {
-		if (turn.followUp && turn.session === undefined)
-			throw new Error("an opencode follow-up needs the first turn's session");
-		return [
-			"run",
-			...(turn.followUp ? ["--session", turn.session as string] : []),
-			...flags,
-			"--format",
-			"json",
-			turn.prompt,
-		];
-	}
-	const common = [
-		...(turn.profile === undefined ? [] : ["--profile", turn.profile]),
-		...resume,
-		...flags,
-		...(turn.sessionDir === undefined ? [] : ["--session-dir", turn.sessionDir]),
-		"--config",
-		turn.overlay,
-	];
-	if (turn.extension !== undefined) return [...common, "-e", turn.extension, turn.prompt];
-	return [...common, "-p", turn.prompt, "--mode", "json"];
+export function trialArgs(variant: Variant, turn: Turn): string[] {
+	return HARNESSES[variant.harness].args(variantArgs(turn.followUp ? { ...variant, planFirst: false } : variant), turn);
 }
 
 /** What an interactive plan-review turn adds to the overlay: plan mode at startup (`plan.defaultOnStartup`). */
@@ -346,7 +310,10 @@ export const PLAN_REVIEW_OVERLAY: Readonly<Record<string, unknown>> = {
 
 /**
  * One trial: a fresh temp root with the overlay and the fixture repo, the harness's turns, the end-state checks, the
- * line counts and the hidden checks. A failed setup or git step throws; the temp root is removed either way.
+ * line counts and the hidden checks. A failed setup before the harness, one cut by {@link SETUP_LIMIT_MS}, or a grading
+ * setup that fails on the fixture commit too, throws (0482's infra); what the harness and the agent left running is
+ * ended and the temp root removed
+ * either way.
  */
 export async function runTrial(
 	evalCase: EvalCase,
@@ -354,21 +321,42 @@ export async function runTrial(
 	harnessVersion: string,
 	options: TrialOptions,
 ): Promise<ResultRow> {
-	const variant = options.variant ?? DEFAULT_VARIANT;
+	const chosen = options.variant ?? DEFAULT_VARIANT;
 	const root = makeTrialRoot(options.workDir);
-	const env = trialEnv(evalCase, root, variant.env);
+	const env = trialEnv(evalCase, root, chosen.env);
+	const name = options.transcriptName ?? `${evalCase.id}-${rep}`;
 	const startedAt = new Date().toISOString();
+	const gradingLimitMs = options.gradingTimeoutMs ?? GRADING_LIMIT_MS;
+	// EVL-13: A7's key, wherever the agent printed it, never reaches what the run keeps.
+	const adapter = HARNESSES[chosen.harness];
+	const secret = adapter.apiKeyEnv === undefined ? undefined : process.env[adapter.apiKeyEnv];
+	let keyExposed = false;
+	const scrub = (text: string): string => {
+		if (!secret || !text.includes(secret)) return text;
+		keyExposed = true;
+		return text.replaceAll(secret, A7_KEY_MARK);
+	};
 	let layer: LayerSetup | undefined;
 	try {
+		const variant = withPromptCopy(chosen, root);
 		// Outside the repo, so it never shows in a git_clean check or the line counts. JSON is YAML.
 		const overlay = join(root, "eval-run.yml");
 		const logFile = (phase: string) =>
 			options.logDir === undefined ? undefined : join(options.logDir, `${phase}.log`);
-		const { repo, fixtureCommit, branch } = makeTrialRepo(evalCase, rep, root, env, logFile("setup"));
+		const setupLimitMs = options.setupTimeoutMs ?? SETUP_LIMIT_MS;
+		const { repo, fixtureCommit } = await makeTrialRepo(evalCase, rep, root, env, {
+			logFile: logFile("setup"),
+			limitMs: setupLimitMs,
+		}).catch((error: unknown) => {
+			if (error instanceof SetupKilled)
+				process.stderr.write(`${name}: setup killed after ${Math.round(setupLimitMs / 60_000)} min\n`);
+			throw error;
+		});
 		// 0567: plan first answered in omp's interactive plan review; the first turn runs in a terminal.
-		const planReview = variant.harness === "omp" ? variant.planReview : undefined;
+		const planReview = adapter.sessionFiles ? variant.planReview : undefined;
 		if (variant.layer !== undefined) {
-			// A6 (0543): Jocasta's layer build sets the trial up; without the build this throws before any model call.
+			// A6 (0543): Jocasta's layer build sets the trial up, its code index built before the clock (0575); without
+			// the build this throws before any model call.
 			layer = await (await loadBenchLayer()).setUp({
 				root,
 				repo,
@@ -389,20 +377,16 @@ export async function runTrial(
 		// omp writes its session files into the trial root (the ledger's and a plan-review trial's record); opencode's
 		// exports are needed for its usage either way.
 		const sessionDir =
-			(options.sessionsDir !== undefined || planReview) && variant.harness === "omp"
-				? join(root, "sessions")
-				: undefined;
+			(options.sessionsDir !== undefined || planReview) && adapter.sessionFiles ? join(root, "sessions") : undefined;
 		const harnessEnv =
-			variant.harness === "opencode"
-				? { ...env, ANTHROPIC_API_KEY: process.env[A7_API_KEY_ENV] }
-				: { ...env, ...layer?.env };
+			adapter.apiKeyEnv !== undefined ? { ...env, ANTHROPIC_API_KEY: secret } : { ...env, ...layer?.env };
 		const outputs: string[] = [];
 		let wallMs = 0;
 		let exitedOk = true;
 		let timedOut = false;
 		for (const [i, prompt] of prompts.entries()) {
 			const left = options.timeoutMs === undefined ? undefined : Math.max(1, options.timeoutMs - wallMs);
-			const session = variant.harness === "opencode" ? opencodeSessions(outputs.join("\n"))[0] : undefined;
+			const session = adapter.session(outputs.join("\n"));
 			const args = [
 				...launcherArgs,
 				...trialArgs(variant, {
@@ -418,7 +402,9 @@ export async function runTrial(
 			];
 			let run: HarnessRun;
 			if (planReview && i === 0) {
-				const terminal = options.runInTerminal ?? herdrTerminal(options.ptySession ?? BENCH_PTY_SESSION);
+				const terminal =
+					options.runInTerminal ??
+					herdrTerminal(options.ptySession ?? BENCH_PTY_SESSION, { workspaceCwd: options.workDir ?? tmpdir() });
 				const ended = await terminal(command, args, repo, harnessEnv, left);
 				const log = existsSync(planReviewLog) ? readFileSync(planReviewLog, "utf8") : "";
 				// herdr reports no exit code: the turn counts as ended well when the extension shut omp down.
@@ -431,31 +417,33 @@ export async function runTrial(
 					wallMs: ended.wallMs,
 				};
 			} else run = await runHarness(command, args, repo, harnessEnv, left);
+			run = { ...run, stdout: scrub(run.stdout), stderr: scrub(run.stderr) };
 			options.onHarnessRun?.({ status: run.status, stderr: run.stderr, timedOut: run.timedOut });
 			outputs.push(run.stdout);
 			wallMs += run.wallMs;
 			if (run.timedOut) {
 				timedOut = true;
-				process.stderr.write(`${evalCase.id}-${rep}: killed after ${options.timeoutMs} ms\n`);
+				process.stderr.write(`${name}: killed after ${options.timeoutMs} ms\n`);
 			} else if (run.status !== 0) {
-				process.stderr.write(`${evalCase.id}-${rep}: ${variant.harness} exited ${run.status}\n${run.stderr}\n`);
+				process.stderr.write(`${name}: ${variant.harness} exited ${run.status}\n${run.stderr}\n`);
 			}
 			if (run.status !== 0 || run.timedOut) {
 				exitedOk = false;
 				break;
 			}
 		}
+		// EVL-12: language servers, watchers and dev servers the harness or the agent left go before grading, and a
+		// git index lock a killed process left with them, so grading sees the agent's files, not a held repo.
+		await endLeftovers(root);
+		removeTree(join(repo, ".git", "index.lock"));
 		// Each turn's output ends its last line, so one turn's JSON never runs into the next. A plan-review trial's
 		// first turn had a terminal, not JSON: its transcript is the session files omp wrote, every turn included.
 		const transcript = planReview
 			? ompSessionText(sessionDir as string)
 			: outputs.map((output) => (output === "" || output.endsWith("\n") ? output : `${output}\n`)).join("");
-		writeFileSync(
-			join(options.outDir, "transcripts", `${options.transcriptName ?? `${evalCase.id}-${rep}`}.jsonl`),
-			transcript,
-		);
+		writeFileSync(join(options.outDir, "transcripts", `${name}.jsonl`), transcript);
 		const savedSessions =
-			options.sessionsDir ?? (variant.harness === "opencode" ? join(root, "opencode-sessions") : undefined);
+			options.sessionsDir ?? (adapter.recordsDir === undefined ? undefined : join(root, adapter.recordsDir));
 		if (savedSessions !== undefined)
 			saveSessions(variant.harness, savedSessions, {
 				transcript,
@@ -463,26 +451,32 @@ export async function runTrial(
 				launcher: options.launcher,
 				env: harnessEnv,
 				cwd: repo,
+				scrub,
 			});
 		const grade: Record<string, number> = { [`${variant.harness} exited 0`]: exitedOk ? 1 : 0 };
 		if (timedOut) grade.timeout = 0;
-		for (const check of evalCase.checks) grade[checkLabel(check)] = gradeCheck(check, repo, env) ? 1 : 0;
+		const killed = () =>
+			process.stderr.write(`${name}: grading killed after ${Math.round(gradingLimitMs / 60_000)} min\n`);
+		const checksBy = performance.now() + gradingLimitMs;
+		for (const check of evalCase.checks) {
+			const result = await checkResult(check, repo, env, undefined, checksBy);
+			if (result.timedOut) killed();
+			grade[checkLabel(check)] = result.passed ? 1 : 0;
+		}
 		// After grading, so staging can't change a git_clean check.
 		const lines = lineCounts(repo, fixtureCommit, logFile("lines"));
 		let hiddenPassed: boolean | null = null;
 		if (evalCase.hiddenChecks.length > 0) {
-			const hidden = gradeHidden(evalCase, repo, branch, join(root, "grade"), env, logFile("grade"));
+			const hidden = await gradeHidden(evalCase, repo, fixtureCommit, join(root, "grade"), {
+				env: trialEnv({ ...evalCase, pathPrefix: evalCase.gradePathPrefix ?? evalCase.pathPrefix }, root, chosen.env),
+				logFile: logFile("grade"),
+				limitMs: gradingLimitMs,
+			});
+			if (hidden[HIDDEN_TIMEOUT] !== undefined) killed();
 			Object.assign(grade, hidden);
 			hiddenPassed = Object.values(hidden).every((score) => score === 1);
 		}
-		const response =
-			variant.harness === "claude"
-				? readClaudeResponse(transcript)
-				: variant.harness === "opencode"
-					? readOpencodeResponse(savedSessions as string)
-					: planReview
-						? readOmpSessionsResponse(sessionDir as string)
-						: readResponse(transcript);
+		const response = adapter.response({ transcript, savedSessions, sessionDir, planReview: planReview !== undefined });
 		const review = outputs[1];
 		return {
 			case: evalCase.id,
@@ -497,8 +491,8 @@ export async function runTrial(
 			...lines,
 			grade,
 			hiddenPassed,
-			findings:
-				prompts.length > 1 ? countFindings(review === undefined ? "" : assistantText(review, variant.harness)) : null,
+			// Only when a review turn ran: a trial whose first turn failed has no review to count.
+			findings: outputs.length > 1 ? countFindings(assistantText(review ?? "", variant.harness)) : null,
 			passed: Object.values(grade).every((score) => score === 1),
 			...(planReview
 				? {
@@ -508,11 +502,47 @@ export async function runTrial(
 						),
 					}
 				: {}),
+			...(layer?.indexBuildMs === undefined ? {} : { layer: { indexBuildMs: layer.indexBuildMs } }),
+			...(keyExposed ? { keyExposed: true as const } : {}),
 		};
 	} finally {
 		await layer?.close();
-		removeTrialDir(root);
+		await endLeftovers(root);
+		try {
+			removeTree(root);
+		} catch (error) {
+			process.stderr.write(`could not remove ${root} (${(error as NodeJS.ErrnoException).code}); delete it by hand\n`);
+		}
 	}
+}
+
+/** The grade a hidden grading cut by {@link GRADING_LIMIT_MS} gets (0574). */
+export const HIDDEN_TIMEOUT = "hidden: timeout";
+/** The grade of a grading setup that the trial's change broke: it passes on the fixture commit (0574). */
+export const HIDDEN_SETUP_FAILED = "hidden: setup failed";
+
+/**
+ * Ends every process whose working folder is in `root` (EVL-12): what a harness or an agent started detached outlives
+ * the harness, holds the trial's files and piles up over a run. A failure to list them is reported, not thrown.
+ */
+async function endLeftovers(root: string): Promise<void> {
+	try {
+		const ids = processesIn(root).flatMap((found) => processIdOf(found.pid) ?? []);
+		await endProcesses(ids);
+	} catch (error) {
+		process.stderr.write(`could not end the processes left in ${root}: ${(error as Error).message}\n`);
+	}
+}
+
+/**
+ * The variant with its `--append-system-prompt` file copied into the trial root without a leading `<!-- … -->` block
+ * (0577): Ponytail's license and file notes stay in the shipped file and out of every arm's system prompt.
+ */
+function withPromptCopy(variant: Variant, root: string): Variant {
+	if (variant.appendSystemPrompt === undefined) return variant;
+	const file = join(root, "system-prompt.md");
+	writeFileSync(file, withoutLeadingComment(readFileSync(variant.appendSystemPrompt, "utf8")));
+	return { ...variant, appendSystemPrompt: file };
 }
 
 /**
@@ -549,20 +579,21 @@ export function trialEnv(
 /**
  * `<root>/repo`: the fixture copied in and committed as `fixture` on `main`, every file of it, those its own ignore rules
  * match too (upstream tracks them: cli/cli's `internal/gh`, pipx's test package lists), and tagged with `fixtureTag`;
- * the setup run in that checkout (tools that read the version from git, such as setuptools-scm and hatch-vcs, need a
+ * the setup run in that checkout within `limitMs` ({@link SETUP_LIMIT_MS} by default; past it, it is ended with its
+ * tree and this throws as infra) (tools that read the version from git, such as setuptools-scm and hatch-vcs, need a
  * commit, and upstream's tag to report upstream's version), and what setup wrote folded
  * into the same commit, so it never counts as the trial's change; then checked out on the trial's own branch. Hooks that
  * setup installs (husky, yorkie, simple-git-hooks) stay off: an arm that commits meets no lint or commit-message check
  * that an arm that doesn't never meets. Git converts no line endings there (`core.autocrlf` off), so its files and its
  * clean clone keep the fixture's bytes on Windows too.
  */
-export function makeTrialRepo(
+export async function makeTrialRepo(
 	evalCase: EvalCase,
 	rep: number,
 	root: string,
 	env: Record<string, string | undefined>,
-	logFile?: string,
-): { repo: string; fixtureCommit: string; branch: string } {
+	options: { logFile?: string; limitMs?: number } = {},
+): Promise<{ repo: string; fixtureCommit: string; branch: string }> {
 	const repo = join(root, "repo");
 	mkdirSync(repo);
 	if (evalCase.fixture) cpSync(evalCase.fixture, repo, { recursive: true });
@@ -577,7 +608,7 @@ export function makeTrialRepo(
 		git(repo, args);
 	}
 	if (evalCase.fixtureTag) git(repo, ["tag", evalCase.fixtureTag]);
-	runSetup(evalCase, repo, env, logFile);
+	await runSetup(evalCase, repo, env, options.logFile, performance.now() + (options.limitMs ?? SETUP_LIMIT_MS));
 	// A folder that never exists, so no hook runs, wherever setup put them (husky moves `core.hooksPath` itself).
 	git(repo, ["config", "core.hooksPath", join(root, "no-hooks")]);
 	git(repo, ["add", "-A"]);
@@ -591,91 +622,161 @@ export function makeTrialRepo(
 	return { repo, fixtureCommit, branch };
 }
 
+interface CommandResult {
+	status: number | null;
+	stdout: string;
+	stderr: string;
+	/** Ended by its deadline, with its process tree. */
+	timedOut: boolean;
+}
+
+/** With `logFile`, appends a command's folder, exit code, seconds, stdout and stderr there (0482). */
+function logCommand(logFile: string | undefined, command: string, cwd: string, started: number, result: CommandResult) {
+	if (logFile === undefined) return;
+	mkdirSync(dirname(logFile), { recursive: true });
+	const seconds = ((performance.now() - started) / 1000).toFixed(1);
+	const exit = result.timedOut ? `${result.status} (killed at its time limit)` : String(result.status);
+	appendFileSync(
+		logFile,
+		`=== ${new Date().toISOString()}\n$ ${command}\ncwd: ${cwd}\nexit: ${exit}\nseconds: ${seconds}\n--- stdout\n${result.stdout}\n--- stderr\n${result.stderr}\n\n`,
+	);
+}
+
 /**
- * Runs a shell command; with `logFile`, appends its command, folder, exit code, seconds, stdout and stderr there, so a
- * failing setup or test can be diagnosed afterwards (0482).
+ * Runs a shell command until `deadline` (a `performance.now()` time), then ends it with its whole process tree (EVL-5:
+ * a shell's own kill leaves the test runner under it holding the pipes, and a blocked event loop never fires a test
+ * framework's timeout); with `logFile`, logs it there.
  */
 function runCommand(
 	command: string,
 	cwd: string,
 	env: Record<string, string | undefined> | undefined,
 	logFile: string | undefined,
-): { status: number | null; stdout: string; stderr: string } {
+	deadline: number,
+): Promise<CommandResult> {
+	const { promise, resolve } = Promise.withResolvers<CommandResult>();
 	const started = performance.now();
-	const result = spawnSync(command, { cwd, env, shell: true, encoding: "utf8", windowsHide: true, maxBuffer: 1 << 28 });
-	const stderr = result.stderr || result.error?.message || "";
-	if (logFile !== undefined) {
-		mkdirSync(dirname(logFile), { recursive: true });
-		const seconds = ((performance.now() - started) / 1000).toFixed(1);
-		appendFileSync(
-			logFile,
-			`=== ${new Date().toISOString()}\n$ ${command}\ncwd: ${cwd}\nexit: ${result.status}\nseconds: ${seconds}\n--- stdout\n${result.stdout ?? ""}\n--- stderr\n${stderr}\n\n`,
-		);
-	}
-	return { status: result.status, stdout: result.stdout ?? "", stderr };
+	const child = spawn(command, {
+		cwd,
+		env,
+		shell: true,
+		detached: process.platform !== "win32",
+		stdio: ["ignore", "pipe", "pipe"],
+		windowsHide: true,
+	});
+	const stdout: Buffer[] = [];
+	const stderr: Buffer[] = [];
+	child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+	child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+	let timedOut = false;
+	let settled = false;
+	const finish = (status: number | null, error?: Error) => {
+		if (settled) return;
+		settled = true;
+		clearTimeout(timer);
+		const result = {
+			status,
+			stdout: Buffer.concat(stdout).toString("utf8"),
+			stderr: Buffer.concat(stderr).toString("utf8") || (error?.message ?? ""),
+			timedOut,
+		};
+		logCommand(logFile, command, cwd, started, result);
+		resolve(result);
+	};
+	const timer = setTimeout(
+		async () => {
+			timedOut = true;
+			if (child.pid !== undefined) await killTree(child.pid).catch(() => []);
+			// A grandchild that kept a pipe open past the kill doesn't hold the grading up.
+			setTimeout(() => finish(null), 5_000).unref();
+		},
+		Math.max(0, deadline - performance.now()),
+	);
+	child.once("error", (error) => finish(null, error));
+	child.once("close", (status) => finish(status));
+	return promise;
 }
 
-function runSetup(
+/** A setup before the harness ended at {@link SETUP_LIMIT_MS}: an infra error (`classifyInfra` reads `: setup \``). */
+class SetupKilled extends Error {}
+
+async function runSetup(
 	evalCase: EvalCase,
 	cwd: string,
 	env: Record<string, string | undefined>,
 	logFile: string | undefined,
-): void {
+	deadline: number,
+): Promise<void> {
 	if (evalCase.setup === undefined) return;
-	const setup = runCommand(evalCase.setup, cwd, env, logFile);
-	if (setup.status !== 0) throw new Error(`${evalCase.id}: setup \`${evalCase.setup}\` failed: ${setup.stderr}`);
+	const setup = await runCommand(evalCase.setup, cwd, env, logFile, deadline);
+	if (setup.timedOut) throw new SetupKilled(`${evalCase.id}: setup \`${evalCase.setup}\` killed at its time limit`);
+	if (setup.status !== 0) throw new Error(setupFailed(evalCase, evalCase.setup, setup.stderr));
 }
+
+/** A setup failure as an infra error names it (`classifyInfra` reads `: setup \``). */
+const setupFailed = (evalCase: EvalCase, setup: string, stderr: string) =>
+	`${evalCase.id}: setup \`${setup}\` failed: ${stderr}`;
 
 /**
  * The hidden checks (0482 E1) on a clean clone of the trial's result: its changes (staged by the caller) committed on
- * the trial branch, cloned to `gradeDir` (no ignored or build files the agent left), the case's setup run again,
- * `hidden/` copied in. With `logFile`, the setup's and the checks' commands are logged there.
+ * whatever HEAD the agent left (EVL-8: a branch it made or a detached HEAD included), that commit cloned to `gradeDir`
+ * (no ignored or build files the agent left), the case's grading setup run there, `hidden/` copied in. With `logFile`,
+ * the setup's and the checks' commands are logged there.
+ *
+ * Grading has one limit (0574, `limitMs`, {@link GRADING_LIMIT_MS} by default) for setup and checks together: what runs
+ * past it is ended and the grades so far get {@link HIDDEN_TIMEOUT} 0. A grading setup that fails is run again on a
+ * clean clone of the fixture commit, within the same limit (EVL-5; cut there, it grades {@link HIDDEN_TIMEOUT} 0 like a
+ * cut setup): when it passes there the trial's change broke it, and the grade is {@link HIDDEN_SETUP_FAILED} 0; when it
+ * fails there too, the setup itself is broken and this throws (infra, 0482).
  */
-export function gradeHidden(
+export async function gradeHidden(
 	evalCase: EvalCase,
 	repo: string,
-	branch: string,
+	fixtureCommit: string,
 	gradeDir: string,
-	env: Record<string, string | undefined>,
-	logFile?: string,
-): Record<string, number> {
+	options: { env: Record<string, string | undefined>; logFile?: string; limitMs?: number },
+): Promise<Record<string, number>> {
+	const { env, logFile } = options;
+	const deadline = performance.now() + (options.limitMs ?? GRADING_LIMIT_MS);
 	git(repo, ["commit", "-q", "--allow-empty", "--no-verify", "-m", "trial result"]);
-	git(repo, ["-c", "core.autocrlf=false", "clone", "-q", "--branch", branch, repo, gradeDir]);
-	runSetup(evalCase, gradeDir, env, logFile);
+	const head = git(repo, ["rev-parse", "HEAD"]).trim();
+	cloneAt(repo, head, gradeDir);
+	const setup = evalCase.gradeSetup ?? evalCase.setup;
+	if (setup !== undefined) {
+		const run = await runCommand(setup, gradeDir, env, logFile, deadline);
+		if (run.timedOut) return { [HIDDEN_TIMEOUT]: 0 };
+		if (run.status !== 0) {
+			const base = `${gradeDir}-base`;
+			cloneAt(repo, fixtureCommit, base);
+			const again = await runCommand(setup, base, env, logFile, deadline);
+			if (again.timedOut) return { [HIDDEN_TIMEOUT]: 0 };
+			if (again.status !== 0) throw new Error(setupFailed(evalCase, setup, again.stderr));
+			return { [HIDDEN_SETUP_FAILED]: 0 };
+		}
+	}
 	if (evalCase.hidden) cpSync(evalCase.hidden, gradeDir, { recursive: true });
-	return Object.fromEntries(
-		evalCase.hiddenChecks.map((check) => [
-			`hidden: ${checkLabel(check)}`,
-			gradeCheck(check, gradeDir, env, logFile) ? 1 : 0,
-		]),
-	);
+	const grade: Record<string, number> = {};
+	for (const check of evalCase.hiddenChecks) {
+		const result = await checkResult(check, gradeDir, env, logFile, deadline);
+		grade[`hidden: ${checkLabel(check)}`] = result.passed ? 1 : 0;
+		if (result.timedOut) {
+			grade[HIDDEN_TIMEOUT] = 0;
+			break;
+		}
+	}
+	return grade;
+}
+
+/** A clone of `repo` at `commit` (detached), its bytes as committed; the fixture tag comes along. */
+function cloneAt(repo: string, commit: string, dir: string): void {
+	git(repo, ["clone", "-q", "--no-checkout", "-c", "core.autocrlf=false", repo, dir]);
+	git(dir, ["checkout", "-q", "--detach", commit]);
 }
 
 /** `[P0]`…`[P3]` markers in a review's reply (0453's priorities); P0 and P1 are blocking. */
 export function countFindings(text: string): { total: number; blocking: number } {
 	const priorities = [...text.matchAll(/\[P([0-3])\]/g)].map((match) => Number(match[1]));
 	return { total: priorities.length, blocking: priorities.filter((p) => p <= 1).length };
-}
-
-/**
- * Removes a trial's temp dir. On Windows a process omp started can hold a file in it for a moment after omp exits
- * (EBUSY), so it retries for up to 10 s, then leaves the dir with a warning rather than lose the run.
- */
-function removeTrialDir(root: string): void {
-	for (let attempt = 0; ; attempt++) {
-		try {
-			rmSync(root, { recursive: true, force: true });
-			return;
-		} catch (error) {
-			const code = (error as NodeJS.ErrnoException).code;
-			if (code !== "EBUSY" && code !== "EPERM" && code !== "ENOTEMPTY") throw error;
-			if (attempt === 20) {
-				process.stderr.write(`could not remove ${root} (${code}); delete it by hand\n`);
-				return;
-			}
-			Bun.sleepSync(500);
-		}
-	}
 }
 
 /**
@@ -702,21 +803,6 @@ function lineCounts(
 		linesRemoved += Number(removed) || 0;
 	}
 	return { linesAdded, linesRemoved };
-}
-
-const emptyUsage = (): Usage => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 });
-
-/** omp's usage shape: Jocasta's, with `cost` an object whose `total` is the dollars. */
-type OmpUsage = Omit<Usage, "cost"> & { cost?: { total?: number } };
-
-function addUsage(target: Usage, used: Partial<OmpUsage> | undefined): void {
-	if (!used) return;
-	target.input += used.input ?? 0;
-	target.output += used.output ?? 0;
-	target.cacheRead += used.cacheRead ?? 0;
-	target.cacheWrite += used.cacheWrite ?? 0;
-	target.totalTokens += used.totalTokens ?? 0;
-	target.cost += used.cost?.total ?? 0;
 }
 
 interface HarnessRun {
@@ -757,7 +843,8 @@ function runHarness(
 			? undefined
 			: setTimeout(() => {
 					timedOut = true;
-					if (child.pid !== undefined) killTree(child.pid);
+					// The product's walk (EVL-12): children whose parent already exited go too.
+					if (child.pid !== undefined) void killTree(child.pid).catch(() => []);
 				}, timeoutMs);
 	let settled = false;
 	const finish = (status: number | null, error?: Error) => {
@@ -777,32 +864,6 @@ function runHarness(
 	return promise;
 }
 
-function killTree(pid: number): void {
-	if (process.platform === "win32") {
-		spawnSync(
-			join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"),
-			["/F", "/T", "/PID", String(pid)],
-			{
-				stdio: "ignore",
-				windowsHide: true,
-			},
-		);
-		return;
-	}
-	try {
-		process.kill(-pid, "SIGKILL");
-	} catch {
-		// The group is already gone.
-	}
-}
-
-function git(cwd: string, args: string[]): string {
-	const result = spawnSync("git", args, { cwd, encoding: "utf8" });
-	if (result.status !== 0)
-		throw new Error(`git ${args.join(" ")} failed in ${cwd}: ${result.stderr || result.error?.message}`);
-	return result.stdout;
-}
-
 export function checkLabel(check: Check): string {
 	if (check.command !== undefined) return `command: ${check.command}`;
 	if (check.git_clean !== undefined) return `git_clean: ${check.git_clean}`;
@@ -813,306 +874,39 @@ export function checkLabel(check: Check): string {
 
 /**
  * Grades one end-state check against the trial repo after the run (0164); a command runs with `env` (default: this
- * process's) and, with `logFile`, is logged there.
+ * process's) within {@link GRADING_LIMIT_MS} and, with `logFile`, is logged there.
  */
-export function gradeCheck(
+export async function gradeCheck(
 	check: Check,
 	repo: string,
 	env?: Record<string, string | undefined>,
 	logFile?: string,
-): boolean {
+): Promise<boolean> {
+	return (await checkResult(check, repo, env, logFile, performance.now() + GRADING_LIMIT_MS)).passed;
+}
+
+/** {@link gradeCheck} until `deadline`: a command still running then is ended with its tree and fails. */
+async function checkResult(
+	check: Check,
+	repo: string,
+	env: Record<string, string | undefined> | undefined,
+	logFile: string | undefined,
+	deadline: number,
+): Promise<{ passed: boolean; timedOut: boolean }> {
 	if (check.command !== undefined) {
-		return runCommand(check.command, repo, env, logFile).status === 0;
+		const run = await runCommand(check.command, repo, env, logFile, deadline);
+		return { passed: run.status === 0 && !run.timedOut, timedOut: run.timedOut };
 	}
 	if (check.git_clean !== undefined) {
-		return (git(repo, ["status", "--porcelain"]).trim() === "") === check.git_clean;
+		return { passed: (git(repo, ["status", "--porcelain"]).trim() === "") === check.git_clean, timedOut: false };
 	}
 	const path = join(repo, check.file ?? "");
-	if (check.absent) return !existsSync(path);
-	if (!existsSync(path)) return false;
-	return check.contains === undefined || readFileSync(path, "utf8").includes(check.contains);
-}
-
-/**
- * From omp's `--mode json` events: the model as the responses name it, the main session's usage summed over its
- * assistant `message_end` events, those turns and their `toolCall` blocks, and `totalUsage`/`requests` with the
- * foreground subagents of each `task` call added from its `tool_execution_end` details (`usage`, `results[].requests`).
- */
-export function readResponse(transcript: string): HarnessResponse {
-	const usage = emptyUsage();
-	const subagentUsage = emptyUsage();
-	let subagentRequests = 0;
-	let model: string | null = null;
-	let turns = 0;
-	let toolCalls = 0;
-	for (const line of transcript.split("\n")) {
-		if (!line.startsWith("{")) continue;
-		const event = JSON.parse(line) as {
-			type?: string;
-			toolName?: string;
-			result?: { details?: { usage?: OmpUsage; results?: { requests?: number }[] } };
-			message?: { role?: string; model?: string; content?: unknown; usage?: OmpUsage };
-		};
-		if (event.type === "tool_execution_end" && event.toolName === "task") {
-			const details = event.result?.details;
-			addUsage(subagentUsage, details?.usage);
-			for (const result of details?.results ?? []) subagentRequests += result.requests ?? 0;
-			continue;
-		}
-		if (event.type !== "message_end" || event.message?.role !== "assistant") continue;
-		turns++;
-		const { content } = event.message;
-		if (Array.isArray(content))
-			toolCalls += content.filter((block) => (block as { type?: unknown } | null)?.type === "toolCall").length;
-		model = event.message.model ?? model;
-		addUsage(usage, event.message.usage);
-	}
-	const totalUsage = { ...usage };
-	for (const key of Object.keys(totalUsage) as (keyof Usage)[]) totalUsage[key] += subagentUsage[key];
-	return { model, usage, totalUsage, requests: turns + subagentRequests, turns, toolCalls };
-}
-
-/** The `.jsonl` files under omp's session folder, the folder's own (the trial's sessions) first, then subagents'. */
-function ompSessionFiles(dir: string): { path: string; main: boolean }[] {
-	if (!existsSync(dir)) return [];
-	return readdirSync(dir, { recursive: true, encoding: "utf8" })
-		.filter((name) => name.endsWith(".jsonl"))
-		.map((name) => ({ path: join(dir, name), main: !/[\\/]/.test(name) }))
-		.sort((a, b) => Number(b.main) - Number(a.main) || a.path.localeCompare(b.path));
-}
-
-/** The trial's own omp session files' text, joined: a plan-review trial's transcript (0567). */
-export function ompSessionText(dir: string): string {
-	return ompSessionFiles(dir)
-		.filter((file) => file.main)
-		.map((file) => {
-			const text = readFileSync(file.path, "utf8");
-			return text === "" || text.endsWith("\n") ? text : `${text}\n`;
-		})
-		.join("");
-}
-
-/**
- * From omp's session files in `dir` (a plan-review trial, whose first turn had a terminal, not JSON): as
- * {@link readResponse} counts the JSON stream, the trial's own assistant messages give the model, `usage`, the turns
- * and their `toolCall` blocks; the subagents' files beside them add to `totalUsage` and `requests`.
- */
-export function readOmpSessionsResponse(dir: string): HarnessResponse {
-	const usage = emptyUsage();
-	const subagentUsage = emptyUsage();
-	let subagentRequests = 0;
-	let model: string | null = null;
-	let turns = 0;
-	let toolCalls = 0;
-	for (const file of ompSessionFiles(dir)) {
-		for (const line of readFileSync(file.path, "utf8").split("\n")) {
-			if (!line.startsWith("{")) continue;
-			const entry = JSON.parse(line) as {
-				type?: string;
-				message?: { role?: string; model?: string; content?: unknown; usage?: OmpUsage };
-			};
-			if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
-			if (!file.main) {
-				subagentRequests++;
-				addUsage(subagentUsage, entry.message.usage);
-				continue;
-			}
-			turns++;
-			const { content } = entry.message;
-			if (Array.isArray(content))
-				toolCalls += content.filter((block) => (block as { type?: unknown } | null)?.type === "toolCall").length;
-			model = entry.message.model ?? model;
-			addUsage(usage, entry.message.usage);
-		}
-	}
-	const totalUsage = { ...usage };
-	for (const key of Object.keys(totalUsage) as (keyof Usage)[]) totalUsage[key] += subagentUsage[key];
-	return { model, usage, totalUsage, requests: turns + subagentRequests, turns, toolCalls };
-}
-
-/** Claude Code's usage shape in its stream-json `result` events. */
-interface ClaudeUsage {
-	input_tokens?: number;
-	output_tokens?: number;
-	cache_read_input_tokens?: number;
-	cache_creation_input_tokens?: number;
-}
-
-/**
- * From Claude Code's `-p --output-format stream-json --verbose` events (one `result` event per invocation, with
- * `total_cost_usd` and `usage`; `assistant` events carry `message.model` and `tool_use` blocks): usage summed over the
- * results, turns from `num_turns`, tool calls from the `tool_use` blocks. Claude Code's subagents are inside its own
- * totals, so `totalUsage` equals `usage`.
- */
-export function readClaudeResponse(transcript: string): HarnessResponse {
-	const usage = emptyUsage();
-	let model: string | null = null;
-	let turns = 0;
-	let toolCalls = 0;
-	for (const line of transcript.split("\n")) {
-		if (!line.startsWith("{")) continue;
-		const event = JSON.parse(line) as {
-			type?: string;
-			model?: string;
-			num_turns?: number;
-			total_cost_usd?: number;
-			usage?: ClaudeUsage;
-			message?: { model?: string; content?: unknown };
-		};
-		if (event.type === "assistant") {
-			model = event.message?.model ?? model;
-			const content = event.message?.content;
-			if (Array.isArray(content))
-				toolCalls += content.filter((block) => (block as { type?: unknown } | null)?.type === "tool_use").length;
-		} else if (event.type === "result") {
-			const used = event.usage ?? {};
-			usage.input += used.input_tokens ?? 0;
-			usage.output += used.output_tokens ?? 0;
-			usage.cacheRead += used.cache_read_input_tokens ?? 0;
-			usage.cacheWrite += used.cache_creation_input_tokens ?? 0;
-			usage.cost += event.total_cost_usd ?? 0;
-			turns += event.num_turns ?? 0;
-		}
-	}
-	usage.totalTokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
-	return { model, usage, totalUsage: { ...usage }, requests: turns, turns, toolCalls };
-}
-
-/**
- * The assistant's text in one turn's transcript, joined by newlines: omp's assistant `message_end` text blocks, Claude
- * Code's `assistant` text blocks, opencode's `text` parts.
- */
-export function assistantText(transcript: string, harness: Harness): string {
-	const texts: string[] = [];
-	for (const line of transcript.split("\n")) {
-		if (!line.startsWith("{")) continue;
-		const event = JSON.parse(line) as {
-			type?: string;
-			message?: { role?: string; content?: unknown };
-			part?: { type?: unknown; text?: unknown };
-		};
-		if (harness === "opencode") {
-			if (event.part?.type === "text" && typeof event.part.text === "string") texts.push(event.part.text);
-			continue;
-		}
-		const assistant =
-			harness === "claude"
-				? event.type === "assistant"
-				: event.type === "message_end" && event.message?.role === "assistant";
-		if (!assistant || !Array.isArray(event.message?.content)) continue;
-		for (const block of event.message.content as { type?: unknown; text?: unknown }[])
-			if (block?.type === "text" && typeof block.text === "string") texts.push(block.text);
-	}
-	return texts.join("\n");
-}
-
-/** The opencode sessions a `--format json` transcript names (`sessionID`), in first-seen order. */
-export function opencodeSessions(transcript: string): string[] {
-	return [...new Set([...transcript.matchAll(/"sessionID"\s*:\s*"(ses_[A-Za-z0-9]+)"/g)].map((m) => m[1] as string))];
-}
-
-/** The Claude Code sessions a stream-json transcript names (`session_id`), in first-seen order. */
-export function claudeSessions(transcript: string): string[] {
-	return [...new Set([...transcript.matchAll(/"session_id"\s*:\s*"([0-9a-f-]{36})"/g)].map((m) => m[1] as string))];
-}
-
-/**
- * Saves the trial's records into `dir` (emptied first) for the ledger (0538): omp's `--session-dir` folder as it is;
- * Claude Code's `<session>.jsonl` and `<session>/subagents/*.jsonl` from `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/*`;
- * for opencode, `opencode export <session>` of each session into `<session>.json`. A session that can't be found or
- * exported is reported on stderr; the ledger then lacks it.
- */
-export function saveSessions(
-	harness: Harness,
-	dir: string,
-	trial: {
-		transcript: string;
-		sessionDir?: string;
-		launcher: readonly string[];
-		env: Record<string, string | undefined>;
-		cwd: string;
-	},
-): void {
-	rmSync(dir, { recursive: true, force: true });
-	mkdirSync(dir, { recursive: true });
-	if (harness === "omp") {
-		if (trial.sessionDir !== undefined && existsSync(trial.sessionDir))
-			cpSync(trial.sessionDir, dir, { recursive: true });
-		return;
-	}
-	if (harness === "claude") {
-		const projects = join(trial.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "projects");
-		const folders = existsSync(projects) ? readdirSync(projects).map((name) => join(projects, name)) : [];
-		for (const id of claudeSessions(trial.transcript)) {
-			const folder = folders.find((path) => existsSync(join(path, `${id}.jsonl`)));
-			if (folder === undefined) {
-				process.stderr.write(`no Claude Code transcript for session ${id} under ${projects}\n`);
-				continue;
-			}
-			cpSync(join(folder, `${id}.jsonl`), join(dir, `${id}.jsonl`));
-			const subagents = join(folder, id, "subagents");
-			if (existsSync(subagents)) cpSync(subagents, join(dir, id, "subagents"), { recursive: true });
-		}
-		return;
-	}
-	const [command = "", ...launcherArgs] = trial.launcher;
-	for (const id of opencodeSessions(trial.transcript)) {
-		const exported = spawnSync(command, [...launcherArgs, "export", id], {
-			cwd: trial.cwd,
-			env: trial.env,
-			encoding: "utf8",
-			windowsHide: true,
-			maxBuffer: 256 * 1024 * 1024,
-			timeout: 120_000,
-		});
-		if (exported.status !== 0 || !exported.stdout.trimStart().startsWith("{")) {
-			process.stderr.write(`opencode export ${id} failed: ${exported.stderr || exported.error?.message}\n`);
-			continue;
-		}
-		writeFileSync(join(dir, `${id}.json`), exported.stdout);
-	}
-}
-
-/**
- * From opencode's exports in `dir` (`opencode export` JSON, one per session): the model, each `step-finish` part's
- * tokens and cost summed (reasoning counted as output), assistant messages as turns and steps as requests, `tool`
- * parts as tool calls. The cost is opencode's own: on A7's API key, the bill.
- */
-export function readOpencodeResponse(dir: string): HarnessResponse {
-	const usage = emptyUsage();
-	let model: string | null = null;
-	let turns = 0;
-	let requests = 0;
-	let toolCalls = 0;
-	const files = existsSync(dir) ? readdirSync(dir).filter((name) => name.endsWith(".json")) : [];
-	for (const name of files) {
-		const exported = JSON.parse(readFileSync(join(dir, name), "utf8")) as {
-			messages?: { info?: { role?: string; modelID?: string }; parts?: Record<string, unknown>[] }[];
-		};
-		for (const message of exported.messages ?? []) {
-			if (message.info?.role !== "assistant") continue;
-			turns++;
-			model = message.info.modelID ?? model;
-			for (const part of message.parts ?? []) {
-				if (part.type === "tool") toolCalls++;
-				if (part.type !== "step-finish") continue;
-				requests++;
-				const tokens = (part.tokens ?? {}) as {
-					input?: number;
-					output?: number;
-					reasoning?: number;
-					cache?: { read?: number; write?: number };
-				};
-				usage.input += tokens.input ?? 0;
-				usage.output += (tokens.output ?? 0) + (tokens.reasoning ?? 0);
-				usage.cacheRead += tokens.cache?.read ?? 0;
-				usage.cacheWrite += tokens.cache?.write ?? 0;
-				usage.cost += typeof part.cost === "number" ? part.cost : 0;
-			}
-		}
-	}
-	usage.totalTokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
-	return { model, usage, totalUsage: { ...usage }, requests, turns, toolCalls };
+	if (check.absent) return { passed: !existsSync(path), timedOut: false };
+	if (!existsSync(path)) return { passed: false, timedOut: false };
+	return {
+		passed: check.contains === undefined || readFileSync(path, "utf8").includes(check.contains),
+		timedOut: false,
+	};
 }
 
 /** What the numbers leave out (0375); the report and `compare.md` both say so. */

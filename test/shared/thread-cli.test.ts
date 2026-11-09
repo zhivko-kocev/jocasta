@@ -138,14 +138,14 @@ test("a command goes to the service with its token; exit 0 done, 1 refused, 3 wh
 
 	err.length = 0;
 	expect(await runCliCommand(cliRequest("thread", ["list"]), deps())).toBe(EXIT.notRunning);
-	expect(err).toEqual(["jocasta: Jocasta isn't running; start it with `jocasta`."]);
+	expect(err).toEqual(["jocasta: Jocasta isn't running; start it with jocasta."]);
 
-	// frontier.json names a live process, but nothing listens on its port.
+	// jocasta-service.json names a live process, but nothing listens on its port.
 	err.length = 0;
 	const gone = fakeService(Response.json({ text: "x" }));
 	servers.pop()?.stop(true);
 	expect(await runCliCommand(cliRequest("worktree", ["list"]), deps(gone.address))).toBe(EXIT.notRunning);
-	expect(err).toEqual(["jocasta: Jocasta isn't running; start it with `jocasta`."]);
+	expect(err).toEqual(["jocasta: Jocasta isn't running; start it with jocasta."]);
 
 	err.length = 0;
 	const broken = fakeService(() => new Response("nope", { status: 500 }));

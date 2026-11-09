@@ -1,14 +1,20 @@
-import { describe, expect, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { Database } from "bun:sqlite";
+import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+	type Completer,
 	type CompletionRequest,
 	createLlmEndpoint,
 	extractJson,
-	LLM_PATH,
+	type GraphUsageLine,
 	ompCompleter,
 } from "../../src/frontier/server/llm-endpoint.ts";
-import { useTempJocasta } from "../shared/fixture.ts";
+import { jsonLines } from "../../src/shared/jsonl.ts";
+import { LLM_PATH } from "../../src/shared/memory/graph/callback.ts";
+import { pidAlive } from "../../src/shared/proctree.ts";
+import { readSettings } from "../../src/shared/settings.ts";
+import { poll, useTempJocasta } from "../shared/fixture.ts";
 import { fakeCompleter, serveLlmEndpoint } from "./helpers.ts";
 
 const env = useTempJocasta();
@@ -178,6 +184,73 @@ describe("the OpenAI-compatible callback endpoint", () => {
 			served.stop();
 		}
 	});
+
+	test("each answered call appends one line to the graph usage file, priced from omp's models.db (0582)", async () => {
+		const agentDir = join(env.root, "omp-agent");
+		mkdirSync(agentDir, { recursive: true });
+		const db = new Database(join(agentDir, "models.db"));
+		db.run("CREATE TABLE model_cache (provider_id TEXT, models TEXT)");
+		db.run("INSERT INTO model_cache VALUES (?, ?)", [
+			"anthropic",
+			JSON.stringify([
+				{ id: "claude-x", contextWindow: 200_000, cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 } },
+			]),
+		]);
+		db.close();
+		const saved = process.env.PI_CODING_AGENT_DIR;
+		process.env.PI_CODING_AGENT_DIR = agentDir;
+		try {
+			const models = ["anthropic/claude-x", "unpriced"];
+			const completer: Completer = {
+				async complete() {
+					const model = models.shift() ?? "";
+					return {
+						model,
+						provider: model.includes("/") ? "anthropic" : null,
+						text: "{}",
+						stopReason: "stop",
+						usage: { input: 1000, output: 200, cacheRead: 5000, cacheWrite: 100 },
+					};
+				},
+			};
+			const usageFile = join(env.root, "usage", "graph-usage.jsonl");
+			const endpoint = createLlmEndpoint({ completer, usageFile });
+			expect((await endpoint.handle(post(endpoint.token, graphitiBody())))?.status).toBe(200);
+			expect((await endpoint.handle(post(endpoint.token, graphitiBody({ model: "small" }))))?.status).toBe(200);
+			const lines = jsonLines<GraphUsageLine>(readFileSync(usageFile, "utf8"));
+			expect(lines).toHaveLength(2);
+			expect(lines[0]).toEqual({
+				at: expect.any(String),
+				model: "anthropic/claude-x",
+				input: 1000,
+				output: 200,
+				cacheRead: 5000,
+				cacheWrite: 100,
+				cost: expect.closeTo((1000 * 3 + 200 * 15 + 5000 * 0.3 + 100 * 3.75) / 1e6, 12),
+			});
+			expect(Number.isNaN(Date.parse(lines[0]?.at ?? ""))).toBe(false);
+			// A model omp doesn't price is still recorded, at no cost.
+			expect(lines[1]).toMatchObject({ model: "unpriced", input: 1000, cost: 0 });
+			// A failed call records nothing.
+			const failing = createLlmEndpoint({ completer: fakeCompleter(() => new Error("down")), usageFile });
+			expect((await failing.handle(post(failing.token, graphitiBody())))?.status).toBe(502);
+			expect(jsonLines(readFileSync(usageFile, "utf8"))).toHaveLength(2);
+		} finally {
+			if (saved === undefined) delete process.env.PI_CODING_AGENT_DIR;
+			else process.env.PI_CODING_AGENT_DIR = saved;
+		}
+	});
+
+	test("a usage file that can't be written leaves the call answered", async () => {
+		const blocker = join(env.root, "not-a-folder");
+		writeFileSync(blocker, "");
+		const endpoint = createLlmEndpoint({
+			completer: fakeCompleter(() => "{}"),
+			usageFile: join(blocker, "graph-usage.jsonl"),
+		});
+		expect((await endpoint.handle(post(endpoint.token, graphitiBody())))?.status).toBe(200);
+		expect(existsSync(join(blocker, "graph-usage.jsonl"))).toBe(false);
+	});
 });
 
 describe("extractJson", () => {
@@ -193,9 +266,9 @@ describe("extractJson", () => {
  * A stand-in `omp` for `omp auth-gateway stdio` (pi-ai `auth-gateway/stdio.ts`): the ready line, then one answer per
  * request line, by id. The last user message picks the answer: `fail` a 404 error, `length` a cut reply, `held` an
  * answer sent only after the next request's, `hang` none, `die` an exit with a stderr line; anything else echoes argv
- * and the request. Each start appends a line to the starts file.
+ * and the request. Each start appends `start <pid>` to the starts file, and the end of its stdin `end`.
  */
-function fakeGateway(root: string): { command: string[]; starts: () => number } {
+function fakeGateway(root: string): { command: string[]; starts: () => number; ends: () => number } {
 	const file = join(root, "fake-omp-gateway.ts");
 	const starts = join(root, "gateway-starts.txt");
 	writeFileSync(starts, "");
@@ -203,7 +276,7 @@ function fakeGateway(root: string): { command: string[]; starts: () => number } 
 		file,
 		`import { appendFileSync } from "node:fs";
 		const [log, ...args] = process.argv.slice(2);
-		appendFileSync(log, "start\\n");
+		appendFileSync(log, "start " + process.pid + "\\n");
 		const send = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
 		send({ ready: true, version: "18.12.6" });
 		let held;
@@ -235,13 +308,24 @@ function fakeGateway(root: string): { command: string[]; starts: () => number } 
 				at = buffered.indexOf("\\n");
 				answer(line.id, line.body);
 			}
-		}`,
+		}
+		appendFileSync(log, "end\\n");`,
 	);
-	return {
-		command: [process.execPath, file, starts],
-		starts: () => readFileSync(starts, "utf8").split("\n").filter(Boolean).length,
-	};
+	const lines = () => readFileSync(starts, "utf8").split("\n");
+	const count = (word: string) => lines().filter((line) => line.split(" ")[0] === word).length;
+	gatewaysGone.push(() => {
+		const pids = lines().flatMap((line) => (line.startsWith("start ") ? [Number(line.slice(6))] : []));
+		return poll(() => !pids.some(pidAlive), { timeoutMs: 15_000, what: "the gateway children to exit" });
+	});
+	return { command: [process.execPath, file, starts], starts: () => count("start"), ends: () => count("end") };
 }
+
+/**
+ * Waits, per fake gateway of the test, until every child it started has exited. A closed child still appends `end`
+ * on its way out; a write into the test's temp dir while the fixture removes it fails the removal (ENOTEMPTY under
+ * load), so this runs first: a describe's afterEach runs before the file's.
+ */
+const gatewaysGone: (() => Promise<unknown>)[] = [];
 
 interface Echoed {
 	args: string[];
@@ -249,6 +333,9 @@ interface Echoed {
 }
 
 describe("ompCompleter over omp auth-gateway stdio (0463)", () => {
+	// Waits on real child processes ending, which takes seconds on a loaded machine.
+	afterEach(() => Promise.all(gatewaysGone.splice(0).map((gone) => gone())), 20_000);
+
 	test("sends main and small as omp's @default and @smol roles to one gateway child, with the system and user turns", async () => {
 		const gateway = fakeGateway(env.root);
 		const completer = ompCompleter({ command: gateway.command, settings: () => ({}) });
@@ -278,17 +365,29 @@ describe("ompCompleter over omp auth-gateway stdio (0463)", () => {
 		}
 	});
 
-	test("graph.main / graph.small in jocasta.yaml name the model; malformed ones are errors", async () => {
+	test("graph.main / graph.small in jocasta.yaml name the model; a malformed one names its line and turns the calls off", async () => {
 		const gateway = fakeGateway(env.root);
-		let settings: Record<string, unknown> = { graph: { small: "q/other" } };
-		const completer = ompCompleter({ command: gateway.command, settings: () => settings });
+		let settings: () => Record<string, unknown> = () => ({ graph: { small: "q/other" } });
+		const completer = ompCompleter({ command: gateway.command, settings: () => settings() });
 		try {
-			const small = JSON.parse((await completer.complete("small", { messages: ["x"] })).text) as Echoed;
-			expect(small.body.model).toBe("q/other");
-			settings = { graph: { main: "just-an-id" } };
+			const answered = await completer.complete("small", { messages: ["x"] });
+			expect((JSON.parse(answered.text) as Echoed).body.model).toBe("q/other");
+			// The selector's provider prices the call; an omp role names none.
+			expect(answered.provider).toBe("q");
+			expect((await completer.complete("main", { messages: ["x"] })).provider).toBeNull();
+			settings = () => ({ graph: { main: "just-an-id" } });
 			await expect(completer.complete("main", { messages: ["x"] })).rejects.toThrow(
-				"graph.main in jocasta.yaml must be an omp model as provider/id",
+				"settings: graph.main must be an omp model as provider/id",
 			);
+			// Read from the file, the message is jocasta.yaml's own check with its line (0584), for both models' calls.
+			mkdirSync(env.config, { recursive: true });
+			writeFileSync(join(env.config, "jocasta.yaml"), "graph:\n  small: q/other\n  main: just-an-id\n");
+			settings = readSettings;
+			for (const name of ["main", "small"] as const) {
+				await expect(completer.complete(name, { messages: ["x"] })).rejects.toThrow(
+					"jocasta.yaml:3: graph.main must be an omp model as provider/id",
+				);
+			}
 		} finally {
 			completer.close();
 		}
@@ -328,6 +427,23 @@ describe("ompCompleter over omp auth-gateway stdio (0463)", () => {
 				"omp auth-gateway stdio exited 3: no login for anthropic",
 			);
 			expect((await completer.complete("small", { messages: ["again"] })).model).toBe("p/answered");
+			expect(gateway.starts()).toBe(2);
+		} finally {
+			completer.close();
+		}
+	});
+
+	test("the gateway child closes after its idle time without calls, and the next call starts it again", async () => {
+		const gateway = fakeGateway(env.root);
+		const completer = ompCompleter({ command: gateway.command, settings: () => ({}), idleMs: 200 });
+		try {
+			await completer.complete("main", { messages: ["a"] });
+			await completer.complete("main", { messages: ["b"] });
+			expect(gateway.starts()).toBe(1);
+			// A real child ending on the completer's real idle clock: polled until its stdin closed, bounded.
+			for (let waited = 0; gateway.ends() === 0 && waited < 5_000; waited += 50) await Bun.sleep(50);
+			expect(gateway.ends()).toBe(1);
+			expect((await completer.complete("small", { messages: ["c"] })).model).toBe("p/answered");
 			expect(gateway.starts()).toBe(2);
 		} finally {
 			completer.close();

@@ -1,22 +1,13 @@
-import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { expect, test } from "bun:test";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { planReviewExtension, readPlanReviewLog } from "../../evals/plan-review.ts";
 import { type EvalCase, PLAN_REVIEW_OVERLAY, runTrial } from "../../evals/runner.ts";
-import { envDelta, type TerminalRunner } from "../../evals/terminal.ts";
+import { envDelta, herdrTerminal, type TerminalRunner, TRIAL_WORKSPACE } from "../../evals/terminal.ts";
 import { loadVariants } from "../../evals/variants.ts";
-import { removeTree } from "../../src/shared/fsx.ts";
+import { useTempDirs } from "../shared/fixture.ts";
 
-const temps: string[] = [];
-afterEach(() => {
-	for (const dir of temps.splice(0)) removeTree(dir);
-});
-const tempDir = () => {
-	const dir = mkdtempSync(join(tmpdir(), "jocasta-review-"));
-	temps.push(dir);
-	return dir;
-};
+const tempDir = useTempDirs("jocasta-review-");
 
 type Handler = (event: Record<string, unknown>, ctx: unknown) => void;
 
@@ -125,6 +116,44 @@ test("a pane's environment carries what the trial changed, and empties what it d
 		C: "",
 	});
 });
+
+test("a dropped herdr read never ends the turn: the pane's process is watched locally until it exits (EVL-6, EVL-17)", async () => {
+	const work = tempDir();
+	const calls: string[] = [];
+	let reads = 0;
+	let child: Bun.Subprocess | undefined;
+	const fake = {
+		async ensureWorkspace(label: string, cwd: string) {
+			calls.push(`workspace ${label} in ${cwd}`);
+			return "w1";
+		},
+		async createTab(_workspace: string, tab: { command: string[]; cwd: string }) {
+			child = Bun.spawn(tab.command, { cwd: tab.cwd, stdio: ["ignore", "ignore", "ignore"] });
+			return { tabId: "t1", paneId: "p1" };
+		},
+		async paneRoot() {
+			reads++;
+			// herdr 0.9.5 sometimes closes the connection without answering (0517).
+			if (reads === 1) throw new Error("herdr closed the connection before answering pane.process_info");
+			return child?.pid;
+		},
+		close() {
+			calls.push("close");
+		},
+	};
+	const terminal = herdrTerminal("bench-pty-test", {
+		workspaceCwd: work,
+		connect: async () => fake,
+		closeTab: async (_session, tabId) => calls.push(`tab.close ${tabId}`),
+	});
+	const ended = await terminal(process.execPath, ["-e", "await Bun.sleep(1500)"], work, {}, 60_000);
+	expect(ended.timedOut).toBe(false);
+	// The turn lasted until the process exited, past the dropped read.
+	expect(ended.wallMs).toBeGreaterThanOrEqual(1_400);
+	expect(reads).toBe(2);
+	expect(calls).toEqual([`workspace ${TRIAL_WORKSPACE} in ${work}`, "tab.close t1", "close"]);
+	expect(() => herdrTerminal("jocasta")).toThrow("the trials' terminal session can't be jocasta");
+}, 30_000);
 
 test("a plan-review trial: the first turn in the terminal with the extension, plan mode on, the review turns in print mode", async () => {
 	const root = tempDir();

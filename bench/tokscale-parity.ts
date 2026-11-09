@@ -8,19 +8,21 @@
 // with `--session-dir` in the trial root), Claude Code's transcripts and opencode's database in their default places on
 // the VM, and `tokscale models --json --group-by client,session,model` gives its totals per session. Tokens must match
 // exactly; dollars aren't compared (tokscale prices with today's LiteLLM, the ledger with the pinned table). Writes
-// tokscale-parity.jsonl (one row per session) and tokscale-parity.json; exits 1 on any mismatch.
+// tokscale-parity.jsonl (one row per session, rewritten on each check) and tokscale-parity.json; exits 1 on any
+// mismatch and 2 when no saved session was compared.
 //
 // tokscale is approved for the benchmark only (0538) and isn't installed on his PC: pinned v4.21.0 (2026-11-02, MIT),
 // the Windows binary from https://github.com/junhoyeo/tokscale/releases/tag/v4.21.0, on PATH in the VM. Without it the
 // script (and its test) say so and stop.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTree } from "../src/shared/fsx.ts";
 import type { LedgerHarness, SessionRecord } from "../src/shared/ledger.ts";
 import { BenchUsageError, parseBenchArgs, runScript } from "./lib/args.ts";
 import { benchPricing, readTrialSessions } from "./lib/ledger.ts";
-import { appendRow, conditions, printPlan, writeJson } from "./lib/output.ts";
+import { conditions, printPlan, writeJson, writeRows } from "./lib/output.ts";
 import { loadPriceTable } from "./lib/prices.ts";
 
 export const TOKSCALE_VERSION = "4.21.0";
@@ -134,7 +136,7 @@ export function runTokscale(extraDirs: readonly string[]): string {
 		if (result.status !== 0) throw new Error(`tokscale models failed: ${result.stderr || result.error?.message}`);
 		return result.stdout;
 	} finally {
-		rmSync(config, { recursive: true, force: true });
+		removeTree(config);
 	}
 }
 
@@ -161,7 +163,7 @@ if (import.meta.main)
 				[
 					"per trial of the run: the ledger's per-session tokens from sessions/<trial>/",
 					`tokscale ${TOKSCALE_VERSION} models --json --group-by client,session,model, omp's saved folders as TOKSCALE_EXTRA_DIRS`,
-					"compare uncached input, cache read, cache write and output exactly; any mismatch exits 1",
+					"compare uncached input, cache read, cache write and output exactly; any mismatch exits 1, nothing compared exits 2",
 					Bun.which("tokscale") === null ? TOKSCALE_MISSING : `tokscale at ${Bun.which("tokscale")}`,
 				],
 				args.out,
@@ -171,7 +173,6 @@ if (import.meta.main)
 		const out = args.out as string;
 		const resultsFile = join(out, "results.jsonl");
 		if (!existsSync(resultsFile)) throw new BenchUsageError(`no task-benchmark results at ${resultsFile}`);
-		if (Bun.which("tokscale") === null) throw new BenchUsageError(TOKSCALE_MISSING);
 		const harnessOf = new Map<string, LedgerHarness>();
 		for (const line of readFileSync(resultsFile, "utf8").split(/\r?\n/)) {
 			if (line.trim() === "") continue;
@@ -190,9 +191,16 @@ if (import.meta.main)
 				totals: ledgerTotals(readTrialSessions(join(sessionsRoot, trial), harness, benchPricing(prices))),
 			};
 		});
+		// Nothing to compare is no pass (0576): a wrong run folder or renamed session folders exit 2.
+		if (ledgers.every((l) => l.totals.size === 0))
+			throw new BenchUsageError(
+				`no saved sessions to compare in ${sessionsRoot} (results.jsonl names ${harnessOf.size} trials)`,
+			);
+		if (Bun.which("tokscale") === null) throw new BenchUsageError(TOKSCALE_MISSING);
 		const tokscale = tokscaleFor(ledgers.filter((l) => l.harness === "omp").map((l) => join(sessionsRoot, l.trial)));
 		const rows = ledgers.flatMap((l) => compareTotals(l.trial, l.totals, tokscale));
-		for (const row of rows) appendRow(out, "tokscale-parity", row);
+		// Derived from the run's own files: each check rewrites its rows.
+		writeRows(out, "tokscale-parity", rows);
 		const mismatched = rows.filter((row) => row.differences.length > 0);
 		const file = writeJson(out, "tokscale-parity", {
 			check: "0538 tokscale parity",

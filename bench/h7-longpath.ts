@@ -12,12 +12,13 @@
 //   claude       <repo>/.claude/worktrees/<slug>        (Claude Code `--worktree`; confirm in the VM)
 // `--location name=<template>` adds one (vibe-kanban's folder once confirmed there). `--home` defaults to a temp
 // folder, so nothing lands in his home. Writes h7-longpath.jsonl and h7-longpath.json (the largest passing L).
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { removeTree } from "../src/shared/fsx.ts";
+import { runProgramSync } from "../src/shared/process.ts";
 import { BenchUsageError, flag, numberListFlag, parseBenchArgs, runScript } from "./lib/args.ts";
-import { appendRow, conditions, printPlan, writeJson } from "./lib/output.ts";
+import { appendRow, claimRows, conditions, printPlan, writeJson } from "./lib/output.ts";
 
 export const DEFAULT_LOCATIONS: Record<string, string> = {
 	jocasta: "<parent>/<name>.wt/<slug>",
@@ -104,6 +105,7 @@ if (import.meta.main) {
 			return;
 		}
 		const out = args.out as string;
+		claimRows(out, "h7-longpath");
 		const started = conditions(["git"]);
 		const root = rootFlag ? resolve(rootFlag) : mkdtempSync(join(tmpdir(), "h7-"));
 		const home = homeFlag ? resolve(homeFlag) : mkdtempSync(join(tmpdir(), "h7-home-"));
@@ -118,8 +120,7 @@ if (import.meta.main) {
 			GIT_COMMITTER_NAME: "Bench",
 			GIT_COMMITTER_EMAIL: "bench@example.org",
 		};
-		const git = (cwd: string, gitArgs: string[]) =>
-			spawnSync("git", gitArgs, { cwd, env, encoding: "utf8", windowsHide: true });
+		const git = (cwd: string, gitArgs: string[]) => runProgramSync(["git", ...gitArgs], { cwd, env });
 		const rows: {
 			location: string;
 			length: number;
@@ -131,10 +132,10 @@ if (import.meta.main) {
 		for (const length of lengths) {
 			for (let run = 0; run < args.runs; run++) {
 				const repo = join(root, `acme-app`);
-				rmSync(repo, { recursive: true, force: true });
+				removeTree(repo);
 				for (const template of Object.values(locations)) {
 					const stale = locationPath(template, repo, home, "x");
-					rmSync(dirname(stale), { recursive: true, force: true });
+					removeTree(dirname(stale));
 				}
 				mkdirSync(repo, { recursive: true });
 				const deep = deepPath(length);
@@ -145,7 +146,7 @@ if (import.meta.main) {
 					git(repo, ["add", "-A"]),
 					git(repo, ["commit", "-q", "-m", "fixture"]),
 				];
-				const fixtureError = init.find((result) => result.status !== 0);
+				const fixtureError = init.find((result) => result.code !== 0);
 				for (const [location, template] of Object.entries(locations)) {
 					const slug = `h7-${length}-${run}`;
 					const path = locationPath(template, repo, home, slug);
@@ -154,9 +155,9 @@ if (import.meta.main) {
 						mkdirSync(dirname(path), { recursive: true });
 						// One branch per location: the folder is the slug, the branch names its location too.
 						const add = git(repo, ["worktree", "add", "-q", "-b", `${location}/${slug}`, path]);
-						const status = add.status === 0 ? git(path, ["status", "--porcelain"]) : undefined;
-						if (add.status !== 0) error = `worktree add: ${add.stderr.trim()}`;
-						else if (status?.status !== 0) error = `status: ${status?.stderr.trim()}`;
+						const status = add.code === 0 ? git(path, ["status", "--porcelain"]) : undefined;
+						if (add.code !== 0) error = `worktree add: ${add.stderr.trim()}`;
+						else if (status?.code !== 0) error = `status: ${status?.stderr.trim()}`;
 						else if (!existsSync(join(path, deep))) error = "the deep file is missing in the worktree";
 					}
 					const row = {

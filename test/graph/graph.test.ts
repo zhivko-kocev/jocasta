@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { type Completer, createLlmEndpoint, LLM_PATH } from "../../src/frontier/server/llm-endpoint.ts";
+import { type Completer, createLlmEndpoint } from "../../src/frontier/server/llm-endpoint.ts";
+import { LLM_PATH } from "../../src/shared/memory/graph/callback.ts";
 import {
 	addEpisodes,
 	type Episode,

@@ -1,9 +1,10 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { connectHerdr, type Herdr } from "../../src/frontier/server/herdr.ts";
+import { killTree } from "../../src/shared/proctree.ts";
 import { BenchUsageError } from "./args.ts";
-import { herdrRequest, paneShellPid } from "./herdr.ts";
-import { killTree } from "./proctree.ts";
+import { herdrRequest } from "./herdr.ts";
+import { refuseHisSession } from "./sandbox.ts";
 
 /**
  * Starting a terminal agent in a real terminal for H5 and H6: Bun's PTY is POSIX-only, so on Windows each tool starts
@@ -68,10 +69,17 @@ export function readyPatterns(spec: string | undefined): Record<BenchTool, strin
 	return patterns;
 }
 
-const HIS_SESSIONS: Record<string, true> = { jocasta: true, jarvis: true };
-
-export async function benchHerdr(session: string): Promise<Herdr> {
-	if (HIS_SESSIONS[session.toLowerCase()]) throw new BenchUsageError(`--pty-session can't be ${session}`);
+/**
+ * The bench herdr session's client, never his session (`jocasta`, `jarvis`) nor the sandbox Jocasta's
+ * (`JOCASTA_HERDR_SESSION`), whose service relaunches what runs there.
+ */
+export async function benchHerdr(
+	session: string,
+	env: Record<string, string | undefined> = process.env,
+): Promise<Herdr> {
+	refuseHisSession(session, "--pty-session");
+	if (env.JOCASTA_HERDR_SESSION && session.toLowerCase() === env.JOCASTA_HERDR_SESSION.toLowerCase())
+		throw new BenchUsageError(`--pty-session can't be the sandbox's session ${session}`);
 	return connectHerdr({ session });
 }
 
@@ -80,14 +88,20 @@ export interface LaunchedPane {
 	paneId: string;
 }
 
-/** A new tab in the bench workspace running `command` in `cwd`. */
+/** A new tab in the bench workspace running `command` in `cwd`, titled `bench <program>` unless `title` is given. */
 export async function launchInPane(
-	herdr: Herdr,
+	herdr: Pick<Herdr, "createTab">,
 	workspaceId: string,
 	command: string[],
 	cwd: string,
+	options: { title?: string; env?: Record<string, string> } = {},
 ): Promise<LaunchedPane> {
-	return herdr.createTab(workspaceId, { title: `bench ${command[0] ?? ""}`, cwd, command });
+	return herdr.createTab(workspaceId, {
+		title: options.title ?? `bench ${command[0] ?? ""}`,
+		cwd,
+		command,
+		...(options.env === undefined ? {} : { env: options.env }),
+	});
 }
 
 /** ms until the pane's visible screen matches `pattern`, or null past `timeoutMs`; timed here, waited on by herdr. */
@@ -112,8 +126,8 @@ export async function waitReady(
 }
 
 /** Ends the pane's process tree and closes its tab. */
-export async function closePane(session: string, pane: LaunchedPane): Promise<void> {
-	const shell = await paneShellPid(session, pane.paneId);
-	if (shell) killTree(shell);
+export async function closePane(herdr: Herdr, session: string, pane: LaunchedPane): Promise<void> {
+	const root = await herdr.paneRoot(pane.paneId).catch(() => undefined);
+	if (root) await killTree(root).catch(() => []);
 	await herdrRequest(session, "tab.close", { tab_id: pane.tabId }).catch(() => undefined);
 }

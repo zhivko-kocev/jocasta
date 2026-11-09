@@ -22,22 +22,46 @@ function service(answer?: () => Response): number {
 
 test("a service whose process lives but doesn't answer in time is busy, not gone (hung, or still starting)", async () => {
 	const port = service();
-	expect(await serviceState({ port, token: "t", pid: process.pid })).toBe("busy");
+	expect(await serviceState({ port, token: "t", pid: process.pid }, 100)).toBe("busy");
 });
 
-test("nothing listening, or another process answering, is down; no frontier.json is down", async () => {
+test("nothing listening, or another process answering, is down; no jocasta-service.json is down", async () => {
 	expect(await serviceState({ port: freePort(), token: "t", pid: process.pid })).toBe("down");
 	const port = service(() => Response.json({ pid: process.pid + 1 }));
 	expect(await serviceState({ port, token: "t", pid: process.pid })).toBe("down");
 	expect(await serviceState(undefined)).toBe("down");
 });
 
-test("the service answers up with its herdr restarts, or closing while it closes Jocasta", async () => {
+test("the service answers up with its herdr restarts and test-only switches, or closing while it closes Jocasta", async () => {
 	let closing = false;
+	const auth: (string | null)[] = [];
 	const port = service(() =>
-		Response.json({ pid: process.pid, herdrRevivals: 2, ...(closing ? { closing: true } : {}) }),
+		Response.json({
+			pid: process.pid,
+			herdrRevivals: 2,
+			layer: "off",
+			hosts: "on",
+			...(closing ? { closing: true } : {}),
+		}),
 	);
-	expect(await serviceHealth({ port, token: "t", pid: process.pid })).toEqual({ state: "up", herdrRevivals: 2 });
+	const seen = Bun.serve({
+		hostname: "127.0.0.1",
+		port: 0,
+		fetch: (request) => {
+			auth.push(request.headers.get("authorization"));
+			return Response.json({ pid: process.pid });
+		},
+	});
+	servers.push(seen);
+	expect(await serviceHealth({ port, token: "t", pid: process.pid })).toEqual({
+		state: "up",
+		herdrRevivals: 2,
+		layer: "off",
+		hosts: "on",
+	});
 	closing = true;
 	expect(await serviceState({ port, token: "t", pid: process.pid })).toBe("closing");
+	// The token goes as a bearer, never as a cookie (SEC-NET-4).
+	expect(await serviceState({ port: seen.port as number, token: "t", pid: process.pid })).toBe("up");
+	expect(auth).toEqual(["Bearer t"]);
 });

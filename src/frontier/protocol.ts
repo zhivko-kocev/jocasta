@@ -2,29 +2,46 @@
  * The service's state feed and question API (4.1, 0409, 0552): typed JSON messages from the Jocasta service to a
  * client (the herdr plugin's panes, 0553) and the questions it asks him. The service owns this file.
  *
- * Transport: a client opens `ws://127.0.0.1:<port>/ws` with the service's token (the cookie `/?t=<token>` sets, or
- * `Authorization: Bearer <token>`, 0254). Every message is one JSON object with a `type`. Questions (the close
- * question, his Allow) are read and answered over HTTP with a one-time code, never broadcast (0519).
+ * Transport: a client opens `ws://127.0.0.1:<port>/ws` with the service's token as `Authorization: Bearer <token>`
+ * (0254; a browser page has no socket and no API token, SEC-NET-4). Every message is one JSON object with a `type`.
+ * Questions (the close question, his Allow) are read and answered over HTTP with a one-time code, never broadcast
+ * (0519).
  */
 
 /** The WebSocket path. */
 export const WS_PATH = "/ws";
-/** The query parameter a browser page opens with: `http://127.0.0.1:<port>/?t=<token>` (0254). */
+/**
+ * The query parameter a browser page opens with: `http://127.0.0.1:<port>/?t=<code>`, a one-time launch code the
+ * service swaps for the page cookie (0254, SEC-LOC-11).
+ */
 export const TOKEN_QUERY = "t";
-/** The cookie the token becomes (0254). */
-export const TOKEN_COOKIE = "jocasta_frontier";
+/** The page cookie's name before its port (0254). */
+export const TOKEN_COOKIE = "jocasta_service";
+
+/** The page cookie of the service on `port` (SEC-NET-4): cookies aren't kept apart by port, so the name is. */
+export function tokenCookie(port: number): string {
+	return `${TOKEN_COOKIE}_${port}`;
+}
+
 /**
  * Where a question's view reads its texts (`GET /api/popup/<code>`) and posts its answer (`POST /api/popup/<code>`, body
  * `PopupAnswer`), with the service's token and the question's one-time code (0519). The code is never listed or
  * broadcast: the service hands it only to what shows the question (the herdr popup, 0553). The popup holds
  * `GET /api/popup/<code>/hold` open while it shows the question: the question ends unanswered when that request ends
  * before an answer (closing the popup any other way denies, 0558), and the service ends it once the question is over.
+ *
+ * One reader per question (0578): the first `GET /api/popup/<code>` answers the view with a reader secret in the
+ * `POPUP_READER_HEADER` response header; the hold and the answer must carry it in the same request header (403
+ * otherwise). A second GET for an open question ends it as its fallback (410) and warns him. The answer's replies:
+ * 204 taken; 409 a wrong code, body `{"left": n}` (tries left); 410 the third wrong code, which took the fallback.
  */
 export const POPUP_PATH = "/api/popup/";
 /** The suffix of a popup's held request (`POPUP_PATH` + code + this). */
 export const POPUP_HOLD = "/hold";
 /** The variable that hands the plugin's `ask` popup its question's one-time code (0553), through herdr's `--env`. */
 export const POPUP_ENV = "JOCASTA_POPUP";
+/** The header carrying a question's reader secret (0578): set on the first view read, required on its hold and answer. */
+export const POPUP_READER_HEADER = "x-jocasta-reader";
 /**
  * His thread keys (0544, 0554): `POST /api/plugin/action` with the service's token, body `{action, paneId?}`; answered
  * at once (202), the outcome follows as an `action` message and, when refused, a notification.
@@ -61,10 +78,7 @@ export interface PopupAnswer {
 	brief?: string;
 }
 
-/** The boss pane's agent state from herdr (0392): the Presence's orbit runs while it works. */
-export type BossState = "working" | "blocked" | "idle" | "unknown";
-
-/** One thread row on the rail (0409): a herdr thread pane. */
+/** One thread row in `today` (0409, 0555): a herdr thread pane. */
 export interface RailItem {
 	paneId: string;
 	title: string;
@@ -111,8 +125,9 @@ export interface Today {
 	/**
 	 * Today's meetings from the calendar (8.1), by start; all-day ones first with `time` "all day". `url` is the
 	 * meeting's link (0429): the entry's URL, a link in its location, or a Teams/Meet/Zoom link in its description.
+	 * `end` (`HH:MM`) keeps a started meeting on `today` as "now" until it ends (0581).
 	 */
-	calendar: { time: string; title: string; url?: string }[];
+	calendar: { time: string; title: string; url?: string; end?: string }[];
 	/**
 	 * What awaits him (0432): reviews requested, red pipelines, threads awaiting him, threads reviewed and not finished
 	 * (0456: oldest first, with `since`), inbox reminders due today (0302) and a nearly full disk. Every row counts in
@@ -156,11 +171,6 @@ export interface Headline {
 /** Source names said in words (0442); any other source shows as brutalist.report names it. */
 const NEWS_NAMES: Record<string, string> = { hn: "Hacker News", lwn: "LWN" };
 
-/** A headline's source as the page says it: `hn` → "Hacker News", `lwn` → "LWN", any other as it is. */
-export function newsSourceName(source: string): string {
-	return NEWS_NAMES[source] ?? source;
-}
-
 /** A feed's heading (0442): "Hacker News", "LWN", otherwise its source or topic capitalized ("Gaming"). */
 export function newsHeading(name: string): string {
 	return NEWS_NAMES[name] ?? name.charAt(0).toUpperCase() + name.slice(1);
@@ -197,7 +207,7 @@ export interface Machine {
 
 /**
  * A service Jocasta relies on (0429, 0444): `up` answers; `starting` while Jocasta starts it; `idle` while it isn't running
- * and starts when needed (Graphiti, 0073); `down` is broken, red on the page.
+ * and starts when needed (Graphiti, 0073); `down` is broken.
  */
 export interface ServiceHealth {
 	name: "Graphiti" | "whiteboard" | "herdr";
@@ -219,7 +229,7 @@ export interface Leftover {
 	dirty: number;
 }
 
-/** The dashboard's third column (0428, 0429): news, weather, machine and services, today's activity. */
+/** The dashboard (0428, 0429): news, weather, machine and services, today's activity. */
 export interface Dashboard {
 	/** One list per feed in `pollers.news.feeds` (0442); the last good lists stay on failure. */
 	news: NewsList[];
@@ -258,7 +268,7 @@ export interface Hud {
 	running: number;
 	/** Thread panes waiting on him. */
 	blocked: number;
-	/** Every row of `today.needsYou` (0432): the same count the greeting says. */
+	/** Every row of `today.needsYou` (0432): the count `today` and `<data>/hud.txt` say. */
 	awaiting: number;
 	/**
 	 * Today's spend in USD, summed from today's assistant messages in omp's session files (local day); null while the
@@ -267,6 +277,8 @@ export interface Hud {
 	spendToday: number | null;
 	/** The subscription windows (0456), 5h then 7d; empty until `omp usage` answered with them. */
 	quota: QuotaWindow[];
+	/** Whether quiet hours are on now (0298, 0581): `today`'s header says so. */
+	quiet?: boolean;
 }
 
 /** Service → client. */
@@ -276,17 +288,12 @@ export type ServerMessage =
 			type: "snapshot";
 			hud: Hud;
 			today: Today;
-			boss: BossState;
-			/** Whether quiet hours are on now (0298). */
-			quietHours: boolean;
-			/** The dashboard's third column (0428, 0429). */
+			/** The dashboard (0428, 0429). */
 			dashboard: Dashboard;
 	  }
-	/** The dashboard's third column changed (0429): pushed only when it differs from the last one sent. */
+	/** The dashboard changed (0429): pushed only when it differs from the last one sent. */
 	| { type: "dashboard"; dashboard: Dashboard }
 	| { type: "hud"; hud: Hud }
-	/** The boss pane's state changed. */
-	| { type: "boss"; state: BossState }
 	/**
 	 * A notification (0407): raised in Windows through herdr (0554), urgent and blocked ones with herdr's request
 	 * sound; `paneId` names the pane it is about.
@@ -301,10 +308,8 @@ export type ServerMessage =
 			priority?: "urgent" | "normal";
 			url?: string;
 	  }
-	/** The `today` view (0300): in reply to `today.open`, and pushed while it changes. */
+	/** The `today` view (0300): pushed while it changes. */
 	| { type: "today"; today: Today }
-	/** Quiet hours began or ended (0298): only urgent notifications go out while quiet. */
-	| { type: "quiet"; quiet: boolean }
 	/** What one of his thread keys did, or why it didn't (0544, 0554): `today` shows the last one. */
 	| { type: "action"; text: string; isError: boolean }
 	| { type: "error"; message: string }
@@ -313,9 +318,10 @@ export type ServerMessage =
 
 /** Client → service. */
 export type ClientMessage =
-	/** Text for the boss pane (0392): typed into it through herdr. */
-	| { type: "boss.send"; text: string }
 	/** A row was chosen: focus that pane in herdr (0407). */
 	| { type: "pane.focus"; paneId: string }
-	/** Refresh `today` (0300). */
-	| { type: "today.open" };
+	/**
+	 * A link row was chosen (0581): the service opens `url` in his browser only when it is one of the links of its
+	 * current `today` or dashboard, and http(s).
+	 */
+	| { type: "link.open"; url: string };

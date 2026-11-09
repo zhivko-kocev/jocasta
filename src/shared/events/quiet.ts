@@ -1,3 +1,5 @@
+import { serviceSetting } from "../settings.ts";
+
 /** Quiet hours as minutes after midnight, local time (0298). */
 export interface QuietHours {
 	from: number;
@@ -5,17 +7,14 @@ export interface QuietHours {
 }
 
 /**
- * `frontier.quietHours` (0298), like `"22:00-08:00"`. Absent is none; a value that doesn't parse throws, naming the
- * key (principle 2).
+ * `service.quietHours` (0298; `frontier.quietHours` still read, 0584), like `"22:00-08:00"`, from read settings.
+ * Absent, empty or null is none; a bad value throws `jocasta.yaml`'s line from its schema (0584) and counts as none.
  */
-export function parseQuietHours(value: unknown): QuietHours | undefined {
-	if (value === undefined || value === null || value === "") return undefined;
-	const match = typeof value === "string" ? /^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/.exec(value.trim()) : null;
-	const [h1, m1, h2, m2] = (match?.slice(1) ?? []).map(Number) as number[];
-	if (!match || [h1, h2].some((h) => (h as number) > 23) || [m1, m2].some((m) => (m as number) > 59)) {
-		throw new Error(`settings: frontier.quietHours must be like "22:00-08:00"`);
-	}
-	return { from: (h1 as number) * 60 + (m1 as number), to: (h2 as number) * 60 + (m2 as number) };
+export function readQuietHours(settings: Record<string, unknown>): QuietHours | undefined {
+	const value = serviceSetting(settings, "quietHours");
+	if (!value) return undefined;
+	const [h1, m1, h2, m2] = value.trim().split(/[:-]/).map(Number) as [number, number, number, number];
+	return { from: h1 * 60 + m1, to: h2 * 60 + m2 };
 }
 
 /** Whether `at` falls in the quiet hours; a range past midnight wraps. */

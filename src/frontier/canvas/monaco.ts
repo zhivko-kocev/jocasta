@@ -9,7 +9,8 @@ import "monaco-editor/editor/contrib/folding/browser/folding.js";
 import "monaco-editor/languages/definitions/register.all.js";
 import "../../../node_modules/monaco-editor/esm/vs/base/browser/ui/codicons/codicon/codicon.css";
 import "../../../node_modules/monaco-editor/esm/vs/base/browser/ui/codicons/codicon/codicon-modifiers.css";
-import { CODE, TOKYO_NIGHT, withAlpha } from "./palette.ts";
+import { LINE_HEIGHT } from "./editor.ts";
+import { CODE, LINE_OPACITY, MONO_FONT, TOKYO_NIGHT, withAlpha, withOpacity } from "./palette.ts";
 
 export { monaco };
 
@@ -20,8 +21,8 @@ const TOKYO = {
 	bg2: TOKYO_NIGHT.bg2,
 	fg: TOKYO_NIGHT.fg,
 	fg3: TOKYO_NIGHT.mark3,
-	line: withAlpha(TOKYO_NIGHT.comment, 0x38),
-	lineStrong: withAlpha(TOKYO_NIGHT.comment, 0x66),
+	line: withOpacity(TOKYO_NIGHT.comment, LINE_OPACITY.line1),
+	lineStrong: withOpacity(TOKYO_NIGHT.comment, LINE_OPACITY.line2),
 	blue: TOKYO_NIGHT.blue,
 	green: TOKYO_NIGHT.green,
 	red: TOKYO_NIGHT.red,
@@ -99,9 +100,9 @@ export const VIEW_OPTIONS: monaco.editor.IEditorOptions & monaco.editor.IGlobalE
 	theme: "tokyo-night",
 	readOnly: true,
 	domReadOnly: true,
-	fontFamily: '"Geist Mono", "Cascadia Mono", Consolas, monospace',
+	fontFamily: MONO_FONT,
 	fontSize: 12.5,
-	lineHeight: 19,
+	lineHeight: LINE_HEIGHT,
 	fontLigatures: false,
 	minimap: { enabled: false },
 	scrollBeyondLastLine: false,

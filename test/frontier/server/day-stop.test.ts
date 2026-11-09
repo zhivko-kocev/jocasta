@@ -37,13 +37,44 @@ function stand(run: RunCli): { day: Day; notes: string[]; close: () => Promise<v
 	return { day, notes, close };
 }
 
-/** A pull request of his whose checks failed, so a finished round has something to write. */
+/** A pull request of his whose checks failed, so a finished round has something to write; keyed by `gh api`'s route. */
 const answers: Record<string, string> = {
-	api: "[]",
-	search: JSON.stringify([
-		{ number: 7, title: "Fix", url: "https://github.com/acme/api/pull/7", repository: { nameWithOwner: "acme/api" } },
-	]),
-	pr: JSON.stringify([{ name: "ci", bucket: "fail", link: "https://ci.example.org/7" }]),
+	notifications: "[[]]",
+	graphql: JSON.stringify({
+		data: {
+			open: { nodes: [{ url: "https://github.com/acme/api/pull/7" }] },
+			recent: {
+				nodes: [
+					{
+						number: 7,
+						title: "Fix",
+						url: "https://github.com/acme/api/pull/7",
+						repository: { nameWithOwner: "acme/api" },
+						commits: {
+							nodes: [
+								{
+									commit: {
+										statusCheckRollup: {
+											contexts: {
+												nodes: [
+													{
+														name: "ci",
+														status: "COMPLETED",
+														conclusion: "FAILURE",
+														detailsUrl: "https://ci.example.org/7",
+													},
+												],
+											},
+										},
+									},
+								},
+							],
+						},
+					},
+				],
+			},
+		},
+	}),
 };
 
 test("a slow round that ignores the stop is awaited, and writes nothing once the day stopped", async () => {
@@ -51,10 +82,10 @@ test("a slow round that ignores the stop is awaited, and writes nothing once the
 	const slow = Promise.withResolvers<void>();
 	const calls: string[] = [];
 	const { day, notes, close } = stand(async (_command, args) => {
-		calls.push(args[0] ?? "");
+		calls.push(args[1] ?? "");
 		asked.resolve();
 		await slow.promise;
-		return answers[args[0] ?? ""] ?? "";
+		return answers[args[1] ?? ""] ?? "";
 	});
 	const round = day.poll("github");
 	await asked.promise;
@@ -68,7 +99,7 @@ test("a slow round that ignores the stop is awaited, and writes nothing once the
 	slow.resolve();
 	await closing;
 	// Stop resolved only after the round's last `gh` call returned, before the catalog closed.
-	expect(calls).toEqual(["api", "search", "pr"]);
+	expect(calls).toEqual(["notifications", "graphql"]);
 	await round;
 	expect(notes).toEqual([]);
 });

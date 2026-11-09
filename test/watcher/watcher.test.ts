@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { appendFileSync, mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type Episode, startWatcher, type WatcherOptions } from "../../src/frontier/server/watcher.ts";
 import { openCatalog } from "../../src/shared/schema.ts";
@@ -523,4 +523,93 @@ test("scans that change nothing leave watcher.json alone", async () => {
 	await watcher.scan();
 	expect(statSync(stateFile).mtimeMs).toBe(old * 1000);
 	expect(readFileSync(stateFile, "utf8")).toBe(offsets);
+});
+
+test("a session omp rewrote through a rename, no shorter than before, is read again from its start (SRV-B-3)", async () => {
+	let clock = NOW;
+	const db = openCatalog();
+	const sessionsDir = join(env.root, "sessions");
+	const watcher = startWatcher({
+		sessionsDir,
+		stateFile: join(env.data, "watcher.json"),
+		db,
+		projectFor: () => ({ projectId: "p-demo" }),
+		post: async () => {},
+		intervalMs: 3_600_000,
+		now: () => clock,
+		onError: () => {},
+	});
+	env.defer(() => {
+		watcher.stop();
+		db.close();
+	});
+	const dir = join(sessionsDir, "--C--work--demo--");
+	const longTurn = assistant("a1", [{ type: "text", text: "x".repeat(5000) }], "length");
+	const file = writeSession(dir, "rewritten", [header("s1", PROJECT), longTurn]);
+	await watcher.scan();
+	// omp's discard: the long turn dropped (re-journaled small), then the recovery's compaction; the whole file written
+	// to a temp file and renamed over it, longer than the offset the last scan kept.
+	const discarded = JSON.stringify({
+		type: "model_usage",
+		id: "m9",
+		parentId: null,
+		timestamp: "2026-10-13T10:02:00.000Z",
+		purpose: "discarded-turn",
+		usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } },
+	});
+	const temp = writeSession(dir, "rewritten.tmp", [
+		header("s1", PROJECT),
+		discarded,
+		compaction("c1", `## Goal\n${"The task so far. ".repeat(400)}`, "soft", "2026-10-13T10:03:00.000Z"),
+	]);
+	expect(statSync(temp).size).toBeGreaterThan(statSync(file).size);
+	renameSync(temp, file);
+	clock = NOW + 60_000;
+	utimesSync(file, clock / 1000, clock / 1000);
+	await watcher.scan();
+	const rows = db.query<{ entry_id: string }, []>("SELECT entry_id FROM summaries").all();
+	expect(rows).toEqual([{ entry_id: "c1" }]);
+});
+
+test("watcher.json is written when its files change, at most every 5 minutes while only offsets move, and at stop (PERF-3)", async () => {
+	let clock = NOW;
+	const db = openCatalog();
+	const sessionsDir = join(env.root, "sessions");
+	const stateFile = join(env.data, "watcher.json");
+	const watcher = startWatcher({
+		sessionsDir,
+		stateFile,
+		db,
+		projectFor: () => undefined,
+		post: async () => {},
+		intervalMs: 3_600_000,
+		now: () => clock,
+		onError: () => {},
+	});
+	env.defer(() => db.close());
+	const dir = join(sessionsDir, "--C--work--demo--");
+	const file = writeSession(dir, "busy", [header("s1", PROJECT)]);
+	const offset = () => JSON.parse(readFileSync(stateFile, "utf8")).files[file]?.offset;
+	await watcher.scan();
+	expect(offset()).toBe(statSync(file).size);
+	// An offset moved a minute later: kept in memory only.
+	appendFileSync(file, `${compaction("c1", "First.", "soft", "2026-10-13T10:01:00.000Z")}\n`);
+	clock += 60_000;
+	utimesSync(file, clock / 1000, clock / 1000);
+	await watcher.scan();
+	expect(offset()).toBeLessThan(statSync(file).size);
+	// A new file is written at once.
+	const other = writeSession(dir, "new", [header("s2", PROJECT)], clock);
+	clock += 1_000;
+	await watcher.scan();
+	expect(offset()).toBe(statSync(file).size);
+	expect(JSON.parse(readFileSync(stateFile, "utf8")).files[other]).toBeDefined();
+	// Moved offsets wait for 5 minutes, or the stop.
+	appendFileSync(file, `${compaction("c2", "Second.", "soft", "2026-10-13T10:02:00.000Z")}\n`);
+	clock += 60_000;
+	utimesSync(file, clock / 1000, clock / 1000);
+	await watcher.scan();
+	expect(offset()).toBeLessThan(statSync(file).size);
+	watcher.stop();
+	expect(offset()).toBe(statSync(file).size);
 });

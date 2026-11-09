@@ -18,6 +18,16 @@ export interface NewEvent {
 	threadId?: string;
 }
 
+/**
+ * One round of a poller that owns kinds of events (SHR-8): its current events, the source ids it could see (open events
+ * of its kinds outside that scope aren't resolved), and the failures that shrank the scope without ending the round.
+ */
+export interface PollRound {
+	events: NewEvent[];
+	observed: (sourceId: string) => boolean;
+	failures: string[];
+}
+
 /** An `events` row (catalog.db v5). */
 export interface EventRow {
 	id: number;
@@ -92,13 +102,20 @@ export class EventQueue {
 	}
 
 	/**
-	 * A poller's full current set for one source and kinds: everything open of those kinds that isn't in `current` has
-	 * gone away (a review done, a pipeline green again). Returns the new events.
+	 * A poller's current set for one source and kinds: everything open of those kinds that isn't in `current` has gone
+	 * away (a review done, a pipeline green again), but only inside `observed`, the scope the poller actually saw this
+	 * round (SHR-8): an event outside it (a listing that failed or was cut short) stays open. Returns the new events.
 	 */
-	sync(source: EventSource, kinds: readonly string[], current: readonly NewEvent[]): EventRow[] {
+	sync(
+		source: EventSource,
+		kinds: readonly string[],
+		current: readonly NewEvent[],
+		observed: (sourceId: string) => boolean = () => true,
+	): EventRow[] {
 		const seen = new Set(current.map((e) => e.sourceId));
 		for (const row of this.open()) {
-			if (row.source === source && kinds.includes(row.kind) && !seen.has(row.source_id)) this.resolve(row.source_id);
+			if (row.source !== source || !kinds.includes(row.kind) || seen.has(row.source_id)) continue;
+			if (observed(row.source_id)) this.resolve(row.source_id);
 		}
 		return current.flatMap((event) => this.add(event) ?? []);
 	}

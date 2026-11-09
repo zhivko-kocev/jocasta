@@ -20,6 +20,7 @@ import { dirname, join, normalize, sep } from "node:path";
 import { freePort } from "../../shared/fsx.ts";
 import { installDir, REPO } from "../../shared/install.ts";
 import { dataDir } from "../../shared/paths.ts";
+import { onPath } from "../../shared/process.ts";
 import type { ServiceHealth } from "../protocol.ts";
 
 /** whiteboard's telemetry off (its README; 0393). */
@@ -29,7 +30,7 @@ export const WHITEBOARD_ENV = { DO_NOT_TRACK: "1", DEV_FAST_REVIEW_TELEMETRY_DIS
 export const WHITEBOARD_VERSION = "0.2.4";
 
 /** The repo's clone of whiteboard v0.2.4 (0417), relative to the repo root. */
-export const WHITEBOARD_FORK = join("forks", "whiteboard");
+const WHITEBOARD_FORK = join("forks", "whiteboard");
 
 /** Where the page loads the canvas and Monaco's worker from (served by `server.ts`). */
 export const CANVAS_PATH = "/whiteboard/canvas/";
@@ -44,7 +45,7 @@ export interface WhiteboardRuntime {
 }
 
 /** whiteboard's state dir, `<data>/whiteboard` (0393). */
-export function whiteboardHome(): string {
+function whiteboardHome(): string {
 	return join(dataDir(), "whiteboard");
 }
 
@@ -60,7 +61,7 @@ export function whiteboardRuntime(): WhiteboardRuntime | undefined {
 		if (existsSync(cli) && existsSync(node)) return { node: normalize(node), cli: normalize(cli) };
 	}
 	const cli = join(REPO, WHITEBOARD_FORK, "packages", "review", "dist", "cli.js");
-	return existsSync(cli) ? { node: Bun.which("node") ?? "node", cli } : undefined;
+	return existsSync(cli) ? { node: onPath("node") ?? "node", cli } : undefined;
 }
 
 /** What the page needs: the server's loopback origin and token, and the canvas's built files. */

@@ -1,9 +1,8 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { type Arm, runBench, runValidation, type TrialJob, type TrialOutcome } from "../../evals/bench.ts";
+import { type Arm, RUN_LOCK, runBench, runValidation, type TrialJob, type TrialOutcome } from "../../evals/bench.ts";
 import type { ResultRow } from "../../evals/runner.ts";
 import {
 	type BenchTask,
@@ -23,31 +22,15 @@ import {
 	trialKey,
 } from "../../evals/tasks.ts";
 import { DEFAULT_VARIANT } from "../../evals/variants.ts";
-import { removeTree } from "../../src/shared/fsx.ts";
+import { readJsonl, useOmpLog, useTempDirs, writeFiles } from "../shared/fixture.ts";
 
-const temps: string[] = [];
-afterEach(() => {
-	for (const dir of temps.splice(0)) removeTree(dir);
-	delete process.env.JOCASTA_TEST_OMP_LOG;
-});
-
-function tempDir(): string {
-	const dir = mkdtempSync(join(tmpdir(), "jocasta-bench-"));
-	temps.push(dir);
-	return dir;
-}
+const tempDir = useTempDirs("jocasta-bench-");
+const ompLog = useOmpLog();
 
 function git(cwd: string, ...args: string[]): string {
 	const result = spawnSync("git", ["-c", "core.autocrlf=false", ...args], { cwd, encoding: "utf8" });
 	if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
 	return result.stdout;
-}
-
-function writeFiles(root: string, files: Record<string, string>): void {
-	for (const [path, content] of Object.entries(files)) {
-		mkdirSync(join(root, path, ".."), { recursive: true });
-		writeFileSync(join(root, path), content);
-	}
 }
 
 const CHECK = `import { readFileSync } from "node:fs";
@@ -142,13 +125,6 @@ function fakeRow(overrides: Partial<ResultRow> = {}): ResultRow {
 	};
 }
 
-const readJsonl = (file: string) =>
-	readFileSync(file, "utf8")
-		.trim()
-		.split("\n")
-		.filter((line) => line !== "")
-		.map((line) => JSON.parse(line));
-
 const host = () => ({
 	startedAt: "2026-10-27T10:00:00.000Z",
 	localHour: 10,
@@ -223,7 +199,7 @@ describe("tasks.jsonl (0482)", () => {
 		expect(() => loadTasks(file)).toThrow(/`language`/);
 	});
 
-	test("a task becomes a case: the fixed prompt, hidden test command, a venv for Python", () => {
+	test("a task becomes a case: the fixed prompt, hidden test command, a venv for Python, a fresh one for grading", () => {
 		const prepared = {
 			dir: "/cache/x",
 			fixture: "/cache/x/fixture",
@@ -239,12 +215,18 @@ describe("tasks.jsonl (0482)", () => {
 		);
 		expect(python.setup?.startsWith(PYTHON_SETUP_PREFIX)).toBe(true);
 		expect(python.pathPrefix).toEqual(["venv/Scripts"]);
+		// 0574: grading's setup makes a new venv beside it, never the one the agent worked in.
+		expect(python.gradeSetup).toBe(
+			"(if exist ..\\gvenv rmdir /s /q ..\\gvenv) && python -m venv ..\\gvenv && python -m pip install -q --upgrade pip && pip install -e .",
+		);
+		expect(python.gradePathPrefix).toEqual(["gvenv/Scripts"]);
 		expect(python.checks).toEqual([]);
 		expect(python.hiddenChecks).toEqual([{ command: "pytest" }]);
 		expect([python.fixture, python.hidden, python.id]).toEqual(["/cache/x/fixture", "/cache/x/hidden", "acme__py-1"]);
 		const go = taskCase({ ...stubTask("acme__go-1", "Go"), setup_command: "go mod download" }, prepared);
 		expect(go.setup).toBe("go mod download");
 		expect(go.pathPrefix).toBeUndefined();
+		expect(go.gradeSetup).toBeUndefined();
 		expect(go.tags).toEqual(["Go", "main"]);
 	});
 });
@@ -308,17 +290,22 @@ describe("the leak scan (0482)", () => {
 
 describe("the infra classifier (0482)", () => {
 	const failed = fakeRow({ grade: { "omp exited 0": 0 }, turns: 0, toolCalls: 0, hiddenPassed: false });
+	const line = (event: unknown) => `${JSON.stringify(event)}\n`;
 	test("setup and runner errors", () => {
 		expect(classifyInfra({ error: "acme__widget-7: setup `npm install` failed: ENOTFOUND" })?.kind).toBe("setup");
+		// A setup cut at its limit (0574, amended) is infra too, retried as a setup error.
+		expect(classifyInfra({ error: "acme__widget-7: setup `npm install` killed at its time limit" })?.kind).toBe(
+			"setup",
+		);
 		expect(classifyInfra({ error: "git clone failed" })?.kind).toBe("error");
 	});
-	test("sign-in failures in stderr or the transcript's end", () => {
+	test("sign-in failures in stderr or the harness's own error end", () => {
 		expect(classifyInfra({ row: failed, stderr: "Error: 401 Unauthorized" })?.kind).toBe("auth");
 		expect(classifyInfra({ row: failed, stderr: "OAuth token refresh failed: invalid_grant" })?.kind).toBe("auth");
 		expect(
 			classifyInfra({
 				row: fakeRow({ harness: "claude", grade: { "claude exited 0": 0 }, turns: 0, toolCalls: 0 }),
-				transcript: `${JSON.stringify({ type: "result", is_error: true, result: "Invalid API key · Please run /login" })}\n`,
+				transcript: line({ type: "result", is_error: true, result: "Invalid API key · Please run /login" }),
 			})?.kind,
 		).toBe("auth");
 		// A trial that ran and exited 0 counts, whatever its transcript says about OAuth.
@@ -336,13 +323,61 @@ describe("the infra classifier (0482)", () => {
 		).toBeNull();
 		expect(classifyInfra({ row: fakeRow({ grade: { "omp exited 0": 0 }, hiddenPassed: false }) })).toBeNull();
 	});
-	test("a rate limit at the end while an account was full is an infra error even after tool calls (0543)", () => {
+	test("a trial that ended on a rate limit while an account was full is infra even after tool calls (0543)", () => {
 		const worked = fakeRow({ toolCalls: 5, grade: { "omp exited 0": 0 }, hiddenPassed: false });
-		const tail = `${JSON.stringify({ type: "message_end", message: { role: "assistant", errorMessage: "429 rate_limit_error" } })}\n`;
-		expect(classifyInfra({ row: worked, transcript: tail, accountFull: true })?.kind).toBe("rate-limit");
+		const end = line({
+			type: "message_end",
+			message: { role: "assistant", stopReason: "error", errorMessage: "429 rate_limit_error" },
+		});
+		expect(classifyInfra({ row: worked, transcript: end, accountFull: true })?.kind).toBe("rate-limit");
 		expect(classifyInfra({ row: worked, stderr: "usage limit reached", accountFull: true })?.kind).toBe("rate-limit");
 		// No full account: the trial counts as it ended.
-		expect(classifyInfra({ row: worked, transcript: tail, accountFull: false })).toBeNull();
+		expect(classifyInfra({ row: worked, transcript: end, accountFull: false })).toBeNull();
+		// A6's session files carry the same end as a `message` entry; Claude Code's as a rejected rate_limit_event.
+		const session = line({
+			type: "message",
+			message: { role: "assistant", stopReason: "error", errorMessage: "overloaded" },
+		});
+		expect(classifyInfra({ row: worked, transcript: session, accountFull: true })?.kind).toBe("rate-limit");
+		const a4 = fakeRow({ harness: "claude", toolCalls: 5, grade: { "claude exited 0": 0 }, hiddenPassed: false });
+		const rejected = line({ type: "rate_limit_event", rate_limit_info: { status: "rejected" } });
+		expect(classifyInfra({ row: a4, transcript: rejected, accountFull: true })?.kind).toBe("rate-limit");
+	});
+	test("the pilot's counted shapes stay counted with a full account, passes and fails alike (EVL-2)", () => {
+		const passed = fakeRow({ toolCalls: 12, turns: 14 });
+		const failedTask = fakeRow({ toolCalls: 12, turns: 14, grade: { "omp exited 0": 1, "hidden: test": 0 } });
+		const usage = { input: 3, output: 812, cacheRead: 13330, cacheWrite: 429, totalTokens: 14574 };
+		const agentEnd = line({
+			type: "agent_end",
+			messages: [
+				{
+					role: "toolResult",
+					content: [{ type: "text", text: "427,428,429,430\n*429: mockFileContents(() =>\n401: );" }],
+				},
+				{ role: "assistant", stopReason: "stop", usage },
+			],
+		});
+		const ompEnd = `${line({ type: "message_end", message: { role: "assistant", stopReason: "stop", usage } })}${agentEnd}`;
+		const a4 = fakeRow({ harness: "claude", toolCalls: 9, turns: 9, grade: { "claude exited 0": 1 } });
+		const claudeEnd = [
+			line({ type: "rate_limit_event", rate_limit_info: { status: "allowed", rateLimitType: "five_hour" } }),
+			line({ type: "user", message: { content: [{ type: "tool_result", content: "  429: return retry(429)" }] } }),
+			line({ type: "result", subtype: "success", is_error: false, num_turns: 9, result: "Fixed the 401 path." }),
+		].join("");
+		for (const row of [passed, failedTask])
+			expect(classifyInfra({ row, transcript: ompEnd, stderr: "", accountFull: true })).toBeNull();
+		expect(classifyInfra({ row: a4, transcript: claudeEnd, stderr: "", accountFull: true })).toBeNull();
+		// The same runs ended by the trial's limit: a timeout, not a sign-in failure or a rate limit.
+		const timedOut = { ...failedTask, grade: { "omp exited 0": 0, timeout: 0 } };
+		expect(classifyInfra({ row: timedOut, transcript: ompEnd, accountFull: true })).toBeNull();
+		const killedA4 = { ...a4, grade: { "claude exited 0": 0, timeout: 0 } };
+		expect(
+			classifyInfra({ row: killedA4, transcript: claudeEnd.split("\n").slice(0, 2).join("\n"), accountFull: true }),
+		).toBeNull();
+	});
+	test("a trial killed at the limit before its first response is graded, not no-response (EVL-3)", () => {
+		const killed = fakeRow({ grade: { "omp exited 0": 0, timeout: 0 }, turns: 0, toolCalls: 0, hiddenPassed: false });
+		expect(classifyInfra({ row: killed })).toBeNull();
 	});
 });
 
@@ -457,6 +492,97 @@ describe("resume (0482)", () => {
 		expect(started[1]).toBe(`${other?.task}/${other?.task}-${other?.arm}-${other?.rep}`);
 	}, 60_000);
 
+	test("a second bench on the same --out is refused while the first runs; a dead holder's lock is taken over (0574)", async () => {
+		const out = join(tempDir(), "run");
+		mkdirSync(out, { recursive: true });
+		const options = {
+			tasks: [localTask()],
+			cacheDir: tempDir(),
+			outDir: out,
+			arms: [stubArm("a0")],
+			reps: 1,
+			seed: 482,
+			workers: 1,
+			describeHost: host,
+			log: () => {},
+			execute: async (job: TrialJob): Promise<TrialOutcome> => ({ row: fakeRow({ rep: job.rep }), stderr: "" }),
+		};
+		// This test's own process stands for a live bench.
+		const startedAt = "2026-11-14T09:02:00.000Z";
+		writeFileSync(join(out, RUN_LOCK), JSON.stringify({ pid: process.pid, startedAt }));
+		await expect(runBench(options)).rejects.toThrow(
+			new RegExp(
+				`is in use by a bench \\(pid ${process.pid}, since \\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d\\); stop it or use another --out`,
+			),
+		);
+		expect(existsSync(join(out, "results.jsonl"))).toBe(false);
+		// A crashed run's lock: its process is gone.
+		const gone = Bun.spawnSync([process.execPath, "-e", "0"]).pid;
+		writeFileSync(join(out, RUN_LOCK), JSON.stringify({ pid: gone, startedAt }));
+		expect(await runBench(options)).toBe(0);
+		expect(existsSync(join(out, RUN_LOCK))).toBe(false);
+	}, 60_000);
+
+	test("a resume with another limit, setup limit, profile or harness version is refused (0574)", async () => {
+		const out = join(tempDir(), "run");
+		const options = {
+			tasks: [localTask()],
+			cacheDir: tempDir(),
+			outDir: out,
+			arms: [stubArm("a0")],
+			reps: 1,
+			seed: 482,
+			workers: 1,
+			timeoutMs: 90 * 60_000,
+			profile: "bench",
+			describeHost: host,
+			log: () => {},
+			execute: async (): Promise<TrialOutcome> => ({ error: "acme__widget-7: setup `x` failed: boom", stderr: "" }),
+		};
+		await runBench(options);
+		const conditions = JSON.parse(readFileSync(join(out, "conditions.json"), "utf8"));
+		expect([conditions.held.setupLimitMinutes, conditions.sessions[0].setupLimitMinutes]).toEqual([60, 60]);
+		expect(conditions.sessions[0].gradingLimitMinutes).toBe(60);
+		const refusal = `${out} ran with --timeout 90, setup limit 60 min, profile bench, omp/0.0.0-stub; this resume has`;
+		await expect(runBench({ ...options, timeoutMs: 60 * 60_000 })).rejects.toThrow(`${refusal} --timeout 60;`);
+		await expect(runBench({ ...options, setupTimeoutMs: 30 * 60_000 })).rejects.toThrow(
+			`${refusal} setup limit 30 min;`,
+		);
+		await expect(runBench({ ...options, profile: undefined })).rejects.toThrow(`${refusal} no profile;`);
+		await expect(
+			runBench({ ...options, arms: [{ ...stubArm("a0"), harnessVersion: "omp/0.0.1-stub" }] }),
+		).rejects.toThrow(`${refusal} omp/0.0.1-stub; resume with the same flags or use a new --out`);
+		expect(await runBench(options)).toBe(1);
+	}, 60_000);
+
+	test("an arm whose harness updated itself stops; the other arms run on (0574)", async () => {
+		const lines: string[] = [];
+		let a7Runs = 0;
+		const a7: Arm = { ...stubArm("a7"), harnessVersion: "1.18.22" };
+		const code = await runBench({
+			tasks: [localTask()],
+			cacheDir: tempDir(),
+			outDir: join(tempDir(), "run"),
+			arms: [a7, stubArm("a0")],
+			reps: 3,
+			seed: 482,
+			workers: 1,
+			describeHost: host,
+			log: (line) => lines.push(line),
+			execute: async (job) => {
+				if (job.options.variant?.label === "a7") a7Runs++;
+				return { row: fakeRow({ rep: job.rep }), stderr: "" };
+			},
+			versionOf: (arm) => (arm.name === "a7" ? "1.18.23" : arm.harnessVersion),
+		});
+		expect(code).toBe(1);
+		expect(a7Runs).toBe(1);
+		expect(lines).toContain(
+			"stopped a7: omp --version now says 1.18.23; the run started on 1.18.22 (0482 pins it); 2 a7 trials not run",
+		);
+		expect(lines.filter((line) => line.startsWith("pass") || line.startsWith("FAIL"))).toHaveLength(4);
+	}, 60_000);
+
 	test("three sign-in failures in a row stop the run with exit code 3", async () => {
 		const lines: string[] = [];
 		let calls = 0;
@@ -487,8 +613,7 @@ describe("resume (0482)", () => {
 		const out = join(tempDir(), "run");
 		// The real path: macOS's temp folder is a link (/var → /private/var), and the harness reports where it runs.
 		const work = join(realpathSync.native(tempDir()), "w");
-		const ompLog = join(tempDir(), "omp.jsonl");
-		process.env.JOCASTA_TEST_OMP_LOG = ompLog;
+		const calls = ompLog().calls;
 		const code = await runBench({
 			tasks: [localTask()],
 			cacheDir: tempDir(),
@@ -523,7 +648,7 @@ describe("resume (0482)", () => {
 		expect(grade).toContain("tests/check.ts");
 		expect(grade).toMatch(/exit: 1\n/);
 		// The harness ran in <work>\t??????\repo, a short root.
-		const [call] = readJsonl(ompLog);
+		const [call] = calls();
 		expect(call.cwd).toMatch(/[\\/]w[\\/]t[^\\/]{6}[\\/]repo$/);
 		expect(call.cwd.startsWith(work)).toBe(true);
 		expect(JSON.parse(readFileSync(join(out, "conditions.json"), "utf8")).sessions[0].workRoot).toBe(work);
@@ -613,12 +738,12 @@ describe("resume (0482)", () => {
 });
 
 describe("--validate (0482)", () => {
-	test("the hidden tests fail on the base commit and pass three times with the gold patch", () => {
+	test("the hidden tests fail on the base commit and pass three times with the gold patch", async () => {
 		const good = localTask();
 		const broken = { ...localTask(), instance_id: "acme__widget-8", test_command: "git --version" };
 		const out = join(tempDir(), "run");
 		const work = join(tempDir(), "w");
-		const failed = runValidation([good, broken], tempDir(), out, () => {}, work);
+		const failed = await runValidation([good, broken], tempDir(), out, () => {}, work);
 		expect(failed).toEqual(["acme__widget-8"]);
 		const [goodRow, brokenRow] = readJsonl(join(out, "validation.jsonl"));
 		expect(goodRow).toMatchObject({ task: "acme__widget-7", null_failed: true, gold_passes: 3, error: null });

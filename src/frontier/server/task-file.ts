@@ -1,10 +1,15 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { writeAtomically } from "../../shared/fsx.ts";
-import { normalizePathKey } from "../../shared/identity.ts";
+import { hhmm } from "../../shared/day.ts";
+import { readJsonObject, writeAtomically } from "../../shared/fsx.ts";
+import { pathKey } from "../../shared/pathkey.ts";
 import { projectDir } from "../../shared/paths.ts";
+import { withoutLeadingComment } from "../../shared/prompt.ts";
+import type { ReviewProof } from "./hunk.ts";
 import { reportLine, type ThreadReport } from "./report.ts";
+import type { TestsResult } from "./sessions.ts";
+import { WHEN_YOU_FINISH } from "./wording.ts";
 
 /**
  * A thread's task file (0540, K2): `<data>/projects/<pid>/threads/<tid>/task.md`, written by Jocasta only and kept
@@ -19,7 +24,10 @@ export interface CheckExit {
 	exit: number | null;
 }
 
-/** One review as the task file lists it. */
+/**
+ * One review as the task file lists it, with the outcome a restart gives the thread back (its notes, blocking notes,
+ * tests and diff proof; absent in records written before they were kept).
+ */
 export interface TaskReview {
 	at: number;
 	passed: boolean;
@@ -27,6 +35,10 @@ export interface TaskReview {
 	checks: CheckExit[];
 	/** What the review found: `2 notes (1 blocking), tests pass`, and `no report` when the thread handed in none. */
 	said: string;
+	notes?: number;
+	blocking?: number;
+	tests?: TestsResult;
+	proof?: ReviewProof;
 }
 
 /** `thread.json`: what the task file is rendered from. */
@@ -106,39 +118,35 @@ export function newTask(
 export function findTask(projectId: string, path: string): TaskRecord | undefined {
 	const dir = threadsDir(projectId);
 	if (!existsSync(dir)) return undefined;
-	const key = normalizePathKey(path);
+	const key = pathKey(path);
 	let found: TaskRecord | undefined;
 	for (const entry of readdirSync(dir, { withFileTypes: true })) {
 		if (!entry.isDirectory()) continue;
-		let record: TaskRecord;
-		try {
-			record = JSON.parse(readFileSync(join(dir, entry.name, "thread.json"), "utf8")) as TaskRecord;
-		} catch {
-			continue;
-		}
-		if (record.closed || !record.path || normalizePathKey(record.path) !== key) continue;
+		const record = readJsonObject(join(dir, entry.name, "thread.json")) as TaskRecord | undefined;
+		if (!record || record.closed || !record.path || pathKey(record.path) !== key) continue;
 		if (!found || record.createdAt > found.createdAt) found = record;
 	}
 	return found;
 }
 
-/** `HH:MM`, local. */
-function clock(at: number): string {
-	const date = new Date(at);
-	return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+/** The Brief section, as the task file and each launch's appended prompt have it. */
+function briefSection(record: Pick<TaskRecord, "brief">): string[] {
+	return ["## Brief", record.brief.trim() || "Not recorded."];
 }
 
-/** The Brief and Done-when sections, as the task file and each launch's appended prompt have them. */
-function briefSections(record: Pick<TaskRecord, "brief" | "doneWhen">): string[] {
+/** The Done-when section (0540). */
+function doneWhenSection(record: Pick<TaskRecord, "doneWhen">): string[] {
 	return [
-		"## Brief",
-		record.brief.trim() || "Not recorded.",
-		"",
 		"## Done when",
 		...(record.doneWhen.length > 0
 			? record.doneWhen.map((command) => `- \`${command}\` passes`)
 			: ["- No commands given; the review's project check decides."]),
 	];
+}
+
+/** The Brief and Done-when sections. */
+function briefSections(record: Pick<TaskRecord, "brief" | "doneWhen">): string[] {
+	return [...briefSection(record), "", ...doneWhenSection(record)];
 }
 
 /**
@@ -169,7 +177,7 @@ export function taskMarkdown(record: TaskRecord): string {
 		...briefSections(record),
 		"",
 		...(record.plan
-			? [`## Plan (approved ${clock(record.plan.approvedAt)})`, planText(record.plan.file, record.session)]
+			? [`## Plan (approved ${hhmm(record.plan.approvedAt)})`, planText(record.plan.file, record.session)]
 			: ["## Plan", "Not approved yet."]),
 		"",
 		"## Report",
@@ -179,7 +187,7 @@ export function taskMarkdown(record: TaskRecord): string {
 		...(record.reviews.length > 0
 			? record.reviews.map((review) =>
 					[
-						`- ${clock(review.at)} ${review.passed ? "pass" : "not a pass"}`,
+						`- ${hhmm(review.at)} ${review.passed ? "pass" : "not a pass"}`,
 						...review.checks.map((c) => `\`${c.command}\` ${c.exit === null ? "not run" : `exit ${c.exit}`}`),
 						`notes: ${review.said}`,
 					].join(" · "),
@@ -216,22 +224,26 @@ export function closeTask(record: TaskRecord, state: string, failed: (error: unk
 	}
 }
 /**
- * The text a thread's omp appends to its system prompt (0540): the panes' shipped prompt when there is one, then the
- * Brief and Done-when sections. The benchmark's A6 layer appends the same text (0543).
+ * The text a thread's omp appends to its system prompt (0540, 0577): the panes' shipped prompt when there is one,
+ * without its leading `<!-- … -->` comment (its license and file notes, PRM-6), then the Brief, Done-when and When you
+ * finish sections. With the layer off (`layer` false, 0576's test switch) only the Brief follows the title: Done when
+ * and When you finish are the layer's parts. The benchmark's A6 layer appends the same text (0543).
  */
 export function taskPrompt(
 	record: Pick<TaskRecord, "title" | "project" | "brief" | "doneWhen">,
 	panePrompt: string | null,
+	layer = true,
 ): string {
 	let shipped = "";
 	if (panePrompt) {
 		try {
-			shipped = readFileSync(panePrompt, "utf8").trimEnd();
+			shipped = withoutLeadingComment(readFileSync(panePrompt, "utf8")).trim();
 		} catch {
 			// Missing: the task's sections alone.
 		}
 	}
-	const task = [`# Your task: ${record.title} (${record.project})`, "", ...briefSections(record)].join("\n");
+	const sections = layer ? [...briefSections(record), "", ...WHEN_YOU_FINISH] : briefSection(record);
+	const task = [`# Your task: ${record.title} (${record.project})`, "", ...sections].join("\n");
 	return `${shipped ? `${shipped}\n\n` : ""}${task}\n`;
 }
 
@@ -240,8 +252,8 @@ export function taskPrompt(
  * omp 18.18 takes one `--append-system-prompt`, the last one given (text, or a file's contents when the value names a
  * file), so the two go in one file. Resolves its path.
  */
-export function launchPrompt(record: TaskRecord, panePrompt: string | null): string {
+export function launchPrompt(record: TaskRecord, panePrompt: string | null, layer = true): string {
 	const file = join(taskDir(record), "prompt.md");
-	writeIfChanged(file, taskPrompt(record, panePrompt));
+	writeIfChanged(file, taskPrompt(record, panePrompt, layer));
 	return file;
 }

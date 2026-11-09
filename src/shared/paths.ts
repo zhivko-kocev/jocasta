@@ -38,16 +38,19 @@ export function configDir(): string {
 /** The OS data dir (0095); `JOCASTA_DATA_DIR` overrides it (0098). 0700 on Linux and macOS (0484). */
 export function dataDir(): string {
 	const env = process.env.JOCASTA_DATA_DIR;
-	if (env) return privateOnPosix(expandTilde(env));
+	return privateOnPosix(env ? expandTilde(env) : defaultDataDir());
+}
+
+/**
+ * The data dir without `JOCASTA_DATA_DIR`: `%LOCALAPPDATA%\jocasta\data` on Windows, `~/Library/Application Support`
+ * on macOS, `$XDG_DATA_HOME` (or `~/.local/share`) elsewhere (0095). An empty variable counts as unset.
+ */
+export function defaultDataDir(): string {
 	if (process.platform === "win32") {
-		const local = process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local");
-		return join(local, "jocasta", "data");
+		return join(process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local"), "jocasta", "data");
 	}
-	if (process.platform === "darwin") {
-		return privateOnPosix(join(homedir(), "Library", "Application Support", "jocasta", "data"));
-	}
-	const xdg = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
-	return privateOnPosix(join(xdg, "jocasta", "data"));
+	if (process.platform === "darwin") return join(homedir(), "Library", "Application Support", "jocasta", "data");
+	return join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "jocasta", "data");
 }
 
 /**

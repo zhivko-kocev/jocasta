@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { TOKEN_COOKIE } from "../../../src/frontier/protocol.ts";
 import {
 	CANVAS_PATH,
 	canvasAsset,
@@ -59,7 +58,7 @@ test("the Desktop server starts with telemetry off on its own state and port, is
 			APP_PID: String(process.pid),
 		});
 		expect((await fetch(`${connection.url}/health`)).ok).toBe(true);
-		// A second companion on the same state uses the running server.
+		// A second service on the same state uses the running server.
 		const second = startWhiteboard({ runtime: fakeRuntime(), home });
 		expect(await second.ready).toEqual(connection);
 		expect(second.origin()).toBe(connection.url);
@@ -116,7 +115,8 @@ test("the canvas build's entry, stylesheets and wasm come from vite's manifest; 
 test("the page gets whiteboard's server behind its token, and the CSP lets it connect there (0393)", async () => {
 	await withServer(
 		async (server) => {
-			const cookie = { cookie: `${TOKEN_COOKIE}=${server.token}` };
+			const login = await fetch(server.url, { redirect: "manual" });
+			const cookie = { cookie: (login.headers.get("set-cookie") ?? "").split(";")[0] as string };
 			const base = `http://127.0.0.1:${server.port}`;
 			expect((await fetch(`${base}/whiteboard/connection`)).status).toBe(403);
 			const page = await fetch(`${base}/whiteboard/connection`, { headers: cookie });
@@ -141,7 +141,7 @@ test("the page gets whiteboard's server behind its token, and the CSP lets it co
 test("with whiteboard off the page hears so and the CSP names only this server", async () => {
 	await withServer(async (server) => {
 		const response = await fetch(`http://127.0.0.1:${server.port}/whiteboard/connection`, {
-			headers: { cookie: `${TOKEN_COOKIE}=${server.token}` },
+			headers: { authorization: `Bearer ${server.token}` },
 		});
 		expect(response.status).toBe(503);
 		expect((await response.json()).error).toBe("whiteboard is off");

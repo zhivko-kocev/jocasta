@@ -1,4 +1,5 @@
 import { isAbsolute, relative, resolve } from "node:path";
+import { UserError } from "../../src/shared/errors.ts";
 
 /**
  * The flags every benchmark script takes (0482): `--out <dir>` outside the repo (raw results live in
@@ -8,7 +9,11 @@ import { isAbsolute, relative, resolve } from "node:path";
 /** The repo root: `bench/lib/` is two levels below it. */
 export const REPO_ROOT = resolve(import.meta.dir, "..", "..");
 
-export class BenchUsageError extends Error {
+/**
+ * The harness's one usage-error convention (DUP-18): a `UserError` (exit 2), which {@link runScript} prints after
+ * `bench: `; `evals/run.ts` prints the same class after `jocasta: `.
+ */
+export class BenchUsageError extends UserError {
 	override name = "BenchUsageError";
 }
 
@@ -99,15 +104,17 @@ export function numberListFlag(args: BenchArgs, name: string, fallback: readonly
 }
 
 /**
- * Runs a script's main: usage errors print one line and exit 2; a dry run prints the plan and measures nothing.
+ * Runs a script's main: a usage error (any `UserError`, a {@link BenchUsageError} or a refusal from the product's
+ * modules such as an unknown variant) prints one line and exits with its code (2); a dry run prints the plan and
+ * measures nothing.
  */
 export async function runScript(main: () => Promise<void> | void): Promise<void> {
 	try {
 		await main();
 	} catch (error) {
-		if (error instanceof BenchUsageError) {
+		if (error instanceof UserError) {
 			console.error(`bench: ${error.message}`);
-			process.exit(2);
+			process.exit(error.exitCode);
 		}
 		throw error;
 	}

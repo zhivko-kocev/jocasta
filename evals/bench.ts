@@ -1,48 +1,56 @@
 // The task benchmark of 0482, as 0543 amends it: `bun evals/bench.ts --tasks <tasks.jsonl> --cache <dir>
 // --out <runDir> [--study main|followup] [--arms a0,a1,a2,a3,a4,a6,a7] [--reps 3] [--set main] [--only id,id]
-// [--pilot] [--workers 2] [--seed 482] [--timeout 60] [--profile <omp profile>] [--work <dir>] [--validate]
+// [--pilot] [--workers 2] [--seed 482] [--timeout 90] [--profile <omp profile>] [--work <dir>] [--validate]
 // [--dry-run]`. Trials (tasks × arms × reps; `--study followup` is the follow-up study's 10 tasks × 2 reps × A6 and
-// its five arms) run in a seeded random order through the eval runner's `runTrial`, each in its own worker thread
+// its four arms) run in a seeded random order through the eval runner's `runTrial`, each in its own worker thread
 // (`--workers` at once, never two of one task), the quota pacer awaited before each, their roots in `--work` (default
 // the OS temp folder). Results go to `<runDir>/results.jsonl` (with each trial's ledger totals), the ledger's rows to
 // `ledger.jsonl`, each attempt's priced spend to `spend.jsonl`, the harnesses' own records to `sessions/`, infra errors
 // to `errors.jsonl` (retried, at most twice more), setup and grading output to `logs/`, the run's conditions to
-// `conditions.json`; a rerun with the same `--out` resumes. `--validate` checks each task without a model: its hidden
-// tests fail on the base commit and pass three times with the gold patch (logs in `validation/`). Real trials bill
-// model usage: they need `JOCASTA_EVALS_REAL=1` and never run in CI (0169). Exits 1 when a trial or task is left
-// failing, 2 on a bad flag, 3 after three sign-in failures in a row, 4 when A7's spend limit stopped its trials.
+// `conditions.json`; a rerun with the same `--out` and the same conditions resumes, and `<runDir>/run.lock` keeps a
+// second bench out while one runs. `--validate` checks each task without a model: its hidden tests fail on the base
+// commit and pass three times with the gold patch (logs in `validation/`). Real trials bill model usage: they need
+// `JOCASTA_EVALS_REAL=1` and never run in CI (0169). Exits 1 when a trial or task is left failing or an arm stopped on
+// a new harness version, 2 on a bad flag, 3 after three sign-in failures in a row, 4 when A7's spend limit stopped its
+// trials.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { isMainThread, parentPort, Worker } from "node:worker_threads";
 import { BenchUsageError, flag, isInside, listFlag, parseBenchArgs, REPO_ROOT, runScript } from "../bench/lib/args.ts";
+import { git } from "../bench/lib/git.ts";
 import { toolCommand } from "../bench/lib/launch.ts";
 import { benchPricing, ledgerOfDir } from "../bench/lib/ledger.ts";
-import { type Conditions, conditions } from "../bench/lib/output.ts";
+import { type Conditions, conditions, readVersion } from "../bench/lib/output.ts";
 import { loadPriceTable, type PriceTable } from "../bench/lib/prices.ts";
-import { UserError } from "../src/shared/errors.ts";
+import { BENCH_PTY_SESSION } from "../bench/lib/sandbox.ts";
+import { findHerdr } from "../src/frontier/server/herdr.ts";
 import { removeTree } from "../src/shared/fsx.ts";
+import { git as gitRead } from "../src/shared/git.ts";
+import { appendJsonl, readJsonlFile } from "../src/shared/jsonl.ts";
 import type { TrialLedger } from "../src/shared/ledger.ts";
-import { parseRunArgs } from "./args.ts";
+import { onPath } from "../src/shared/process.ts";
+import { pidAlive, processStartedAt } from "../src/shared/proctree.ts";
+import { profileName } from "./args.ts";
 import { FOLLOWUP_ARMS, FOLLOWUP_COMPARISONS, FOLLOWUP_REPS, FOLLOWUP_TASKS, pickFollowupTasks } from "./followup.ts";
-import { LAYER_MODULE, layerBuilt, layerMissingMessage } from "./layer.ts";
+import { A7_API_KEY_ENV } from "./harness.ts";
+import { LAYER_MODULE, layerBuilt, layerMissingMessage, loadBenchLayer } from "./layer.ts";
 import { createPacer, PACER_PROVIDER, PAUSE_AT, type Pause, realPacerDeps } from "./pacer.ts";
 import {
-	A7_API_KEY_ENV,
 	type EvalCase,
+	GRADING_LIMIT_MS,
 	gradeHidden,
 	makeTrialRepo,
 	makeTrialRoot,
 	type ResultRow,
-	readVersion,
 	runTrial,
+	SETUP_LIMIT_MS,
 	type TrialOptions,
 	trialArgs,
 	trialEnv,
 } from "./runner.ts";
 import {
-	appendJsonl,
 	type BenchRow,
 	type BenchTask,
 	classifyInfra,
@@ -60,7 +68,6 @@ import {
 	taskCase,
 	trialKey,
 } from "./tasks.ts";
-import { BENCH_PTY_SESSION } from "./terminal.ts";
 import { loadVariants, type Variant } from "./variants.ts";
 
 /** One arm as the run uses it: its variant, the command that starts its harness, and that harness's version. */
@@ -95,6 +102,8 @@ export interface BenchOptions {
 	seed: number;
 	workers: number;
 	timeoutMs?: number;
+	/** The setup-before-the-harness limit; {@link SETUP_LIMIT_MS} when unset (tests shorten it). Held for the run. */
+	setupTimeoutMs?: number;
 	profile?: string;
 	/** The bench herdr session for plan-review trials' terminals (`--pty-session`, 0567). */
 	ptySession?: string;
@@ -111,6 +120,11 @@ export interface BenchOptions {
 	workDir?: string;
 	/** Runs one trial; the default runs it in a worker thread. */
 	execute?: (job: TrialJob) => Promise<TrialOutcome>;
+	/**
+	 * Reads an arm's harness version again after each of its trials (0574); a changed version stops that arm's
+	 * remaining trials. No re-check when unset.
+	 */
+	versionOf?: (arm: Arm) => string;
 	/** The host's conditions for `conditions.json`; the default asks each tool for its version. */
 	describeHost?: () => Conditions;
 	log?: (line: string) => void;
@@ -149,11 +163,7 @@ export interface LongPaths {
 
 /** Reads {@link LongPaths} without changing anything. */
 export function readLongPaths(): LongPaths {
-	const config = spawnSync("git", ["config", "--get", "core.longpaths"], {
-		cwd: tmpdir(),
-		encoding: "utf8",
-		windowsHide: true,
-	});
+	const gitCoreLongpaths = gitRead(tmpdir(), ["config", "--get", "core.longpaths"]) ?? null;
 	let windowsLongPathsEnabled: number | null = null;
 	if (process.platform === "win32") {
 		const reg = spawnSync(
@@ -164,13 +174,13 @@ export function readLongPaths(): LongPaths {
 		const value = /LongPathsEnabled\s+REG_DWORD\s+(0x[0-9a-f]+)/i.exec(reg.stdout ?? "")?.[1];
 		if (value !== undefined) windowsLongPathsEnabled = Number(value);
 	}
-	return { gitCoreLongpaths: config.status === 0 ? config.stdout.trim() : null, windowsLongPathsEnabled };
+	return { gitCoreLongpaths, windowsLongPathsEnabled };
 }
 
 /** The host, the tools' versions (Go's from `go version`, not `--version`) and long-path support. */
 export function hostConditions(): Conditions & { longPaths: LongPaths } {
 	const host = conditions(VERSION_TOOLS.filter((tool) => tool !== "go"));
-	const go = Bun.which("go");
+	const go = onPath("go");
 	const version =
 		go === null ? null : spawnSync(go, ["version"], { encoding: "utf8", windowsHide: true, timeout: 30_000 });
 	host.versions.go = version?.status === 0 ? version.stdout.trim() : null;
@@ -212,6 +222,16 @@ if (!isMainThread)
 		}
 	});
 
+/** What a run holds for its whole length (0574): a resume with other values is refused. */
+interface HeldConditions {
+	timeoutMinutes: number | null;
+	profile: string | null;
+	/** The setup-before-the-harness limit (0574, amended); absent in runs from before it. */
+	setupLimitMinutes?: number;
+	/** Each arm's `--version` at the run's start. */
+	versions: Record<string, string>;
+}
+
 interface RunRecord {
 	seed: number;
 	arms: string[];
@@ -219,9 +239,13 @@ interface RunRecord {
 	tasks: string[];
 	pilot: boolean;
 	order: string[];
+	/** Absent in runs from before 0574. */
+	held?: HeldConditions;
 	sessions: (Conditions & {
 		workers: number;
 		timeoutMinutes: number | null;
+		gradingLimitMinutes: number;
+		setupLimitMinutes: number;
 		profile: string | null;
 		workRoot: string;
 	})[];
@@ -230,24 +254,126 @@ interface RunRecord {
 /** Infra errors in a row that were sign-in failures; three stop the run (0482). */
 const AUTH_STOP = 3;
 
+/** `<out>/run.lock`: the bench that runs in `--out` now (0574). */
+export const RUN_LOCK = "run.lock";
+
+interface RunLock {
+	pid: number;
+	startedAt: string;
+	/** The holder's process start (Windows), so a reused pid isn't taken for the holder. */
+	processStart?: number;
+}
+
+/** A time as `YYYY-MM-DD HH:MM`, local. */
+function localMinute(iso: string): string {
+	const at = new Date(iso);
+	const two = (n: number) => String(n).padStart(2, "0");
+	return `${at.getFullYear()}-${two(at.getMonth() + 1)}-${two(at.getDate())} ${two(at.getHours())}:${two(at.getMinutes())}`;
+}
+
 /**
- * Runs the benchmark's trials into `outDir`, resuming what is there. A free worker takes the next trial in the seeded
- * order whose task isn't running already, so two trials never share a task's caches or tool folders at once. Each
- * attempt's saved sessions are priced into the ledger (0538); A7's trials stop once its priced spend reaches the limit
- * (0537). Returns the exit code: 0 when every trial has a row, 1 when some used up their attempts on infra errors, 3
- * when three sign-in failures in a row stopped the run, 4 when A7's spend limit (or an A7 model the price table lacks)
- * stopped its trials.
+ * Takes `<outDir>/run.lock` for this process (0574, as the service's lock, 0565): refused while a live bench holds it;
+ * a lock whose process is gone (a crashed run) is taken over. Returns its release.
+ */
+function takeRunLock(outDir: string): () => void {
+	const file = join(outDir, RUN_LOCK);
+	let held: RunLock | undefined;
+	try {
+		held = JSON.parse(readFileSync(file, "utf8")) as RunLock;
+	} catch {
+		held = undefined;
+	}
+	if (held !== undefined) {
+		const start = processStartedAt(held.pid);
+		const same = held.processStart === undefined || start === undefined || Math.abs(start - held.processStart) < 1_000;
+		if (pidAlive(held.pid) && same)
+			throw new BenchUsageError(
+				`${outDir} is in use by a bench (pid ${held.pid}, since ${localMinute(held.startedAt)}); stop it or use another --out`,
+			);
+		removeTree(file);
+	}
+	const mine: RunLock = { pid: process.pid, startedAt: new Date().toISOString() };
+	const start = processStartedAt(process.pid);
+	if (start !== undefined) mine.processStart = start;
+	try {
+		writeFileSync(file, `${JSON.stringify(mine)}\n`, { flag: "wx" });
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+		throw new BenchUsageError(`${outDir} is in use by another bench starting now; stop it or use another --out`);
+	}
+	return () => {
+		try {
+			if ((JSON.parse(readFileSync(file, "utf8")) as RunLock).pid === process.pid) removeTree(file);
+		} catch {
+			// Gone already.
+		}
+	};
+}
+
+/** A resume whose held conditions differ from the run's: the refusal's text, or undefined when they match. */
+function heldDiffers(outDir: string, before: HeldConditions, now: HeldConditions): string | undefined {
+	const profile = (held: HeldConditions) => (held.profile === null ? "no profile" : `profile ${held.profile}`);
+	const changed: string[] = [];
+	if (now.timeoutMinutes !== before.timeoutMinutes) changed.push(`--timeout ${now.timeoutMinutes ?? "none"}`);
+	if (before.setupLimitMinutes !== undefined && now.setupLimitMinutes !== before.setupLimitMinutes)
+		changed.push(`setup limit ${now.setupLimitMinutes} min`);
+	if (now.profile !== before.profile) changed.push(profile(now));
+	for (const [arm, version] of Object.entries(now.versions))
+		if (before.versions[arm] !== version && !changed.includes(version)) changed.push(version);
+	if (changed.length === 0) return undefined;
+	const was = [
+		`--timeout ${before.timeoutMinutes ?? "none"}`,
+		...(before.setupLimitMinutes === undefined ? [] : [`setup limit ${before.setupLimitMinutes} min`]),
+		profile(before),
+		...new Set(Object.values(before.versions)),
+	];
+	return `${outDir} ran with ${was.join(", ")}; this resume has ${changed.join(", ")}; resume with the same flags or use a new --out`;
+}
+
+/** Every file's text under `dir`: a trial's saved sessions, subagents' included, for the leak scan (EVL-10). */
+function textUnder(dir: string): string {
+	if (!existsSync(dir)) return "";
+	return readdirSync(dir, { recursive: true, encoding: "utf8" })
+		.map((name) => join(dir, name))
+		.filter((path) => statSync(path).isFile())
+		.map((path) => readFileSync(path, "utf8"))
+		.join("\n");
+}
+
+/**
+ * Runs the benchmark's trials into `outDir`, resuming what is there, while it holds `<outDir>/run.lock`. A free worker
+ * takes the next trial in the seeded order whose task isn't running already, so two trials never share a task's
+ * caches or tool folders at once. Each attempt's saved sessions are priced into the ledger (0538); A7's trials stop
+ * once its priced spend reaches the limit (0537); an arm whose harness reports a new version stops (0574). Returns the
+ * exit code: 0 when every trial has a row, 1 when some used up their attempts on infra errors or an arm stopped on a
+ * new version, 3 when three sign-in failures in a row stopped the run, 4 when A7's spend limit (or an A7 model the
+ * price table lacks) stopped its trials.
  */
 export async function runBench(options: BenchOptions): Promise<number> {
+	mkdirSync(join(options.outDir, "transcripts"), { recursive: true });
+	const release = takeRunLock(options.outDir);
+	try {
+		return await runLocked(options);
+	} finally {
+		release();
+	}
+}
+
+async function runLocked(options: BenchOptions): Promise<number> {
 	const log = options.log ?? ((line: string) => console.log(line));
 	const execute = options.execute ?? executeInWorker;
-	mkdirSync(join(options.outDir, "transcripts"), { recursive: true });
 	const order = planTrials(
 		options.tasks,
 		options.arms.map((arm) => arm.name),
 		options.reps,
 		options.seed,
 	);
+	const held: HeldConditions = {
+		timeoutMinutes: options.timeoutMs === undefined ? null : options.timeoutMs / 60_000,
+		profile: options.profile ?? null,
+		setupLimitMinutes: (options.setupTimeoutMs ?? SETUP_LIMIT_MS) / 60_000,
+		versions: Object.fromEntries(options.arms.map((arm) => [arm.name, arm.harnessVersion])),
+	};
 	const record: RunRecord = {
 		seed: options.seed,
 		arms: options.arms.map((arm) => arm.name),
@@ -255,6 +381,7 @@ export async function runBench(options: BenchOptions): Promise<number> {
 		tasks: options.tasks.map((task) => task.instance_id),
 		pilot: options.pilot ?? false,
 		order: order.map(trialKey),
+		held,
 		sessions: [],
 	};
 	const recordFile = join(options.outDir, "conditions.json");
@@ -264,13 +391,19 @@ export async function runBench(options: BenchOptions): Promise<number> {
 			throw new BenchUsageError(
 				`${options.outDir} holds a run with another plan (seed, arms, reps or tasks); resume it with the same flags or use a new --out`,
 			);
+		// A run from before 0574 recorded no held conditions: this session's become them.
+		const refused = before.held === undefined ? undefined : heldDiffers(options.outDir, before.held, held);
+		if (refused !== undefined) throw new BenchUsageError(refused);
+		record.held = before.held ?? held;
 		record.sessions = before.sessions;
 	}
 	const session = {
 		...(options.describeHost ?? hostConditions)(),
 		workers: options.workers,
-		timeoutMinutes: options.timeoutMs === undefined ? null : options.timeoutMs / 60_000,
-		profile: options.profile ?? null,
+		timeoutMinutes: held.timeoutMinutes,
+		gradingLimitMinutes: GRADING_LIMIT_MS / 60_000,
+		setupLimitMinutes: held.setupLimitMinutes ?? SETUP_LIMIT_MS / 60_000,
+		profile: held.profile,
 		workRoot: options.workDir ?? tmpdir(),
 	};
 	record.sessions.push(session);
@@ -293,16 +426,20 @@ export async function runBench(options: BenchOptions): Promise<number> {
 	const spendFile = join(options.outDir, "spend.jsonl");
 	const spendLimit = options.a7SpendLimitUsd ?? A7_SPEND_LIMIT_USD;
 	const isA7 = (trial: Trial) => arms.get(trial.arm)?.variant.harness === "opencode";
-	let a7Spent = existsSync(spendFile)
-		? readFileSync(spendFile, "utf8")
-				.split(/\r?\n/)
-				.filter((line) => line.trim() !== "")
-				.map((line) => JSON.parse(line) as SpendRow)
-				.filter((row) => row.harness === "opencode")
-				.reduce((sum, row) => sum + row.cost, 0)
-		: 0;
-	let a7StoppedWhy: string | null = a7Spent >= spendLimit ? `A7's priced spend is $${a7Spent.toFixed(2)}` : null;
+	const a7Spend = readJsonlFile<SpendRow>(spendFile).filter((row) => row.harness === "opencode");
+	let a7Spent = a7Spend.reduce((sum, row) => sum + row.cost, 0);
+	const unpriced = [...new Set(a7Spend.flatMap((row) => row.unpricedModels))];
+	// A resume after an unpriced-model stop stays stopped: its spend still can't be counted (EVL-16).
+	let a7StoppedWhy: string | null =
+		unpriced.length > 0
+			? `the price table lacks ${unpriced.join(", ")}, so A7's spend can't be counted`
+			: a7Spent >= spendLimit
+				? `A7's priced spend is $${a7Spent.toFixed(2)}`
+				: null;
 	const a7Skipped: Trial[] = [];
+	/** Arms stopped because their harness reported a new version (0574), with why; and their trials not run. */
+	const versionStopped = new Map<string, string>();
+	const versionSkipped: Trial[] = [];
 	/** Tasks with a trial running now. */
 	const running = new Set<string>();
 	let wake = Promise.withResolvers<void>();
@@ -310,6 +447,20 @@ export async function runBench(options: BenchOptions): Promise<number> {
 		const woken = wake;
 		wake = Promise.withResolvers<void>();
 		woken.resolve();
+	};
+	const checkVersion = (arm: Arm) => {
+		if (options.versionOf === undefined || versionStopped.has(arm.name)) return;
+		let now: string;
+		try {
+			now = options.versionOf(arm);
+		} catch (error) {
+			now = `nothing (${(error as Error).message.split("\n")[0]})`;
+		}
+		if (now !== arm.harnessVersion)
+			versionStopped.set(
+				arm.name,
+				`${arm.variant.harness} --version now says ${now}; the run started on ${arm.harnessVersion} (0482 pins it)`,
+			);
 	};
 
 	const runOne = async (trial: Trial) => {
@@ -319,6 +470,8 @@ export async function runBench(options: BenchOptions): Promise<number> {
 		const attempt = (state.failures.get(key) ?? 0) + 1;
 		const transcriptName = `${trial.task}-${trial.arm}-${trial.rep}`;
 		const sessionsDir = join(options.outDir, "sessions", transcriptName);
+		// An attempt that throws before it saves its sessions never prices the previous attempt's again (EVL-16).
+		removeTree(sessionsDir);
 		const outcome = await execute({
 			evalCase,
 			rep: trial.rep,
@@ -329,6 +482,7 @@ export async function runBench(options: BenchOptions): Promise<number> {
 				variant: arm.variant,
 				profile: options.profile,
 				timeoutMs: options.timeoutMs,
+				...(options.setupTimeoutMs === undefined ? {} : { setupTimeoutMs: options.setupTimeoutMs }),
 				transcriptName,
 				workDir: options.workDir,
 				ptySession: options.ptySession,
@@ -336,6 +490,7 @@ export async function runBench(options: BenchOptions): Promise<number> {
 				sessionsDir,
 			},
 		});
+		checkVersion(arm);
 		const ledger: TrialLedger | null = existsSync(sessionsDir)
 			? ledgerOfDir(sessionsDir, arm.variant.harness, benchPricing(prices))
 			: null;
@@ -391,7 +546,8 @@ export async function runBench(options: BenchOptions): Promise<number> {
 			language: task.language,
 			attempt,
 			trialIndex: trial.index,
-			leak: scanLeaks(task, transcript, evalCase.prompt),
+			// Subagents' own records too (EVL-10): a search an explorer ran reaches the transcript only as its report.
+			leak: scanLeaks(task, `${transcript}\n${textUnder(sessionsDir)}`, evalCase.prompt),
 			...(ledger ? { ledger: { ...ledger.totals, sessions: ledger.sessions.length } } : {}),
 		};
 		appendJsonl(join(options.outDir, "results.jsonl"), row);
@@ -406,11 +562,17 @@ export async function runBench(options: BenchOptions): Promise<number> {
 		log(`${row.hiddenPassed ? "pass" : "FAIL"} ${key}${row.leak.length > 0 ? ` (leak: ${row.leak.join(", ")})` : ""}`);
 	};
 
+	/** Where a trial goes instead of running: an arm stopped by A7's limit or by a new harness version. */
+	const skippedTo = (trial: Trial): Trial[] | undefined =>
+		a7StoppedWhy !== null && isA7(trial) ? a7Skipped : versionStopped.has(trial.arm) ? versionSkipped : undefined;
 	const worker = async () => {
 		for (;;) {
 			if (stoppedBy !== null || queue.length === 0) return;
-			if (a7StoppedWhy !== null)
-				for (let i = queue.length - 1; i >= 0; i--) if (isA7(queue[i] as Trial)) a7Skipped.push(...queue.splice(i, 1));
+			for (let i = queue.length - 1; i >= 0; i--) {
+				const trial = queue[i] as Trial;
+				const to = skippedTo(trial);
+				if (to !== undefined) to.unshift(...queue.splice(i, 1));
+			}
 			if (queue.length === 0) return;
 			const next = queue.findIndex((trial) => !running.has(trial.task));
 			if (next === -1) {
@@ -421,8 +583,9 @@ export async function runBench(options: BenchOptions): Promise<number> {
 			running.add(trial.task);
 			try {
 				await options.pace?.();
-				if (stoppedBy === null && !(a7StoppedWhy !== null && isA7(trial))) await runOne(trial);
-				else if (stoppedBy === null) a7Skipped.push(trial);
+				const to = skippedTo(trial);
+				if (stoppedBy === null && to === undefined) await runOne(trial);
+				else if (stoppedBy === null) to?.push(trial);
 			} finally {
 				running.delete(trial.task);
 				notify();
@@ -437,6 +600,15 @@ export async function runBench(options: BenchOptions): Promise<number> {
 		a7SpendUsd: Math.round(a7Spent * 100) / 100,
 	});
 	saveRecord();
+	// Exhausted trials are listed whatever else stopped the run (EVL-16).
+	if (exhausted.length > 0)
+		log(
+			`${exhausted.length} trials used up ${MAX_ATTEMPTS} attempts on infra errors: ${exhausted.map(trialKey).join(", ")}`,
+		);
+	for (const [arm, why] of versionStopped) {
+		const left = versionSkipped.filter((trial) => trial.arm === arm).length;
+		log(`stopped ${arm}: ${why}; ${left} ${arm} trials not run`);
+	}
 	if (stoppedBy !== null) {
 		log(
 			`stopped: ${AUTH_STOP} trials in a row could not sign in to ${stoppedBy}. Sign in to ${stoppedBy} again (a token refresh on another machine may have revoked the copied login), then rerun the same command to resume.`,
@@ -449,13 +621,7 @@ export async function runBench(options: BenchOptions): Promise<number> {
 		);
 		return 4;
 	}
-	if (exhausted.length > 0) {
-		log(
-			`${exhausted.length} trials used up ${MAX_ATTEMPTS} attempts on infra errors: ${exhausted.map(trialKey).join(", ")}`,
-		);
-		return 1;
-	}
-	return 0;
+	return exhausted.length > 0 || versionSkipped.length > 0 ? 1 : 0;
 }
 
 /** One `validation.jsonl` row: the task's hidden tests without a model, on the base commit and with the gold patch. */
@@ -477,14 +643,15 @@ const since = (start: number) => Math.round((performance.now() - start) / 100) /
 /**
  * Validates one task without a model (0482, the SWE-bench-Live check): the fixture with its setup, graded unchanged on
  * a clean clone (a *null* trial, which must fail), then `gold.patch` applied as the "agent" and graded on a fresh clean
- * clone {@link GOLD_GRADES} times (each must pass). Grading is the runner's own `gradeHidden`. With `logDir`, each
- * phase's commands and output go to `setup.log`, `null.log` and `gold-<n>.log` there; the trial root goes in `workDir`.
+ * clone {@link GOLD_GRADES} times (each must pass). Grading is the runner's own `gradeHidden`, its limit included. With
+ * `logDir`, each phase's commands and output go to `setup.log`, `null.log` and `gold-<n>.log` there; the trial root
+ * goes in `workDir`.
  */
-export function validateTask(
+export async function validateTask(
 	task: BenchTask,
 	cacheDir: string,
 	options: { logDir?: string; workDir?: string } = {},
-): ValidationRow {
+): Promise<ValidationRow> {
 	const row: ValidationRow = {
 		task: task.instance_id,
 		language: task.language,
@@ -504,25 +671,29 @@ export function validateTask(
 	row.seconds.prepare = since(start);
 	const evalCase = taskCase(task, prepared);
 	const logFile = (phase: string) => (options.logDir === undefined ? undefined : join(options.logDir, `${phase}.log`));
-	if (options.logDir !== undefined) rmSync(options.logDir, { recursive: true, force: true });
+	if (options.logDir !== undefined) removeTree(options.logDir);
 	const root = makeTrialRoot(options.workDir);
 	try {
 		const env = trialEnv(evalCase, root);
+		const gradeEnv = trialEnv({ ...evalCase, pathPrefix: evalCase.gradePathPrefix ?? evalCase.pathPrefix }, root);
 		start = performance.now();
-		const { repo, branch } = makeTrialRepo(evalCase, 0, root, env, logFile("setup"));
+		const { repo, fixtureCommit } = await makeTrialRepo(evalCase, 0, root, env, { logFile: logFile("setup") });
 		row.seconds.setup = since(start);
-		const passes = (gradeDir: string, phase: string) =>
-			Object.values(gradeHidden(evalCase, repo, branch, join(root, gradeDir), env, logFile(phase))).every(
-				(score) => score === 1,
-			);
+		const passes = async (gradeDir: string, phase: string) =>
+			Object.values(
+				await gradeHidden(evalCase, repo, fixtureCommit, join(root, gradeDir), {
+					env: gradeEnv,
+					logFile: logFile(phase),
+				}),
+			).every((score) => score === 1);
 		start = performance.now();
-		row.null_failed = !passes("g0", "null");
+		row.null_failed = !(await passes("g0", "null"));
 		row.seconds.null = since(start);
-		gitIn(repo, ["apply", "--whitespace=nowarn", prepared.goldPatch]);
-		gitIn(repo, ["add", "-A"]);
+		git(repo, ["apply", "--whitespace=nowarn", prepared.goldPatch]);
+		git(repo, ["add", "-A"]);
 		for (let i = 1; i <= GOLD_GRADES; i++) {
 			start = performance.now();
-			if (passes(`g${i}`, `gold-${i}`)) row.gold_passes++;
+			if (await passes(`g${i}`, `gold-${i}`)) row.gold_passes++;
 			row.seconds.gold.push(since(start));
 		}
 	} catch (error) {
@@ -533,11 +704,6 @@ export function validateTask(
 	return row;
 }
 
-function gitIn(cwd: string, args: string[]): void {
-	const result = spawnSync("git", args, { cwd, encoding: "utf8", windowsHide: true });
-	if (result.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${result.stderr || result.error?.message}`);
-}
-
 export const validationPassed = (row: ValidationRow): boolean =>
 	row.error === null && row.null_failed === true && row.gold_passes === GOLD_GRADES;
 
@@ -545,20 +711,20 @@ export const validationPassed = (row: ValidationRow): boolean =>
  * `--validate`: every task in turn into `<out>/validation.jsonl` (rewritten), each phase's log in
  * `<out>/validation/<task>/`, then a summary; the failing ids.
  */
-export function runValidation(
+export async function runValidation(
 	tasks: readonly BenchTask[],
 	cacheDir: string,
 	outDir: string,
 	log: (line: string) => void = (line) => console.log(line),
 	workDir?: string,
-): string[] {
+): Promise<string[]> {
 	mkdirSync(outDir, { recursive: true });
 	const file = join(outDir, "validation.jsonl");
 	writeFileSync(file, "");
 	const failed: string[] = [];
 	for (const task of tasks) {
 		log(`validating ${task.instance_id}`);
-		const row = validateTask(task, cacheDir, { logDir: join(outDir, "validation", task.instance_id), workDir });
+		const row = await validateTask(task, cacheDir, { logDir: join(outDir, "validation", task.instance_id), workDir });
 		appendJsonl(file, row);
 		if (!validationPassed(row)) failed.push(task.instance_id);
 		log(
@@ -628,26 +794,18 @@ async function main(): Promise<void> {
 	const reps = study === "followup" ? FOLLOWUP_REPS : pilot ? 1 : wholeNumber(flag(args, "reps"), "reps", 3);
 	const workers = wholeNumber(flag(args, "workers"), "workers", 2);
 	const seed = wholeNumber(flag(args, "seed"), "seed", 482, 0);
-	const timeoutText = flag(args, "timeout", "60");
+	const timeoutText = flag(args, "timeout", "90");
 	const timeoutMinutes = Number(timeoutText);
 	if (!Number.isFinite(timeoutMinutes) || timeoutMinutes <= 0)
 		throw new BenchUsageError(`--timeout needs a number of minutes above 0, not "${timeoutText}"`);
 	const set = flag(args, "set", "main");
 	if (set !== "main" && set !== "spare" && set !== "all")
 		throw new BenchUsageError(`--set must be main, spare or all, not "${set}"`);
-	let profile: string | undefined;
+	const profileText = flag(args, "profile");
+	const profile = profileText === undefined ? undefined : profileName(profileText);
 	const armNames = study === "followup" ? [...FOLLOWUP_ARMS] : listFlag(args, "arms", DEFAULT_ARMS);
 	const variants = new Map<string, Variant>();
-	try {
-		profile =
-			flag(args, "profile") === undefined
-				? undefined
-				: parseRunArgs(["--profile", flag(args, "profile") ?? ""]).profile;
-		for (const name of armNames) variants.set(name, loadVariants(VARIANTS_DIR, [name]));
-	} catch (error) {
-		if (error instanceof UserError) throw new BenchUsageError(error.message);
-		throw error;
-	}
+	for (const name of armNames) variants.set(name, loadVariants(VARIANTS_DIR, [name]));
 	if (armNames.length === 0) throw new BenchUsageError("--arms needs at least one arm");
 
 	const all = loadTasks(resolve(tasksFile));
@@ -661,12 +819,19 @@ async function main(): Promise<void> {
 	if (study === "followup") tasks = pickFollowupTasks(all, seed);
 	if (pilot) tasks = pickPilot(tasks, seed);
 	if (tasks.length === 0) throw new BenchUsageError("no tasks selected");
-
+	// EVL-1: each layered arm's layer is checked before any trial (its code index's data folder, codebase-memory-mcp).
+	const layerProblems = new Map<string, string | undefined>();
+	for (const name of armNames) {
+		const switches = variants.get(name)?.layer;
+		if (switches === undefined) continue;
+		layerProblems.set(name, layerBuilt() ? await (await loadBenchLayer()).preflight(switches) : layerMissingMessage());
+	}
 	if (args.dryRun) {
 		printDryRun({
 			tasks,
 			armNames,
 			variants,
+			layerProblems,
 			reps,
 			seed,
 			workers,
@@ -683,15 +848,15 @@ async function main(): Promise<void> {
 		return;
 	}
 	if (validate) {
-		const failed = runValidation(tasks, cacheDir, outDir, undefined, workDir);
+		const failed = await runValidation(tasks, cacheDir, outDir, undefined, workDir);
 		if (failed.length > 0) process.exitCode = 1;
 		return;
 	}
 	if (!process.env.JOCASTA_EVALS_REAL)
 		throw new BenchUsageError("the benchmark runs real models and bills usage; set JOCASTA_EVALS_REAL=1 to run it");
 	if (process.env.CI) throw new BenchUsageError("real-model runs never run in CI (0169)");
-	const layered = armNames.filter((name) => variants.get(name)?.layer !== undefined);
-	if (layered.length > 0 && !layerBuilt()) throw new BenchUsageError(`${layered.join(", ")}: ${layerMissingMessage()}`);
+	for (const [name, problem] of layerProblems)
+		if (problem !== undefined) throw new BenchUsageError(`${name}: ${problem}`);
 	const a7 = armNames.filter((name) => variants.get(name)?.harness === "opencode");
 	if (a7.length > 0) {
 		if (hostname().toUpperCase() !== VM_MACHINE)
@@ -712,7 +877,7 @@ async function main(): Promise<void> {
 	});
 	const ptySession = flag(args, "pty-session", BENCH_PTY_SESSION);
 	const interactive = armNames.filter((name) => variants.get(name)?.planReview !== undefined);
-	if (interactive.length > 0 && !Bun.which("herdr"))
+	if (interactive.length > 0 && !findHerdr())
 		throw new BenchUsageError(
 			`${interactive.join(", ")} answer omp's plan review in a herdr pane: herdr is not on PATH`,
 		);
@@ -734,6 +899,8 @@ async function main(): Promise<void> {
 		pace: pacer.pace,
 		accountFull: pacer.accountFull,
 		pauses,
+		// 0574: a harness that updated itself mid-run stops its arm.
+		versionOf: (arm) => readVersion(arm.launcher),
 	});
 	console.log(`results: ${join(outDir, "results.jsonl")}`);
 	process.exitCode = code;
@@ -743,6 +910,8 @@ function printDryRun(plan: {
 	tasks: BenchTask[];
 	armNames: string[];
 	variants: Map<string, Variant>;
+	/** Each layered arm's preflight: why it can't run here, or undefined. */
+	layerProblems: Map<string, string | undefined>;
 	reps: number;
 	seed: number;
 	workers: number;
@@ -779,7 +948,7 @@ function printDryRun(plan: {
 				console.log(
 					`    ${c.arm}: ${c.change} (${c.records}; the feature is ${c.feature === "arm" ? "the arm's" : "a6's"})`,
 				);
-			console.log("    not compared: pitchfork (0560)");
+			console.log("    not compared: pitchfork (0560), keep-alive pings (no idle gap in a trial)");
 		}
 		console.log(`  order (first ${Math.min(15, order.length)}):`);
 		for (const trial of order.slice(0, 15))
@@ -803,17 +972,19 @@ function printDryRun(plan: {
 				console.log(
 					`  arm ${name} plan review (0567): turn 1 runs omp interactive in a pane of the herdr session ${plan.ptySession}, plan mode at startup; the extension answers "${variant.planReview === "execute" ? "Approve and execute" : "Approve and keep context"}" and shuts omp down after the execution`,
 				);
-			if (variant.layer !== undefined)
+			if (variant.layer !== undefined) {
+				const problem = plan.layerProblems.get(name);
 				console.log(
-					`  arm ${name} layer: index ${variant.layer.index ? "on" : "off"}; ${layerBuilt() ? `${LAYER_MODULE} adds its flags, settings and env` : `NOT RUNNABLE: ${layerMissingMessage()}`}`,
+					`  arm ${name} layer: index ${variant.layer.index ? "on" : "off"}; ${problem === undefined ? `${LAYER_MODULE} adds its flags, settings and env` : `NOT RUNNABLE: ${problem}`}`,
 				);
+			}
 			if (variant.harness === "opencode")
 				console.log(
 					`  arm ${name}: Anthropic API key from ${A7_API_KEY_ENV} (as ANTHROPIC_API_KEY, opencode only), VM ${VM_MACHINE} only, stops at $${A7_SPEND_LIMIT_USD} priced spend (0537)`,
 				);
 		}
 		console.log(
-			`  quota pacer: omp usage --json before each trial, waits only while every ${PACER_PROVIDER} account has its 5h or 7d window at ${PAUSE_AT * 100}% or more; a rate limit while an account is full is an infra error, retried`,
+			`  quota pacer: omp usage --json before each trial, waits only while every ${PACER_PROVIDER} account has its 5h or 7d window at ${PAUSE_AT * 100}% or more; a trial that ended on a rate limit while an account is full is an infra error, retried`,
 		);
 		console.log(
 			"  ledger: each trial's sessions saved to <out>/sessions/, priced with bench/prices/ (LiteLLM, pinned), rows in ledger.jsonl, totals in each results row, spend per attempt in spend.jsonl",

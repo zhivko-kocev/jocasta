@@ -1,8 +1,8 @@
 import { beforeEach, expect, test } from "bun:test";
-import { readFileSync, rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { miseCheck, miseEnv } from "../../../src/frontier/server/mise.ts";
-import { useTempJocasta } from "../../shared/fixture.ts";
+import { readJsonl, useTempJocasta } from "../../shared/fixture.ts";
 
 const env = useTempJocasta();
 
@@ -18,14 +18,7 @@ function base(answers: Record<string, string>, extra: Record<string, string> = {
 }
 
 function calls(): { args: string; miseEnv?: string }[] {
-	try {
-		return readFileSync(log(), "utf8")
-			.trim()
-			.split("\n")
-			.map((line) => JSON.parse(line));
-	} catch {
-		return [];
-	}
+	return existsSync(log()) ? readJsonl(log()) : [];
 }
 
 test("without mise on PATH a pane's env and the review's check are unchanged (0473, 0477)", async () => {

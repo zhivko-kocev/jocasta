@@ -1,9 +1,9 @@
 # Releases on a tag (0051): each target tested, then built on its own platform (0043; CR-07), packaged (0044) with its
 # checksum, then one GitHub release. whiteboard v0.2.4 is cloned at its pinned commit (the build refuses any other, 0417)
-# and built with Node 24 and pnpm through Corepack (0393); hunk comes from its npm platform package (0394). The companion
-# (Electrobun) builds on Windows only (0367): the Windows zip must carry `app\bin\launcher.exe` and the app's parts, and
-# the Linux and macOS archives say in the run summary that they have no companion. Only the publish job may write; every
-# action is pinned to the commit its tag named when it was pinned.
+# and built with Node 24 and pnpm through Corepack (0393); hunk comes from its npm platform package (0394). Each build
+# is checked for what scripts/build.ts ships (the install layout, appendix I) and its `jocasta --version` runs before
+# anything is uploaded. Only the publish job may write; every action is pinned to the commit its tag named when it was
+# pinned.
 # Installer integrity (0484): before the release exists, the publish job commits `checksums.sha256` (one sha256sum line
 # per archive) on top of the release's tag and pushes that commit as the tag `checksums-<tag>`. install.ps1 and
 # install.sh read the expected SHA-256 from that tag on raw.githubusercontent.com, never from the release, so a
@@ -52,35 +52,17 @@ jobs:
       - run: bun run lint
       - run: bun test
       - run: bun run build --target ${{ matrix.target }}
-      - name: The companion's main process type-checks
-        if: matrix.target == 'windows-x64'
-        run: bunx tsc -p src/app
-      - name: The Windows build runs and its zip carries the companion
-        if: matrix.target == 'windows-x64'
-        shell: pwsh
-        run: |
-          dist/windows-x64/jocasta.exe --version
-          if ($LASTEXITCODE -ne 0) { throw "jocasta.exe --version exited $LASTEXITCODE" }
-          if (-not (Test-Path dist/windows-x64/app/bin/launcher.exe)) { throw 'dist/windows-x64 has no app\bin\launcher.exe: the companion did not build' }
-          $parts = @(
-            'jocasta.exe', 'config', 'node/node.exe', 'whiteboard/dist/cli.js', 'hunk/hunk.exe',
-            'app/Resources/app/server/server.js',
-            'app/Resources/app/server/light.js',
-            'app/Resources/app/server/whiteboard-canvas/.vite/manifest.json',
-            'app/Resources/app/server/editor.worker.js',
-            'app/Resources/app/server/node_modules/sherpa-onnx-win-x64'
-          )
-          foreach ($part in $parts) {
-            if (-not (Test-Path "dist/windows-x64/$part")) { throw "dist/windows-x64 has no $part" }
-          }
-      - name: What this archive lacks
-        if: matrix.target != 'windows-x64'
+      - name: The build runs and carries what build.ts ships
         shell: bash
         run: |
-          echo "### ${{ matrix.target }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "No companion app: Electrobun's companion builds on Windows only (0367); \`jocasta\` opens herdr without it." >> "$GITHUB_STEP_SUMMARY"
-          for part in node whiteboard hunk; do
-            [ -e "dist/${{ matrix.target }}/$part" ] || echo "Missing: $part" >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          out="dist/${{ matrix.target }}"
+          exe=""
+          [ "${{ matrix.target }}" = windows-x64 ] && exe=".exe"
+          "$out/jocasta$exe" --version
+          for part in "jocasta$exe" README.md CHANGELOG.md config/boss-manual.md "node/node$exe" whiteboard/dist/cli.js \
+            whiteboard-canvas/.vite/manifest.json editor.worker.js "hunk/hunk$exe"; do
+            [ -e "$out/$part" ] || { echo "$out has no $part" >&2; exit 1; }
           done
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

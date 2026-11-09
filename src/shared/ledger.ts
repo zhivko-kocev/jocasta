@@ -1,8 +1,10 @@
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { type Dirent, readdirSync, readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { asObject } from "./fsx.ts";
+import { jsonLines } from "./jsonl.ts";
+import { transcriptsOf } from "./omp-session.ts";
 import { ompAgentDir } from "./paths.ts";
 
 /**
@@ -61,10 +63,19 @@ export interface SessionRecord {
 	harness: LedgerHarness;
 	session: string;
 	agent: string;
+	/**
+	 * The session its header names as the one it moved from, forked off or ran under (omp's `parentSession`: an id
+	 * for a move, a `/tan` clone or a seance fork, a file path for a subagent); its file may hold copies of that one's
+	 * entries. Absent when the header names none.
+	 */
+	parentSession?: string;
+	/** Epoch ms of the session's header, when it has one; orders a thread's files parent-first. */
+	startedAt?: number;
 	requests: RequestRow[];
 	tools: ToolRow[];
 	/** Every file each call touched, by index into `tools`: reads, edits and writes. */
 	touched: string[][];
+	/** Times of its compactions, Jocasta's own `/handoff` (`method: "handoff"`) left out (0582). */
 	compactions: number[];
 }
 
@@ -78,10 +89,17 @@ export interface Waste {
 	oversizedResults: number;
 	/** Failures of a tool after its first failure in a row (a success of that tool ends the row). */
 	repeatedFailures: number;
-	/** Requests writing {@link CACHE_MISS_WRITE_TOKENS} or more to the cache after more than 5 minutes idle. */
+	/**
+	 * Requests writing {@link CACHE_MISS_WRITE_TOKENS} or more to the cache after more than 5 minutes without a request
+	 * on the same provider and model (each model has its own cache).
+	 */
 	cacheMisses: number;
 	/** The idle minutes before each cache miss, rounded. */
 	cacheMissIdleMinutes: number[];
+	/**
+	 * omp's compactions (`soft`, `shake`, `remote`, legacy), not Jocasta's own `/handoff` (`method: "handoff"`), which
+	 * no context pressure caused (0582).
+	 */
 	compactions: number;
 }
 
@@ -131,7 +149,7 @@ export interface LedgerPricing {
 }
 
 export const OVERSIZED_RESULT_BYTES = 50_000;
-export const CACHE_MISS_IDLE_MS = 5 * 60_000;
+const CACHE_MISS_IDLE_MS = 5 * 60_000;
 export const CACHE_MISS_WRITE_TOKENS = 10_000;
 
 const READ_TOOLS: Record<string, true> = { read: true, Read: true };
@@ -218,19 +236,6 @@ export function resultText(content: unknown): string {
 		.join("");
 }
 
-/** The JSON object lines of a JSONL text; other and torn lines are skipped. */
-export const parseLines = (text: string): Record<string, unknown>[] =>
-	text
-		.split(/\r?\n/)
-		.filter((line) => line.startsWith("{"))
-		.flatMap((line) => {
-			try {
-				return [JSON.parse(line) as Record<string, unknown>];
-			} catch {
-				return [];
-			}
-		});
-
 /** Epoch ms of a number or an ISO string; NaN otherwise. */
 export const timeOf = (value: unknown): number =>
 	typeof value === "number" ? value : typeof value === "string" ? Date.parse(value) : Number.NaN;
@@ -275,11 +280,18 @@ export function requestRow(
 	};
 }
 
-/** One omp session file: assistant messages and `model_usage` entries are requests; `toolCall` blocks are calls. */
+/**
+ * One omp session file: assistant messages and `model_usage` entries are requests; `toolCall` blocks are calls;
+ * compactions other than `method: "handoff"` count (0582). The header's `parentSession` and time are kept for
+ * {@link withoutCopies}.
+ */
 export function readOmpSession(text: string, pricing: LedgerPricing, agent = "main"): SessionRecord {
-	const entries = parseLines(text);
+	const entries = jsonLines(text);
 	const header = entries.find((entry) => entry.type === "session");
 	const record = newRecord("omp", typeof header?.id === "string" ? header.id : agent, agent);
+	if (typeof header?.parentSession === "string") record.parentSession = header.parentSession;
+	const startedAt = timeOf(header?.timestamp);
+	if (Number.isFinite(startedAt)) record.startedAt = startedAt;
 	const results = new Map<string, { bytes: number; error: boolean }>();
 	for (const entry of entries) {
 		const message = entry.message as Record<string, unknown> | undefined;
@@ -292,7 +304,7 @@ export function readOmpSession(text: string, pricing: LedgerPricing, agent = "ma
 	for (const entry of entries) {
 		const at = timeOf(entry.timestamp);
 		if (entry.type === "compaction") {
-			record.compactions.push(at);
+			if (entry.method !== "handoff") record.compactions.push(at);
 			continue;
 		}
 		if (entry.type === "model_usage") {
@@ -392,11 +404,13 @@ export function wasteOf(record: SessionRecord): Waste {
 		} else failing.set(call.tool, 0);
 	});
 	const cacheMissIdleMinutes: number[] = [];
-	let previous: number | undefined;
+	const previous = new Map<string, number>();
 	for (const row of record.requests) {
-		if (previous !== undefined && row.at - previous > CACHE_MISS_IDLE_MS && row.cacheWrite >= CACHE_MISS_WRITE_TOKENS)
-			cacheMissIdleMinutes.push(Math.round((row.at - previous) / 60_000));
-		if (Number.isFinite(row.at)) previous = row.at;
+		const model = `${row.provider ?? ""}/${row.model}`;
+		const before = previous.get(model);
+		if (before !== undefined && row.at - before > CACHE_MISS_IDLE_MS && row.cacheWrite >= CACHE_MISS_WRITE_TOKENS)
+			cacheMissIdleMinutes.push(Math.round((row.at - before) / 60_000));
+		if (Number.isFinite(row.at)) previous.set(model, row.at);
 	}
 	return {
 		rereads,
@@ -413,7 +427,7 @@ export function wasteOf(record: SessionRecord): Waste {
 const ownRequests = (record: SessionRecord): RequestRow[] => record.requests.filter((row) => row.purpose === undefined);
 
 /** The agent's own requests' largest context (side requests left out), against the model's window. */
-export function peakContextOf(record: SessionRecord, pricing: LedgerPricing): PeakContext {
+function peakContextOf(record: SessionRecord, pricing: LedgerPricing): PeakContext {
 	let peak: RequestRow | undefined;
 	let tokens = 0;
 	for (const row of ownRequests(record)) {
@@ -481,10 +495,65 @@ function sumWaste(wastes: readonly Waste[]): Waste {
 	return waste;
 }
 
-/** Every session's summary, their sums (waste summed, the largest peak) and all rows. */
+/**
+ * `records` with copies left out (0538: each request once), in the same order. A file whose header names a parent
+ * (`parentSession`: a moved session's sibling, a `/tan` clone, a seance fork, a subagent, or a subagent transcript
+ * omp copied along with a moved session's artifacts) may repeat entries another file holds; its requests, calls and
+ * compactions an earlier record already counted are dropped. Records are walked parent-first: those naming no parent,
+ * then the others by header time (a fork's, move's or subagent's header is written after its parent's; a copied
+ * transcript keeps its original's header, and whichever of the two comes first counts). A copy keeps its request's
+ * time, model and usage and its call's time, tool and arguments, which is what is compared; omp's "entries older than
+ * the header" isn't a rule, since a move publishes the entry that triggered it only to the new file. A record left
+ * whole is returned as is, so running this twice changes nothing.
+ */
+export function withoutCopies(records: readonly SessionRecord[]): SessionRecord[] {
+	const order = records
+		.map((record, i) => ({ record, i }))
+		.sort((a, b) => {
+			const aCopies = a.record.parentSession !== undefined;
+			const bCopies = b.record.parentSession !== undefined;
+			if (aCopies !== bCopies) return aCopies ? 1 : -1;
+			if (!aCopies) return a.i - b.i;
+			// No header time sorts last (Infinity - Infinity is NaN, so the input order decides).
+			const later = (a.record.startedAt ?? Number.POSITIVE_INFINITY) - (b.record.startedAt ?? Number.POSITIVE_INFINITY);
+			return later || a.i - b.i;
+		});
+	const requests = new Set<string>();
+	const tools = new Set<string>();
+	const compactions = new Set<number>();
+	const requestKey = (r: RequestRow) => `${r.at}|${r.model}|${r.input}|${r.cacheRead}|${r.cacheWrite}|${r.output}`;
+	const toolKey = (t: ToolRow) => `${t.at}|${t.tool}|${t.argHash}`;
+	const result: SessionRecord[] = [...records];
+	for (const { record, i } of order) {
+		const copies = record.parentSession !== undefined;
+		const keptRequests = copies ? record.requests.filter((r) => !requests.has(requestKey(r))) : record.requests;
+		const keptTools = record.tools.flatMap((t, index) => (copies && tools.has(toolKey(t)) ? [] : [index]));
+		const keptCompactions = copies ? record.compactions.filter((at) => !compactions.has(at)) : record.compactions;
+		for (const r of keptRequests) requests.add(requestKey(r));
+		for (const index of keptTools) tools.add(toolKey(record.tools[index] as ToolRow));
+		for (const at of keptCompactions) compactions.add(at);
+		if (
+			keptRequests.length !== record.requests.length ||
+			keptTools.length !== record.tools.length ||
+			keptCompactions.length !== record.compactions.length
+		) {
+			result[i] = {
+				...record,
+				requests: keptRequests,
+				tools: keptTools.map((index) => record.tools[index] as ToolRow),
+				touched: keptTools.map((index) => record.touched[index] ?? []),
+				compactions: keptCompactions,
+			};
+		}
+	}
+	return result;
+}
+
+/** Every session's summary with copies left out ({@link withoutCopies}), their sums (waste summed, the largest peak) and all rows. */
 export function trialLedger(records: readonly SessionRecord[], pricing: LedgerPricing): TrialLedger {
-	const sessions = records.map((record) => summarizeSession(record, pricing));
-	const requests = records.flatMap((record) => record.requests);
+	const counted = withoutCopies(records);
+	const sessions = counted.map((record) => summarizeSession(record, pricing));
+	const requests = counted.flatMap((record) => record.requests);
 	const peak = sessions.reduce<PeakContext>((best, s) => (s.peakContext.tokens > best.tokens ? s.peakContext : best), {
 		tokens: 0,
 		window: null,
@@ -500,23 +569,57 @@ export function trialLedger(records: readonly SessionRecord[], pricing: LedgerPr
 			peakContext: peak,
 			waste: sumWaste(sessions.map((s) => s.waste)),
 		},
-		rows: records.flatMap((record) => [...record.requests, ...record.tools]).sort((a, b) => a.at - b.at),
+		rows: counted.flatMap((record) => [...record.requests, ...record.tools]).sort((a, b) => a.at - b.at),
 	};
 }
 
 // --- The product's ledger: omp's own prices and windows, one thread's session files. ---
 
-interface CachedModels {
-	provider: string;
-	models: { id: string; contextWindow: number }[];
+/** omp's prices for a model, in dollars per million tokens. */
+export interface ModelCost {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
 }
 
-/** `models.db`'s `model_cache` rows by the db's path, read once per process (an unreadable db: none). */
-const modelCaches = new Map<string, CachedModels[]>();
+interface CachedModels {
+	provider: string;
+	models: { id: string; contextWindow: number | null; cost: ModelCost | null }[];
+}
 
+/** `models.db`'s `model_cache` rows by the db's path, kept while the db's mtime and size stay the same (0546). */
+const modelCaches = new Map<string, { mtimeMs: number; size: number; rows: CachedModels[] }>();
+
+/** A model's `cost` as omp's model cache has it; null without finite input and output prices. */
+function modelCost(value: unknown): ModelCost | null {
+	const cost = asObject(value);
+	if (!cost || typeof cost.input !== "number" || !Number.isFinite(cost.input)) return null;
+	if (typeof cost.output !== "number" || !Number.isFinite(cost.output)) return null;
+	return {
+		input: cost.input,
+		output: cost.output,
+		cacheRead: tokenCount(cost.cacheRead),
+		cacheWrite: tokenCount(cost.cacheWrite),
+	};
+}
+
+/**
+ * omp's model cache rows, read again when the db's mtime or size changes (omp refreshes it; a fresh install has none
+ * yet). A db that can't be opened or read (missing, locked, not omp's) yields none and isn't kept, so the next call
+ * tries again.
+ */
 function readModelCache(path: string): CachedModels[] {
+	let mtimeMs: number;
+	let size: number;
+	try {
+		({ mtimeMs, size } = statSync(path));
+	} catch {
+		modelCaches.delete(path);
+		return [];
+	}
 	const cached = modelCaches.get(path);
-	if (cached) return cached;
+	if (cached && cached.mtimeMs === mtimeMs && cached.size === size) return cached.rows;
 	const rows: CachedModels[] = [];
 	let db: Database | undefined;
 	try {
@@ -533,25 +636,53 @@ function readModelCache(path: string): CachedModels[] {
 			}
 			const models = (Array.isArray(parsed) ? parsed : []).flatMap((model) => {
 				const m = asObject(model);
-				return typeof m?.id === "string" && typeof m.contextWindow === "number" && m.contextWindow > 0
-					? [{ id: m.id, contextWindow: m.contextWindow }]
-					: [];
+				if (typeof m?.id !== "string") return [];
+				const contextWindow = typeof m.contextWindow === "number" && m.contextWindow > 0 ? m.contextWindow : null;
+				const cost = modelCost(m.cost);
+				return contextWindow === null && cost === null ? [] : [{ id: m.id, contextWindow, cost }];
 			});
 			rows.push({ provider: row.provider_id, models });
 		}
 	} catch {
-		// missing, locked or not omp's: no windows
+		// Missing, locked or not omp's: none this time.
+		return [];
 	} finally {
 		db?.close();
 	}
-	modelCaches.set(path, rows);
+	modelCaches.set(path, { mtimeMs, size, rows });
 	return rows;
 }
 
 /**
+ * The first model `model` with `field` set in omp's model cache, under `provider` (`provider_id` equal to it or
+ * starting with `<provider>:`), or under any provider when it is null.
+ */
+function cachedModel<K extends "contextWindow" | "cost">(
+	provider: string | null,
+	model: string,
+	field: K,
+): NonNullable<CachedModels["models"][number][K]> | null {
+	for (const row of readModelCache(join(ompAgentDir(), "models.db"))) {
+		if (provider !== null && row.provider !== provider && !row.provider.startsWith(`${provider}:`)) continue;
+		const found = row.models.find((m) => m.id === model && m[field] !== null);
+		if (found) return found[field] as NonNullable<CachedModels["models"][number][K]>;
+	}
+	return null;
+}
+
+/**
+ * omp's price for `model` in dollars per million tokens, from its model cache (`<omp agent dir>/models.db`): under
+ * `provider` as {@link ompPricing}'s window matches it, or the first provider listing the model when `provider` is
+ * null. Null when the cache has no price for it.
+ */
+export function ompModelCost(provider: string | null, model: string): ModelCost | null {
+	return cachedModel(provider, model, "cost");
+}
+
+/**
  * omp's own pricing: a request costs its `usage.cost.total` (null when it has none); the window is the model's
- * `contextWindow` in omp's model cache, `<omp agent dir>/models.db` (`model_cache`, read-only, read once per process),
- * under the request's provider (`provider_id` equal to it or starting with `<provider>:`).
+ * `contextWindow` in omp's model cache, `<omp agent dir>/models.db` (`model_cache`, read-only, read again when it
+ * changes), under the request's provider (`provider_id` equal to it or starting with `<provider>:`).
  */
 export const ompPricing: LedgerPricing = {
 	cost(_request, usage) {
@@ -559,13 +690,7 @@ export const ompPricing: LedgerPricing = {
 		return typeof total === "number" && Number.isFinite(total) ? total : null;
 	},
 	window(provider, model) {
-		if (provider === null) return null;
-		for (const row of readModelCache(join(ompAgentDir(), "models.db"))) {
-			if (row.provider !== provider && !row.provider.startsWith(`${provider}:`)) continue;
-			const found = row.models.find((m) => m.id === model);
-			if (found) return found.contextWindow;
-		}
-		return null;
+		return provider === null ? null : cachedModel(provider, model, "contextWindow");
 	},
 };
 
@@ -582,9 +707,6 @@ export interface ThreadLedger {
 	waste: Waste;
 }
 
-/** Scratch copies `omp gc --compress` leaves beside transcripts; never transcripts of their own. */
-const COMPRESS_SCRATCH = ".omp-gc-compress-";
-
 interface CachedSession {
 	size: number;
 	mtimeMs: number;
@@ -592,14 +714,12 @@ interface CachedSession {
 	summary: SessionSummary;
 	/** Whether the agent made requests of its own (the peak means something). */
 	ownRequests: boolean;
-	/** Its header names the session it moved from or forked off: it holds copies of that one's entries. */
-	copies: boolean;
 }
 
-/** Each session file's parse, kept while its size and mtime stay the same. */
+/** Each session file's parse, kept while its size and mtime stay the same, until {@link forgetStaleSessions}. */
 const sessionCache = new Map<string, CachedSession>();
 
-function sessionSummary(path: string, agent: string): CachedSession | undefined {
+function cachedSession(path: string, agent: string): CachedSession | undefined {
 	let size: number;
 	let mtimeMs: number;
 	try {
@@ -623,120 +743,83 @@ function sessionSummary(path: string, agent: string): CachedSession | undefined 
 		record,
 		summary: summarizeSession(record, ompPricing),
 		ownRequests: ownRequests(record).length > 0,
-		copies: namesParent(text),
 	};
 	sessionCache.set(path, entry);
 	return entry;
 }
 
 /**
- * Whether a session file's header names the session it moved from or forked off (`parentSession`): omp copied that
- * one's entries into it (`session-manager.ts` `#moveOffSessionFile`).
+ * Drops the ledger's kept parses of files last modified before `sinceMs` (epoch ms) unless `keep(file)` holds, so the
+ * cache doesn't grow for the service's lifetime. `file` is a session file as passed to {@link threadLedger}, or a
+ * transcript under its artifacts dir (the session file's path without `.jsonl`).
  */
-function namesParent(text: string): boolean {
-	for (const line of text.split("\n", 8)) {
-		try {
-			const entry: unknown = JSON.parse(line);
-			const fields = entry !== null && typeof entry === "object" ? (entry as Record<string, unknown>) : undefined;
-			if (fields?.type === "session") return typeof fields.parentSession === "string";
-		} catch {
-			// Not a JSON line.
-		}
-	}
-	return false;
-}
-
-/** What a thread's files already counted, so a copy in a moved or forked session's file counts once. */
-interface Counted {
-	requests: Set<string>;
-	tools: Set<string>;
-	compactions: Set<number>;
+export function forgetStaleSessions(sinceMs: number, keep: (file: string) => boolean = () => false): void {
+	for (const [file, entry] of sessionCache) if (entry.mtimeMs < sinceMs && !keep(file)) sessionCache.delete(file);
 }
 
 /**
- * `session`'s summary, noting its requests, calls and compactions in `counted`; with `copies` (a file of a session
- * that moved from or forked off another) what `counted` holds is left out first. A copy keeps its request's time and
- * usage and its call's time, tool and arguments, which is what is compared.
+ * `read` over a thread's transcripts: each session file in order (agent `main`), and when it could be read, the
+ * transcripts under the folder named like it without `.jsonl` (subagents, the advisor, forks; agent: the path
+ * below that folder without `.jsonl`).
  */
-function uncounted(session: CachedSession, counted: Counted, copies: boolean): SessionSummary {
-	const { record } = session;
-	const requestKey = (r: RequestRow) => `${r.at}|${r.model}|${r.input}|${r.cacheRead}|${r.cacheWrite}|${r.output}`;
-	const toolKey = (t: ToolRow) => `${t.at}|${t.tool}|${t.argHash}`;
-	const requests = copies ? record.requests.filter((r) => !counted.requests.has(requestKey(r))) : record.requests;
-	const kept = record.tools.flatMap((t, i) => (copies && counted.tools.has(toolKey(t)) ? [] : [i]));
-	const compactions = copies ? record.compactions.filter((at) => !counted.compactions.has(at)) : record.compactions;
-	for (const r of requests) counted.requests.add(requestKey(r));
-	for (const i of kept) counted.tools.add(toolKey(record.tools[i] as ToolRow));
-	for (const at of compactions) counted.compactions.add(at);
-	if (
-		requests.length === record.requests.length &&
-		kept.length === record.tools.length &&
-		compactions.length === record.compactions.length
-	) {
-		return session.summary;
+function threadTranscripts<T>(
+	sessionFiles: readonly string[],
+	read: (path: string, agent: string, main: boolean) => T | undefined,
+): T[] {
+	const found: T[] = [];
+	for (const sessionFile of sessionFiles) {
+		const main = read(sessionFile, "main", true);
+		if (main === undefined) continue;
+		found.push(main);
+		const dir = sessionFile.replace(/\.jsonl$/, "");
+		for (const path of transcriptsOf(sessionFile)) {
+			const agent = relative(dir, path)
+				.replaceAll("\\", "/")
+				.replace(/\.jsonl$/, "");
+			const nested = read(path, agent, false);
+			if (nested !== undefined) found.push(nested);
+		}
 	}
-	return summarizeSession(
-		{
-			...record,
-			requests,
-			tools: kept.map((i) => record.tools[i] as ToolRow),
-			touched: kept.map((i) => record.touched[i] ?? []),
-			compactions,
-		},
-		ompPricing,
-	);
+	return found;
 }
 
-/** Transcripts (`*.jsonl`) anywhere under a session's artifacts dir, scratch copies left out. */
-function nestedTranscripts(dir: string): string[] {
-	let entries: Dirent[];
-	try {
-		entries = readdirSync(dir, { recursive: true, withFileTypes: true });
-	} catch {
-		return [];
-	}
-	return entries
-		.filter(
-			(e) =>
-				e.isFile() &&
-				e.name.endsWith(".jsonl") &&
-				!e.name.includes(COMPRESS_SCRATCH) &&
-				!relative(dir, e.parentPath).includes(COMPRESS_SCRATCH),
-		)
-		.map((e) => join(e.parentPath, e.name))
-		.sort();
+/**
+ * The records of the files {@link threadLedger} reads, read with `pricing` and with copies left out
+ * ({@link withoutCopies}); files that can't be read are skipped. Nothing is cached.
+ */
+export function threadSessionRecords(sessionFiles: readonly string[], pricing: LedgerPricing): SessionRecord[] {
+	return withoutCopies(
+		threadTranscripts(sessionFiles, (path, agent) => {
+			try {
+				return readOmpSession(readFileSync(path, "utf8"), pricing, agent);
+			} catch {
+				return undefined;
+			}
+		}),
+	);
 }
 
 /**
  * A thread's ledger (0538, 0546) from its omp session files, oldest first, and the transcripts under the folder named
- * like each without `.jsonl` (subagents, the advisor): spend, cache-read share and waste over all of them (what a
- * moved or forked session's file copied from an earlier one counted once), and peak context the largest of the
- * sessions' own. Unchanged files aren't parsed again. Undefined when none of the session files exists.
+ * like each without `.jsonl` (subagents, the advisor, forks): spend, cache-read share and waste over all of them, a
+ * copy counted once ({@link withoutCopies}), and peak context the largest of the session files' own. Unchanged files
+ * aren't parsed again. Undefined when none of the session files exists.
  */
 export function threadLedger(sessionFiles: readonly string[]): ThreadLedger | undefined {
-	const counted: Counted = { requests: new Set(), tools: new Set(), compactions: new Set() };
-	const summaries: SessionSummary[] = [];
 	let peakContext: PeakContext | null = null;
-	for (const sessionFile of sessionFiles) {
-		const main = sessionSummary(sessionFile, "main");
-		if (!main) continue;
-		summaries.push(uncounted(main, counted, main.copies));
-		if (main.ownRequests && main.summary.peakContext.tokens > (peakContext?.tokens ?? -1)) {
-			peakContext = main.summary.peakContext;
+	const sessions = threadTranscripts(sessionFiles, (path, agent, main) => {
+		const session = cachedSession(path, agent);
+		if (main && session?.ownRequests && session.summary.peakContext.tokens > (peakContext?.tokens ?? -1)) {
+			peakContext = session.summary.peakContext;
 		}
-		const dir = sessionFile.replace(/\.jsonl$/, "");
-		for (const path of nestedTranscripts(dir)) {
-			const nested = sessionSummary(
-				path,
-				relative(dir, path)
-					.replaceAll("\\", "/")
-					.replace(/\.jsonl$/, ""),
-			);
-			// A moved or forked session's artifacts are copies too.
-			if (nested) summaries.push(uncounted(nested, counted, main.copies));
-		}
-	}
-	if (summaries.length === 0) return undefined;
+		return session;
+	});
+	if (sessions.length === 0) return undefined;
+	const counted = withoutCopies(sessions.map((s) => s.record));
+	const summaries = sessions.map((s, i) => {
+		const record = counted[i] as SessionRecord;
+		return record === s.record ? s.summary : summarizeSession(record, ompPricing);
+	});
 	const sum = (key: "input" | "cacheRead" | "cacheWrite" | "cost" | "requests") =>
 		summaries.reduce((total, s) => total + s[key], 0);
 	const cacheRead = sum("cacheRead");

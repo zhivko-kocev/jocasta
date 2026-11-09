@@ -6,3 +6,7 @@
 harness: claude
 model: claude-opus-5-5
 args: [--permission-mode, bypassPermissions, --effort, high]
+# Claude Code stays the version the run started on (0482 pins 2.1.296; 0574): its self-update is off, and the bench
+# stops the arm if `claude --version` changes anyway.
+env:
+  DISABLE_AUTOUPDATER: "1"

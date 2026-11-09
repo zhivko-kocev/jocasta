@@ -6,16 +6,18 @@
 # to a folder holding jocasta-windows-x64.zip and its .sha256 (a local build's dist\), that zip is installed instead
 # (0487). Tests only: $env:JOCASTA_INSTALL_NO_PATH=1 leaves the user PATH alone, and install.json then names no PATH
 # entry.
-# Folder: $env:JOCASTA_INSTALL_DIR, else %LOCALAPPDATA%\Programs\jocasta\; added to the user's PATH. A drive root or a
-# folder holding files that aren't Jocasta's is refused.
+# Folder: $env:JOCASTA_INSTALL_DIR, else %LOCALAPPDATA%\Programs\jocasta\; added to the user's PATH. The folder is
+# Jocasta's alone (0579): a drive root, or a folder holding files when no install.json there names that same folder,
+# is refused.
 # Layout: <dir>\jocasta.exe, <dir>\config\, <dir>\node\, <dir>\whiteboard\, <dir>\whiteboard-canvas\,
-# <dir>\editor.worker.js, <dir>\hunk\, and <dir>\install.json naming <dir> and what this install adds beyond the
-# folder, for `jocasta uninstall` (0468): its user PATH entry.
+# <dir>\editor.worker.js, <dir>\hunk\, and <dir>\install.json naming <dir>, the release's top-level entries (what
+# `jocasta uninstall` removes, 0579) and what this install adds beyond the folder (0468): its user PATH entry.
 # Upgrade (CR-06): omp sessions keep `jocasta.exe mcp` and whiteboard's node.exe running from the install, and hunk
 # panes hunk.exe, so neither those files nor the folder can be replaced (a running program's file can't be
 # overwritten, and its folder can't be renamed). A running program's file can be renamed, though: the release is
-# staged complete beside the install, the Jocasta service (`jocasta.exe service`) and whiteboard's desktop server stop
-# (herdr's panes keep running, 0392; `jocasta` starts the service again, 0552), the old install is copied aside, every
+# staged complete beside the install, the Jocasta service (`jocasta.exe service`), whiteboard's desktop server and an
+# older install's companion (`app\`, gone with 0552) stop (herdr's panes keep running, 0392; `jocasta` starts the
+# service again, 0552), the old install is copied aside, every
 # file still in use (.exe, .dll, .node) is renamed in place to `<name>.old-<stamp>`, and robocopy mirrors the staged
 # release over the install, leaving those `.old-*` files alone. Running programs keep their old files until
 # they exit; `.old-*` files no longer in use are removed now and by every later install. If the renames or the copy
@@ -31,8 +33,13 @@
 	$addToPath = $env:JOCASTA_INSTALL_NO_PATH -ne '1'
 	$dir = [IO.Path]::GetFullPath($(if ($env:JOCASTA_INSTALL_DIR) { $env:JOCASTA_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'Programs\jocasta' })).TrimEnd('\')
 	if ($dir -match '^[A-Za-z]:$') { throw "jocasta install: $dir is a drive root; choose a folder for JOCASTA_INSTALL_DIR." }
-	if ((Test-Path $dir -PathType Container) -and (Get-ChildItem -Force $dir | Select-Object -First 1) -and
-		-not (Test-Path (Join-Path $dir 'jocasta.exe')) -and -not (Test-Path (Join-Path $dir 'install.json'))) {
+	# Jocasta's alone (0579): anything in the folder must come with the install.json that names this same folder.
+	$owned = $false
+	try {
+		$named = [string](Get-Content -Raw -LiteralPath (Join-Path $dir 'install.json') | ConvertFrom-Json).dir
+		$owned = $named -and ([IO.Path]::GetFullPath($named).TrimEnd('\') -ieq $dir)
+	} catch { $owned = $false }
+	if ((Test-Path $dir -PathType Container) -and (Get-ChildItem -Force $dir | Select-Object -First 1) -and -not $owned) {
 		throw "jocasta install: $dir holds files that aren't Jocasta's; choose an empty folder for JOCASTA_INSTALL_DIR."
 	}
 	$stamp = Get-Date -Format 'yyyyMMddHHmmss'
@@ -52,9 +59,10 @@
 			ForEach-Object { Remove-Item -Force $_.FullName -ErrorAction SilentlyContinue }
 	}
 
-	# robocopy's mirror; exit codes 8 and up are failures. `.old-*` files in the destination are neither copied nor purged.
+	# robocopy's mirror; exit codes 8 and up are failures. `.old-*` files in the destination are neither copied nor
+	# purged, and a junction is never followed (/XJ), so the purge can't reach outside the folder (0579).
 	function Sync-Folder([string]$from, [string]$to) {
-		robocopy $from $to /MIR /XF '*.old-*' /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+		robocopy $from $to /MIR /XJ /XF '*.old-*' /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
 		if ($LASTEXITCODE -ge 8) { throw "robocopy $from -> $to exited $LASTEXITCODE" }
 	}
 
@@ -100,10 +108,13 @@
 			throw "jocasta install: $asset doesn't match the SHA-256 in $where (expected $($expected.ToLowerInvariant()), got $($actual.ToLowerInvariant())); nothing was installed."
 		}
 
-		# The whole release, staged and checked before the install is touched.
-		Expand-Archive "$tmp\$asset" -DestinationPath $stage
+		# The whole release, staged and checked before the install is touched. Windows' own tar unpacks it in about a
+		# tenth of Expand-Archive's time.
+		New-Item -ItemType Directory -Path $stage | Out-Null
+		& "$env:SystemRoot\System32\tar.exe" -xf "$tmp\$asset" -C $stage
+		if ($LASTEXITCODE -ne 0) { throw "jocasta install: couldn't unpack $asset (tar exited $LASTEXITCODE); nothing was installed." }
 		if (-not (Test-Path (Join-Path $stage 'jocasta.exe'))) { throw "jocasta install: $asset has no jocasta.exe" }
-		$record = [ordered]@{ dir = $dir }
+		$record = [ordered]@{ dir = $dir; entries = @(Get-ChildItem -Force -LiteralPath $stage | ForEach-Object { $_.Name }) }
 		if ($addToPath) { $record.path = $dir }
 		# What an earlier install's companion (0367, gone with 0552) may have left: uninstall removes either only while
 		# it is still the companion's (its Run value naming app\bin\launcher.exe, its WebView2 data).
@@ -114,7 +125,15 @@
 		$upgrading = Test-Path $dir
 		if ($upgrading) {
 			# The Jocasta service (0552) stops first, with whiteboard's desktop server, which would otherwise keep the old
-			# node.exe busy and be reused by the next service; `jocasta` starts the service again on the new build.
+			# node.exe busy and be reused by the next service, and an older install's companion (launcher.exe and its
+			# bun.exe under app\), which would keep its old service's port; `jocasta` starts the service again on the new
+			# build.
+			$companion = @(Get-CimInstance Win32_Process |
+				Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith("$dir\app\", [StringComparison]::OrdinalIgnoreCase) })
+			if ($companion.Count -gt 0) {
+				Write-Host "jocasta install: stopping the companion app an earlier install left running."
+				$companion | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+			}
 			Get-CimInstance Win32_Process -Filter "Name = 'jocasta.exe'" |
 				Where-Object {
 					$_.ExecutablePath -and $_.ExecutablePath -ieq "$dir\jocasta.exe" -and $_.CommandLine -match '\sservice\s*$'

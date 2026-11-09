@@ -8,11 +8,11 @@
  * `{"t":"peer-joined"|"peer-left","peer":N}`, a guest `{"t":"room-closed"}`; close codes 4001 room closed, 4004 no such
  * room, 4009 a second host. Pings are WebSocket pings, which Bun answers itself.
  */
-import { spawn } from "node:child_process";
 import { delimiter } from "node:path";
 import type { Server, ServerWebSocket } from "bun";
 import { UserError } from "../../shared/errors.ts";
 import { asObject } from "../../shared/fsx.ts";
+import { runProgram } from "../../shared/process.ts";
 
 /** The relay's port on 127.0.0.1 (0561): fixed, so every pane's overlay names it. */
 export const RELAY_PORT = 47_499;
@@ -89,29 +89,15 @@ export async function ompRelayUrl(
 ): Promise<string> {
 	const merged = { ...process.env, ...env };
 	const files = [...(merged.PI_CONFIG_FILES?.split(delimiter).filter(Boolean) ?? []), ...configFiles(command)];
-	const [program, ...args] = [...omp, "config", "get", "collab.relayUrl", "--json"];
-	if (!program) throw new Error("no omp command");
-	const child = spawn(program, args, {
+	if (omp.length === 0) throw new Error("no omp command");
+	const run = await runProgram([...omp, "config", "get", "collab.relayUrl", "--json"], {
 		cwd,
 		env: { ...merged, PI_CONFIG_FILES: files.join(delimiter) },
-		stdio: ["ignore", "pipe", "pipe"],
-		windowsHide: true,
+		timeoutMs: RESOLVE_TIMEOUT_MS,
 	});
-	let out = "";
-	let err = "";
-	child.stdout.on("data", (chunk) => {
-		out += chunk;
-	});
-	child.stderr.on("data", (chunk) => {
-		err += chunk;
-	});
-	const timer = setTimeout(() => child.kill(), RESOLVE_TIMEOUT_MS);
-	const closed = Promise.withResolvers<number | null>();
-	child.on("error", closed.reject);
-	child.on("close", closed.resolve);
-	const code = await closed.promise.finally(() => clearTimeout(timer));
-	if (code !== 0) {
-		throw new Error(`\`omp config get collab.relayUrl\` failed (exit ${code}): ${err.trim() || out.trim()}`);
+	const out = run.stdout;
+	if (run.code !== 0) {
+		throw new Error(`\`omp config get collab.relayUrl\` failed (exit ${run.code}): ${run.stderr.trim() || out.trim()}`);
 	}
 	let answer: Record<string, unknown> | undefined;
 	try {
@@ -152,6 +138,22 @@ interface Room {
 }
 
 const ROOM_PATH = /^\/r\/([A-Za-z0-9_-]{10,64})$/;
+/**
+ * The relay's bounds (SEC-NET-7): Jocasta's panes host one room each and it has no guests of its own, so these leave
+ * room for his own `/join` while a web page can't grow the service's memory. omp keeps a frame's payload under 1 MB
+ * plus its envelope (`collab/replication-shrink.ts` `MAX_REPLICATED_PAYLOAD_BYTES`).
+ */
+const MAX_ROOMS = 64;
+const MAX_GUESTS = 4;
+const MAX_FRAME_BYTES = 4 * 1024 * 1024;
+
+/** Whether a WebSocket's `Origin` may open a room: none (omp's client sends none) or a loopback page. */
+function originAllowed(origin: string | null): boolean {
+	if (origin === null) return true;
+	if (!URL.canParse(origin)) return false;
+	const host = new URL(origin).hostname.toLowerCase();
+	return host === "localhost" || host === "[::1]" || /^127(\.\d{1,3}){3}$/.test(host);
+}
 
 /**
  * Starts the relay on 127.0.0.1:`port` (`0` picks a free one: tests). A port another program holds fails the start
@@ -169,10 +171,17 @@ export function startRelay(port = RELAY_PORT): Relay {
 				const room = ROOM_PATH.exec(url.pathname)?.[1];
 				const role = url.searchParams.get("role");
 				if (!room || (role !== "host" && role !== "guest")) return new Response("Not found", { status: 404 });
+				// A web page elsewhere can't open rooms here (browsers allow cross-origin WebSockets).
+				if (!originAllowed(request.headers.get("origin"))) return new Response("Forbidden", { status: 403 });
+				const open = rooms.get(room);
+				if (role === "host" ? !open && rooms.size >= MAX_ROOMS : (open?.guests.size ?? 0) >= MAX_GUESTS) {
+					return new Response("Too many", { status: 503 });
+				}
 				if (srv.upgrade(request, { data: { roomId: room, role, peer: 0 } })) return undefined;
 				return new Response("Upgrade required", { status: 426 });
 			},
 			websocket: {
+				maxPayloadLength: MAX_FRAME_BYTES,
 				open(ws) {
 					const { roomId, role } = ws.data;
 					const room = rooms.get(roomId);

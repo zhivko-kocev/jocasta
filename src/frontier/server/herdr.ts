@@ -10,8 +10,11 @@ import { existsSync, readdirSync } from "node:fs";
 import { createConnection, type Socket } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { LineSplitter } from "../../shared/line-rpc.ts";
 import { log } from "../../shared/log.ts";
-import { endProcesses, processTree } from "./proctree.ts";
+import { waitFor } from "../../shared/poll.ts";
+import { onPath } from "../../shared/process.ts";
+import { endProcesses, type ProcessId, processIdOf } from "../../shared/proctree.ts";
 
 interface HerdrOptions {
 	/** herdr session name; Jocasta's is `jocasta`. */
@@ -28,6 +31,13 @@ interface HerdrOptions {
 	timeoutMs?: number;
 	/** How often `watch` re-reads its pane set; 1 s when omitted. */
 	watchIntervalMs?: number;
+	/**
+	 * Whether `connectHerdr` starts a server when none answers (and again after one stopped, 0431); true when omitted.
+	 * False connects to a running one only (the plugin's startup hook): no answer fails with `unreachable`.
+	 */
+	start?: boolean;
+	/** Told the server process each time this module starts one (0582: a hung service's takeover spares it). */
+	onServerStarted?: (server: ProcessId) => void;
 }
 
 export type AgentState = "working" | "blocked" | "idle" | "done" | "unknown";
@@ -56,7 +66,7 @@ export interface HerdrSnapshot {
 }
 
 /** herdr's answers to `notification.show` (`NotificationShowReason`). */
-export const NOTIFICATION_RESULTS = ["shown", "disabled", "rate_limited", "no_foreground_client", "busy"] as const;
+const NOTIFICATION_RESULTS = ["shown", "disabled", "rate_limited", "no_foreground_client", "busy"] as const;
 export type NotificationResult = (typeof NOTIFICATION_RESULTS)[number];
 
 export interface Herdr {
@@ -179,9 +189,10 @@ export interface Herdr {
 	panes(): Promise<PaneInfo[]>;
 	/**
 	 * The process herdr started for the pane (`pane.process_info`'s `shell_pid`; omp in Jocasta's panes), undefined when
-	 * herdr names none. Never starts the server; throws when it doesn't answer.
+	 * herdr names none. Never starts the server; throws when it doesn't answer within `timeoutMs` (the client's own
+	 * timeout when omitted).
 	 */
-	paneRoot(paneId: string): Promise<number | undefined>;
+	paneRoot(paneId: string, timeoutMs?: number): Promise<number | undefined>;
 	/**
 	 * Calls `onChange` when a watched pane's agent state changes, starting with each pane's current state. The pane set
 	 * is re-read from `paneIds` every interval; the subscription is reopened when it changes or drops (`events_lost`,
@@ -229,6 +240,8 @@ const RESTART_GAP_MS = 5_000;
 const SERVER_STOP_MS = 10_000;
 /** A ping while stopping: a server on its way out answers at once or not at all. */
 export const STOP_PING_MS = 2_000;
+/** How many panes' processes `paneProcesses` asks herdr for at once (SRV-A-8). */
+const PANE_READS_AT_ONCE = 4;
 const DEFAULT_TIMEOUT_MS = 30_000;
 /** `worktree.create` runs `git worktree add` before it answers. */
 const WORKTREE_TIMEOUT_MS = 120_000;
@@ -260,8 +273,8 @@ export function herdrPipe(file: string): string {
 
 /** `herdr` on PATH, else the newest `~/.herdr/packages/standalone/releases/<version>-<target>/herdr[.exe]`. */
 export function findHerdr(): string | undefined {
-	const onPath = Bun.which("herdr");
-	if (onPath) return onPath;
+	const found = onPath("herdr");
+	if (found) return found;
 	const releases = join(homedir(), ".herdr", "packages", "standalone", "releases");
 	if (!existsSync(releases)) return undefined;
 	const exe = process.platform === "win32" ? "herdr.exe" : "herdr";
@@ -290,37 +303,41 @@ export function herdrVersionWarning(version: string): string | undefined {
 
 /**
  * Connects to herdr's session `options.session`, starting `herdr --session <session> server` detached with
- * `HERDR_CONFIG_PATH` when its socket is absent and waiting up to 10 s for it. Warns if the server's version (from
- * `ping`, checked once here) is not 0.9.x. When the server stops later, the next request starts it again the same way
- * (0431), at most once every few seconds; herdr restores its panes as shells, which the service relaunches.
+ * `HERDR_CONFIG_PATH` when its socket is absent and waiting up to 10 s for it (unless `start` is false). Warns if the
+ * server's version (from `ping`, checked once here) is not 0.9.x. When the server stops later, the next request starts
+ * it again the same way (0431), at most once every few seconds; herdr restores its panes as shells, which the service
+ * relaunches.
  */
 export async function connectHerdr(options: HerdrOptions): Promise<Herdr> {
 	const socketPath = options.socketPath ?? herdrSocketPath(options.session);
 	// Into Jocasta's log (0431), which a source run also prints.
 	const warn = options.onWarning ?? ((message: string) => log("warn", "herdr", message));
 	const client = new Client(socketPath, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+	const start = options.start ?? true;
 	let pong: { version?: string };
 	let started = false;
 	try {
 		pong = await client.ping();
 	} catch (error) {
-		if (!(error instanceof HerdrError && error.code === "unreachable")) throw error;
+		if (!start || !(error instanceof HerdrError && error.code === "unreachable")) throw error;
 		pong = await startAndWait(client, options);
 		started = true;
 	}
 	const warning = pong.version === undefined ? undefined : herdrVersionWarning(pong.version);
 	if (warning) warn(warning);
 	let lastStart = 0;
-	client.revive = async () => {
-		if (Date.now() - lastStart < RESTART_GAP_MS) {
-			throw new HerdrError("unreachable", `herdr session ${options.session} is down; it was restarted moments ago`);
-		}
-		lastStart = Date.now();
-		await startAndWait(client, options);
-		revivedAt = Date.now();
-		revivals++;
-		warn(`herdr's server for session ${options.session} had stopped; Jocasta started it again`);
-	};
+	if (start) {
+		client.revive = async () => {
+			if (Date.now() - lastStart < RESTART_GAP_MS) {
+				throw new HerdrError("unreachable", `herdr session ${options.session} is down; it was restarted moments ago`);
+			}
+			lastStart = Date.now();
+			await startAndWait(client, options);
+			revivedAt = Date.now();
+			revivals++;
+			warn(`herdr's server for session ${options.session} had stopped; Jocasta started it again`);
+		};
+	}
 	return new HerdrClient(client, options.watchIntervalMs ?? 1000, started);
 }
 
@@ -370,64 +387,101 @@ export async function herdrSessionAnswers(
 	}
 }
 
-/** Starts the session's server and waits up to 10 s for its `ping`. */
-async function startAndWait(client: Client, options: HerdrOptions): Promise<{ version?: string }> {
-	startServer(options);
-	const end = Date.now() + SERVER_START_MS;
-	for (;;) {
-		await Bun.sleep(100);
-		try {
-			return await client.ping();
-		} catch (retry) {
-			if (Date.now() >= end) {
-				throw new HerdrError("unreachable", `herdr session ${options.session} didn't start: ${String(retry)}`);
-			}
-		}
-	}
+/**
+ * One request to session `session`'s server, as the service's client sends it (a read herdr dropped is asked again
+ * once, 0517); never starts a server. Throws `HerdrError`.
+ */
+export function herdrRequestOnce<T>(session: string, method: string, params: object, timeoutMs?: number): Promise<T> {
+	const ms = timeoutMs ?? DEFAULT_TIMEOUT_MS;
+	return new Client(herdrSocketPath(session), ms).request<T>(method, params, ms);
 }
 
-function startServer(options: HerdrOptions): void {
+/** Starts the session's server and waits up to 10 s for its `ping`. */
+async function startAndWait(client: Client, options: HerdrOptions): Promise<{ version?: string }> {
+	const server = startServer(options);
+	if (server) options.onServerStarted?.(server);
+	let answer: { version?: string } | undefined;
+	let last: unknown;
+	const started = await waitFor(
+		async () => {
+			try {
+				answer = await client.ping();
+				return true;
+			} catch (retry) {
+				last = retry;
+				return false;
+			}
+		},
+		{ timeoutMs: SERVER_START_MS, intervalMs: 100 },
+	);
+	if (!started || !answer) {
+		throw new HerdrError("unreachable", `herdr session ${options.session} didn't start: ${String(last)}`);
+	}
+	return answer;
+}
+
+/** Starts the session's server; resolves its process as it runs now, when that can be read. */
+function startServer(options: HerdrOptions): ProcessId | undefined {
 	const bin = options.herdrBin ?? findHerdr();
 	if (!bin) throw new HerdrError("not_installed", "herdr isn't installed (not on PATH, not in ~/.herdr)");
 	const env = { ...process.env };
 	if (options.configPath) env.HERDR_CONFIG_PATH = options.configPath;
 	// `herdr server` runs the headless server (cli-reference.mdx "Server"); `--session` picks the socket. It outlives
 	// the service, so it starts in the home dir: inheriting the launcher's cwd would lock the install folder.
-	spawn(bin, ["--session", options.session, "server"], {
+	const child = spawn(bin, ["--session", options.session, "server"], {
 		cwd: homedir(),
 		detached: true,
 		stdio: "ignore",
 		windowsHide: true,
 		env,
-	}).unref();
+	});
+	child.unref();
+	return child.pid === undefined ? undefined : processIdOf(child.pid);
 }
 
-/** Opens one NDJSON connection; every received line goes to `onLine`, and `onClose` runs when it drops after opening. */
-function openLines(path: string, onLine: (line: string) => void, onClose: () => void): Promise<Socket> {
-	const { promise, resolve, reject } = Promise.withResolvers<Socket>();
+/**
+ * A connect error as herdr's state: no socket or pipe (ENOENT) or nothing listening (ECONNREFUSED) is no server
+ * (`unreachable`, which may start one); anything else (a busy pipe, EMFILE, EACCES) is a `transport` failure, so a
+ * live session never gets a second server (SRV-A-10).
+ */
+function connectError(path: string, error: unknown): HerdrError {
+	const code = (error as NodeJS.ErrnoException | undefined)?.code;
+	return code === "ENOENT" || code === "ECONNREFUSED"
+		? new HerdrError("unreachable", `herdr isn't reachable at ${path}: ${String(error)}`)
+		: new HerdrError("transport", `herdr's socket at ${path} didn't connect: ${String(error)}`);
+}
+
+/**
+ * Opens one NDJSON connection: the socket at once, and `opened` once it connected (rejected with `connectError`'s
+ * `HerdrError`). Every received line goes to `onLine`, and `onClose` runs when it drops after opening.
+ */
+function openLines(
+	path: string,
+	onLine: (line: string) => void,
+	onClose: () => void,
+): { socket: Socket; opened: Promise<void> } {
+	const { promise, resolve, reject } = Promise.withResolvers<void>();
 	const socket = createConnection(path);
-	let buffer = "";
+	const lines = new LineSplitter();
 	let opened = false;
 	socket.setEncoding("utf8");
 	socket.once("connect", () => {
 		opened = true;
-		resolve(socket);
+		resolve();
 	});
 	socket.on("data", (chunk: string) => {
-		buffer += chunk;
-		for (let end = buffer.indexOf("\n"); end >= 0; end = buffer.indexOf("\n")) {
-			const line = buffer.slice(0, end).trim();
-			buffer = buffer.slice(end + 1);
-			if (line) onLine(line);
-		}
+		for (const line of lines.push(chunk)) if (line) onLine(line);
 	});
 	socket.on("error", (error) => {
-		if (!opened) reject(error);
+		if (!opened) reject(connectError(path, error));
 	});
 	socket.on("close", () => {
 		if (opened) onClose();
+		else reject(connectError(path, new Error("closed before connecting")));
 	});
-	return promise;
+	// A caller that gave up first (its timeout) destroyed the socket; the failure then has no one to tell.
+	promise.catch(() => {});
+	return { socket, opened: promise };
 }
 
 interface Response {
@@ -528,68 +582,76 @@ class Client {
 			// A server on its way out may close the connection before it answers.
 			if (!gone(error) && !(error instanceof HerdrError && error.code === "transport")) throw error;
 		}
-		const end = Date.now() + SERVER_STOP_MS;
-		for (;;) {
-			try {
-				await this.attempt("ping", {}, STOP_PING_MS);
-			} catch (error) {
-				if (gone(error)) return;
-			}
-			if (Date.now() >= end) {
-				throw new HerdrError("timeout", `herdr's server at ${this.path} didn't stop in ${SERVER_STOP_MS / 1000} s`);
-			}
-			await Bun.sleep(100);
+		const stopped = await waitFor(
+			async () => {
+				try {
+					await this.attempt("ping", {}, STOP_PING_MS);
+					return false;
+				} catch (error) {
+					return gone(error);
+				}
+			},
+			{ timeoutMs: SERVER_STOP_MS, intervalMs: 100 },
+		);
+		if (!stopped) {
+			throw new HerdrError("timeout", `herdr's server at ${this.path} didn't stop in ${SERVER_STOP_MS / 1000} s`);
 		}
 	}
 
 	/**
-	 * The processes the panes run (those of workspace `workspaceId` or tab `tabId`, else every pane) with everything they
-	 * started, from one snapshot of the process list: each pane's root (`pane.process_info`'s `shell_pid`, the process
-	 * herdr started for it) and its foreground processes. Never starts the server; empty when herdr can't say.
+	 * The processes herdr started for the panes (those of workspace `workspaceId` or tab `tabId`, else every pane), each
+	 * by pid and start, read while herdr still has the panes: each pane's root (`pane.process_info`'s `shell_pid`) and its
+	 * foreground processes. `endProcesses` later ends them with everything they started, by the start-checked walk
+	 * (SRV-A-1). At most 4 panes are asked at once (0517: herdr drops requests under bursts), and the panes whose
+	 * processes couldn't be read are named in one warning (SRV-A-8). Never starts the server; empty when herdr can't say.
 	 */
-	async paneProcesses(where: { workspaceId?: string; tabId?: string } = {}): Promise<number[]> {
+	async paneProcesses(where: { workspaceId?: string; tabId?: string } = {}): Promise<ProcessId[]> {
 		let panes: WirePane[];
 		try {
 			({ panes } = await this.attempt<{ panes: WirePane[] }>("pane.list", {}, this.timeoutMs));
-		} catch {
+		} catch (error) {
+			log("warn", "herdr", `the panes' processes weren't listed: ${(error as Error).message}`);
 			return [];
 		}
-		const roots = await Promise.all(
-			panes
-				.filter(
-					(pane) =>
-						(where.workspaceId === undefined || pane.workspace_id === where.workspaceId) &&
-						(where.tabId === undefined || pane.tab_id === where.tabId),
-				)
-				.map(async (pane) => {
-					try {
-						const info = await this.processInfo(pane.pane_id);
-						return [info.shell_pid ?? 0, ...(info.foreground_processes ?? []).map((p) => p.pid)];
-					} catch {
-						return [];
-					}
-				}),
+		const asked = panes.filter(
+			(pane) =>
+				(where.workspaceId === undefined || pane.workspace_id === where.workspaceId) &&
+				(where.tabId === undefined || pane.tab_id === where.tabId),
 		);
-		return processTree(roots.flat().filter((pid) => pid > 0));
-	}
-
-	/** One pane's processes; never starts the server. */
-	processInfo(paneId: string): Promise<WireProcessInfo> {
-		// pane.process_info {pane_id} → `{type: "pane_process_info", process_info}` (schema `PaneProcessInfo`).
-		return this.attempt<{ process_info: WireProcessInfo }>(
-			"pane.process_info",
-			{ pane_id: paneId },
-			this.timeoutMs,
-		).then((answer) => answer.process_info);
-	}
-
-	/** Connects to the server, opened (for `events.subscribe`) the same way a request is. */
-	async open(onLine: (line: string) => void, onClose: () => void): Promise<Socket> {
-		try {
-			return await openLines(this.path, onLine, onClose);
-		} catch (error) {
-			throw new HerdrError("unreachable", `herdr isn't reachable at ${this.path}: ${String(error)}`);
+		const pids: number[] = [];
+		const unread: string[] = [];
+		let next = 0;
+		const worker = async () => {
+			for (let pane = asked[next++]; pane !== undefined; pane = asked[next++]) {
+				try {
+					const info = await this.processInfo(pane.pane_id);
+					pids.push(info.shell_pid ?? 0, ...(info.foreground_processes ?? []).map((p) => p.pid));
+				} catch {
+					unread.push(pane.pane_id);
+				}
+			}
+		};
+		await Promise.all(Array.from({ length: Math.min(PANE_READS_AT_ONCE, asked.length) }, worker));
+		if (unread.length > 0) {
+			log("warn", "herdr", `the processes of pane${unread.length === 1 ? "" : "s"} ${unread.join(", ")} weren't read`);
 		}
+		return [...new Set(pids.filter((pid) => pid > 0))].flatMap((pid) => processIdOf(pid) ?? []);
+	}
+
+	/** One pane's processes, within `timeoutMs` (the client's own by default); never starts the server. */
+	processInfo(paneId: string, timeoutMs = this.timeoutMs): Promise<WireProcessInfo> {
+		// pane.process_info {pane_id} → `{type: "pane_process_info", process_info}` (schema `PaneProcessInfo`).
+		return this.attempt<{ process_info: WireProcessInfo }>("pane.process_info", { pane_id: paneId }, timeoutMs).then(
+			(answer) => answer.process_info,
+		);
+	}
+
+	/**
+	 * A connection to the server (for `events.subscribe`) opened the same way a request is: the socket at once, so a
+	 * caller that gives up can destroy it, and `opened` once it connected.
+	 */
+	connect(onLine: (line: string) => void, onClose: () => void): { socket: Socket; opened: Promise<void> } {
+		return openLines(this.path, onLine, onClose);
 	}
 
 	/** A read herdr dropped before answering is asked again once (`READS`); anything else fails as it came. */
@@ -603,11 +665,15 @@ class Client {
 		}
 	}
 
-	/** One request on its own connection: herdr answers it and closes. */
+	/** One request on its own connection: herdr answers it and closes. `timeoutMs` covers connecting too. */
 	private async send<T>(method: string, params: object, timeoutMs: number): Promise<T> {
 		const id = `jocasta_${++nextId}`;
 		const answer = Promise.withResolvers<Response>();
-		const socket = await this.open(
+		const timer = setTimeout(
+			() => answer.reject(new HerdrError("timeout", `herdr didn't answer ${method} in ${timeoutMs} ms`)),
+			timeoutMs,
+		);
+		const { socket, opened } = this.connect(
 			(line) => {
 				// An undecodable request is answered with an empty `id` (socket-api.mdx "Socket transport").
 				const response = parse(line);
@@ -615,12 +681,9 @@ class Client {
 			},
 			() => answer.reject(new HerdrError("transport", `herdr closed the connection before answering ${method}`)),
 		);
-		const timer = setTimeout(
-			() => answer.reject(new HerdrError("timeout", `herdr didn't answer ${method} in ${timeoutMs} ms`)),
-			timeoutMs,
-		);
-		socket.write(`${JSON.stringify({ id, method, params })}\n`);
 		try {
+			await Promise.race([opened, answer.promise]);
+			socket.write(`${JSON.stringify({ id, method, params })}\n`);
 			const response = await answer.promise;
 			if (response.error) {
 				throw new HerdrError(response.error.code ?? "error", response.error.message ?? "herdr error");
@@ -709,6 +772,19 @@ export function paneText(text: string): string {
 		if (code === 0x09 || code === 0x0a || (code >= 0x20 && code < 0x7f) || code > 0x9f) clean += char;
 	}
 	return clean;
+}
+
+/**
+ * `value` with `paneText`'s control characters removed from every string in it (N-3): what a popup, `today` and a
+ * notification get can't carry terminal escapes from a title, a brief or a question (SEC-NET-3).
+ */
+export function cleanText<T>(value: T): T {
+	if (typeof value === "string") return paneText(value) as T;
+	if (Array.isArray(value)) return value.map(cleanText) as T;
+	if (value && typeof value === "object") {
+		return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, cleanText(inner)])) as T;
+	}
+	return value;
 }
 
 function workspaceList(workspaces: WireWorkspace[], panes: WirePane[]): HerdrSnapshot["workspaces"] {
@@ -1059,8 +1135,8 @@ class HerdrClient implements Herdr {
 		return (await this.wirePanes()).map(paneInfo);
 	}
 
-	async paneRoot(paneId: string): Promise<number | undefined> {
-		const pid = (await this.client.processInfo(paneId)).shell_pid;
+	async paneRoot(paneId: string, timeoutMs?: number): Promise<number | undefined> {
+		const pid = (await this.client.processInfo(paneId, timeoutMs)).shell_pid;
 		return pid && pid > 0 ? pid : undefined;
 	}
 
@@ -1072,6 +1148,8 @@ class HerdrClient implements Herdr {
 		let stopped = false;
 		let syncing = false;
 		let subscription: { key: string; socket: Socket } | undefined;
+		/** The connection of a subscribe still waiting for herdr's answer. */
+		let subscribing: Socket | undefined;
 		let missing = false;
 		let wantedKey = "";
 
@@ -1091,7 +1169,7 @@ class HerdrClient implements Herdr {
 			const id = `jocasta_${++nextId}`;
 			const started = Promise.withResolvers<void>();
 			const pushed = new Set<string>();
-			const socket = await this.client.open(
+			const { socket, opened } = this.client.connect(
 				(line) => {
 					const message = parse(line);
 					if (message?.id === id) {
@@ -1105,25 +1183,33 @@ class HerdrClient implements Herdr {
 				},
 				() => started.reject(new HerdrError("transport", "subscription closed")),
 			);
-			socket.write(
-				`${JSON.stringify({
-					id,
-					method: "events.subscribe",
-					params: { subscriptions: ids.map((pane_id) => ({ type: "pane.agent_status_changed", pane_id })) },
-				})}\n`,
-			);
+			// Destroyed by `stop()` while it subscribes, so a stop never leaves this connection open (SRV-A-7).
+			subscribing = socket;
 			// A server that accepts and never answers mustn't hold the watch in `syncing` forever.
 			const timer = setTimeout(
 				() => started.reject(new HerdrError("timeout", "herdr didn't answer events.subscribe")),
 				this.client.timeoutMs,
 			);
 			try {
+				await Promise.race([opened, started.promise]);
+				socket.write(
+					`${JSON.stringify({
+						id,
+						method: "events.subscribe",
+						params: { subscriptions: ids.map((pane_id) => ({ type: "pane.agent_status_changed", pane_id })) },
+					})}\n`,
+				);
 				await started.promise;
 			} catch (error) {
 				socket.destroy();
 				throw error;
 			} finally {
 				clearTimeout(timer);
+				if (subscribing === socket) subscribing = undefined;
+			}
+			if (stopped) {
+				socket.destroy();
+				return pushed;
 			}
 			subscription?.socket.destroy();
 			subscription = { key: ids.join(","), socket };
@@ -1170,6 +1256,8 @@ class HerdrClient implements Herdr {
 		const stop = () => {
 			stopped = true;
 			clearInterval(timer);
+			subscribing?.destroy();
+			subscribing = undefined;
 			subscription?.socket.destroy();
 			subscription = undefined;
 			this.watches.delete(stop);

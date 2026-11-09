@@ -95,16 +95,23 @@ test("notes the reviewer marked P0 or P1 are blocking (0453)", () => {
 	expect(countComments(json)).toEqual({ notes: 5, blocking: 2 });
 });
 
-test("the review's proof: diff size, changed test files and added skip/only markers (0453)", () => {
+test("the review's proof: diff size, changed test files and added skip/only markers, from one diff of the test files (0453, SRV-A-9)", async () => {
 	const repo = makeRepo(join(env.root, "proof"));
 	sh(repo, "checkout", "-q", "-b", "feature/x");
 	writeFileSync(join(repo, "app.ts"), "export const a = 1;\nexport const b = 2;\n");
 	writeFileSync(join(repo, "app.test.ts"), 'test.skip("a", () => {});\n');
+	writeFileSync(join(repo, "other.test.ts"), 'test("b", () => {});\n');
 	sh(repo, "add", ".");
 	sh(repo, "commit", "-q", "-m", "work");
-	const proof = reviewProof(repo, "main...feature/x");
-	expect(proof).toEqual({ added: 3, deleted: 0, files: 2, testFiles: ["app.test.ts"], skipped: ["app.test.ts"] });
-	expect(proofSaid(proof as NonNullable<typeof proof>)).toBe(
+	const proof = await reviewProof(repo, "main...feature/x");
+	expect(proof).toEqual({
+		added: 4,
+		deleted: 0,
+		files: 3,
+		testFiles: ["app.test.ts", "other.test.ts"],
+		skipped: ["app.test.ts"],
+	});
+	expect(proofSaid({ added: 3, deleted: 0, files: 2, testFiles: ["app.test.ts"], skipped: ["app.test.ts"] })).toBe(
 		"+3/−0 in 2 files, test files changed: app.test.ts, adds skip/only in app.test.ts",
 	);
 	expect(proofSaid({ added: 1, deleted: 1, files: 1, testFiles: [], skipped: [] })).toBe(

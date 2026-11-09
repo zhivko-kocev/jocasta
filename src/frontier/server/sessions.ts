@@ -24,15 +24,24 @@
  * `parentId` apply in file order.
  *
  * Files are read incrementally (CR-03): each keeps its byte offset and running stats, and only appended lines are
- * parsed (`jsonl.ts`). A file checked under a second ago isn't looked at again, and an active session's artifacts dir
- * is re-listed only when the session changed or every 30 s (PM-6, PM-17).
+ * parsed (`omp-session.ts` `SessionTail`). A file checked under a second ago isn't looked at again, and an active
+ * session's artifacts dir is re-listed only when the session changed or every 30 s (PM-6, PM-17).
  */
-import { closeSync, type Dirent, existsSync, openSync, readdirSync, readSync, type Stats, statSync } from "node:fs";
-import { basename, dirname, join, relative } from "node:path";
+import { existsSync, readdirSync, statSync } from "node:fs";
+import { basename, dirname, join, relative, sep } from "node:path";
 import { dayStart, localDay } from "../../shared/day.ts";
 import { asObject } from "../../shared/fsx.ts";
+import { jsonLines } from "../../shared/jsonl.ts";
+import { forgetStaleSessions } from "../../shared/ledger.ts";
+import {
+	readHeader,
+	type SessionHeader,
+	SessionTail,
+	SessionWalker,
+	type TailVisitor,
+	transcriptsOf,
+} from "../../shared/omp-session.ts";
 import { ompAgentDir } from "../../shared/paths.ts";
-import { parseLine, readLines } from "./jsonl.ts";
 
 /** omp's sessions dir: `<omp agent dir>/sessions` (guide §5, `docs/config-usage.md:80`). */
 function ompSessionsDir(): string {
@@ -40,17 +49,7 @@ function ompSessionsDir(): string {
 }
 
 /** One session file with its header. */
-interface SessionFile {
-	file: string;
-	cwd: string;
-	title: string | null;
-	/** The header's session id, and the session it moved from or forked off (`parentSession`). */
-	id?: string;
-	parentSession?: string;
-	/** When the session began (the header's `timestamp`), epoch ms. */
-	started?: number;
-	mtimeMs: number;
-}
+type SessionFile = SessionHeader & { mtimeMs: number };
 
 /**
  * One bash call of a session and how it ended (0453): exit 0, a failure, or still running in the background; `exit` its
@@ -120,9 +119,6 @@ export type TestsResult = "pass" | "fail" | "none" | "unknown";
 /** The line `reviewPrompt` asks the review turn to end with: `TESTS: pass — <command>`. */
 const TESTS_LINE = /^[\s*_`>-]*TESTS:\s*(pass|fail|none)\b[`*_]*(?:[ \t]*[—–:-]+[ \t]*([^\n]+))?/gim;
 
-/** Scratch copies `omp gc --compress` leaves beside transcripts; never transcripts of their own (omp-stats). */
-const COMPRESS_SCRATCH = ".omp-gc-compress-";
-
 /** A session written to this recently may still have subagents or an advisor writing: its artifacts dir is re-listed. */
 const ACTIVE_MS = 10 * 60_000;
 
@@ -132,46 +128,16 @@ const RELIST_MS = 30_000;
 /** A file checked this recently is answered from what was read (PM-6). */
 const CHECK_MS = 1_000;
 
-/** The first `bytes` of a file: enough for the title slot (256 bytes) and the session header. */
-function head(file: string, bytes = 8192): string {
-	const fd = openSync(file, "r");
-	try {
-		const buffer = Buffer.alloc(bytes);
-		return buffer.subarray(0, readSync(fd, buffer, 0, bytes, 0)).toString("utf8");
-	} finally {
-		closeSync(fd);
-	}
-}
-
-/** A session file's header: its cwd, title, id, `parentSession` and start; undefined when it has no `session` line yet. */
-export function readHeader(file: string): Omit<SessionFile, "mtimeMs"> | undefined {
-	let title: string | null = null;
-	for (const line of head(file).split("\n")) {
-		const entry = parseLine(line);
-		if (entry?.type === "title" && typeof entry.title === "string" && entry.title.trim()) title = entry.title.trim();
-		if (entry?.type !== "session") continue;
-		if (typeof entry.cwd !== "string") return undefined;
-		const started = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
-		return {
-			file,
-			cwd: entry.cwd,
-			title,
-			...(typeof entry.id === "string" ? { id: entry.id } : {}),
-			...(typeof entry.parentSession === "string" ? { parentSession: entry.parentSession } : {}),
-			...(Number.isFinite(started) ? { started } : {}),
-		};
-	}
-	return undefined;
-}
-
 /** The ids of every entry in `file` (the session a moved one copied its transcript from). */
 function entryIds(file: string): Set<string> {
 	const ids = new Set<string>();
-	const size = statSync(file, { throwIfNoEntry: false })?.size ?? 0;
-	readLines(file, 0, size, (line) => {
-		const id = parseLine(line)?.id;
-		if (typeof id === "string") ids.add(id);
-	});
+	const collect: TailVisitor = {
+		entry: ({ id }) => {
+			if (typeof id === "string") ids.add(id);
+		},
+		reset: () => ids.clear(),
+	};
+	new SessionTail(file, collect).advance();
 	return ids;
 }
 
@@ -248,7 +214,7 @@ function addCost(
 ): void {
 	const cost = costOf(usage);
 	if (cost === undefined) return;
-	ledger?.add(entry.id, at, cost);
+	ledger?.add(entry, usage, at, cost);
 	if (copied) return;
 	stats.cost += cost;
 	if (Number.isFinite(at)) {
@@ -258,19 +224,25 @@ function addCost(
 }
 
 /**
- * Every model call's cost by local day, each counted once wherever it was written (0433, 0452, 0464). An entry is
- * known by its id and time, which its copies keep (a moved session's sibling, a file rewritten through a rename, a
- * moved session's artifacts), so a copy never counts twice, and a call stays counted after the file holding it was
- * rewritten without it, moved or deleted: the day's spend never drops within the day. Calls before `since` aren't kept.
+ * Every model call's cost by local day, each counted once wherever it was written (0433, 0452, 0464). A call is known
+ * by its entry's ISO `timestamp` and its usage (tokens and cost), which its copies keep (a moved session's sibling, a
+ * file rewritten through a rename, a moved session's artifacts) and so does omp's re-journal of a turn it discards
+ * durably (an off-branch `model_usage` under a new id with the turn's timestamp, SRV-B-2). So a copy never counts
+ * twice, and a call stays counted after the file holding it was rewritten without it, moved or deleted: the day's
+ * spend never drops within the day. The day is the message's own time. Calls before `since` aren't kept.
  */
 class SpendLedger {
 	private since = Number.NEGATIVE_INFINITY;
 	private readonly days = new Map<string, { keys: Set<string>; total: number }>();
 
-	add(id: unknown, at: number, cost: number): void {
+	add(entry: Record<string, unknown>, usage: unknown, at: number, cost: number): void {
 		if (!Number.isFinite(at) || at < this.since) return;
-		// An entry without an id (older transcripts): its time and cost stand for it.
-		const key = typeof id === "string" ? `${id}|${at}` : `|${at}|${cost}`;
+		const u = asObject(usage);
+		const tokens = [u?.input, u?.output, u?.cacheRead, u?.cacheWrite].map((n) => (typeof n === "number" ? n : 0));
+		// An entry without an ISO time (older transcripts): its id, if any, and its time stand for it.
+		const stamp =
+			typeof entry.timestamp === "string" ? entry.timestamp : `${typeof entry.id === "string" ? entry.id : ""}|${at}`;
+		const key = `${stamp}|${tokens.join("|")}|${cost}`;
 		const day = localDay(at);
 		let spent = this.days.get(day);
 		if (!spent) {
@@ -297,14 +269,20 @@ class SpendLedger {
 }
 
 /** The test result and command of a `TESTS:` line in `text`, the last one; undefined when there is none. */
-export function testsLine(
-	text: string,
-): { result: Exclude<TestsResult, "unknown">; command: string | null } | undefined {
+function testsLine(text: string): { result: Exclude<TestsResult, "unknown">; command: string | null } | undefined {
 	const match = [...text.matchAll(TESTS_LINE)].at(-1);
 	const result = match?.[1]?.toLowerCase();
 	if (result !== "pass" && result !== "fail" && result !== "none") return undefined;
 	const command = match?.[2]?.replace(/^[\s`*_]+|[\s`*_]+$/g, "");
-	return { result, command: command || null };
+	return { result, command: command ? detached(command) : null };
+}
+
+/**
+ * A copy of `part` that holds no reference to the text it was cut from (PERF-4): in JavaScriptCore a substring keeps
+ * its whole source alive, and the state keeps a first line for every assistant message of a followed session.
+ */
+function detached(part: string): string {
+	return Buffer.from(part, "utf8").toString("utf8");
 }
 
 /** A command with its whitespace runs made one space, so a named command matches the one that ran. */
@@ -457,12 +435,13 @@ function effectOf(entry: Record<string, unknown>): Effect | undefined {
 		}
 	}
 	const reported = testsLine(text);
+	const firstLine = text.trim().split("\n")[0]?.trim();
 	return {
 		assistant: {
 			said,
 			model,
 			retry: false,
-			firstLine: text.trim().split("\n")[0]?.trim() || undefined,
+			firstLine: firstLine ? detached(firstLine) : undefined,
 			tests: reported ? { ...reported, at: Number.isFinite(at) ? at : 0 } : undefined,
 			question,
 			bash,
@@ -549,28 +528,29 @@ function replayBranch(stats: SessionStats, branches: Branches): void {
 }
 
 /**
- * Folds one session line into `stats`; `seen` holds entry ids already counted in the file this one moved from;
+ * Folds one session entry into `stats`; `seen` holds entry ids already counted in the file this one moved from;
  * `ledger` counts the day's spend across files. Cost and times count in file order; the state follows the active
- * branch (`branches`), an entry without an id or a `parentId` applying in file order.
+ * branch (`branches`), an entry without an id or a `parentId` applying in file order. `costOnly` (a nested transcript,
+ * whose cost alone the session uses, SRV-B-11) counts the cost and keeps no times, branches or state.
  */
-function addLine(
+function addEntry(
 	stats: SessionStats,
 	branches: Branches,
-	line: string,
+	entry: Record<string, unknown>,
 	seen?: Set<string>,
 	ledger?: SpendLedger,
+	costOnly = false,
 ): void {
-	const entry = parseLine(line);
-	if (!entry) return;
 	// A copy of an entry the old file holds: its cost and time are counted there.
 	const copied = seen !== undefined && typeof entry.id === "string" && seen.has(entry.id);
 	if (entry.type === "model_usage") addCost(stats, entry, entry.usage, entryTime(entry), copied, ledger);
 	const message = entry.type === "message" ? asObject(entry.message) : undefined;
 	if (message) {
 		const at = entryTime(entry, message);
-		if (Number.isFinite(at) && !copied) stats.messageTimes.push(at);
+		if (Number.isFinite(at) && !copied && !costOnly) stats.messageTimes.push(at);
 		if (message.role === "assistant") addCost(stats, entry, message.usage, at, copied, ledger);
 	}
+	if (costOnly) return;
 	const effect = effectOf(entry);
 	if (typeof entry.id !== "string" || !("parentId" in entry)) {
 		if (effect) applyEffect(stats, effect);
@@ -593,28 +573,44 @@ function addLine(
 	}
 }
 
-/** Stats of a session file's text. */
+/**
+ * Stats of a session file's text, read whole. Tests use it as the oracle the incremental reader (`SessionIndex.read`)
+ * must match.
+ */
 export function readStats(text: string): SessionStats {
 	const stats = emptyStats();
 	const branches = newBranches();
-	for (const line of text.split("\n")) addLine(stats, branches, line);
+	for (const entry of jsonLines(text)) addEntry(stats, branches, entry);
 	return stats;
 }
 
-/** One transcript followed incrementally: what was read of it and the stats so far. */
-interface Tail {
-	size: number;
-	mtimeMs: number;
-	/** Byte offset after the last complete line parsed. */
-	offset: number;
-	/** The file's identity when read: a file replaced by a rename differs in either (omp's snapcompact strip). */
-	ino: number;
-	birthtimeMs: number;
-	stats: SessionStats;
+/** One transcript followed incrementally (`SessionTail`, CR-03) and the stats read of it so far. */
+class Tail implements TailVisitor {
+	readonly reader: SessionTail;
+	stats = emptyStats();
 	/** The session tree read so far, which the state follows (0509). */
-	branches: Branches;
+	branches = newBranches();
 	/** For a session moved to this file: the ids of the old file's entries, whose cost and times count there. */
 	seen?: Set<string>;
+
+	constructor(
+		file: string,
+		private readonly ledger: SpendLedger,
+		/** A nested transcript: only its cost is read (`addEntry`'s `costOnly`). */
+		private readonly costOnly = false,
+	) {
+		this.reader = new SessionTail(file, this);
+	}
+
+	entry(entry: Record<string, unknown>): void {
+		addEntry(this.stats, this.branches, entry, this.seen, this.ledger, this.costOnly);
+	}
+
+	/** A rewritten file (omp's rewrite through a rename, possibly larger) is read again from its start. */
+	reset(): void {
+		this.stats = emptyStats();
+		this.branches = newBranches();
+	}
 }
 
 /** A session's own transcript, the nested ones found in its artifacts dir, and their stats combined. */
@@ -627,90 +623,13 @@ interface Followed {
 	listedTime: number;
 	/** When `read` last looked at the files, by the index's clock. */
 	checkedAt: number;
+	/** When a nested transcript last grew, by the index's clock: its folder is re-listed while it works (SRV-B-19). */
+	nestedGrewAt: number;
 	combined: SessionStats;
 }
 
-/** Transcripts (`*.jsonl`) anywhere under a session's artifacts dir, scratch copies left out. */
-function nestedTranscripts(dir: string): string[] {
-	let entries: Dirent[];
-	try {
-		entries = readdirSync(dir, { recursive: true, withFileTypes: true });
-	} catch {
-		return []; // no artifacts dir (yet)
-	}
-	return entries
-		.filter((e) => e.isFile() && e.name.endsWith(".jsonl") && !relative(dir, e.parentPath).includes(COMPRESS_SCRATCH))
-		.map((e) => join(e.parentPath, e.name));
-}
-
-/**
- * Whether the file changed since `tail` last read it; a rewritten one starts `tail` over: it shrank, or another file
- * took its name (omp ≥ 18.10.4 rewrites a session whole through a temp file and a rename, possibly larger).
- */
-function changedSince(stat: Stats, tail: Tail): boolean {
-	const replaced = stat.ino !== tail.ino || stat.birthtimeMs !== tail.birthtimeMs;
-	if (!replaced && stat.size === tail.size && stat.mtimeMs === tail.mtimeMs) return false;
-	if ((replaced && tail.size >= 0) || stat.size < tail.offset) {
-		tail.offset = 0;
-		tail.stats = emptyStats();
-		tail.branches = newBranches();
-	}
-	tail.ino = stat.ino;
-	tail.birthtimeMs = stat.birthtimeMs;
-	return true;
-}
-
-/**
- * Brings `tail` up to the file on disk: parses the lines appended since its offset; a rewritten file is read again
- * from its start. Returns whether anything changed; a missing file leaves the tail as it was.
- */
-function advance(file: string, tail: Tail, ledger?: SpendLedger): boolean {
-	const stat = statSync(file, { throwIfNoEntry: false });
-	if (!stat || !changedSince(stat, tail)) return false;
-	tail.offset = readLines(file, tail.offset, stat.size, (line) =>
-		addLine(tail.stats, tail.branches, line, tail.seen, ledger),
-	);
-	tail.size = stat.size;
-	tail.mtimeMs = stat.mtimeMs;
-	return true;
-}
-
-const newTail = (): Tail => ({
-	size: -1,
-	mtimeMs: -1,
-	offset: 0,
-	ino: -1,
-	birthtimeMs: -1,
-	stats: emptyStats(),
-	branches: newBranches(),
-});
-
 /** Bytes parsed before `warm` lets the event loop run. */
 const WARM_STEP = 1 << 20;
-
-/** As `advance`, a step of about 1 MB at a time with the event loop let run between steps. */
-async function advanceInSteps(file: string, tail: Tail, stopped: () => boolean, ledger?: SpendLedger): Promise<void> {
-	const stat = statSync(file, { throwIfNoEntry: false });
-	if (!stat || !changedSince(stat, tail)) return;
-	while (tail.offset < stat.size && !stopped()) {
-		// A line longer than a step: the window doubles until the line is whole, then stepping goes on (PM-18).
-		let window = WARM_STEP;
-		let next: number;
-		for (;;) {
-			const to = Math.min(stat.size, tail.offset + window);
-			next = readLines(file, tail.offset, to, (line) => addLine(tail.stats, tail.branches, line, tail.seen, ledger));
-			if (next !== tail.offset || to === stat.size) break;
-			window *= 2;
-		}
-		if (next === tail.offset) break; // only a line still being written is left
-		tail.offset = next;
-		await Bun.sleep(0);
-	}
-	// Stopped half-way: `advance` reads the rest when it is asked.
-	if (tail.offset < stat.size && stopped()) return;
-	tail.size = stat.size;
-	tail.mtimeMs = stat.mtimeMs;
-}
 
 /** A session's stats with its nested transcripts' cost added. */
 function combine(followed: Followed): SessionStats {
@@ -728,51 +647,44 @@ function combine(followed: Followed): SessionStats {
 /**
  * Session files under `dir` modified at or after `sinceMs`, with their headers, and each session's stats read
  * incrementally. Headers are cached by path, as a session's cwd never changes. At the first call of a new local day,
- * message times before yesterday are dropped and files that are gone are forgotten (PM-17).
+ * message times before yesterday are dropped, and sessions not written since yesterday's midnight and files that are
+ * gone are forgotten (PM-17, PERF-4). A day before yesterday is read through a throwaway index (`timesOn`, SRV-B-4).
  */
 export class SessionIndex {
-	private readonly headers = new Map<string, Omit<SessionFile, "mtimeMs"> | null>();
+	private readonly headers = new Map<string, SessionHeader | null>();
 	private readonly followed = new Map<string, Followed>();
 	/** The local day of the last call. */
 	private day: string | undefined;
-	/** Counts the reads that found a session changed: equal counts mean equal stats (`spendToday`). */
-	changes = 0;
 	/** The spend of today and yesterday, across every file read (0464): `spentOn`. */
 	private readonly ledger = new SpendLedger();
+	/** A day before yesterday asked for (the worklog on request): read whole by its own index, dropped at rollover. */
+	private past: { day: string; index: SessionIndex } | undefined;
+	/** The session files under `dir`, cwd dirs unchanged since the last list answered from it (SRV-B-6). */
+	private readonly walker: SessionWalker;
 
 	constructor(
 		readonly dir: string = ompSessionsDir(),
 		private readonly now: () => number = Date.now,
-	) {}
+	) {
+		this.walker = new SessionWalker(dir);
+	}
 
 	list(sinceMs = 0): SessionFile[] {
 		this.rollOver();
-		if (!existsSync(this.dir)) return [];
 		const found: SessionFile[] = [];
-		for (const cwdDir of readdirSync(this.dir, { withFileTypes: true })) {
-			if (!cwdDir.isDirectory()) continue;
-			let entries: Dirent[];
+		for (const file of this.walker.files()) {
 			try {
-				entries = readdirSync(join(this.dir, cwdDir.name), { withFileTypes: true });
-			} catch {
-				continue; // removed since the listing
-			}
-			for (const entry of entries) {
-				if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
-				const file = join(this.dir, cwdDir.name, entry.name);
-				try {
-					const mtimeMs = statSync(file).mtimeMs;
-					if (mtimeMs < sinceMs) continue;
-					let header = this.headers.get(file);
-					if (header === undefined) {
-						header = readHeader(file) ?? null;
-						// No header yet: read again next time, once omp wrote it.
-						if (header) this.headers.set(file, header);
-					}
-					if (header) found.push({ ...header, mtimeMs });
-				} catch {
-					// removed since the listing
+				const mtimeMs = statSync(file).mtimeMs;
+				if (mtimeMs < sinceMs) continue;
+				let header = this.headers.get(file);
+				if (header === undefined) {
+					header = readHeader(file) ?? null;
+					// No header yet: read again next time, once omp wrote it.
+					if (header) this.headers.set(file, header);
 				}
+				if (header) found.push({ ...header, mtimeMs });
+			} catch {
+				// removed since the listing
 			}
 		}
 		return found;
@@ -802,23 +714,67 @@ export class SessionIndex {
 		}
 		if (!fresh && now - followed.checkedAt < CHECK_MS) return followed.combined;
 		followed.checkedAt = now;
-		let changed = advance(file, followed.main, this.ledger);
-		const { main } = followed;
-		// The artifacts dir is listed again when the session changed, or every `RELIST_MS` while it is active (a
-		// subagent or the advisor may write after the session's last line).
-		const key = `${main.mtimeMs}:${main.size}`;
-		if (key !== followed.listedAt || (now - main.mtimeMs < ACTIVE_MS && now - followed.listedTime >= RELIST_MS)) {
-			followed.listedAt = key;
-			followed.listedTime = now;
-			for (const nested of nestedTranscripts(file.replace(/\.jsonl$/, ""))) {
-				if (advance(nested, this.nestedTail(file, followed, nested), this.ledger)) changed = true;
+		let changed = followed.main.reader.advance();
+		// The known subagent and advisor transcripts are followed on every read (one stat each), so a long `task` call
+		// that leaves the session untouched still shows its spend as it goes (SRV-B-19).
+		for (const tail of followed.nested.values()) {
+			if (tail.reader.advance()) {
+				changed = true;
+				followed.nestedGrewAt = now;
 			}
 		}
-		if (changed) {
-			followed.combined = combine(followed);
-			this.changes++;
+		const main = followed.main.reader;
+		// The artifacts dir is listed again when the session changed, or every `RELIST_MS` while it or a transcript in
+		// it is active (a subagent or the advisor may start after the session's last line).
+		const key = `${main.mtimeMs}:${main.size}`;
+		const active = now - main.mtimeMs < ACTIVE_MS || now - followed.nestedGrewAt < ACTIVE_MS;
+		if (key !== followed.listedAt || (active && now - followed.listedTime >= RELIST_MS)) {
+			followed.listedAt = key;
+			followed.listedTime = now;
+			for (const nested of transcriptsOf(file)) {
+				if (followed.nested.has(nested)) continue;
+				if (this.nestedTail(file, followed, nested).reader.advance()) {
+					changed = true;
+					followed.nestedGrewAt = now;
+				}
+			}
 		}
+		if (changed) followed.combined = combine(followed);
 		return followed.combined;
+	}
+
+	/** Whether `file` was read already, so a `read` of it parses only what was appended. */
+	follows(file: string): boolean {
+		return this.followed.has(file);
+	}
+
+	/**
+	 * The message times of session `file` that a worklog of `day` needs (SRV-B-4). Today's and yesterday's come from
+	 * the followed session; a day before yesterday's, whose times this index dropped at rollover, from a throwaway
+	 * index kept for that day (`prepare` reads it in steps first).
+	 */
+	timesOn(file: string, day: string): readonly number[] {
+		return this.indexFor(day).read(file).messageTimes;
+	}
+
+	/**
+	 * Reads the sessions that may hold `day`'s messages (written since its start) in steps, letting the event loop run,
+	 * so `timesOn` for that day then only parses what was appended. A day before yesterday goes to its throwaway index.
+	 */
+	prepare(day: string, stopped: () => boolean = () => false): Promise<void> {
+		const index = this.indexFor(day);
+		return index.warm(
+			index.list(dayStart(day)).map((s) => s.file),
+			stopped,
+		);
+	}
+
+	/** This index for today and yesterday; for an older day, a fresh one (its times kept whole), one day at a time. */
+	private indexFor(day: string): SessionIndex {
+		this.rollOver();
+		if (day >= localDay(dayStart(this.day as string, -1))) return this;
+		if (this.past?.day !== day) this.past = { day, index: new SessionIndex(this.dir, this.now) };
+		return this.past.index;
 	}
 
 	/**
@@ -831,14 +787,13 @@ export class SessionIndex {
 			if (stopped()) return;
 			if (!existsSync(file)) continue;
 			const followed = this.followed.get(file) ?? this.newFollowed(file);
-			await advanceInSteps(file, followed.main, stopped, this.ledger);
-			for (const nested of nestedTranscripts(file.replace(/\.jsonl$/, ""))) {
-				await advanceInSteps(nested, this.nestedTail(file, followed, nested), stopped, this.ledger);
+			await followed.main.reader.advanceInSteps(WARM_STEP, stopped);
+			for (const nested of transcriptsOf(file)) {
+				await this.nestedTail(file, followed, nested).reader.advanceInSteps(WARM_STEP, stopped);
 			}
-			followed.listedAt = `${followed.main.mtimeMs}:${followed.main.size}`;
+			followed.listedAt = `${followed.main.reader.mtimeMs}:${followed.main.reader.size}`;
 			followed.listedTime = this.now();
 			followed.combined = combine(followed);
-			this.changes++;
 		}
 	}
 
@@ -883,7 +838,7 @@ export class SessionIndex {
 	}
 
 	/** A file's header, cached once it has one. */
-	private header(file: string): Omit<SessionFile, "mtimeMs"> | undefined {
+	private header(file: string): SessionHeader | undefined {
 		let header = this.headers.get(file);
 		if (header === undefined) {
 			try {
@@ -941,7 +896,7 @@ export class SessionIndex {
 	 * are copies of the old file's, so their cost and times aren't counted twice (0452, 0464).
 	 */
 	private newFollowed(file: string): Followed {
-		const main = newTail();
+		const main = new Tail(file, this.ledger);
 		const parent = this.parentFile(file);
 		if (parent) main.seen = entryIds(parent);
 		const followed: Followed = {
@@ -950,6 +905,7 @@ export class SessionIndex {
 			listedAt: "",
 			listedTime: 0,
 			checkedAt: Number.NEGATIVE_INFINITY,
+			nestedGrewAt: Number.NEGATIVE_INFINITY,
 			combined: emptyStats(),
 		};
 		this.followed.set(file, followed);
@@ -968,7 +924,7 @@ export class SessionIndex {
 	private nestedTail(file: string, followed: Followed, nested: string): Tail {
 		let tail = followed.nested.get(nested);
 		if (!tail) {
-			tail = newTail();
+			tail = new Tail(nested, this.ledger, true);
 			const parent = followed.main.seen ? this.parentFile(file) : undefined;
 			if (parent) {
 				const twin = join(parent.replace(/\.jsonl$/, ""), relative(file.replace(/\.jsonl$/, ""), nested));
@@ -980,8 +936,10 @@ export class SessionIndex {
 	}
 
 	/**
-	 * At the first call of a new local day: message times and spent calls before yesterday's midnight are dropped, and
-	 * files that no longer exist are forgotten.
+	 * At the first call of a new local day: message times and spent calls before yesterday's midnight are dropped;
+	 * sessions not written since then (no transcript of theirs either) and files that no longer exist are forgotten, so
+	 * the index holds today's and yesterday's sessions only (PERF-4, SRV-B-11). A forgotten session read again later is
+	 * read from its start; its calls are in the ledger already, so none counts twice. An older day's index goes too.
 	 */
 	private rollOver(now = this.now()): void {
 		const day = localDay(now);
@@ -990,13 +948,15 @@ export class SessionIndex {
 		this.day = day;
 		const since = dayStart(day, -1);
 		this.ledger.forgetBefore(since);
+		this.past = undefined;
 		if (first) return;
 		for (const [file, followed] of this.followed) {
-			if (!existsSync(file)) {
+			const tails = [followed.main, ...followed.nested.values()];
+			if (!existsSync(file) || tails.every((tail) => tail.reader.mtimeMs < since)) {
 				this.followed.delete(file);
 				continue;
 			}
-			for (const { stats } of [followed.main, ...followed.nested.values()]) {
+			for (const { stats } of tails) {
 				stats.messageTimes = stats.messageTimes.filter((at) => at >= since);
 			}
 			followed.combined = combine(followed);
@@ -1004,6 +964,8 @@ export class SessionIndex {
 		for (const file of this.headers.keys()) {
 			if (!existsSync(file)) this.headers.delete(file);
 		}
-		this.changes++;
+		// The thread ledger's parsed files go the same way, except those of a session still followed (SRV-B-11).
+		const kept = [...this.followed.keys()].map((file) => file.replace(/\.jsonl$/, ""));
+		forgetStaleSessions(since, (file) => kept.some((stem) => file === `${stem}.jsonl` || file.startsWith(stem + sep)));
 	}
 }

@@ -1,15 +1,11 @@
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { pidAlive } from "../../../src/shared/fsx.ts";
+import { pidAlive } from "../../../src/shared/proctree.ts";
+import { poll } from "../../shared/fixture.ts";
 
 /** Waits until `check` holds, at most `ms`: real processes start and end on the OS clock, not a fake one. */
-export async function settles(check: () => boolean, ms = 10_000): Promise<boolean> {
-	const end = Date.now() + ms;
-	while (!check()) {
-		if (Date.now() >= end) return false;
-		await Bun.sleep(50);
-	}
-	return true;
+export function settles(check: () => boolean, ms = 10_000): Promise<boolean> {
+	return poll(check, { timeoutMs: ms, intervalMs: 50 });
 }
 
 /** Kills each pid that is still running (a test's cleanup). */

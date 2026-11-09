@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
-import { appendFileSync, mkdirSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkedTests, readStats, SessionIndex } from "../../../src/frontier/server/sessions.ts";
-import { spendToday } from "../../../src/frontier/server/spend.ts";
+import { spendSettled, spendToday } from "../../../src/frontier/server/spend.ts";
+import { writeWorklog } from "../../../src/frontier/server/worklog.ts";
 import { dayStart, localDay } from "../../../src/shared/day.ts";
 import { useTempJocasta } from "../../shared/fixture.ts";
 
@@ -324,23 +325,161 @@ test("warm reads past a line over a step and goes on stepping after it (PM-18)",
 	expect(index.read(main).messageTimes).toHaveLength(4);
 });
 
-test("today's spend is reused for 30 s unless a read found a session changed (CO-15)", () => {
+test("today's spend lists the sessions folder at most every 30 s, reads today's known files on every call, and reads a new one in steps off the call (CO-15, PERF-3)", async () => {
 	const now = Date.now();
 	const sessions = join(env.root, "sessions");
 	const file = write(join(sessions, "--C--demo--", "spend.jsonl"), [title, header("C:\\demo"), assistant("A", now, 1)]);
 	let clock = now;
 	const index = new SessionIndex(sessions, () => clock);
-	expect(spendToday(index, now)).toBeCloseTo(1);
-	appendFileSync(file, `${assistant("B", now, 2)}\n`);
-	clock += 2_000;
-	// Nothing read the session since: the sum stands.
-	expect(spendToday(index, now + 2_000)).toBeCloseTo(1);
-	// A read (the service's watched sessions) found the change: summed again.
 	index.read(file);
-	expect(spendToday(index, now + 2_000)).toBeCloseTo(3);
-	appendFileSync(file, `${assistant("C", now, 4)}\n`);
+	expect(spendToday(index, clock)).toBeCloseTo(1);
+	// A known file is read on every call: its new call counts at once.
+	appendFileSync(file, `${assistant("B", now + 1, 2)}\n`);
+	clock += 2_000;
+	expect(spendToday(index, clock)).toBeCloseTo(3);
+	// A new session shows only after the next list, 30 s after the last; it is read off the call, then followed.
+	const other = write(join(sessions, "--C--other--", "new.jsonl"), [
+		title,
+		header("C:\\other"),
+		assistant("C", now + 2, 4),
+	]);
+	clock += 2_000;
+	expect(spendToday(index, clock)).toBeCloseTo(3);
+	expect(index.follows(other)).toBe(false);
 	clock += 30_000;
-	expect(spendToday(index, now + 32_000)).toBeCloseTo(7);
+	spendToday(index, clock);
+	await spendSettled(index);
+	expect(index.follows(other)).toBe(true);
+	appendFileSync(other, `${assistant("D", now + 3, 8)}\n`);
+	clock += 2_000;
+	expect(spendToday(index, clock)).toBeCloseTo(15);
+});
+
+test("today's spend adds Graphiti's model calls of today from graph-usage.jsonl (0582)", () => {
+	const now = Date.now();
+	const index = new SessionIndex(join(env.root, "sessions"), () => now);
+	const usage = join(env.root, "graph-usage.jsonl");
+	expect(spendToday(index, now, usage)).toBe(0);
+	const yesterday = dayStart(localDay(now), -1) + 3_600_000;
+	writeFileSync(
+		usage,
+		`${[
+			{ at: new Date(yesterday).toISOString(), model: "anthropic/claude-x", input: 10, output: 5, cost: 4 },
+			{ at: new Date(now).toISOString(), model: "anthropic/claude-x", input: 10, output: 5, cost: 0.25 },
+		]
+			.map((row) => JSON.stringify(row))
+			.join("\n")}\n{"at": "torn`,
+	);
+	expect(spendToday(index, now, usage)).toBeCloseTo(0.25);
+	appendFileSync(usage, `", "cost": 9}\n${JSON.stringify({ at: new Date(now).toISOString(), cost: 0.5 })}\n`);
+	expect(spendToday(index, now, usage)).toBeCloseTo(0.75);
+});
+
+test("a turn omp discards durably counts once in today's spend: its re-journaled usage is the same call (SRV-B-2)", () => {
+	const now = Date.now();
+	const sessions = join(env.root, "sessions");
+	const file = join(sessions, "--d--work--acme--", "2026-11-09T10-00-00-000Z_s1.jsonl");
+	const t0 = now - 10 * 60_000;
+	const iso = (ms: number) => new Date(ms).toISOString();
+	const usage = { input: 100, output: 50, cacheRead: 0, cacheWrite: 0, totalTokens: 150, cost: { total: 0.5 } };
+	const sessionHeader = JSON.stringify({
+		type: "session",
+		version: 3,
+		id: "s1",
+		timestamp: iso(t0),
+		cwd: "D:/work/acme",
+	});
+	const user = JSON.stringify({
+		type: "message",
+		id: "u1",
+		parentId: null,
+		timestamp: iso(t0),
+		message: { role: "user", content: [{ type: "text", text: "hi" }], timestamp: t0 },
+	});
+	const turn = {
+		type: "message",
+		id: "a1",
+		parentId: "u1",
+		timestamp: iso(t0 + 60_000),
+		message: {
+			role: "assistant",
+			content: [],
+			provider: "anthropic",
+			model: "claude-test",
+			usage,
+			timestamp: t0 + 30_000,
+		},
+	};
+	write(file, [sessionHeader, user, JSON.stringify(turn)]);
+	let clock = now;
+	const index = new SessionIndex(sessions, () => clock);
+	expect(index.read(file, true).cost).toBeCloseTo(0.5);
+	expect(index.spentOn(localDay(now))).toBeCloseTo(0.5);
+	// omp's `discardEntryDurably`: the turn removed, its usage re-journaled as an off-branch `model_usage` under a new
+	// id with the turn's timestamp, the file rewritten through a temp file and a rename.
+	const discarded = {
+		type: "model_usage",
+		id: "m9",
+		parentId: "u1",
+		timestamp: turn.timestamp,
+		activeLeafId: "u1",
+		purpose: "discarded-turn",
+		provider: "anthropic",
+		model: "claude-test",
+		usage,
+	};
+	const temp = write(`${file}.tmp`, [sessionHeader, user, JSON.stringify(discarded)]);
+	renameSync(temp, file);
+	clock += 2_000;
+	expect(index.read(file, true).cost).toBeCloseTo(0.5);
+	expect(index.spentOn(localDay(now))).toBeCloseTo(0.5);
+});
+
+test("an older day's message times are read whole though the index trimmed them at rollover (SRV-B-4)", async () => {
+	const today = localDay(Date.now());
+	const old = dayStart(today, -4) + 9 * 3_600_000;
+	const oldDay = localDay(old);
+	const sessions = join(env.root, "sessions");
+	const lines = [title, header("C:\\demo")];
+	for (let i = 0; i < 6; i++) lines.push(assistant(`m${i}`, old + i * 5 * 60_000));
+	const file = write(join(sessions, "--C--demo--", "old.jsonl"), lines, old + 30 * 60_000);
+	// A service that read the file on that day, then kept running until today.
+	let clock = old + 3_600_000;
+	const index = new SessionIndex(sessions, () => clock);
+	expect(index.read(file).messageTimes).toHaveLength(6);
+	expect(index.timesOn(file, oldDay)).toHaveLength(6);
+	clock = Date.now();
+	await index.prepare(oldDay);
+	expect(index.timesOn(file, oldDay)).toHaveLength(6);
+	// The worklog of that day gets its 25 minutes.
+	const project = { id: "p1", identity: "root:p1", name: "demo", mainPath: "C:\\demo", git: false, paths: [] };
+	const written = await writeWorklog([project], oldDay, () => [{ label: "demo", times: index.timesOn(file, oldDay) }]);
+	expect(readFileSync(written.path, "utf8")).toContain("## demo · 25m");
+	// Not written since yesterday: dropped from the index at rollover (PERF-4).
+	expect(index.follows(file)).toBe(false);
+});
+
+test("a long subagent's spend shows while the session stays untouched (SRV-B-19)", () => {
+	const now = Date.now();
+	const sessions = join(env.root, "sessions");
+	// The session's last line, a blocking `task` call, was written 20 minutes ago.
+	const main = write(
+		join(sessions, "--C--demo--", "long.jsonl"),
+		[title, header("C:\\demo"), assistant("Task", now, 1)],
+		now - 20 * 60_000,
+	);
+	const sub = write(join(sessions, "--C--demo--", "long", "0-Explore.jsonl"), [assistant("Sub", now, 0.5)]);
+	let clock = now;
+	const index = new SessionIndex(sessions, () => clock);
+	expect(index.read(main).cost).toBeCloseTo(1.5);
+	appendFileSync(sub, `${assistant("Sub 2", now + 1, 0.25)}\n`);
+	clock += 2_000;
+	expect(index.read(main).cost).toBeCloseTo(1.75);
+	// A second subagent the task starts later is found within 30 s while the first one works.
+	write(join(sessions, "--C--demo--", "long", "1-Review.jsonl"), [assistant("Review", now + 2, 2)]);
+	clock += 31_000;
+	expect(index.read(main).cost).toBeCloseTo(3.75);
+	expect(index.spentOn(localDay(now))).toBeCloseTo(3.75);
 });
 
 test("the first read of a new day drops message times before yesterday and forgets files that are gone (PM-17)", () => {

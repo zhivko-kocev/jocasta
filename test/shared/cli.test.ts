@@ -1,24 +1,31 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ServiceState } from "../../src/frontier/server/launch.ts";
+import { UserError } from "../../src/shared/errors.ts";
+import { herdrSession } from "../../src/shared/herdr-session.ts";
+import { projectCommand } from "../../src/shared/project-cli.ts";
+import { route } from "../../src/shared/route.ts";
 import {
 	attachedSurface,
-	herdrSession,
+	lastLoggedError,
 	openSurface,
-	projectCommand,
 	type SurfaceDeps,
 	serviceStopped,
-} from "../../src/shared/cli.ts";
-import { UserError } from "../../src/shared/errors.ts";
-import { route } from "../../src/shared/route.ts";
-import { GIT_TEST_TIMEOUT, makeRepo, useTempJocasta, writeProjectsYaml } from "./fixture.ts";
+} from "../../src/shared/surface.ts";
+import { GIT_TEST_TIMEOUT, makeRepo, poll, useTempJocasta, writeProjectsYaml } from "./fixture.ts";
 
 const env = useTempJocasta();
 const DEMO = "https://github.com/example-org/demo.git";
 
-afterEach(() => {
+// A live-check shell sets JOCASTA_HERDR_SESSION (0441): every test starts without it, and it is put back after.
+const savedSession = process.env.JOCASTA_HERDR_SESSION;
+beforeEach(() => {
 	delete process.env.JOCASTA_HERDR_SESSION;
+});
+afterEach(() => {
+	if (savedSession === undefined) delete process.env.JOCASTA_HERDR_SESSION;
+	else process.env.JOCASTA_HERDR_SESSION = savedSession;
 });
 
 test("the jocasta command's words (0387, 0467, 0468, 0472, 0544); anything else is usage", () => {
@@ -41,11 +48,12 @@ test("the jocasta command's words (0387, 0467, 0468, 0472, 0544); anything else 
 	expect(route(["--version"])).toEqual({ role: "version" });
 	expect(route(["-v"])).toEqual({ role: "version" });
 	expect(route(["--help"])).toEqual({ role: "help" });
-	// Retired words (0387) and stray arguments are invocation errors.
-	for (const args of [["guard"], ["harness"], ["memory", "import"], ["fix it"], ["mcp", "-x"]]) {
-		expect(route(args)).toEqual({ role: "usage" });
+	// Retired words (0387) are no command and are named; stray arguments to a command are invocation errors.
+	for (const args of [["guard"], ["harness"], ["memory", "import"], ["fix it"]]) {
+		expect(route(args)).toEqual({ role: "usage", unknown: args[0] });
 	}
 	for (const args of [
+		["mcp", "-x"],
 		["setup", "now"],
 		["setup", "--refresh"],
 		["uninstall", "--yes"],
@@ -75,19 +83,34 @@ test("herdr's session: jocasta, or JOCASTA_HERDR_SESSION for live checks; a bad 
 });
 
 test(
-	"project add twice says it's already a project; list shows watched repos; other verbs are usage (0111)",
-	() => {
+	"project add twice says it's already a project; list shows watched repos, or how to add one; other verbs are usage (0111)",
+	async () => {
+		expect(await projectCommand(["list"])).toEqual([
+			"No projects yet: add one with jocasta project add <path>, or a watched root in projects.yaml.",
+		]);
 		const code = join(env.root, "code");
 		const repo = makeRepo(join(code, "demo"), { origin: DEMO });
-		const [added] = projectCommand(["add", repo]);
+		const [added] = await projectCommand(["add", repo]);
 		expect(added).toStartWith("added demo (");
-		expect(projectCommand(["add", repo])[0]).toMatch(/^demo \(p-[0-9a-f]+\) is already a project, at /);
+		expect((await projectCommand(["add", repo]))[0]).toMatch(/^demo \(p-[0-9a-f]+\) is already a project, at /);
 		writeProjectsYaml(env.config, `version: 1\nroots:\n  - path: ${code.replaceAll("\\", "/")}\n    depth: 1\n`);
-		expect(projectCommand(["list"])[0]).toMatch(/^p-[0-9a-f]{16} {2}demo {2}/);
-		expect(() => projectCommand(["rename", "x"])).toThrow(UserError);
+		expect((await projectCommand(["list"]))[0]).toMatch(/^p-[0-9a-f]{16} {2}demo {2}/);
+		await expect(projectCommand(["rename", "x"])).rejects.toThrow(UserError);
 	},
 	GIT_TEST_TIMEOUT,
 );
+
+test("project usage and --help touch nothing: no catalog, no data folder (as thread --help)", async () => {
+	for (const args of [["--help"], [], ["rename", "x"], ["add"], ["list", "x"]]) {
+		await expect(projectCommand(args)).rejects.toThrow(
+			new UserError("usage: jocasta project list | add <path> | remove <name|id>"),
+		);
+	}
+	expect(existsSync(env.data)).toBe(false);
+});
+
+/** A started service that keeps running. */
+const running = () => ({ exited: new Promise<number>(() => {}) });
 
 function surface(over: Partial<SurfaceDeps> = {}) {
 	const calls = {
@@ -99,7 +122,11 @@ function surface(over: Partial<SurfaceDeps> = {}) {
 	const printed: string[] = [];
 	const deps: SurfaceDeps = {
 		serviceHealth: async () => ({ state: "up" }),
-		startService: () => void calls.started++,
+		startService: () => {
+			calls.started++;
+			return running();
+		},
+		lastError: () => undefined,
 		herdr: "herdr.exe",
 		herdrConfig: join(env.root, "herdr.toml"),
 		attach: async (argv, e) => {
@@ -133,6 +160,7 @@ test("bare jocasta starts the service when none answers, then attaches herdr's s
 		startService: () => {
 			calls.started++;
 			state = "up";
+			return running();
 		},
 	});
 	expect(await openSurface(deps)).toBe(0);
@@ -162,6 +190,7 @@ test("a service that is closing is waited for, then started once, after saying s
 		startService: () => {
 			calls.started++;
 			order.push("start");
+			return running();
 		},
 	});
 	await openSurface(deps);
@@ -177,6 +206,7 @@ test("a hung service (busy: its process lives, its /health doesn't answer) gets 
 		startService: () => {
 			calls.started++;
 			state = "up";
+			return running();
 		},
 	});
 	await openSurface(deps);
@@ -193,6 +223,62 @@ test("a service it started that doesn't answer in time is said; a missing herdr.
 	expect(calls.attached[0]?.env).toEqual({});
 	expect(printed.join("\n")).toContain("run `jocasta setup`");
 	await expect(openSurface(surface({ herdr: undefined }).deps)).rejects.toThrow("herdr isn't installed");
+});
+
+test("a service that exits before it answers is said with its last error, and nothing attaches: exit 1 (0582)", async () => {
+	let asked = 0;
+	const { deps, calls, printed } = surface({
+		serviceHealth: async () => {
+			asked++;
+			return { state: "down" };
+		},
+		startService: () => {
+			calls.started++;
+			return { exited: Promise.resolve(1) };
+		},
+		lastError: () => "C:/Users/x/.jocasta/agent/projects.yaml:4: Unexpected token",
+	});
+	expect(await openSurface(deps)).toBe(1);
+	expect(printed).toEqual([
+		"jocasta: the service stopped while starting: C:/Users/x/.jocasta/agent/projects.yaml:4: Unexpected token",
+		"jocasta: run `jocasta diagnose` for the full log.",
+	]);
+	expect(calls.attached).toEqual([]);
+	expect(asked).toBeLessThan(5);
+
+	// One that left because another service answers: that one is attached to.
+	let state: ServiceState = "down";
+	const left = surface({
+		serviceHealth: async () => ({ state }),
+		startService: () => {
+			state = "up";
+			return { exited: Promise.resolve(0) };
+		},
+	});
+	expect(await openSurface(left.deps)).toBe(0);
+	expect(left.calls.attached).toHaveLength(1);
+});
+
+test("lastLoggedError: the newest ERROR line's message since the start, without the service's lead (0582)", () => {
+	const dir = join(env.root, "logs-last");
+	mkdirSync(dir, { recursive: true });
+	writeFileSync(
+		join(dir, "jocasta-2026-11-08.log"),
+		"2026-11-08T23:59:00.000Z ERROR [service] didn't start: yesterday's\n",
+	);
+	writeFileSync(
+		join(dir, "jocasta-2026-11-09.log"),
+		[
+			"2026-11-09T10:00:00.000Z ERROR [service] didn't start: earlier",
+			"2026-11-09T10:05:00.000Z WARN [setup] a warning",
+			"2026-11-09T10:05:01.000Z ERROR [service] didn't start: C:/x/projects.yaml:4: Unexpected token",
+			"2026-11-09T10:05:02.000Z INFO [service] after",
+			"",
+		].join("\n"),
+	);
+	expect(lastLoggedError(dir, Date.parse("2026-11-09T10:05:00.500Z"))).toBe("C:/x/projects.yaml:4: Unexpected token");
+	expect(lastLoggedError(dir, Date.parse("2026-11-09T11:00:00.000Z"))).toBeUndefined();
+	expect(lastLoggedError(join(env.root, "none"), 0)).toBeUndefined();
 });
 
 test("herdr's client exiting closes Jocasta: the service is told when it answers, else the containers and herdr stop here (0434, 0549)", async () => {
@@ -248,7 +334,7 @@ test("closing the terminal tells the service once and ends this process (0549)",
 		exit: () => exited.resolve(),
 	});
 	const run = openSurface(deps);
-	while (close === undefined) await Bun.sleep(1);
+	await poll(() => close !== undefined, { intervalMs: 1, what: "the terminal-close handler" });
 	close?.();
 	await exited.promise;
 	expect(calls.closed).toEqual(["tell service", "stop containers", "stop herdr"]);
@@ -281,7 +367,7 @@ test("bare jocasta exits 0 when the service stopped herdr itself; any other clie
 	expect(await openSurface(surface({ watchServiceStop: watch }).deps)).toBe(0);
 	expect([watched, checked]).toEqual([1, 0]);
 
-	// Which service stopped it: the one frontier.json named as the client started.
+	// Which service stopped it: the one jocasta-service.json named as the client started.
 	const named = { port: 1, token: "t", pid: 7 };
 	const closing = async () => "closing" as const;
 	const up = async () => "up" as const;

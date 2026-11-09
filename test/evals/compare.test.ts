@@ -1,22 +1,14 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { compareRows } from "../../evals/compare.ts";
+import { holm, mcnemarExact, median, passHatK, wilcoxonSignedRank } from "../../bench/lib/stats.ts";
+import { compareRows, pairedStats, renderPaired } from "../../evals/compare.ts";
 import type { ResultRow } from "../../evals/runner.ts";
 import { loadVariants, variantArgs } from "../../evals/variants.ts";
+import { useTempDirs } from "../shared/fixture.ts";
 
-const temps: string[] = [];
-afterEach(() => {
-	for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
-function tempDir(): string {
-	const dir = mkdtempSync(join(tmpdir(), "jocasta-evals-compare-"));
-	temps.push(dir);
-	return dir;
-}
+const tempDir = useTempDirs("jocasta-evals-compare-");
 
 function row(
 	id: string,
@@ -249,5 +241,64 @@ describe("variants (0375)", () => {
 			"--effort",
 			"high",
 		]);
+	});
+});
+
+describe("the pre-registered paired analysis (0482)", () => {
+	// Four tasks: A wins t1, B wins t2, a tie in majority on t3, and t4 with 2 of 4 on A (no majority) and 3 of 4 on B.
+	const sides = [
+		{ id: "t1", a: [3, 3], b: [0, 3] },
+		{ id: "t2", a: [0, 3], b: [3, 3] },
+		{ id: "t3", a: [2, 3], b: [2, 3] },
+		{ id: "t4", a: [2, 4], b: [3, 4] },
+	] as const;
+	const metricsA = (i: number) => ({ wallMs: 100 * (i + 1), cost: 1, tokens: 1000 * (i + 1) });
+	const metricsB = (i: number) => ({ wallMs: 150 * (i + 1), cost: 0.5, tokens: 900 * (i + 1) });
+	const rowsA = sides.flatMap((task, i) => trials(task.id, task.a[0], task.a[1], metricsA(i)));
+	const rowsB = sides.flatMap((task, i) => trials(task.id, task.b[0], task.b[1], metricsB(i)));
+
+	test("pass rates per task, majority votes, per-task medians and Holm over the four p-values, in order", () => {
+		const stats = pairedStats(rowsA, rowsB, { seed: 482 });
+		expect(stats.tasks).toBe(4);
+		expect(stats.passRateA).toBeCloseTo((1 + 0 + 2 / 3 + 0.5) / 4, 12);
+		expect(stats.passRateB).toBeCloseTo((0 + 1 + 2 / 3 + 0.75) / 4, 12);
+		expect(stats.difference.value).toBeCloseTo(stats.passRateB - stats.passRateA, 12);
+		expect(stats.mcnemar).toMatchObject({ onlyA: 1, onlyB: 2, p: mcnemarExact(1, 2).p });
+		expect(stats.passHat3.a).toBeCloseTo(
+			passHatK(
+				sides.map((task) => ({ passed: task.a[0], trials: task.a[1] })),
+				3,
+			),
+			12,
+		);
+		const pairs = (
+			metric: (i: number) => { wallMs: number; cost: number; tokens: number },
+			key: "wallMs" | "cost" | "tokens",
+		) => sides.map((_, i) => metric(i)[key]);
+		for (const key of ["wallMs", "cost", "tokens"] as const) {
+			const a = pairs(metricsA, key);
+			const b = pairs(metricsB, key);
+			expect(stats.wilcoxon[key]).toMatchObject({
+				...wilcoxonSignedRank(a.map((value, i) => ({ a: value, b: b[i] as number }))),
+				medianA: median(a),
+				medianB: median(b),
+			});
+		}
+		expect(stats.wilcoxon.wallMs).toMatchObject({ n: 4, wPlus: 10, medianA: 250, medianB: 375 });
+		expect(stats.wilcoxon.tokens.wPlus).toBe(0);
+		const adjusted = holm([stats.mcnemar.p, stats.wilcoxon.wallMs.p, stats.wilcoxon.cost.p, stats.wilcoxon.tokens.p]);
+		expect([
+			stats.mcnemar.pHolm,
+			stats.wilcoxon.wallMs.pHolm,
+			stats.wilcoxon.cost.pHolm,
+			stats.wilcoxon.tokens.pHolm,
+		]).toEqual(adjusted);
+	});
+
+	test("renderPaired writes a p below 0.001 as < 0.001", () => {
+		const stats = pairedStats(rowsA, rowsB, { seed: 482 });
+		const lines = renderPaired({ ...stats, mcnemar: { ...stats.mcnemar, p: 0.0004, pHolm: 0.0012 } });
+		expect(lines).toContain(`- McNemar (exact) on per-task majority votes: only A 1, only B 2, p < 0.001, Holm 0.001.`);
+		expect(lines[0]).toBe("## Paired statistics (0482), 4 tasks in both runs");
 	});
 });

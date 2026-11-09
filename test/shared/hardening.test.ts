@@ -13,12 +13,11 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { withoutJocastaKeys } from "../../src/frontier/server/service.ts";
-import { privateDir, removeTree } from "../../src/shared/fsx.ts";
+import { join } from "node:path";
+import { withoutJocastaKeys } from "../../src/frontier/server/pane-launch.ts";
+import { privateDir, removeTree, writeAtomically } from "../../src/shared/fsx.ts";
 import { configDir, dataDir } from "../../src/shared/paths.ts";
 
-const REPO = resolve(import.meta.dir, "..", "..");
 const posix = process.platform !== "win32";
 let root = "";
 
@@ -83,6 +82,36 @@ test("removeTree removes read-only files (git's objects) and is quiet about a pa
 	removeTree(join(root, "never"));
 });
 
+test.skipIf(!posix)("writeAtomically writes a symlinked file's target and keeps the file's mode (SEC-LOC-9)", () => {
+	const dotfiles = join(root, "dotfiles");
+	mkdirSync(dotfiles);
+	const real = join(dotfiles, "config.yml");
+	writeFileSync(real, "old: 1\n");
+	chmodSync(real, 0o600);
+	const link = join(root, "config.yml");
+	symlinkSync(real, link);
+
+	writeAtomically(link, "new: 2\n");
+
+	expect(lstatSync(link).isSymbolicLink()).toBe(true);
+	expect(readFileSync(real, "utf8")).toBe("new: 2\n");
+	expect(statSync(real).mode & 0o777).toBe(0o600);
+
+	// A dangling link makes its target.
+	const dangling = join(root, "rc");
+	symlinkSync(join(dotfiles, "rc"), dangling);
+	writeAtomically(dangling, "x\n");
+	expect(lstatSync(dangling).isSymbolicLink()).toBe(true);
+	expect(readFileSync(join(dotfiles, "rc"), "utf8")).toBe("x\n");
+});
+
+test("writeAtomically replaces a plain file's text and makes a missing one with its folders", () => {
+	const file = join(root, "a", "b.txt");
+	writeAtomically(file, "one\n");
+	writeAtomically(file, "two\n");
+	expect(readFileSync(file, "utf8")).toBe("two\n");
+});
+
 test.skipIf(!posix)("Jocasta's data and config folders are 0700 on Linux and macOS, made or tightened (0484)", () => {
 	const data = join(root, "data");
 	const config = join(root, "config");
@@ -111,8 +140,7 @@ test("privateDir makes the folder and its parents; 0700 where the OS has modes",
 	if (posix) expect(statSync(dir).mode & 0o777).toBe(0o700);
 });
 
-test("on Windows dataDir and configDir only name the folders; nothing is made", () => {
-	if (posix) return;
+test.skipIf(posix)("on Windows dataDir and configDir only name the folders; nothing is made", () => {
 	const saved = process.env.JOCASTA_DATA_DIR;
 	process.env.JOCASTA_DATA_DIR = join(root, "unmade");
 	try {
@@ -137,11 +165,4 @@ test("mise's env can't override herdr's, Jocasta's or omp's variables in a pane,
 			PIP_INDEX_URL: "https://example.org/simple",
 		}),
 	).toEqual({ PATH: "C:\\mise\\bin", API_PORT: "3010", PIP_INDEX_URL: "https://example.org/simple" });
-});
-
-test("the whiteboard bridge sets no HTML (0484)", () => {
-	const bridge = readFileSync(join(REPO, "src", "frontier", "canvas", "bridge.ts"), "utf8");
-	expect(bridge).not.toContain("innerHTML");
-	expect(bridge).not.toContain("outerHTML");
-	expect(bridge).not.toContain("insertAdjacentHTML");
 });

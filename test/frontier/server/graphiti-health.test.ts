@@ -1,10 +1,17 @@
 import { expect, test } from "bun:test";
 import { type GraphitiChecks, graphitiHealth } from "../../../src/frontier/server/server.ts";
+import { CALLBACK_UNREACHABLE } from "../../../src/shared/memory/graph/callback.ts";
 
-const checks = (health: "ok" | "refused" | "bad", starting: boolean, dockerRunning: boolean): GraphitiChecks => ({
+const checks = (
+	health: "ok" | "refused" | "bad",
+	starting: boolean,
+	dockerRunning: boolean,
+	nativeDocker = false,
+): GraphitiChecks => ({
 	health: async () => health,
 	starting: () => starting,
 	dockerRunning: () => dockerRunning,
+	nativeDocker: () => nativeDocker,
 });
 
 test("Graphiti on the services row: up, starting, idle while Docker runs, down with why (0444)", async () => {
@@ -20,4 +27,6 @@ test("Graphiti on the services row: up, starting, idle while Docker runs, down w
 		note: "Docker isn't running",
 	});
 	expect(await graphitiHealth(checks("bad", false, true))).toEqual({ state: "down", note: "not answering" });
+	// Linux with its own Docker engine: its container can't call back for its model calls (SEC-LOC-10).
+	expect(await graphitiHealth(checks("ok", false, true, true))).toEqual({ state: "down", note: CALLBACK_UNREACHABLE });
 });

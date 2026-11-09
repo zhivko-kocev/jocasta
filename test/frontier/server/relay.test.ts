@@ -113,6 +113,35 @@ test("a relay port another program holds fails the start loudly; a stopped relay
 	startRelay(relay.port).stop();
 });
 
+test("the relay refuses a web page's origin and more guests than a room takes (SEC-NET-7)", async () => {
+	const relay = startRelay(0);
+	const opened = (url: string) => {
+		const socket = new WebSocket(url);
+		const { promise, resolve } = Promise.withResolvers<WebSocket>();
+		socket.addEventListener("open", () => resolve(socket), { once: true });
+		return promise;
+	};
+	try {
+		const room = `127.0.0.1:${relay.port}/r/room-abcdefgh`;
+		const upgrade = {
+			connection: "Upgrade",
+			upgrade: "websocket",
+			"sec-websocket-version": "13",
+			"sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==",
+		};
+		const asked = (role: string, origin?: string) =>
+			fetch(`http://${room}?role=${role}`, { headers: { ...upgrade, ...(origin ? { origin } : {}) } });
+		expect((await asked("host", "https://example.org")).status).toBe(403);
+		// omp's client sends no Origin: it hosts and its guests join, up to four.
+		const sockets = [await opened(`ws://${room}?role=host`)];
+		for (let i = 0; i < 4; i++) sockets.push(await opened(`ws://${room}?role=guest`));
+		expect((await asked("guest")).status).toBe(503);
+		for (const socket of sockets) socket.close();
+	} finally {
+		relay.stop();
+	}
+});
+
 test("the host registry answers each host of Jocasta's pids through its pipe, never another's; a host that doesn't answer is left out (0547, 0561)", async () => {
 	const dir = join(env.root, "collab-hosts");
 	const ours = await fakeHost(dir, { pid: 101, cwd: "C:/wt/a", busy: true, inputRequired: false });

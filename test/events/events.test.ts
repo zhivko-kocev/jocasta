@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Inbox } from "../../src/shared/events/inbox.ts";
 import { EventQueue, type NewEvent } from "../../src/shared/events/queue.ts";
-import { isQuiet, parseQuietHours } from "../../src/shared/events/quiet.ts";
+import { isQuiet, readQuietHours } from "../../src/shared/events/quiet.ts";
 import { CATALOG_MIGRATIONS, openCatalog, openMeDb } from "../../src/shared/schema.ts";
 import { useTempJocasta } from "../shared/fixture.ts";
 
@@ -58,17 +58,35 @@ test("the queue deduplicates by source id; a poller's set resolves what went awa
 	}
 });
 
+test("a poller's set resolves only what went away inside the scope it observed (SHR-8)", () => {
+	const db = openCatalog();
+	const queue = new EventQueue(db);
+	try {
+		for (const n of [1, 2, 3]) queue.add(review(n));
+		// Review 1 lies outside this round's scope: it stays open though missing; 2 went away; 3 is still there.
+		const observed = (sourceId: string) => sourceId !== "github:review:acme/api#1";
+		expect(queue.sync("github", ["review"], [review(3)], observed)).toEqual([]);
+		expect(queue.open().map((r) => r.source_id)).toEqual(["github:review:acme/api#1", "github:review:acme/api#3"]);
+	} finally {
+		db.close();
+	}
+});
+
 test("quiet hours parse like 22:00-08:00, wrap past midnight, and a bad value names the key (0298)", () => {
-	const quiet = parseQuietHours("22:00-08:00");
+	const hours = (quietHours: unknown) => readQuietHours({ service: { quietHours } });
+	const quiet = hours("22:00-08:00");
 	const at = (h: number, m = 0) => new Date(2026, 9, 8, h, m);
 	expect(isQuiet(quiet, at(23))).toBe(true);
 	expect(isQuiet(quiet, at(7, 59))).toBe(true);
 	expect(isQuiet(quiet, at(8))).toBe(false);
 	expect(isQuiet(quiet, at(21, 59))).toBe(false);
-	expect(isQuiet(parseQuietHours("13:00-14:00"), at(13, 30))).toBe(true);
-	expect(isQuiet(parseQuietHours(undefined), at(23))).toBe(false);
-	expect(() => parseQuietHours("late")).toThrow("frontier.quietHours");
-	expect(() => parseQuietHours("25:00-08:00")).toThrow("frontier.quietHours");
+	expect(isQuiet(hours("13:00-14:00"), at(13, 30))).toBe(true);
+	expect(isQuiet(readQuietHours({}), at(23))).toBe(false);
+	expect(isQuiet(hours(""), at(23))).toBe(false);
+	expect(() => hours("late")).toThrow('settings: service.quietHours must be like "22:00-08:00"');
+	expect(() => hours("25:00-08:00")).toThrow("service.quietHours");
+	// The old group's name, as his file spells it (0584).
+	expect(() => readQuietHours({ frontier: { quietHours: "late" } })).toThrow("settings: frontier.quietHours");
 });
 
 test("the inbox holds notes for a project's next work and reminders at a time (0302, me.db v1)", () => {

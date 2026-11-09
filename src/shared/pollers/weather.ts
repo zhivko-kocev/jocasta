@@ -1,6 +1,7 @@
 import { type Static, type TSchema, Type } from "typebox";
 import { Value } from "typebox/value";
 import type { Weather } from "../../frontier/protocol.ts";
+import { checkSettings, type Settings } from "../settings.ts";
 
 /**
  * The weather on the dashboard (0429) from Open-Meteo: keyless JSON, free for non-commercial use, CC-BY 4.0. The place
@@ -50,25 +51,17 @@ const WMO: Record<number, string> = {
 	99: "Thunderstorm with hail",
 };
 
-export function weatherSummary(code: number): string {
+function weatherSummary(code: number): string {
 	return WMO[code] ?? "Unknown";
 }
 
-/** `dashboard.weather` (0429): the place, or undefined when unset. A malformed value throws, naming the key. */
+/**
+ * `dashboard.weather` (0429): the place, or undefined when unset. A bad value throws, naming the file, line and key
+ * (0584), and turns the weather off.
+ */
 export function readWeatherPlace(settings: Record<string, unknown>): string | undefined {
-	const dashboard = settings.dashboard;
-	if (dashboard === undefined) return undefined;
-	if (dashboard === null || typeof dashboard !== "object" || Array.isArray(dashboard)) {
-		throw new Error("settings: dashboard must be an object");
-	}
-	const place = (dashboard as Record<string, unknown>).weather;
-	if (place === undefined || place === null) return undefined;
-	if (typeof place !== "string" || !place.trim()) {
-		throw new Error(
-			'settings: dashboard.weather must be a place, e.g. "Example City, Example Country" or "12.34, 56.78"',
-		);
-	}
-	return place.trim();
+	checkSettings(settings, "dashboard.weather");
+	return (settings as Settings).dashboard?.weather?.trim() || undefined;
 }
 
 /** Fetches one Open-Meteo answer and checks its shape; every failure is one plain line naming the endpoint. */

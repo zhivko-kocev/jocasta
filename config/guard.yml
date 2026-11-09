@@ -5,7 +5,8 @@
 # How omp matches: anchored, case-sensitive, `*` is the only wildcard; quotes are stripped; deny and prompt rules also
 # match each segment of a compound command; the first rule in list order wins, so every deny comes before every prompt.
 # Under omp's default `yolo` these rules still act. Shapes on omp's own critical list (`/`-rooted recursive rm,
-# `--no-preserve-root`, piping into sh/bash) are deny here: a prompt for them would be silently allowed under yolo.
+# `--no-preserve-root`, piping into sh/bash/zsh/fish, curl or wget run through `<(…)` or `eval $(…)`, `sudo rm`) are
+# deny here: a prompt for them would be silently allowed under yolo.
 #
 # Known limits (accepted, 0485): commands run through omp's `eval` tool aren't covered; a commit message quoting a
 # denied command is denied; scripts and interpreter one-liners beyond the shapes below, the `ri`/`del`/`erase`
@@ -15,20 +16,28 @@ bash:
   gitGuard: true
   patterns:
     # deny: git and gh (the leading `*git *` also catches `git -C x`, `cd x &&`, `pwsh -c "…"`, `cmd /c`; `*git*push*`
-    # also catches git.exe and a full path to git, 0485)
+    # also catches git.exe and a full path to git, 0485); force flags combined with -u, -v or -q, and pushes onto the
+    # remote's main or master, which only Finish does (0580)
     - { match: "*git*push* --force", approval: deny }
     - { match: "*git*push* --force *", approval: deny }
     - { match: "*git*push* -f", approval: deny }
     - { match: "*git*push* -f *", approval: deny }
+    - { match: "*git*push* -fu*", approval: deny }
+    - { match: "*git*push* -uf*", approval: deny }
+    - { match: "*git*push* -fv*", approval: deny }
+    - { match: "*git*push* -vf*", approval: deny }
+    - { match: "*git*push* -fq*", approval: deny }
+    - { match: "*git*push* -qf*", approval: deny }
     - { match: "*git*push* +*", approval: deny }
     - { match: "*git*push* :*", approval: deny }
+    - { match: "*git*push* *:main*", approval: deny }
+    - { match: "*git*push* *:master*", approval: deny }
     - { match: "*git*push* --delete*", approval: deny }
     - { match: "*git*push* -d *", approval: deny }
     - { match: "*git*push* --mirror*", approval: deny }
     - { match: "*git*push* --prune*", approval: deny }
     - { match: "*git*reset* --hard*", approval: deny }
     - { match: "*git*clean -*", approval: deny }
-    # also the long and split delete-and-force forms, and ref deletes (0481's re-test, under 0485)
     - { match: "*git*branch* -D*", approval: deny }
     - { match: "*git*branch* -d* -f*", approval: deny }
     - { match: "*git*branch* -d* --force*", approval: deny }
@@ -41,44 +50,160 @@ bash:
     - { match: "*git*branch* -df*", approval: deny }
     - { match: "*git*branch* -fd*", approval: deny }
     - { match: "*git*update-ref* -d*", approval: deny }
+    - { match: "*git*update-ref*refs/heads/*", approval: deny }
     - { match: "*git*checkout* .*", approval: deny }
     - { match: "*git*checkout* -- *", approval: deny }
     - { match: "*git*checkout -f*", approval: deny }
     - { match: "*git*checkout --force*", approval: deny }
     - { match: "*git*restore .*", approval: deny }
     - { match: "*git*restore -- *", approval: deny }
+    - { match: "*git*restore*--worktree*", approval: deny }
+    - { match: "*git*restore* -W*", approval: deny }
+    - { match: "*git*restore*--source*", approval: deny }
     - { match: "*git*switch -f*", approval: deny }
     - { match: "*git*switch --force*", approval: deny }
     - { match: "*git*switch --discard-changes*", approval: deny }
     - { match: "*git*worktree remove* -f*", approval: deny }
     - { match: "*git*worktree remove* --force*", approval: deny }
-    - { match: "*git*config*alias.*", approval: deny }
+    - { match: "*git*config *alias.*", approval: deny }
     - { match: "*git*-c alias.*", approval: deny }
-    - { match: "*git*-c*alias.*", approval: deny }
+    - { match: "*git*--config-env*alias.*", approval: deny }
     - { match: "*gh repo delete*", approval: deny }
+    - { match: "*gh repo edit*--visibility*", approval: deny }
     - { match: "*gh release delete*", approval: deny }
     - { match: "*gh api*-X*DELETE*", approval: deny }
     - { match: "*gh api*--method*DELETE*", approval: deny }
-    # deny: logins and tokens leaving the machine (0485): the CLIs' token commands, and omp's, gh's, az's and Jocasta's
-    # credential files named on a command line
+    # deny: logins and tokens leaving the machine (0485): the CLIs' token commands, omp's (`omp auth export`) and its
+    # credential store `agent.db` (and its -wal/-shm files), gh's, az's and Jocasta's credential files named on a
+    # command line, and git's credential helpers (0580)
     - { match: "*gh auth token*", approval: deny }
     - { match: "*gh auth status* -t*", approval: deny }
     - { match: "*gh auth status* --show-token*", approval: deny }
     - { match: "*az account get-access-token*", approval: deny }
     - { match: "*gcloud auth print-access-token*", approval: deny }
-    - { match: "*.omp/agent/auth.json*", approval: deny }
-    - { match: "*.omp\\agent\\auth.json*", approval: deny }
-    - { match: "*.omp/agent/accounts.json*", approval: deny }
-    - { match: "*.omp\\agent\\accounts.json*", approval: deny }
+    - { match: "*omp auth export*", approval: deny }
+    - { match: "*.omp/agent/agent.db*", approval: deny }
+    - { match: "*.omp\\agent\\agent.db*", approval: deny }
     - { match: "*.config/gh/hosts.yml*", approval: deny }
     - { match: "*.config\\gh\\hosts.yml*", approval: deny }
     - { match: "*.azure/msal_token_cache*", approval: deny }
     - { match: "*.azure\\msal_token_cache*", approval: deny }
     - { match: "*frontier.json*", approval: deny }
-    - { match: "*graphiti-token*", approval: deny }
+    - { match: "*jocasta-service.json*", approval: deny }
     - { match: "*.ssh/id_*", approval: deny }
     - { match: "*.ssh\\id_*", approval: deny }
-    # deny: shapes omp's critical list also matches (a prompt would be silently allowed under yolo)
+    - { match: "*git*credential*fill*", approval: deny }
+    - { match: "*git*credential-manager*get*", approval: deny }
+    # deny: the graph's containers, whose env and database hold every project's graph (0580)
+    - { match: "*docker*inspect*jocasta*", approval: deny }
+    - { match: "*docker*exec*jocasta-*", approval: deny }
+    - { match: "*docker*exec*falkordb*", approval: deny }
+    # deny: the git rules above with the program written GIT or Git, which Windows runs as git (0580)
+    - { match: "*GIT*push* --force", approval: deny }
+    - { match: "*GIT*push* --force *", approval: deny }
+    - { match: "*GIT*push* -f", approval: deny }
+    - { match: "*GIT*push* -f *", approval: deny }
+    - { match: "*GIT*push* -fu*", approval: deny }
+    - { match: "*GIT*push* -uf*", approval: deny }
+    - { match: "*GIT*push* -fv*", approval: deny }
+    - { match: "*GIT*push* -vf*", approval: deny }
+    - { match: "*GIT*push* -fq*", approval: deny }
+    - { match: "*GIT*push* -qf*", approval: deny }
+    - { match: "*GIT*push* +*", approval: deny }
+    - { match: "*GIT*push* :*", approval: deny }
+    - { match: "*GIT*push* *:main*", approval: deny }
+    - { match: "*GIT*push* *:master*", approval: deny }
+    - { match: "*GIT*push* --delete*", approval: deny }
+    - { match: "*GIT*push* -d *", approval: deny }
+    - { match: "*GIT*push* --mirror*", approval: deny }
+    - { match: "*GIT*push* --prune*", approval: deny }
+    - { match: "*GIT*reset* --hard*", approval: deny }
+    - { match: "*GIT*clean -*", approval: deny }
+    - { match: "*GIT*branch* -D*", approval: deny }
+    - { match: "*GIT*branch* -d* -f*", approval: deny }
+    - { match: "*GIT*branch* -d* --force*", approval: deny }
+    - { match: "*GIT*branch* --delete* -f*", approval: deny }
+    - { match: "*GIT*branch* --delete* --force*", approval: deny }
+    - { match: "*GIT*branch* -f* -d*", approval: deny }
+    - { match: "*GIT*branch* --force* -d*", approval: deny }
+    - { match: "*GIT*branch* -f* --delete*", approval: deny }
+    - { match: "*GIT*branch* --force* --delete*", approval: deny }
+    - { match: "*GIT*branch* -df*", approval: deny }
+    - { match: "*GIT*branch* -fd*", approval: deny }
+    - { match: "*GIT*update-ref* -d*", approval: deny }
+    - { match: "*GIT*update-ref*refs/heads/*", approval: deny }
+    - { match: "*GIT*checkout* .*", approval: deny }
+    - { match: "*GIT*checkout* -- *", approval: deny }
+    - { match: "*GIT*checkout -f*", approval: deny }
+    - { match: "*GIT*checkout --force*", approval: deny }
+    - { match: "*GIT*restore .*", approval: deny }
+    - { match: "*GIT*restore -- *", approval: deny }
+    - { match: "*GIT*restore*--worktree*", approval: deny }
+    - { match: "*GIT*restore* -W*", approval: deny }
+    - { match: "*GIT*restore*--source*", approval: deny }
+    - { match: "*GIT*switch -f*", approval: deny }
+    - { match: "*GIT*switch --force*", approval: deny }
+    - { match: "*GIT*switch --discard-changes*", approval: deny }
+    - { match: "*GIT*worktree remove* -f*", approval: deny }
+    - { match: "*GIT*worktree remove* --force*", approval: deny }
+    - { match: "*GIT*config *alias.*", approval: deny }
+    - { match: "*GIT*-c alias.*", approval: deny }
+    - { match: "*GIT*--config-env*alias.*", approval: deny }
+    - { match: "*GIT*credential*fill*", approval: deny }
+    - { match: "*GIT*credential-manager*get*", approval: deny }
+    - { match: "*Git*push* --force", approval: deny }
+    - { match: "*Git*push* --force *", approval: deny }
+    - { match: "*Git*push* -f", approval: deny }
+    - { match: "*Git*push* -f *", approval: deny }
+    - { match: "*Git*push* -fu*", approval: deny }
+    - { match: "*Git*push* -uf*", approval: deny }
+    - { match: "*Git*push* -fv*", approval: deny }
+    - { match: "*Git*push* -vf*", approval: deny }
+    - { match: "*Git*push* -fq*", approval: deny }
+    - { match: "*Git*push* -qf*", approval: deny }
+    - { match: "*Git*push* +*", approval: deny }
+    - { match: "*Git*push* :*", approval: deny }
+    - { match: "*Git*push* *:main*", approval: deny }
+    - { match: "*Git*push* *:master*", approval: deny }
+    - { match: "*Git*push* --delete*", approval: deny }
+    - { match: "*Git*push* -d *", approval: deny }
+    - { match: "*Git*push* --mirror*", approval: deny }
+    - { match: "*Git*push* --prune*", approval: deny }
+    - { match: "*Git*reset* --hard*", approval: deny }
+    - { match: "*Git*clean -*", approval: deny }
+    - { match: "*Git*branch* -D*", approval: deny }
+    - { match: "*Git*branch* -d* -f*", approval: deny }
+    - { match: "*Git*branch* -d* --force*", approval: deny }
+    - { match: "*Git*branch* --delete* -f*", approval: deny }
+    - { match: "*Git*branch* --delete* --force*", approval: deny }
+    - { match: "*Git*branch* -f* -d*", approval: deny }
+    - { match: "*Git*branch* --force* -d*", approval: deny }
+    - { match: "*Git*branch* -f* --delete*", approval: deny }
+    - { match: "*Git*branch* --force* --delete*", approval: deny }
+    - { match: "*Git*branch* -df*", approval: deny }
+    - { match: "*Git*branch* -fd*", approval: deny }
+    - { match: "*Git*update-ref* -d*", approval: deny }
+    - { match: "*Git*update-ref*refs/heads/*", approval: deny }
+    - { match: "*Git*checkout* .*", approval: deny }
+    - { match: "*Git*checkout* -- *", approval: deny }
+    - { match: "*Git*checkout -f*", approval: deny }
+    - { match: "*Git*checkout --force*", approval: deny }
+    - { match: "*Git*restore .*", approval: deny }
+    - { match: "*Git*restore -- *", approval: deny }
+    - { match: "*Git*restore*--worktree*", approval: deny }
+    - { match: "*Git*restore* -W*", approval: deny }
+    - { match: "*Git*restore*--source*", approval: deny }
+    - { match: "*Git*switch -f*", approval: deny }
+    - { match: "*Git*switch --force*", approval: deny }
+    - { match: "*Git*switch --discard-changes*", approval: deny }
+    - { match: "*Git*worktree remove* -f*", approval: deny }
+    - { match: "*Git*worktree remove* --force*", approval: deny }
+    - { match: "*Git*config *alias.*", approval: deny }
+    - { match: "*Git*-c alias.*", approval: deny }
+    - { match: "*Git*--config-env*alias.*", approval: deny }
+    - { match: "*Git*credential*fill*", approval: deny }
+    - { match: "*Git*credential-manager*get*", approval: deny }
+    # deny: shapes omp's critical list also matches (a prompt would be silently allowed under yolo, 0450, 0580)
     - { match: "*rm -*r* /*", approval: deny }
     - { match: "*rm -*R* /*", approval: deny }
     - { match: "*--no-preserve-root*", approval: deny }
@@ -91,11 +216,26 @@ bash:
     - { match: "*| bash *", approval: deny }
     - { match: "*|bash", approval: deny }
     - { match: "*|bash *", approval: deny }
+    - { match: "*| zsh*", approval: deny }
+    - { match: "*|zsh*", approval: deny }
+    - { match: "*| fish*", approval: deny }
+    - { match: "*<(curl*", approval: deny }
+    - { match: "*<(wget*", approval: deny }
+    - { match: "*eval $(curl*", approval: deny }
+    - { match: "*eval $(wget*", approval: deny }
+    - { match: "*sudo rm *", approval: deny }
     # deny: mise trust and global changes (0476); Jocasta checks a repo's trust itself, outside omp
     - { match: "*mise trust*", approval: deny }
     - { match: "*mise use* -g*", approval: deny }
     - { match: "*mise use* --global*", approval: deny }
     - { match: "*mise up* --bump*", approval: deny }
+    # prompt: merging a PR on GitHub (Finish asks him itself), and publishing a package or a release (0580)
+    - { match: "*gh pr merge*", approval: prompt }
+    - { match: "*gh release create*", approval: prompt }
+    - { match: "*npm*publish*", approval: prompt }
+    - { match: "*pnpm*publish*", approval: prompt }
+    - { match: "*bun*publish*", approval: prompt }
+    - { match: "*cargo*publish*", approval: prompt }
     # prompt
     - { match: "*git*push* --force-with-lease*", approval: prompt }
     - { match: "*rm -r *", approval: prompt }

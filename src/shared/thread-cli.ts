@@ -1,6 +1,7 @@
-import { readFrontierFile } from "../frontier/server/frontier-file.ts";
 import { UserError } from "./errors.ts";
-import { asObject, pidAlive } from "./fsx.ts";
+import { asObject } from "./fsx.ts";
+import { log } from "./log.ts";
+import { connectionRefused, NOT_RUNNING } from "./service-file.ts";
 
 /**
  * `jocasta thread …` and `jocasta worktree …` (0544): doors to the running service's own thread functions (the ones the
@@ -96,19 +97,11 @@ export function cliRequest(word: "thread" | "worktree", args: string[]): CliRequ
 }
 
 export interface CliDeps {
-	/** The running service's port and token from `<data>/frontier.json`, or undefined when its process is gone. */
+	/** The running service's port and token from `<data>/jocasta-service.json`, or undefined when its process is gone. */
 	service(): { port: number; token: string } | undefined;
 	print(line: string): void;
 	printError(line: string): void;
 }
-
-/** The service named by `<data>/frontier.json` while its process lives. */
-export function runningService(): { port: number; token: string } | undefined {
-	const file = readFrontierFile();
-	return file && pidAlive(file.pid) ? { port: file.port, token: file.token } : undefined;
-}
-
-const NOT_RUNNING = "Jocasta isn't running; start it with `jocasta`.";
 
 /** Runs one command against the service and prints its answer; resolves the exit code (`EXIT`). */
 export async function runCliCommand(request: CliRequest, deps: CliDeps): Promise<number> {
@@ -128,11 +121,12 @@ export async function runCliCommand(request: CliRequest, deps: CliDeps): Promise
 			timeout: false,
 		});
 	} catch (error) {
-		const code = asObject(error)?.code;
-		if (code === "ConnectionRefused" || code === "ECONNREFUSED") {
+		if (connectionRefused(error)) {
 			deps.printError(`jocasta: ${NOT_RUNNING}`);
 			return EXIT.notRunning;
 		}
+		// Anything but a refused connection is unexpected: its stack goes to the log before the one-line reply (DUP-12).
+		log("error", "cli", error instanceof Error ? (error.stack ?? error.message) : String(error));
 		deps.printError(`jocasta: Jocasta's service failed: ${error instanceof Error ? error.message : String(error)}`);
 		return EXIT.refused;
 	}

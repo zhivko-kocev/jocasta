@@ -1,31 +1,30 @@
-import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { expect, test } from "bun:test";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { DEFAULT_ARMS } from "../../evals/bench.ts";
 import { FOLLOWUP_ARMS, FOLLOWUP_REPS, FOLLOWUP_TASKS, pickFollowupTasks } from "../../evals/followup.ts";
-import { LAYER_MODULE, LayerUnavailableError, layerBuilt, loadBenchLayer } from "../../evals/layer.ts";
 import {
 	A7_API_KEY_ENV,
 	claudeSessions,
 	opencodeSessions,
 	readOpencodeResponse,
 	saveSessions,
-	trialArgs,
-	trialEnv,
-} from "../../evals/runner.ts";
-import { type BenchTask, planTrials, type TaskLanguage } from "../../evals/tasks.ts";
+} from "../../evals/harness.ts";
+import { LAYER_MODULE, type LayerTrial, LayerUnavailableError, layerBuilt, loadBenchLayer } from "../../evals/layer.ts";
+import { trialArgs, trialEnv } from "../../evals/runner.ts";
+import { type BenchTask, planTrials, TASK_PROMPT_PREFIX, type TaskLanguage } from "../../evals/tasks.ts";
 import { loadVariants } from "../../evals/variants.ts";
+import { benchLayer } from "../../src/frontier/layer/bench.ts";
+import { briefTitle } from "../../src/frontier/server/wording.ts";
+import { useTempDirs } from "../shared/fixture.ts";
 
 const VARIANTS = join(import.meta.dir, "..", "..", "evals", "variants");
-const temps: string[] = [];
-afterEach(() => {
-	for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-const tempDir = () => {
-	const dir = mkdtempSync(join(tmpdir(), "jocasta-arms-"));
-	temps.push(dir);
-	return dir;
+const REPO = join(import.meta.dir, "..", "..");
+const tempDir = useTempDirs("jocasta-arms-");
+const inside = (folder: string, path: string) => {
+	const rel = relative(folder, path);
+	return !rel.startsWith("..") && !isAbsolute(rel);
 };
 
 const task = (id: string, language: TaskLanguage, set: "main" | "spare" = "main") =>
@@ -66,7 +65,9 @@ test("A6 is A3 plus the layer, plan first through omp's plan review answered 'ex
 	});
 	for (const arm of ["a0", "a1", "a2", "a3", "a6", "f-index-off", "f-prewalk", "f-keep-context", "f-ponytail-if"])
 		expect(loadVariants(VARIANTS, [arm]).settings).toMatchObject({ providers: { cacheWarming: "streaming" } });
-	expect(loadVariants(VARIANTS, ["f-keepalive"]).settings).toMatchObject({ providers: { cacheWarming: "idle" } });
+	// 0574: the two arms whose harness updates itself have it off.
+	expect(loadVariants(VARIANTS, ["a4"]).env).toEqual({ DISABLE_AUTOUPDATER: "1" });
+	expect(loadVariants(VARIANTS, ["a7"]).env).toEqual({ OPENCODE_DISABLE_AUTOUPDATE: "1" });
 	// A6's first turn is interactive: no -p, the extension, the prompt last; its review turns are A3's print turns.
 	const first = trialArgs(a6, {
 		prompt: "Fix it",
@@ -119,15 +120,15 @@ test("omp-only keys are refused on opencode", () => {
 	expect(() => loadVariants(dir, ["oc"])).toThrow(/settings, layer apply to omp only, not opencode/);
 });
 
-test("the follow-up study: 10 main tasks in the main set's language proportions × 2 reps × A6 and its five arms (0571)", () => {
-	expect(FOLLOWUP_ARMS).toEqual(["a6", "f-index-off", "f-prewalk", "f-keepalive", "f-keep-context", "f-ponytail-if"]);
+test("the follow-up study: 10 main tasks in the main set's language proportions × 2 reps × A6 and its four arms (0571, 0575)", () => {
+	expect(FOLLOWUP_ARMS).toEqual(["a6", "f-index-off", "f-prewalk", "f-keep-context", "f-ponytail-if"]);
 	const picked = pickFollowupTasks(mainSet, 482);
 	expect(picked).toHaveLength(FOLLOWUP_TASKS);
 	const count = (languages: TaskLanguage[]) => picked.filter((t) => languages.includes(t.language)).length;
 	expect([count(["Python"]), count(["TypeScript", "JavaScript"]), count(["Go"])]).toEqual([4, 4, 2]);
 	expect(picked.some((t) => t.set === "spare")).toBe(false);
 	expect(pickFollowupTasks(mainSet, 482)).toEqual(picked);
-	expect(planTrials(picked, FOLLOWUP_ARMS, FOLLOWUP_REPS, 482)).toHaveLength(120);
+	expect(planTrials(picked, FOLLOWUP_ARMS, FOLLOWUP_REPS, 482)).toHaveLength(100);
 });
 
 test("each follow-up arm differs from A6 in its one part only", () => {
@@ -139,7 +140,6 @@ test("each follow-up arm differs from A6 in its one part only", () => {
 	expect(arm("f-keep-context").layer).toEqual(layer);
 	expect(arm("f-keep-context").planReview).toBe("keep");
 	expect(arm("f-prewalk").args).toEqual([...a6.args, "--prewalk"]);
-	expect(arm("f-keepalive").settings).toMatchObject({ providers: { cacheWarming: "idle" } });
 	const ponytail = arm("f-ponytail-if").appendSystemPrompt as string;
 	expect(ponytail).toEndWith("ponytail-important-if.md");
 	const plain = readFileSync(a6.appendSystemPrompt as string, "utf8");
@@ -161,10 +161,62 @@ test("A6 fails loud without Jocasta's layer build, before any model call", async
 	mkdirSync(join(root, LAYER_MODULE, ".."), { recursive: true });
 	writeFileSync(
 		join(root, LAYER_MODULE),
-		"export const benchLayer = { setUp: async () => ({ args: [], settings: {}, env: {}, close: async () => {} }) };\n",
+		"export const benchLayer = { setUp: async () => ({ args: [], settings: {}, env: {}, close: async () => {} }), preflight: async () => undefined };\n",
 	);
 	expect(typeof (await loadBenchLayer(root)).setUp).toBe("function");
 });
+
+test("A6's layer keeps its data under the OS temp folder, not in a trial root outside the profile, and removes it (EVL-1)", async () => {
+	// Beside the checkout: on Windows outside the user's profile (D:\ on his PC and in CI), as the VM's C:\t is.
+	const root = tempDir(dirname(REPO));
+	const repo = join(root, "repo");
+	mkdirSync(repo);
+	const ponytail = join(root, "system-prompt.md");
+	writeFileSync(ponytail, "# Ponytail, lazy senior dev mode\n");
+	const prompt = `${TASK_PROMPT_PREFIX}The retry test is flaky.`;
+	const trial: LayerTrial = {
+		root,
+		repo,
+		baseCommit: "0".repeat(40),
+		prompt,
+		appendSystemPrompt: ponytail,
+		switches: { index: false },
+		env: {},
+	};
+	const layer = await benchLayer.setUp(trial);
+	const data = layer.env.JOCASTA_DATA_DIR as string;
+	try {
+		expect(inside(tmpdir(), data)).toBe(true);
+		expect(inside(root, data)).toBe(false);
+		expect(existsSync(join(data, "jocasta-service.json"))).toBe(true);
+		const plugin = layer.args[layer.args.indexOf("-e") + 1] as string;
+		// 0577: the check's 30 minutes fit omp's limit; JOCASTA_THREAD lists report_result and check.
+		expect(JSON.parse(readFileSync(join(plugin, ".mcp.json"), "utf8")).mcpServers.jocasta).toMatchObject({
+			timeout: 1_860_000,
+			env: { JOCASTA_DATA_DIR: data, JOCASTA_THREAD: expect.stringMatching(/^[a-z0-9-]+$/) },
+		});
+		// PRM-5: titled as New thread titles the brief, the checkout's folder as the project.
+		const text = readFileSync(layer.args[layer.args.indexOf("--append-system-prompt") + 1] as string, "utf8");
+		expect(text).toStartWith("# Ponytail, lazy senior dev mode\n");
+		expect(text).toContain(`# Your task: ${briefTitle(prompt)} (repo)`);
+		expect(text).not.toContain("benchmark");
+		expect(layer.indexBuildMs).toBeUndefined();
+	} finally {
+		await layer.close();
+	}
+	expect(existsSync(data)).toBe(false);
+	// With the index on, the root never decides whether it runs; codebase-memory-mcp may be missing here.
+	const indexed = await benchLayer.setUp({ ...trial, switches: { index: true } }).then(
+		async (setup) => {
+			await setup.close();
+			return "set up";
+		},
+		(error: Error) => error.message,
+	);
+	expect(indexed).not.toMatch(/can't keep its data/);
+	expect((await benchLayer.preflight({ index: true })) ?? "").not.toMatch(/can't keep its data/);
+	expect(await benchLayer.preflight({ index: false })).toBeUndefined();
+}, 120_000);
 
 test("A7's key reaches opencode only: every trial's environment drops it and any ANTHROPIC_API_KEY", () => {
 	process.env[A7_API_KEY_ENV] = "sk-test";

@@ -15,9 +15,12 @@ import type { ServiceState } from "../../src/frontier/server/launch.ts";
 import { markersDir } from "../../src/setup/markers.ts";
 import { HERDR_OMP_EXTENSION, runSetup, type SetupPaths, setupUndo } from "../../src/setup/setup.ts";
 import {
+	describeProcess,
 	type InstallRecord,
+	installContents,
 	rcPathLine,
 	readInstallRecord,
+	removeAfterExit,
 	removeRcLine,
 	runUninstall,
 	type UninstallDeps,
@@ -125,7 +128,7 @@ function deps(state: ServiceState = "down"): UninstallDeps {
 			calls.push(`credential ${target}`);
 			return true;
 		},
-		removeAfterExit: (dir) => void calls.push(`after exit ${dir}`),
+		removeAfterExit: (dir, entries) => void calls.push(`after exit ${dir} ${entries.join(",")}`),
 	};
 }
 
@@ -228,6 +231,38 @@ test("uninstall takes out only what setup added to the three omp files: his keys
 	expect(JSON.parse(readFileSync(join(agent, "lsp.json"), "utf8"))).toEqual({ idleTimeoutMs: 60000 });
 });
 
+test("uninstall's key removal keeps his keybindings.yml comments and formatting: only Jocasta's lines go (0584)", async () => {
+	const file = join(setupPaths.ompAgentDir, "keybindings.yml");
+	put(
+		file,
+		"# my bindings, tuned over months\napp.model.cycle: [ctrl+k] # cycle models\napp.live.toggle: []\napp.stt.toggle: f9\n",
+	);
+	const { text } = await uninstall(["y", "n", "n"]);
+	expect(text).toContain(`removed app.live.toggle, app.stt.toggle from ${file}`);
+	expect(readFileSync(file, "utf8")).toBe(
+		"# my bindings, tuned over months\napp.model.cycle: [ctrl+k] # cycle models\n",
+	);
+});
+
+test("a keybindings.yml setup made stays when his comment is left in it; only Jocasta's lines go (0584)", async () => {
+	const file = join(setupPaths.ompAgentDir, "keybindings.yml");
+	put(file, "# F9 dictation is how I like it\napp.live.toggle: []\napp.stt.toggle: f9\n");
+	const { text } = await uninstall(["y", "n", "n"]);
+	expect(text).toContain(`removed app.live.toggle, app.stt.toggle from ${file}`);
+	expect(readFileSync(file, "utf8")).toBe("# F9 dictation is how I like it\n");
+});
+
+test("a keybindings.yml whose lines can't be edited stays byte for byte; uninstall says what to remove by hand (SET-5, 0584)", async () => {
+	const file = join(setupPaths.ompAgentDir, "keybindings.yml");
+	const his = '{app.live.toggle: [], app.stt.toggle: f9, app.model.cycle: ["ctrl+k"]}\n';
+	put(file, his);
+	const { text } = await uninstall(["y", "n", "n"]);
+	expect(text).toContain(
+		`couldn't remove Jocasta's app.live.toggle, app.stt.toggle in ${file}: ${file} can't be edited line by line, so uninstall left it as it is; remove app.live.toggle, app.stt.toggle from it by hand`,
+	);
+	expect(readFileSync(file, "utf8")).toBe(his);
+});
+
 test("a file of his that setup added a key to stays when only that key goes (0479)", async () => {
 	setupPaths = {
 		...setupPaths,
@@ -259,7 +294,7 @@ test("the data folder and the containers go on their own `y`; a running install'
 	expect(existsSync(setupPaths.dataDir)).toBe(false);
 	// `<LOCALAPPDATA>\jocasta` held only the data folder.
 	expect(existsSync(dirname(setupPaths.dataDir))).toBe(false);
-	expect(calls.at(-1)).toBe(`after exit ${record.dir}`);
+	expect(calls.at(-1)).toBe(`after exit ${record.dir} jocasta.exe`);
 	expect(existsSync(record.dir)).toBe(true);
 	expect(text).toContain(`${record.dir} goes when this command exits.`);
 });
@@ -398,6 +433,106 @@ test("install.json is trusted only for its own folder, and the window data only 
 	put(join(dir, "install.json"), JSON.stringify({ dir, appData: join(local, "local.jocasta.frontier") }));
 	expect(readInstallRecord(dir, local, true)).toEqual({ dir, appData: join(local, "local.jocasta.frontier") });
 });
+
+test("install.json's entries are kept as plain names only; a list with a path in it is no list (0579)", () => {
+	const dir = join(root, "inst");
+	put(join(dir, "install.json"), JSON.stringify({ dir, entries: ["jocasta", "config"], rc: "/home/u/.bashrc" }));
+	expect(readInstallRecord(dir, undefined, false)).toEqual({
+		dir,
+		entries: ["jocasta", "config"],
+		rc: "/home/u/.bashrc",
+	});
+	for (const bad of ["..", "../x", "a/b", "C:\\x", ""]) {
+		put(join(dir, "install.json"), JSON.stringify({ dir, entries: ["config", bad], rc: "/r" }));
+		expect(readInstallRecord(dir, undefined, false)).toEqual({ dir, rc: "/r" });
+	}
+});
+
+test("uninstall removes only the install's listed entries; a folder holding his files stays with them (0579)", async () => {
+	const dir = join(root, "bin");
+	for (const name of ["jocasta", "config/boss.md", "node/node", "his-tool", "notes/his.txt", "jocasta.old-20261109"]) {
+		put(join(dir, name), "x");
+	}
+	put(join(dir, "install.json"), JSON.stringify({ dir, entries: ["jocasta", "config", "node"] }));
+	const record = readInstallRecord(dir, undefined, false) as InstallRecord;
+	expect(installContents(record, false)).toEqual({
+		ours: ["config", "jocasta", "jocasta.old-20261109", "node"],
+		others: ["his-tool", "notes"],
+	});
+	const { code, text } = await uninstall(["y", "n", "n"], uninstallPaths(record));
+	expect(code).toBe(0);
+	expect(text).toContain(`removed Jocasta's files from ${dir}; kept the folder (it holds other files)`);
+	expect(readdirSync(dir).sort()).toEqual(["his-tool", "notes"]);
+
+	// Only Jocasta's entries: the folder goes with them.
+	const own = join(root, "own");
+	put(join(own, "jocasta"), "x");
+	put(join(own, "install.json"), JSON.stringify({ dir: own, entries: ["jocasta", "hunk"] }));
+	const again = await uninstall(["y", "n", "n"], uninstallPaths(readInstallRecord(own, undefined, false)));
+	expect(again.text).toContain(`removed ${own}`);
+	expect(existsSync(own)).toBe(false);
+});
+
+test("an install from before the list goes whole only when every entry is a release's; else it all stays (0579)", async () => {
+	const record = install();
+	put(join(record.dir, "his-tool.exe"), "his");
+	const { code, text } = await uninstall(["y", "n", "n"], uninstallPaths(record));
+	expect(code).toBe(1);
+	expect(text).toContain(
+		`couldn't remove ${record.dir}: kept ${record.dir}: it holds files that aren't Jocasta's (his-tool.exe); remove Jocasta's files from it by hand`,
+	);
+	expect(readdirSync(record.dir).sort()).toEqual(["his-tool.exe", "install.json", "jocasta.exe"]);
+});
+
+test("omp sessions running programs from the install are named and refused before anything is asked (0579)", async () => {
+	const record = install();
+	const d = deps();
+	d.processesUnder = (dir) => [
+		{ pid: 4120, path: `${dir}\\jocasta.exe`, commandLine: `"${dir}\\jocasta.exe" mcp` },
+		{
+			pid: 5332,
+			path: `${dir}\\node\\node.exe`,
+			commandLine: `"${dir}\\node\\node.exe" "${dir}\\whiteboard\\dist\\cli.js" mcp`,
+		},
+	];
+	const refused = uninstall(["y"], uninstallPaths(record), d);
+	await expect(refused).rejects.toThrow(
+		`omp sessions still run programs from ${record.dir}: jocasta.exe mcp (pid 4120), node.exe whiteboard mcp (pid 5332). Close them, then run jocasta uninstall again.`,
+	);
+	expect(calls).toEqual([]);
+	expect(existsSync(join(record.dir, "jocasta.exe"))).toBe(true);
+});
+
+test("describeProcess names the program and its words, a path inside the install as its entry", () => {
+	const dir = "C:\\Users\\x\\AppData\\Local\\Programs\\jocasta";
+	expect(describeProcess(dir, { pid: 7, path: `${dir}\\hunk\\hunk.exe`, commandLine: "hunk.exe diff --watch" })).toBe(
+		"hunk.exe diff --watch (pid 7)",
+	);
+	expect(
+		describeProcess(dir, {
+			pid: 8,
+			path: `${dir}\\jocasta.exe`,
+			commandLine: `${dir}\\jocasta.exe mcp --boss C:\\elsewhere\\x.js`,
+		}),
+	).toBe("jocasta.exe mcp --boss C:\\elsewhere\\x.js (pid 8)");
+});
+
+test.if(process.platform === "win32")(
+	"removeAfterExit removes the listed entries once the process has exited, then install.json and the empty folder (0579)",
+	async () => {
+		const dir = join(root, "Programs", "jocasta");
+		put(join(dir, "jocasta.exe"), "exe");
+		put(join(dir, "config", "boss.md"), "x");
+		put(join(dir, "install.json"), JSON.stringify({ dir }));
+		const waiter = Bun.spawn(["ping", "-n", "2", "127.0.0.1"], { stdout: "ignore", windowsHide: true });
+		removeAfterExit(dir, ["jocasta.exe", "config"], waiter.pid);
+		await waiter.exited;
+		// The remover is a detached PowerShell with nothing to await: its effect on the folder is the signal.
+		for (let waited = 0; existsSync(dir) && waited < 20_000; waited += 250) await Bun.sleep(250);
+		expect(existsSync(dir)).toBe(false);
+	},
+	30_000,
+);
 
 test("a recorded folder that no longer holds Jocasta's marker is kept and said (0484)", async () => {
 	const record = install();

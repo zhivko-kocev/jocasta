@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
-import { git } from "./git.ts";
+import { gitAsync } from "./git.ts";
+import { pathKey } from "./pathkey.ts";
 
 const AZURE = "dev.azure.com";
 
@@ -51,7 +52,7 @@ export function normalizeOrigin(url: string): string {
 			.replace(/\.git$/i, "")
 			.toLowerCase();
 	}
-	const segments = decodeURIComponent(path)
+	const segments = decoded(path)
 		.replace(/\.git\/?$/i, "")
 		.split("/")
 		.filter(Boolean)
@@ -61,21 +62,38 @@ export function normalizeOrigin(url: string): string {
 	return azure ? [AZURE, ...azure].join("/") : [lowerHost, ...segments].join("/");
 }
 
-/** A path as identity: resolved, forward slashes, lowercased on Windows. */
-export function normalizePathKey(path: string): string {
-	const forward = path.replaceAll("\\", "/").replace(/\/+$/, "");
-	return process.platform === "win32" ? forward.toLowerCase() : forward;
+/** The URL path percent-decoded; a stray `%` (`50%-off`) leaves it as written rather than throwing. */
+function decoded(path: string): string {
+	try {
+		return decodeURIComponent(path);
+	} catch {
+		return path;
+	}
 }
 
-/** A project's identity key (0103): the origin key, else `root:<sha>`, else `path:<path>`. */
-export function identityKey(dir: string): string {
-	const origin = git(dir, ["config", "--get", "remote.origin.url"]);
+/** How long one git call of the identity may take (CO-10). */
+const GIT_TIMEOUT_MS = 30_000;
+
+/** Trimmed stdout of a git call that exited 0, else undefined; a call killed at its timeout throws. */
+async function gitOut(dir: string, args: string[]): Promise<string | undefined> {
+	const result = await gitAsync(dir, args, GIT_TIMEOUT_MS);
+	if (result.code === null)
+		throw new Error(`git ${args.join(" ")} was killed after ${GIT_TIMEOUT_MS / 1000} s in ${dir}`);
+	return result.code === 0 ? result.stdout.trim() : undefined;
+}
+
+/**
+ * A project's identity key (0103): the origin key, else `root:<sha>`, else `path:<path>`. Git runs without holding the
+ * event loop (SHR-3).
+ */
+export async function identityKey(dir: string): Promise<string> {
+	const origin = await gitOut(dir, ["config", "--get", "remote.origin.url"]);
 	if (origin) return normalizeOrigin(origin);
-	const roots = git(dir, ["rev-list", "--max-parents=0", "HEAD"]);
+	const roots = await gitOut(dir, ["rev-list", "--max-parents=0", "HEAD"]);
 	// rev-list lists newest first; the first root commit is the last line.
 	const first = roots?.split(/\r?\n/).filter(Boolean).at(-1);
 	if (first) return `root:${first}`;
-	return `path:${normalizePathKey(dir)}`;
+	return `path:${pathKey(dir)}`;
 }
 
 /** `p-` plus the first 16 hex of SHA-256 of the identity key (0107). */

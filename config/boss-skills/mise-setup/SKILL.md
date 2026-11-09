@@ -26,6 +26,8 @@ On his yes, `thread_start(project, "mise setup", brief)` with this brief, filled
 > through `_.file = "{{cwd}}/.env"` when it has one; the thread variables `JOCASTA_THREAD`, `JOCASTA_PORT_OFFSET` and
 > `COMPOSE_PROJECT_NAME` are already set and can be used as `{{env.JOCASTA_PORT_OFFSET}}`. Add `[tasks.test]` (the
 > project's tests) and `[tasks.verify]` (everything a change must pass: build, lint, tests). Never run `mise trust`,
-> `mise use` or `mise install`; show `mise tasks ls` once the file is written.
+> `mise use` or `mise install`; show `mise tasks ls` once the file is written. This task changes no repo file: make no
+> commit (the commit step doesn't apply).
 
-He approves its plan in its pane like any thread's.
+He approves its plan in its pane like any thread's. It commits nothing, so it never reports done: when its
+"finished its turn" line arrives, report that line to him as the setup's outcome and offer to close the thread.

@@ -39,7 +39,9 @@ export function meetingLink(event: Pick<VEvent, "url" | "location" | "descriptio
 
 /**
  * The meetings today and tomorrow in an iCal document (0353): recurrences expanded with their exceptions and
- * overrides, cancelled ones left out, by start.
+ * overrides, cancelled ones left out, by start; each occurrence ends at its start plus the event's duration. node-ical
+ * folds an override into its series, so a top-level entry with a RECURRENCE-ID is one occurrence whose series isn't
+ * in the feed (an invitation to one meeting of a series, SHR-4), and counts as a meeting of its own.
  */
 export function meetingsIn(parsed: CalendarResponse, now: Date): Meeting[] {
 	const today = localDay(now.getTime());
@@ -49,8 +51,6 @@ export function meetingsIn(parsed: CalendarResponse, now: Date): Meeting[] {
 	for (const component of Object.values(parsed)) {
 		if (component?.type !== "VEVENT") continue;
 		const event = component as VEvent;
-		// Overrides are applied by their base event's expansion.
-		if (event.recurrenceid) continue;
 		for (const instance of ical.expandRecurringEvent(event, { from, to, expandOngoing: true })) {
 			if (text(instance.event.status).toUpperCase() === "CANCELLED") continue;
 			const url = meetingLink(instance.event);

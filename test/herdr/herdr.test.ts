@@ -14,9 +14,10 @@ import {
 	paneText,
 	stopHerdrSession,
 } from "../../src/frontier/server/herdr.ts";
-import { processesIn } from "../../src/frontier/server/proctree.ts";
-import { pidAlive, removeTree } from "../../src/shared/fsx.ts";
+import { removeTree } from "../../src/shared/fsx.ts";
+import { pidAlive, processesIn } from "../../src/shared/proctree.ts";
 import { killAll, type SleeperTree, settles, sleeperCommand, sleeperTree } from "../frontier/server/sleepers.ts";
+import { poll } from "../shared/fixture.ts";
 import { FakeHerdr } from "./fake-herdr.ts";
 
 const cleanup: (() => void | Promise<void>)[] = [];
@@ -40,13 +41,7 @@ async function setup(version = "0.9.4"): Promise<{ fake: FakeHerdr; herdr: Herdr
 	return { fake, herdr, warnings };
 }
 
-async function until(check: () => boolean, what: string): Promise<void> {
-	const end = Date.now() + 5000;
-	while (!check()) {
-		if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
-		await Bun.sleep(10);
-	}
-}
+const until = (check: () => boolean, what: string) => poll(check, { timeoutMs: 5_000, intervalMs: 10, what });
 
 const pane = (pane_id: string, workspace_id: string, agent_status: string, extra: object = {}) => ({
 	pane_id,
@@ -873,3 +868,29 @@ test.skipIf(process.env.JOCASTA_HERDR_SMOKE !== "1")(
 	},
 	60_000,
 );
+
+test("a watch stopped while herdr answers its subscribe leaves no subscription open (SRV-A-7)", async () => {
+	const { fake, herdr } = await setup();
+	fake.handlers["pane.list"] = () => ({ result: { type: "pane_list", panes: [pane("w1:p1", "w1", "idle")] } });
+	let stop: (() => void) | undefined;
+	fake.handlers["events.subscribe"] = () => {
+		// The stop lands while herdr takes the request, before its answer arrives.
+		stop?.();
+		return { result: { type: "subscription_started" } };
+	};
+	stop = herdr.watch(
+		() => ["w1:p1"],
+		() => {},
+	);
+	await until(() => fake.subscriptions.length === 1, "the subscribe");
+	expect(await settles(() => fake.subscriptions.every((s) => s.socket.destroyed))).toBe(true);
+});
+
+test("connecting with start off never starts a server: no answer is unreachable (SRV-A-10)", async () => {
+	const name = `jocasta-herdr-none-${process.pid}`;
+	const socketPath = process.platform === "win32" ? `\\\\.\\pipe\\${name}` : join(tmpdir(), `${name}.sock`);
+	await expect(
+		// `no-such-herdr` would fail as not_installed if a start were tried.
+		connectHerdr({ session: "unused", socketPath, herdrBin: "no-such-herdr", start: false }),
+	).rejects.toMatchObject({ code: "unreachable" });
+});

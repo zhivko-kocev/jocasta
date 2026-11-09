@@ -10,6 +10,7 @@
 // `compare <runDirA> <runDirB>` applies the keep rule and the paired statistics (0375, 0482). Exits 1 when a trial
 // fails, 2 on a bad flag, variant or environment (0140).
 import { join } from "node:path";
+import { toolCommand } from "../bench/lib/launch.ts";
 import { UserError } from "../src/shared/errors.ts";
 import { configDir, dataDir } from "../src/shared/paths.ts";
 import { parseRunArgs, type RunSettings, takeVariantFlags } from "./args.ts";
@@ -22,7 +23,7 @@ const argv = process.argv.slice(2);
 const casesDirs = [join(import.meta.dir, "cases"), join(configDir(), "evals", "cases")];
 let settings: RunSettings;
 let variant: Variant;
-let harness: string;
+let launcher: string[];
 try {
 	if (argv[0] === "compare") {
 		const [, dirA, dirB, ...extra] = argv;
@@ -70,12 +71,12 @@ try {
 	if (!process.env.JOCASTA_EVALS_REAL)
 		throw new UserError("evals run omp against real models and bill usage; set JOCASTA_EVALS_REAL=1 to run them");
 	if (process.env.CI) throw new UserError("real-model evals never run in CI (0169)");
-	const found = Bun.which(variant.harness);
-	if (!found)
-		throw new UserError(
-			`${variant.harness} is not on PATH; install ${variant.harness} or add it to PATH to run the evals`,
-		);
-	harness = found;
+	// The bench's launcher (EVL-14): npm's `.cmd` shim is started through its `.exe`, or `cmd.exe /d /c`.
+	launcher = toolCommand(variant.harness, (name) => {
+		const found = Bun.which(name);
+		if (!found) throw new UserError(`${name} is not on PATH; install ${name} or add it to PATH to run the evals`);
+		return found;
+	});
 } catch (error) {
 	if (!(error instanceof UserError)) throw error;
 	console.error(`jocasta: ${error.message}`);
@@ -87,7 +88,7 @@ const rows = await runEvals({
 	outDir,
 	reps: settings.reps,
 	timeoutMs: settings.timeoutMinutes === undefined ? undefined : settings.timeoutMinutes * 60_000,
-	launcher: [harness],
+	launcher,
 	variant,
 	profile: settings.profile,
 	pace: createPacer().pace,

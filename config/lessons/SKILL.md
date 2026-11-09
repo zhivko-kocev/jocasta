@@ -15,8 +15,9 @@ lesson as its title and when it applies.
 
 ## How a lesson is added
 
-Only when he says "make that a lesson", and only for something non-obvious, durable and material. The boss writes it
-with its `lesson` tool: one file here and one line in the index below. Threads never edit this folder.
+Only on his word: when he says "make that a lesson" or says yes to the boss's offer. A lesson is something
+non-obvious, durable and material. The boss writes it with its `lesson` tool: one file here and one line in the index
+below. Threads never edit this folder.
 
 To turn test-first on for this project, he asks the boss to add Jocasta's TDD lesson.
 

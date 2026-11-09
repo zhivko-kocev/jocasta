@@ -41,8 +41,9 @@
 	overflow: hidden;
 }
 
-/* Before the first review (0419): Jocasta's empty state instead of whiteboard's Welcome, quiet and centred. */
-.wb-empty {
+/* Jocasta's own centred screens: the empty state before the first review (0419), instead of whiteboard's Welcome, and
+   the canvas couldn't start (0432), with the plain reason and remedy and Try again only when it can help. */
+:is(.wb-empty, .wb-unavailable) {
 	position: absolute;
 	inset: 0;
 	display: flex;
@@ -55,22 +56,25 @@
 	animation: resolve var(--calm) var(--ease) both;
 }
 
-.wb-empty h2 {
+:is(.wb-empty, .wb-unavailable) h2 {
 	margin: 0;
 	color: var(--fg);
 	font: 500 15px / 1.4 var(--sans);
 }
 
-.wb-empty p {
-	max-width: 44ch;
+:is(.wb-empty, .wb-unavailable) p {
 	margin: 0;
 	color: var(--fg-2);
 	font-size: 14.5px;
 	line-height: 1.5;
 }
 
-.wb-empty .btn {
+:is(.wb-empty, .wb-unavailable) .btn {
 	margin-top: 14px;
+}
+
+.wb-empty p {
+	max-width: 44ch;
 }
 
 .wb-empty .notice {
@@ -78,44 +82,34 @@
 	font-size: 13px;
 }
 
-/* The canvas couldn't start (0432): centred like the empty state, the plain reason and remedy, Try again only when it
-   can help, the raw error folded under Details. */
+/* The trouble screen covers the stage. */
 .wb-unavailable {
-	position: absolute;
-	inset: 0;
 	z-index: 1;
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	justify-content: center;
-	gap: 6px;
-	padding: 28px;
 	background: var(--bg-1);
-	text-align: center;
-	animation: resolve var(--calm) var(--ease) both;
-}
-
-.wb-unavailable h2 {
-	margin: 0;
-	color: var(--fg);
-	font: 500 15px / 1.4 var(--sans);
 }
 
 .wb-unavailable p {
 	max-width: 52ch;
-	margin: 0;
-	color: var(--fg-2);
-	font-size: 14.5px;
-	line-height: 1.5;
 }
 
-.wb-unavailable .btn {
-	margin-top: 14px;
-}
-
+/* The raw error, folded under Details. */
 .wb-unavailable details {
 	max-width: 60ch;
 	margin-top: 10px;
+	color: var(--fg-3);
+	font-size: 12.5px;
+}
+
+.wb-unavailable summary {
+	cursor: pointer;
+}
+
+.wb-unavailable details code {
+	display: block;
+	margin-top: 6px;
+	color: var(--fg-2);
+	font: 12px / 1.5 var(--mono);
+	overflow-wrap: anywhere;
 }
 
 /* A code peek and an embedded diff: Monaco on the page's ground, a hairline around. */

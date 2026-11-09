@@ -1,9 +1,10 @@
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { type Static, Type } from "typebox";
 import { UserError } from "./errors.ts";
 import { writeAtomically } from "./fsx.ts";
-import { normalizePathKey } from "./identity.ts";
+import { samePath } from "./pathkey.ts";
 import { projectsFile } from "./paths.ts";
+import { parseYamlFile, YamlFileError } from "./yaml.ts";
 
 /** One watched root (0109). */
 interface WatchedRoot {
@@ -20,18 +21,39 @@ export interface ProjectsFile {
 	names: Record<string, string>;
 }
 
-/** A malformed projects file stops the run with one line naming it (principle 2); exit 1 (0140). */
-function fail(file: string, why: string): never {
-	throw new UserError(`${file}: ${why}`, 1);
-}
+/** A list key may be left empty (`add:`), which YAML reads as null. */
+const PathList = Type.Union([Type.Array(Type.String()), Type.Null()]);
 
-function stringList(file: string, key: string, value: unknown): string[] {
-	if (value === undefined || value === null) return [];
-	if (!Array.isArray(value) || value.some((v) => typeof v !== "string")) fail(file, `${key} must be a list of paths`);
-	return value;
-}
+/**
+ * The file's shape (0109): the mapping first, so a list or a scalar is told it must be a mapping. A root's other keys
+ * and the file's other keys (an old `scopes`) are allowed and left alone.
+ */
+const ProjectsFileSchema = Type.Union([
+	Type.Object({
+		version: Type.Optional(Type.Literal(1)),
+		roots: Type.Optional(
+			Type.Union([
+				Type.Array(
+					Type.Object({
+						path: Type.String(),
+						depth: Type.Optional(Type.Integer({ minimum: 1 })),
+						ignore: Type.Optional(PathList),
+					}),
+				),
+				Type.Null(),
+			]),
+		),
+		add: Type.Optional(PathList),
+		exclude: Type.Optional(PathList),
+		names: Type.Optional(Type.Union([Type.Record(Type.String(), Type.String()), Type.Null()])),
+	}),
+	Type.Null(),
+]);
 
-/** Reads the projects file; a missing file is an empty one. A malformed file throws, naming it (principle 2). */
+/**
+ * Reads the projects file; a missing file is an empty one. A malformed file stops the run with one line naming the
+ * file and line, `<file>:<line>: <reason>` (principle 2), exit 1 (0140, 0582).
+ */
 export function readProjectsFile(file = projectsFile()): ProjectsFile {
 	let text: string;
 	try {
@@ -40,36 +62,18 @@ export function readProjectsFile(file = projectsFile()): ProjectsFile {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return { roots: [], add: [], exclude: [], names: {} };
 		throw error;
 	}
-	const doc: unknown = Bun.YAML.parse(text) ?? {};
-	if (typeof doc !== "object" || doc === null || Array.isArray(doc)) fail(file, "not a YAML mapping");
-	const version = "version" in doc ? doc.version : undefined;
-	if (version !== undefined && version !== 1) fail(file, `version ${String(version)} is not supported`);
-	const rawRoots = "roots" in doc ? doc.roots : undefined;
-	if (rawRoots !== undefined && rawRoots !== null && !Array.isArray(rawRoots)) fail(file, "roots must be a list");
-	const roots = (rawRoots ?? []).map((root: unknown): WatchedRoot => {
-		if (typeof root !== "object" || root === null || !("path" in root) || typeof root.path !== "string") {
-			fail(file, "each root needs a path");
-		}
-		const depth = "depth" in root ? root.depth : 1;
-		if (typeof depth !== "number" || !Number.isInteger(depth) || depth < 1)
-			fail(file, "a root's depth must be 1 or more");
-		const ignore = stringList(file, "ignore", "ignore" in root ? root.ignore : undefined);
-		return { path: root.path, depth, ignore };
-	});
-	const rawNames = "names" in doc ? doc.names : undefined;
-	const names: Record<string, string> = {};
-	if (rawNames !== undefined && rawNames !== null) {
-		if (typeof rawNames !== "object" || Array.isArray(rawNames)) fail(file, "names must map project ids to names");
-		for (const [id, name] of Object.entries(rawNames)) {
-			if (typeof name !== "string") fail(file, `names.${id} must be a string`);
-			names[id] = name;
-		}
+	let doc: Static<typeof ProjectsFileSchema>;
+	try {
+		doc = parseYamlFile(ProjectsFileSchema, text, file).value;
+	} catch (error) {
+		if (error instanceof YamlFileError) throw new UserError(error.message, 1);
+		throw error;
 	}
 	return {
-		roots,
-		add: stringList(file, "add", "add" in doc ? doc.add : undefined),
-		exclude: stringList(file, "exclude", "exclude" in doc ? doc.exclude : undefined),
-		names,
+		roots: (doc?.roots ?? []).map((root) => ({ path: root.path, depth: root.depth ?? 1, ignore: root.ignore ?? [] })),
+		add: doc?.add ?? [],
+		exclude: doc?.exclude ?? [],
+		names: doc?.names ?? {},
 	};
 }
 
@@ -79,8 +83,6 @@ function yamlScalar(path: string): string {
 	const plain = /^[A-Za-z0-9_./~$][^#]*$/.test(value) && !value.includes(": ") && !value.endsWith(":");
 	return plain ? value : JSON.stringify(value);
 }
-
-const samePath = (a: string, b: string) => normalizePathKey(resolve(a)) === normalizePathKey(resolve(b));
 
 interface ListBlock {
 	keyLine: number;

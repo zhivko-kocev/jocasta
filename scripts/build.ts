@@ -16,7 +16,8 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { dirname, join, parse, resolve } from "node:path";
-import { $, type BuildConfig } from "bun";
+import { $, type BuildConfig, type BunPlugin } from "bun";
+import { git } from "../src/shared/git.ts";
 
 const TARGETS = ["windows-x64", "linux-x64", "darwin-arm64"] as const;
 type Target = (typeof TARGETS)[number];
@@ -76,7 +77,7 @@ const HOST: Target | undefined =
 				? "darwin-arm64"
 				: undefined;
 
-/** whiteboard v0.2.4, a plain clone at the tag until it becomes a submodule (0393, 0417); never modified. */
+/** whiteboard v0.2.4, the submodule at `forks/whiteboard` (0393, 0417, 0564); never modified. */
 const WHITEBOARD = join(root, "forks", "whiteboard");
 /** The commit tag v0.2.4 names (0383, 0417): a clone anywhere else is refused (SEC-7). */
 const WHITEBOARD_COMMIT = "5b00f0e66d034e187a29d270b3690a37b57ccf7b";
@@ -127,8 +128,12 @@ const TAR = process.platform === "win32" ? join(process.env.SystemRoot ?? "C:\\W
  * clone's content identifies it instead.
  */
 function whiteboardCommit(): string | undefined {
-	const result = spawnSync("git", ["-C", WHITEBOARD, "rev-parse", "HEAD"], { encoding: "utf8" });
-	const head = result.status === 0 ? result.stdout.trim() : "";
+	let head: string | undefined;
+	try {
+		head = git(WHITEBOARD, ["rev-parse", "HEAD"]);
+	} catch {
+		// git couldn't run: the clone's content identifies it.
+	}
 	if (!head) return undefined;
 	if (head !== WHITEBOARD_COMMIT) {
 		fail(`${WHITEBOARD} is at ${head}, not whiteboard v0.2.4 (${WHITEBOARD_COMMIT}): check it out at the tag (0417)`);
@@ -157,8 +162,8 @@ function whiteboardContent(): string {
  * Builds the clone with its own toolchain (0393): pnpm 11 through Corepack on Node 24, `install --frozen-lockfile`,
  * the runtime package, its tutorial's assets (`tutorial/pins.json` and the sample repo's git stub, which the tutorial
  * the canvas's empty state opens needs; 0419), then the canvas (that order: the canvas imports the runtime's build).
- * Reused when the clone's commit (or, without git, its content after the last build) matches and every output is
- * there.
+ * Reused when the clone's commit (or, without git, its content after the last build) and its folder match and every
+ * output is there: pnpm's links are absolute, so a moved checkout installs again.
  */
 function buildWhiteboard(): void {
 	if (!existsSync(join(WHITEBOARD, "pnpm-workspace.yaml"))) {
@@ -167,7 +172,8 @@ function buildWhiteboard(): void {
 		);
 	}
 	const commit = whiteboardCommit();
-	const key = () => JSON.stringify(commit ? { head: commit } : { content: whiteboardContent() });
+	const key = () =>
+		JSON.stringify(commit ? { head: commit, at: WHITEBOARD } : { content: whiteboardContent(), at: WHITEBOARD });
 	const stampFile = join(CACHE, "whiteboard", "built.json");
 	const built =
 		existsSync(join(WHITEBOARD_PACKAGE, "dist", "cli.js")) &&
@@ -363,20 +369,45 @@ function clearOut(out: string): void {
 	}
 }
 
+/**
+ * OpenTUI's tree-sitter assets (its wasm, parser worker and grammars, 5.2 MB) as empty files: `today` and `ask` draw
+ * plain text and never highlight, so the exe carries none of them (PERF-10). An OpenTUI feature that highlights would
+ * need them back.
+ */
+const NO_TREE_SITTER: BunPlugin = {
+	name: "no-tree-sitter",
+	setup(build) {
+		build.onResolve({ filter: /(tree-sitter\.wasm|parser\.worker(\.[jt]s)?|\.scm)$|assets[\\/].*\.wasm$/ }, (args) =>
+			/opentui|web-tree-sitter/.test(args.importer + args.path) ? { path: args.path, namespace: "empty" } : undefined,
+		);
+		build.onLoad({ filter: /.*/, namespace: "empty" }, () => ({ contents: "", loader: "file" }));
+	},
+};
+
 async function build(target: Target): Promise<void> {
 	const out = join(dist, target);
+	// The last build's archive goes first: a build that fails later leaves nothing installable with
+	// JOCASTA_INSTALL_FROM=dist.
+	if (existsSync(dist)) {
+		for (const name of readdirSync(dist)) if (name.startsWith(`jocasta-${target}.`)) rmSync(join(dist, name));
+	}
 	clearOut(out);
 	mkdirSync(out, { recursive: true });
 	const exe = join(out, target.startsWith("windows") ? "jocasta.exe" : "jocasta");
 
 	// The command, its service and the service's whiteboard canvas page (an HTML import, bundled into the exe), with
-	// the push-to-talk hook's worker as its own entry so the exe carries it (0552, 0556).
+	// the push-to-talk hook's worker as its own entry so the exe carries it (0552, 0556). Compiled to bytecode (ESM:
+	// entry.ts awaits at top level): every start skips parsing the bundle, `--help` 76 → 22 ms and `mcp` to its
+	// `initialize` reply 83 → 23 ms (PERF-6). OpenTUI's tree-sitter assets stay out (PERF-10).
 	await guardedBuild({
 		entrypoints: [join(root, "src/entry.ts"), join(root, "src/frontier/server/ptt-worker.ts")],
 		root,
 		compile: { target: `bun-${target}`, outfile: exe, autoloadBunfig: false },
+		bytecode: true,
+		format: "esm",
 		minify: true,
 		define: { "process.env.NODE_ENV": '"production"' },
+		plugins: [NO_TREE_SITTER],
 	});
 
 	cpSync(join(root, "README.md"), join(out, "README.md"));

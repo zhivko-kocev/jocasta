@@ -1,14 +1,10 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseRunArgs, takeVariantFlags } from "../../evals/args.ts";
+import { useTempDirs } from "../shared/fixture.ts";
 
-const temps: string[] = [];
-afterEach(() => {
-	for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
+const tempDir = useTempDirs("jocasta-evals-args-");
 
 describe("eval run flags (0318)", () => {
 	test("runs default to 3 reps and 10 minutes", () => {
@@ -41,8 +37,7 @@ describe("eval run flags (0318)", () => {
 		[["--variant", "nope"], "jocasta: unknown variant: nope"],
 		[["--variant"], "jocasta: --variant needs a name"],
 	])("%p exits 2 with a jocasta: line before any trial runs", (argv, message) => {
-		const data = mkdtempSync(join(tmpdir(), "jocasta-evals-args-"));
-		temps.push(data);
+		const data = tempDir();
 		const env: Record<string, string | undefined> = { ...process.env, JOCASTA_DATA_DIR: data };
 		delete env.JOCASTA_EVALS_REAL;
 		const run = spawnSync(process.execPath, [join(import.meta.dir, "..", "..", "evals", "run.ts"), ...argv], {

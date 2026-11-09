@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { FeedEntry } from "../../bench/lib/companion-feed.ts";
+import type { FeedEntry } from "../../bench/lib/service-feed.ts";
 import { a5Report } from "../../evals/a5.ts";
 
 const T = Date.parse("2026-10-24T09:00:00Z");

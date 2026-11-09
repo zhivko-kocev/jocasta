@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { join, resolve } from "node:path";
 import jocastaPackage from "../package.json" with { type: "json" };
-import { MCP_PROTOCOL_VERSION, NOT_RUNNING } from "../src/mcp/server.ts";
+import { MCP_PROTOCOL_VERSION } from "../src/mcp/server.ts";
+import { NOT_RUNNING } from "../src/shared/service-file.ts";
 import { useTempJocasta } from "./shared/fixture.ts";
 
 const ENTRY = resolve(import.meta.dir, "..", "src", "entry.ts");
@@ -38,8 +39,15 @@ test("--version names Jocasta, omp, herdr and Bun", async () => {
 	expect(out.trim()).toBe(`jocasta ${jocastaPackage.version} (omp not found, herdr not found, bun ${Bun.version})`);
 });
 
-test("other words print usage and exit 2 (0140)", async () => {
-	for (const args of [["harness"], ["mcp", "--nope"]]) {
+test("other words print usage and exit 2, a word that is no command named first (0140, 0581)", async () => {
+	const unknown = jocasta(["threads", "list"]);
+	const said = await new Response(unknown.stderr).text();
+	expect(await unknown.exited).toBe(2);
+	expect(said).toStartWith('jocasta: unknown command "threads".\nusage: jocasta');
+	for (const args of [
+		["mcp", "--nope"],
+		["setup", "now"],
+	]) {
 		const child = jocasta(args);
 		const err = await new Response(child.stderr).text();
 		expect(await child.exited).toBe(2);
@@ -52,7 +60,8 @@ test("jocasta thread|worktree: bad usage exits 2 with the usage; without the ser
 		const child = jocasta(args);
 		const err = await new Response(child.stderr).text();
 		expect(await child.exited).toBe(2);
-		expect(err).toStartWith(`jocasta: usage: jocasta ${args[0]}`);
+		// A usage prints as it is: its continuation lines line up (0581).
+		expect(err).toStartWith(`usage: jocasta ${args[0]}`);
 	}
 	for (const args of [
 		["thread", "list"],

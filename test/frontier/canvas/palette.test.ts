@@ -2,7 +2,15 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { CODE, readPalette, TOKYO_NIGHT, withAlpha } from "../../../src/frontier/canvas/palette.ts";
+import {
+	CODE,
+	LINE_OPACITY,
+	MONO_FONT,
+	readPalette,
+	TOKYO_NIGHT,
+	withAlpha,
+	withOpacity,
+} from "../../../src/frontier/canvas/palette.ts";
 
 const canvas = join(import.meta.dir, "../../../src/frontier/canvas");
 
@@ -31,6 +39,17 @@ test("palette.ts reads Tokyo Night from palette.css (0401's values)", () => {
 
 test("a palette file missing a colour is refused by name", () => {
 	expect(() => readPalette(":root { --bg-0: #1a1b26; }")).toThrow("palette.css has no --bg-1 hex colour");
+});
+
+test("Monaco's hairlines and mono face are palette.css's --line-1, --line-2 and page.css's --mono", () => {
+	const palette = readFileSync(join(canvas, "palette.css"), "utf8");
+	const opacity = (name: string) => Number(palette.match(new RegExp(`${name}:[^;]*/ (\\d+)%`))?.[1]);
+	expect({ line1: opacity("--line-1"), line2: opacity("--line-2") }).toEqual(LINE_OPACITY);
+	// The bytes Monaco's theme gets: 22% and 40% of 255.
+	expect(withOpacity(TOKYO_NIGHT.comment, LINE_OPACITY.line1)).toBe("#565f8938");
+	expect(withOpacity(TOKYO_NIGHT.comment, LINE_OPACITY.line2)).toBe("#565f8966");
+	const page = readFileSync(join(canvas, "page.css"), "utf8");
+	expect(page.match(/--mono:\s*([^;]+);/)?.[1]).toBe(MONO_FONT);
 });
 
 test("no other page file holds a colour of its own: the stylesheets, the HTML and Monaco's theme read the palette", () => {

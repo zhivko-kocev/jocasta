@@ -4,18 +4,22 @@
 // names the review; before that there is no bar (0432). The service hands over whiteboard's server and the canvas build
 // (`GET /whiteboard/connection`). Until the first review exists the stage shows Jocasta's empty state, not
 // whiteboard's Welcome (0419); when the canvas can't start it says why in plain words and what to do (0432).
-import { loadCanvas, WhiteboardHost } from "./bridge.ts";
+
 import type { WhiteboardConnection } from "./contract.ts";
+import { CanvasFilesError, loadCanvas, WhiteboardHost } from "./host.ts";
 import { canvasTrouble } from "./trouble.ts";
 
 /** `GET /whiteboard/connection`: whiteboard's server and canvas files, or why there are none. */
 async function connect(): Promise<WhiteboardConnection> {
 	const response = await fetch("/whiteboard/connection");
 	const body: unknown = await response.json().catch(() => null);
-	if (!response.ok || !body || typeof body !== "object" || !("url" in body)) {
-		const error = body && typeof body === "object" && "error" in body ? String(body.error) : `${response.status}`;
-		throw new Error(error);
+	const said = body && typeof body === "object" && "error" in body ? String(body.error) : undefined;
+	// A refused cookie (an earlier run's token) reads as such whatever the body: the service's 403 is plain text.
+	if (response.status === 401 || response.status === 403) {
+		throw new Error(`Jocasta answered ${response.status}${said ? `: ${said}` : ""}`);
 	}
+	if (!response.ok || !body || typeof body !== "object" || !("url" in body))
+		throw new Error(said ?? `${response.status}`);
 	// The service's own reply (server.ts `whiteboardConnection`).
 	return body as WhiteboardConnection;
 }
@@ -77,7 +81,8 @@ class CanvasPage {
 		this.showTitle(null);
 		this.showEmpty(false);
 		this.open(attempt).catch((caught: Error) => {
-			if (attempt === this.attempt) this.showTrouble(caught.message);
+			if (attempt === this.attempt)
+				this.showTrouble(caught.message, caught instanceof CanvasFilesError && caught.reload);
 		});
 	}
 
@@ -132,8 +137,11 @@ class CanvasPage {
 		this.overlay.before(shown);
 	}
 
-	/** Why the canvas couldn't start, Try again when it can help, and the raw error under Details (0432). */
-	private showTrouble(error: string): void {
+	/**
+	 * Why the canvas couldn't start, Try again when it can help, and the raw error under Details (0432). `reload`: Try
+	 * again reloads the page, since the browser keeps a failed script import until then (0581).
+	 */
+	private showTrouble(error: string, reload: boolean): void {
 		const trouble = canvasTrouble(error);
 		const shown = element("div", "wb-unavailable");
 		shown.setAttribute("role", "alert");
@@ -141,7 +149,7 @@ class CanvasPage {
 			element("h2", "", "The canvas couldn't start."),
 			element("p", "", `${trouble.reason} ${trouble.remedy}`),
 		);
-		if (trouble.transient) shown.append(button("Try again", () => this.start()));
+		if (trouble.transient) shown.append(button("Try again", () => (reload ? location.reload() : this.start())));
 		const details = element("details", "");
 		details.append(element("summary", "", "Details"), element("code", "", error));
 		shown.append(details);

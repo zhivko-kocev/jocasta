@@ -33,3 +33,4 @@ Fix it in this round.
 ## Consequences
 - 0481's reliability checks cover it (kill a pane mid-turn, Stop everything, then remove the worktree).
 - Amended by 0490: a thread pane he closes in herdr himself also ends its own leftovers, found through the omp process id Jocasta remembered for the pane.
+- Note (2026-11-09, 0573's review, SRV-A-1/SEC-LOC-1): process trees are walked by start-checked parent links: a process counts as a child only when it started at or after its parent (`src/shared/proctree.ts`, `endProcesses`). `taskkill /T` isn't used: it follows raw parent pids, and stale Windows parent pids (a long-dead parent's pid given to a new process) had reached unrelated apps. On POSIX a found group leader's whole group still ends.

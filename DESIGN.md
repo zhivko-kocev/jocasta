@@ -89,7 +89,7 @@ components:
     backgroundColor: "{colors.bg-2}"
     marker: "› in {colors.blue}"
   today-quiet:
-    textColor: "{colors.comment}"
+    textColor: "{colors.fg-3}"
   ask-ground:
     backgroundColor: "{colors.bg-0}"
   ask-title:
@@ -169,17 +169,17 @@ The two terminal surfaces are coloured text only: OpenTUI draws plain lines of c
 ### Text
 - **FG** (fg): primary text everywhere: the date and time in `today`'s header, thread names, a question's message, the canvas's titles and buttons.
 - **FG 2** (fg-2): secondary text: CPU and memory, quota below 80%, a thread's time and cost, LANDED TODAY rows without a pane, headlines, a question's detail, the canvas bar, the empty state's sentence, Monaco's delimiters and operators.
-- **FG 3** (fg-3): quiet text on the canvas page: notices, the source panel's meta line, the folded Details; lifted from herdr's overlay1 so it reaches 4.5:1 on bg-0 to bg-2 (0432).
-- **Comment** (comment): quiet lines in the terminal surfaces ("nothing waits on you", "no thread at work", wait times, an idle thread's state, news feed names, the key lines and hints), Monaco's comments (italic), and the colour every canvas hairline is made from.
+- **FG 3** (fg-3): quiet text: in the terminal surfaces "nothing waits on you", "no thread at work", wait times, an idle thread's state, news feed names, `quiet` in `today`'s header, "Connecting to Jocasta…", the key lines and hints, the popup's "… N more lines" line and the form's labels (0581); on the canvas page notices, the source panel's meta line, the folded Details. Lifted from herdr's overlay1 so it reaches 4.5:1 on bg-0 to bg-2 (0432).
+- **Comment** (comment): the " · " separators in the terminal surfaces (0581), Monaco's comments (italic), and the colour every canvas hairline is made from.
 - **Mark 3** (mark-3): Monaco's line numbers.
 - **Bright Black** (bright-black): the terminal scheme's bright black only.
 
 ### Accents
-- **Blue**: headings in `today` (NEEDS YOU, UNDERWAY, LANDED TODAY, NEXT, NEWS), the picked row's `›`, the `ask` popup's title and the picked choice's ground; on the canvas page links, focus outlines, the caret, the lit range's left rule, a checked menu item's ✓, and Monaco's cursor.
-- **Cyan**: the weather in `today`'s header, a calendar entry's time, New thread's project; Monaco's types.
-- **Yellow**: a NEEDS YOU row that isn't blocked or reviewed, the code to type in `ask` and the letters typed so far, the line "Jocasta's service isn't answering; trying again…", a popup with no question.
+- **Blue**: headings in `today` (NEEDS YOU, UNDERWAY, LANDED TODAY, CALENDAR, NEXT, NEWS), the picked row's `›`, a link row's `↗`, the `ask` popup's title and the picked choice's ground; on the canvas page links, focus outlines, the caret, the lit range's left rule, a checked menu item's ✓, and Monaco's cursor.
+- **Cyan**: the weather in `today`'s header, a calendar entry's time (or `now`), New thread's project; Monaco's types.
+- **Yellow**: a NEEDS YOU row that isn't blocked or reviewed, the code to type in `ask` and the letters typed so far, "Jocasta isn't answering (since 18:03); trying again…", a popup with no question.
 - **Orange**: a reviewed thread in NEEDS YOU; Monaco's numbers and string escapes.
-- **Red**: a blocked thread in NEEDS YOU, a quota window at 80% or more, a key that failed in `today`, a note under a question (a wrong code, "Write the brief first."); on the canvas page error notices and the raw error line; deleted lines in diffs.
+- **Red**: a blocked thread in NEEDS YOU, a quota window at 80% or more, a broken service in `today`'s header, a key that failed or an error reply in `today`, a note under a question (a wrong code, "Write the brief first.", "Wrong code three times; Deny was taken."); on the canvas page error notices and the raw error line; deleted lines in diffs.
 - **Green**: today's spend, a working thread's state, a key that worked in `today`; Monaco's strings; added lines in diffs.
 - **Purple**: a thread's context size in UNDERWAY; Monaco's keywords and tags.
 
@@ -196,24 +196,27 @@ The scheme "Tokyo Night" `jocasta setup` writes (0401, 0474): background bg-0, f
 
 ## The `today` pane
 
-`today` (0555) is lines of text, top to bottom:
+`today` (0555, 0581) is lines of text, top to bottom:
 
-1. **The header**, flowed over as many lines as the width needs, parts joined with " · ": the date and time (`Mon 9 Nov 14:20`, bold fg), the weather (`12° Light rain`, cyan; only with `dashboard.weather` set), `cpu N% · mem N%` (fg-2), each quota window (`5h N%`, fg-2, red from 80%) and today's spend (`$3.20 today`, green). While the service doesn't answer, the header is one yellow line instead.
-2. **NEEDS YOU**, **UNDERWAY**, **LANDED TODAY** (only when something landed) and **NEXT**, each an uppercase bold blue heading over its rows. An empty section says so in one comment-coloured line. A NEEDS YOU row is coloured by kind (blocked red, reviewed orange, the rest yellow) with how long it has waited flush right; an UNDERWAY row is the thread's `project/title` in fg with its state, time, cost and context flush right; a NEXT row is the time in cyan and the title in fg.
-3. **NEWS**, only when at least three rows are left: a blank line, the heading, then one headline per row, its feed in comment and its title in fg-2.
-4. **The foot**: what his last key did (green, or red when it failed), then the key line `↑↓ thread · Enter go to it · f Finish · s Stop` in comment.
+1. **The header**, flowed over as many lines as the width needs, parts joined with " · ": the date and time (`Mon 9 Nov 14:20`, bold fg), `quiet` during quiet hours (fg-3), each broken service with its note (`Graphiti down (Docker isn't running)`, red), the weather (`12° Light rain`, cyan; only with `dashboard.weather` set), `cpu N% · mem N%` (fg-2), each quota window (`5h N%`, fg-2, red from 80%, with its reset when that is within a day: `5h 91% (16:30)`) and today's spend (`$3.20 today`, green). When the header would pass two rows the weather gives way, then CPU and memory. Until the feed first connects the header is "Connecting to Jocasta…" (fg-3); while the service doesn't answer it is the time, then "Jocasta isn't answering (since 18:03); trying again…" in yellow.
+2. **NEEDS YOU**, **UNDERWAY**, **LANDED TODAY** (only when something landed) and **CALENDAR**, each an uppercase bold blue heading over its rows. An empty section says so in one fg-3 line; UNDERWAY's adds `· n starts one`. A NEEDS YOU row starts with its kind's glyph (`?` a question or plan, `✓` reviewed, `↗` a review request, `!` a red pipeline or a full disk; a reminder its time), is coloured by kind (blocked red, reviewed orange, the rest yellow), and has how long it has waited flush right. An UNDERWAY row is the thread's `project/title` in fg with its state, time, cost and context flush right; as the pane narrows the title keeps at least 18 columns while the context, then the cost, then the time give way, the state last. A CALENDAR row is the time in cyan (`now` for a meeting that started and hasn't ended) and the title in fg.
+3. **NEXT**, his notes filed through the boss (`acme-api: look at the slow search endpoint (#7)`), only while rows are left after the calendar.
+4. **NEWS**, only when at least three rows are left: a blank line, the heading, then one headline per row, its feed in fg-3 and its title in fg-2.
+5. **The foot**: what his last key did, or an error reply (green, or red when it failed), over at most two rows and gone after a minute; then the key line `↑↓ thread · Enter go · f Finish · s Stop · r Review · n New` in fg-3, its last keys dropped when the pane is too narrow.
 
-The picked thread carries a blue `›` and its whole row is filled bg-2. When the sections don't fit, they scroll so the picked thread stays in view. Any line longer than the pane is cut with "…"; a row with something flush right cuts its left part first.
+Up and down pick a row: a thread (Enter goes to its pane) or a row with a link (a meeting, a review request, a red pipeline, a headline; Enter opens it), which ends in a blue `↗` (a review request's glyph says it already). The picked row carries a blue `›` and its whole row is filled bg-2. When the sections don't fit, they scroll only as far as the picked row needs. Any line longer than the pane is cut with "…", measured in terminal columns (a wide character takes two); a row with something flush right cuts its left part first.
 
 ## The `ask` popup
 
-The popup (0553) is herdr's: 70% wide and 18 rows high (the plugin's manifest), titled "Jocasta asks". Inside, OpenTUI draws: the question's title in bold blue ("Jocasta: Allow or Deny", "Jocasta: Stop everything?", "Jocasta: Finish <thread>", "Jocasta: New thread"), a blank line, the message wrapped in fg, the detail wrapped in fg-2, and then:
+The popup (0553) is herdr's: 70% wide and 18 rows high (the plugin's manifest), titled "Jocasta asks". Inside, OpenTUI draws: the question's title in bold blue ("Jocasta: Allow or Deny", "Jocasta: Stop everything?", "Jocasta: Finish <thread>", "Jocasta: New thread"), a blank line, the message wrapped in fg, the detail wrapped in fg-2 (a word longer than the line is split, never cut), and then the foot. The foot is laid out first so it always shows (0578); a question taller than the rows left shows its first lines and `… N more lines · PgDn reads on` in fg-3, and PgUp/PgDn read it. The popup redraws when its size changes, and keys in its first 750 ms are dropped.
 
 - **Choices**: one row of buttons, each ` <choice> ` with two spaces between; the picked one bold bg-0 on blue, the others fg on bg-2.
-- **A coded choice** (Allow, Merge, PR, Stop everything; 0558, 0568): "Type `XYZ` for <choice>" with the code in bold yellow, then `> ` and the letters typed so far, padded with `_`, in bold yellow; the hint `←→ choose · Esc <fallback>` in comment.
-- **An uncoded choice**: the hint `←→ choose · Enter <choice> · Esc <fallback>` in comment.
-- **New thread**: `Project  ‹ name ›` (the label in comment, the project bold cyan) and `Brief    <text>▏` (fg), the active field on bg-2, then `Tab field · ↑↓ project · Enter start · Esc cancel` in comment.
-- **A note** under everything in red when something went wrong ("Wrong code; nothing was done.").
+- **A coded choice** (Allow, Merge, PR, Stop everything; 0558, 0568): "Type `XYZ` for <choice>" with the code in bold yellow, then `> ` and the letters typed so far, padded with `_`, in bold yellow; the hint `←→ choose · Esc <fallback>` (with `PgUp/PgDn read` before Esc when the question scrolls).
+- **An uncoded choice**: the hint `←→ choose · Enter <choice> · Esc <fallback>`.
+- **New thread**: `Project  ‹ name ›` (the label in fg-3, the project bold cyan) and `Brief    <text>▏` (fg), the field the keys go to on bg-2 and the caret only in Brief when it has them; it opens on Brief. The hint follows the field: `Tab project · Enter start · Esc cancel` in Brief, `Type to find · ↑↓ project · Enter brief · Esc cancel` in Project.
+- **A note** above the hint in red when something went wrong ("Wrong code; nothing was done.", "Wrong code; one try left, then it counts as Deny.", "Type the Latin letters XYZ (switch the keyboard layout)."); after the third wrong code "Wrong code three times; Deny was taken." shows for 2 s before the popup closes.
+
+Hints are fg-3 with " · " separators in comment.
 
 ## The canvas page
 

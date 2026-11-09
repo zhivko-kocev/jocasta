@@ -10,6 +10,11 @@ import { FakeHerdr } from "./fake-herdr.ts";
 
 const env = useTempJocasta();
 
+/** A boss pane's env with its pane key (0578), whatever key it got. */
+function keyed(vars: Record<string, string> = {}): Record<string, string> {
+	return { ...vars, JOCASTA_PANE_KEY: expect.any(String) as unknown as string };
+}
+
 test("workspace Jocasta is made first, made first again after he closes it, with the guard, its manual as APPEND_SYSTEM.md and its skills (0404, 0424, 0450, 0465)", async () => {
 	const herdr = new FakeHerdr();
 	await herdr.ensureWorkspace("demo", env.root);
@@ -25,7 +30,14 @@ test("workspace Jocasta is made first, made first again after he closes it, with
 	const launched = new LaunchedPanes();
 	const pane = await ensureBossPane(herdr, { command, launched });
 	expect(herdr.workspaceList.map((w) => w.label)).toEqual(["Jocasta", "demo"]);
-	expect(herdr.of("ensureWorkspace").at(-1)).toEqual(["Jocasta", join(env.data, "home"), command]);
+	expect(herdr.of("ensureWorkspace").at(-1)).toEqual(["Jocasta", join(env.data, "home"), command, keyed()]);
+	// Its pane key is kept with the pane, in panes.json, so a later run knows it (0578).
+	const key = herdr.envOf(pane.paneId)?.JOCASTA_PANE_KEY as string;
+	expect(key).toMatch(/^[0-9a-f]{64}$/);
+	expect(launched.keyOf(pane.paneId)).toBe(key);
+	expect(new LaunchedPanes().paneOfKey(key)).toBe(pane.paneId);
+	expect(new LaunchedPanes().paneOfKey(`${key.slice(0, -1)}0`)).toBeUndefined();
+	expect(new LaunchedPanes().paneOfKey(undefined)).toBeUndefined();
 	const manual = join(env.data, "home", ".omp", "APPEND_SYSTEM.md");
 	expect(readFileSync(manual, "utf8")).toBe(readFileSync(join(shippedConfigDir(), "boss-manual.md"), "utf8"));
 	expect(launched.has(pane.paneId)).toBe(true);
@@ -60,7 +72,7 @@ test("the boss pane's omp starts with its env (the run's boss key), and a stale 
 	const env1 = { JOCASTA_BOSS_KEY: "run-1" };
 	const started: string[] = [];
 	const pane = await ensureBossPane(herdr, { command, env: env1, launched, started: (id) => started.push(id) });
-	expect(herdr.of("ensureWorkspace").at(-1)).toEqual(["Jocasta", join(env.data, "home"), command, env1]);
+	expect(herdr.of("ensureWorkspace").at(-1)).toEqual(["Jocasta", join(env.data, "home"), command, keyed(env1)]);
 	expect(started).toEqual([pane.paneId]);
 	herdr.setState(pane.paneId, "idle");
 
@@ -73,7 +85,9 @@ test("the boss pane's omp starts with its env (the run's boss key), and a stale 
 	expect(herdr.of("respawn")).toEqual([]);
 	herdr.setState(pane.paneId, "idle");
 	const again = await ensureBossPane(herdr, { command, env: env2, launched, stale, started: (id) => started.push(id) });
-	expect(herdr.of("respawn")).toEqual([[pane.paneId, { cwd: join(env.data, "home"), command, env: env2 }]]);
+	expect(herdr.of("respawn")).toEqual([[pane.paneId, { cwd: join(env.data, "home"), command, env: keyed(env2) }]]);
+	// A new start, a new key (0578).
+	expect(launched.keyOf(again.paneId)).not.toBe(herdr.envOf(pane.paneId)?.JOCASTA_PANE_KEY);
 	expect(started).toEqual([pane.paneId, again.paneId]);
 });
 
@@ -110,18 +124,17 @@ test("the boss's omp isn't started when its check refuses it, made or respawned 
 	};
 	const env1 = { JOCASTA_BOSS_KEY: "run-1" };
 	await expect(ensureBossPane(herdr, { command, env: env1, launched, check: refuse })).rejects.toThrow("not loopback");
-	expect(checked).toEqual([[command, join(env.data, "home"), env1]]);
+	expect(checked).toEqual([[command, join(env.data, "home"), keyed(env1)]]);
 	expect(herdr.of("ensureWorkspace")).toEqual([]);
 	// Started once the check passes; restored as a shell, the respawn is refused the same way.
-	const pane = await ensureBossPane(herdr, { command, launched, check: async () => {} });
+	await ensureBossPane(herdr, { command, launched, check: async () => {} });
 	launched.seen(await herdr.panes());
 	herdr.restore();
 	await expect(ensureBossPane(herdr, { command, launched, check: refuse })).rejects.toThrow("not loopback");
 	expect(herdr.of("respawn")).toEqual([]);
-	expect(pane.paneId).toBeDefined();
 });
 
-test("bare jocasta and the companion making workspace Jocasta at once leave one: the oldest, the other closed (CR-10)", async () => {
+test("bare jocasta and the service making workspace Jocasta at once leave one: the oldest, the other closed (CR-10)", async () => {
 	const herdr = new FakeHerdr();
 	const command = bossCommand(["omp"]);
 	const [a, b] = await Promise.all([
@@ -151,7 +164,7 @@ test("a boss pane herdr restored as a shell runs omp again; one whose omp ended 
 	// herdr restarted: a new terminal in the same folder.
 	herdr.restore();
 	const respawned = await ensureBossPane(herdr, { command, launched });
-	expect(herdr.of("respawn")).toEqual([[pane.paneId, { cwd: join(env.data, "home"), command }]]);
+	expect(herdr.of("respawn")).toEqual([[pane.paneId, { cwd: join(env.data, "home"), command, env: keyed() }]]);
 	expect(launched.has(respawned.paneId)).toBe(true);
 
 	// A record from another run (a fresh LaunchedPanes reads <data>/panes.json) knows it too; a pane it lacks isn't touched.
@@ -210,7 +223,7 @@ test("at the service's start a boss pane with no omp runs omp even without a rec
 	await ensureBossPane(herdr, { command, launched });
 	expect(herdr.of("respawn")).toEqual([]);
 	const adopted = await ensureBossPane(herdr, { command, launched, adopt: true });
-	expect(herdr.of("respawn")).toEqual([[pane.paneId, { cwd: join(env.data, "home"), command }]]);
+	expect(herdr.of("respawn")).toEqual([[pane.paneId, { cwd: join(env.data, "home"), command, env: keyed() }]]);
 	expect(launched.has(adopted.paneId)).toBe(true);
 
 	// omp runs in it: a later start leaves it alone.

@@ -10,15 +10,23 @@ import {
 	readIndexReuse,
 	relationshipOf,
 } from "../../../src/frontier/server/code-index.ts";
-import { useTempJocasta } from "../../shared/fixture.ts";
+import { readJsonl, useTempJocasta } from "../../shared/fixture.ts";
 
-/** Every index a test made: stopped (awaited) before the temp dir goes, so no server holds it. */
+/**
+ * Every index a test made: stopped (awaited) before the temp dir goes, so no server holds it. A stop waits up to 6 s
+ * on real servers leaving, past the hook's default 5 s on a loaded machine.
+ */
 const made: CodeIndex[] = [];
 afterEach(async () => {
 	await Promise.all(made.splice(0).map((codeIndex) => codeIndex.stop()));
-});
+}, 15_000);
 const env = useTempJocasta();
 const FAKE = join(import.meta.dir, "fake-cbm.ts");
+/**
+ * For tests that start the fake server several times (three Bun processes each: two `config set` and the server) or
+ * wait on its timed index builds, one after another: real processes, which take seconds each on a loaded machine.
+ */
+const SERVERS_TIMEOUT = 30_000;
 
 /** A main checkout whose graph (as the fake CBM reads it) is `graph`. */
 function checkout(name: string, graph: Record<string, unknown[]>): { id: string; mainPath: string } {
@@ -28,11 +36,12 @@ function checkout(name: string, graph: Record<string, unknown[]>): { id: string;
 	return { id: `${name}-1`, mainPath };
 }
 
-function index(extra: string[] = []): CodeIndex {
+function index(extra: string[] = [], idleMs?: number): CodeIndex {
 	const codeIndex = new CodeIndex({
 		dataDir: env.data,
 		server: [process.execPath, FAKE, ...extra],
 		log: () => undefined,
+		...(idleMs === undefined ? {} : { idleMs }),
 	});
 	made.push(codeIndex);
 	return codeIndex;
@@ -40,11 +49,7 @@ function index(extra: string[] = []): CodeIndex {
 
 function calls(): { pid: number; cwd: string; tool: string; args: Record<string, unknown> }[] {
 	const file = join(env.data, "code-index", "cache", "fake-calls.log");
-	if (!existsSync(file)) return [];
-	return readFileSync(file, "utf8")
-		.trim()
-		.split("\n")
-		.map((line) => JSON.parse(line));
+	return existsSync(file) ? readJsonl(file) : [];
 }
 
 function alive(pid: number): boolean {
@@ -153,7 +158,7 @@ test.if(process.platform === "win32")(
 		const outside = join(parse(homedir()).root, "jocasta-not-profile");
 		const refused = new CodeIndex({ dataDir: outside, server: [process.execPath, FAKE] });
 		made.push(refused);
-		const reason = refused.unavailable() ?? "";
+		const reason = (await refused.unavailable()) ?? "";
 		expect(reason).toBe(
 			`The code index can't keep its data in ${join(outside, "code-index")}: codebase-memory-mcp refuses folders other users may write to (D:\\ lets them by default), so Jocasta's data folder must be under ${homedir()}.`,
 		);
@@ -162,68 +167,128 @@ test.if(process.platform === "win32")(
 		expect(await refused.locations(project, "what did we decide?")).toBeUndefined();
 		expect(existsSync(outside)).toBe(false);
 
-		expect(new CodeIndex({ dataDir: env.data, server: null }).unavailable()).toBe("The code index is off.");
-		expect(new CodeIndex({ dataDir: env.data, mise: null }).unavailable()).toBe(
+		expect(await new CodeIndex({ dataDir: env.data, server: null }).unavailable()).toBe("The code index is off.");
+		expect(await new CodeIndex({ dataDir: env.data, mise: null }).unavailable()).toBe(
 			"codebase-memory-mcp can't be found: mise isn't on PATH.",
 		);
 		const noTool = [process.execPath, "-e", "process.exit(1)"];
-		expect(new CodeIndex({ dataDir: env.data, mise: noTool }).unavailable()).toBe(
+		expect(await new CodeIndex({ dataDir: env.data, mise: noTool }).unavailable()).toBe(
 			"codebase-memory-mcp 0.12.1 isn't installed: run `jocasta setup`, then `mise install`.",
 		);
-		expect(new CodeIndex({ dataDir: env.data, server: [join(env.root, "no-cbm.exe")] }).unavailable()).toBe(
+		expect(await new CodeIndex({ dataDir: env.data, server: [join(env.root, "no-cbm.exe")] }).unavailable()).toBe(
 			"codebase-memory-mcp 0.12.1 isn't installed: run `jocasta setup`, then `mise install`.",
 		);
-		expect(index().unavailable()).toBeUndefined();
+		expect(await index().unavailable()).toBeUndefined();
 	},
 );
 
-test("answers from an index that already existed count as reuse, in memory and one line each in reuse.log", async () => {
-	const project = checkout("reused", { calls: [["caller", "src/a.ts", 1, "target", 2]] });
-	expect(readIndexReuse(env.data)).toBe(0);
-	const first = index();
-	await first.locations(project, "who calls target");
-	expect(first.reuse).toBe(0);
-	await first.locations(project, "who calls target");
-	expect(first.reuse).toBe(1);
-	await first.stop();
+test(
+	"answers from an index that already existed count as reuse, in memory and one line each in reuse.log",
+	async () => {
+		const project = checkout("reused", { calls: [["caller", "src/a.ts", 1, "target", 2]] });
+		expect(readIndexReuse(env.data)).toBe(0);
+		const first = index();
+		await first.locations(project, "who calls target");
+		expect(first.reuse).toBe(0);
+		await first.locations(project, "who calls target");
+		expect(first.reuse).toBe(1);
+		await first.stop();
 
-	// A later run finds the index CBM kept: served without indexing, so it counts.
-	const second = index();
-	await second.locations(project, "what breaks if target changes");
-	expect(second.reuse).toBe(1);
-	expect(calls().filter((call) => call.tool === "index_repository")).toHaveLength(1);
-	expect(readIndexReuse(env.data)).toBe(2);
-	const lines = readFileSync(join(env.data, "code-index", "reuse.log"), "utf8")
-		.trim()
-		.split("\n");
-	expect(lines.map((line) => line.split(" ").slice(1))).toEqual([
-		["reused-1", "callers"],
-		["reused-1", "impact"],
-	]);
-	await second.stop();
+		// A later run finds the index CBM kept: served without indexing, so it counts.
+		const second = index();
+		await second.locations(project, "what breaks if target changes");
+		expect(second.reuse).toBe(1);
+		expect(calls().filter((call) => call.tool === "index_repository")).toHaveLength(1);
+		expect(readIndexReuse(env.data)).toBe(2);
+		const lines = readFileSync(join(env.data, "code-index", "reuse.log"), "utf8")
+			.trim()
+			.split("\n");
+		expect(lines.map((line) => line.split(" ").slice(1))).toEqual([
+			["reused-1", "callers"],
+			["reused-1", "impact"],
+		]);
+		await second.stop();
 
-	// A merge reported before the next run's first question: the kept index is brought up to date first.
-	const third = index();
-	await third.refresh(project);
-	expect(calls().filter((call) => call.tool === "index_repository")).toHaveLength(1);
-	await third.locations(project, "who calls target");
-	expect(calls().filter((call) => call.tool === "index_repository")).toHaveLength(2);
-	expect(third.reuse).toBe(1);
-});
+		// A merge reported before the next run's first question: the kept index is brought up to date first.
+		const third = index();
+		await third.refresh(project);
+		expect(calls().filter((call) => call.tool === "index_repository")).toHaveLength(1);
+		await third.locations(project, "who calls target");
+		expect(calls().filter((call) => call.tool === "index_repository")).toHaveLength(2);
+		expect(third.reuse).toBe(1);
+	},
+	SERVERS_TIMEOUT,
+);
 
-test("refresh re-indexes the main checkout single-flight, and does nothing for a project never indexed", async () => {
-	const project = checkout("fresh", { calls: [["caller", "src/a.ts", 1, "target", 2]] });
-	const codeIndex = index(["--index-ms=300"]);
-	await codeIndex.refresh(project);
-	expect(calls()).toEqual([]);
-	await codeIndex.locations(project, "who calls target");
+test(
+	"refresh re-indexes the main checkout single-flight, and does nothing for a project never indexed",
+	async () => {
+		const project = checkout("fresh", { calls: [["caller", "src/a.ts", 1, "target", 2]] });
+		const codeIndex = index(["--index-ms=300"]);
+		await codeIndex.refresh(project);
+		expect(calls()).toEqual([]);
+		await codeIndex.locations(project, "who calls target");
+		const indexed = () => calls().filter((call) => call.tool === "index_repository");
+		expect(indexed()).toHaveLength(1);
+		await Promise.all([codeIndex.refresh(project), codeIndex.refresh(project), codeIndex.refresh(project)]);
+		expect(indexed()).toHaveLength(2);
+		expect(String(indexed()[1]?.args.repo_path).toLowerCase()).toBe(project.mainPath.toLowerCase());
+		await codeIndex.refresh(project);
+		expect(indexed()).toHaveLength(3);
+	},
+	SERVERS_TIMEOUT,
+);
+
+test(
+	"a merge reported while the first lookup runs re-indexes before the next answer",
+	async () => {
+		const project = checkout("racing", { calls: [["caller", "src/a.ts", 1, "target", 2]] });
+		const codeIndex = index(["--index-ms=300"]);
+		const indexed = () => calls().filter((call) => call.tool === "index_repository");
+		const first = codeIndex.locations(project, "who calls target");
+		// The fake logs index_repository when it starts building (300 ms); the merge is reported during that build.
+		while (indexed().length === 0) await Bun.sleep(10);
+		await codeIndex.refresh(project);
+		await first;
+		expect(indexed()).toHaveLength(1);
+		await codeIndex.locations(project, "who calls target");
+		expect(indexed()).toHaveLength(2);
+		await codeIndex.locations(project, "who calls target");
+		expect(indexed()).toHaveLength(2);
+	},
+	SERVERS_TIMEOUT,
+);
+
+test("build makes the index before the first question, which then answers without indexing", async () => {
+	const project = checkout("built", { calls: [["caller", "src/a.ts", 1, "target", 2]] });
+	const codeIndex = index();
+	await codeIndex.build(project);
 	const indexed = () => calls().filter((call) => call.tool === "index_repository");
 	expect(indexed()).toHaveLength(1);
-	await Promise.all([codeIndex.refresh(project), codeIndex.refresh(project), codeIndex.refresh(project)]);
-	expect(indexed()).toHaveLength(2);
-	expect(String(indexed()[1]?.args.repo_path).toLowerCase()).toBe(project.mainPath.toLowerCase());
-	await codeIndex.refresh(project);
-	expect(indexed()).toHaveLength(3);
+	expect(await codeIndex.locations(project, "who calls target")).toEqual([
+		{ path: "src/a.ts", line: 2, symbol: "caller", relation: "caller of target" },
+	]);
+	expect(indexed()).toHaveLength(1);
+	await expect(new CodeIndex({ dataDir: env.data, server: null }).build(project)).rejects.toThrow(
+		"The code index is off.",
+	);
+});
+
+test("a project's server closes after its idle time and when the project is forgotten; the next question starts one", async () => {
+	const project = checkout("idle", { calls: [] });
+	const codeIndex = index([], 200);
+	const serverPids = () => [...new Set(calls().flatMap((call) => (call.tool === "config" ? [] : [call.pid])))];
+	await codeIndex.locations(project, "who calls x1");
+	const [first = 0] = serverPids();
+	expect(alive(first)).toBe(true);
+	// A real child closing on the index's real idle clock: polled until it is gone, bounded.
+	for (let waited = 0; alive(first) && waited < 5_000; waited += 50) await Bun.sleep(50);
+	expect(alive(first)).toBe(false);
+	expect(await codeIndex.locations(project, "who calls x1")).toEqual([]);
+	const second = serverPids().find((pid) => pid !== first) ?? 0;
+	expect(alive(second)).toBe(true);
+	await codeIndex.forget(project.id);
+	expect(alive(second)).toBe(false);
 });
 
 test("stop ends every server it started, is bounded, and never throws", async () => {

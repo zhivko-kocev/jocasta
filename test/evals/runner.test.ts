@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { assistantText, readClaudeResponse, readResponse } from "../../evals/harness.ts";
 import {
 	type Check,
 	countFindings,
@@ -10,33 +11,16 @@ import {
 	loadCases,
 	MEASUREMENT_NOTES,
 	makeTrialRepo,
-	readClaudeResponse,
-	readResponse,
 	runEvals,
 	trialArgs,
 } from "../../evals/runner.ts";
 import { DEFAULT_VARIANT, type Variant } from "../../evals/variants.ts";
+import { removeTree } from "../../src/shared/fsx.ts";
+import { readJsonl, sh, useOmpLog, useTempDirs, writeFiles } from "../shared/fixture.ts";
 
 const omp = [process.execPath, join(import.meta.dir, "fixtures", "omp.ts")];
 const runScript = join(import.meta.dir, "..", "..", "evals", "run.ts");
-const temps: string[] = [];
-afterEach(() => {
-	for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
-	delete process.env.JOCASTA_TEST_OMP_LOG;
-});
-
-function tempDir(): string {
-	const dir = mkdtempSync(join(tmpdir(), "jocasta-evals-"));
-	temps.push(dir);
-	return dir;
-}
-
-function writeFiles(root: string, files: Record<string, string>): void {
-	for (const [path, content] of Object.entries(files)) {
-		mkdirSync(join(root, path, ".."), { recursive: true });
-		writeFileSync(join(root, path), content);
-	}
-}
+const tempDir = useTempDirs("jocasta-evals-");
 
 interface OmpCall {
 	argv: string[];
@@ -45,15 +29,7 @@ interface OmpCall {
 	branch: string;
 }
 
-const ompLog = () => {
-	const file = join(tempDir(), "omp.jsonl");
-	process.env.JOCASTA_TEST_OMP_LOG = file;
-	return () =>
-		readFileSync(file, "utf8")
-			.trim()
-			.split("\n")
-			.map((line) => JSON.parse(line) as OmpCall);
-};
+const ompLog = useOmpLog<OmpCall>();
 
 describe("runEvals on omp", () => {
 	test("each trial runs omp in a fresh fixture repo and writes results, transcripts and the report", async () => {
@@ -65,14 +41,11 @@ describe("runEvals on omp", () => {
 			"wrong/case.yaml":
 				"prompt: 'Write wrong.txt: something else'\nchecks:\n  - file: wrong.txt\n    contains: expected text\n",
 		});
-		const calls = ompLog();
+		const calls = ompLog().calls;
 		const out = join(tempDir(), "run");
 		const rows = await runEvals({ casesDir: cases, outDir: out, reps: 2, launcher: omp });
 
-		const written = readFileSync(join(out, "results.jsonl"), "utf8")
-			.trim()
-			.split("\n")
-			.map((line) => JSON.parse(line));
+		const written = readJsonl(join(out, "results.jsonl"));
 		expect(written).toEqual(JSON.parse(JSON.stringify(rows)));
 		expect(written.map((row) => `${row.case}-${row.rep}`)).toEqual(["greet-0", "greet-1", "wrong-0", "wrong-1"]);
 		for (const row of written) {
@@ -177,7 +150,9 @@ describe("runEvals on omp", () => {
 			"branch/case.yaml":
 				"prompt: Say done\nsetup: echo made > made.txt\nchecks:\n  - file: made.txt\n    contains: made\n  - git_clean: true\n",
 		});
-		const calls = ompLog();
+		const calls = ompLog().calls;
+		const prompt = join(tempDir(), "acme.md");
+		writeFileSync(prompt, "Be brief.\n");
 		const rows = await runEvals({
 			casesDir: cases,
 			outDir: join(tempDir(), "run"),
@@ -186,7 +161,7 @@ describe("runEvals on omp", () => {
 			variant: {
 				...DEFAULT_VARIANT,
 				label: "lean+acme",
-				appendSystemPrompt: "/prompts/acme.md",
+				appendSystemPrompt: prompt,
 				extensions: ["/ext/a.ts"],
 				tools: ["read", "bash"],
 				settings: { memory: { backend: "local", extra: 1 }, modelRoles: { default: "acme/model-a" } },
@@ -198,7 +173,8 @@ describe("runEvals on omp", () => {
 		const [call] = calls();
 		expect(call?.argv).toEqual([
 			"--append-system-prompt",
-			"/prompts/acme.md",
+			// The trial's copy, its leading comment stripped (0577).
+			expect.stringMatching(/system-prompt\.md$/),
 			"-e",
 			"/ext/a.ts",
 			"--tools",
@@ -294,7 +270,7 @@ describe("runEvals on omp", () => {
 		writeFiles(cases, {
 			"sum/case.yaml": "prompt: 'Write sum.txt: 3'\nchecks:\n  - file: sum.txt\n    contains: '3'\n",
 		});
-		const calls = ompLog();
+		const calls = ompLog().calls;
 		let paced = 0;
 		const variant: Variant = {
 			...DEFAULT_VARIANT,
@@ -344,7 +320,7 @@ describe("runEvals on omp", () => {
 	test("a Claude Code variant runs claude -p with stream-json and reads its result events (0482 E4)", async () => {
 		const cases = tempDir();
 		writeFiles(cases, { "c/case.yaml": "prompt: 'Write a.txt: hi'\nchecks:\n  - file: a.txt\n    contains: hi\n" });
-		const calls = ompLog();
+		const calls = ompLog().calls;
 		const rows = await runEvals({
 			casesDir: cases,
 			outDir: join(tempDir(), "run"),
@@ -411,7 +387,7 @@ describe("bun run evals", () => {
 });
 
 describe("the trial repo (0482)", () => {
-	test("holds every fixture file, ignored ones too, runs setup on a tagged commit, and runs none of setup's hooks", () => {
+	test("holds every fixture file, ignored ones too, runs setup on a tagged commit, and runs none of setup's hooks", async () => {
 		const fixture = tempDir();
 		// Upstream tracks internal/gh although `gh` (its binary) is ignored, as cli/cli does; setup installs hooks that
 		// refuse every commit, husky's way (`core.hooksPath`) and simple-git-hooks' way (`.git/hooks`).
@@ -443,7 +419,7 @@ describe("the trial repo (0482)", () => {
 			fixtureTag: "v2.3.0",
 		};
 		const root = tempDir();
-		const { repo } = makeTrialRepo(evalCase, 1, root, process.env);
+		const { repo } = await makeTrialRepo(evalCase, 1, root, process.env);
 		const copy = join(tempDir(), "copy");
 		expect(spawnSync("git", ["clone", "-q", repo, copy]).status).toBe(0);
 		expect(existsSync(join(copy, "internal", "gh", "gh.go"))).toBe(true);
@@ -453,23 +429,45 @@ describe("the trial repo (0482)", () => {
 		const commit = spawnSync("git", ["commit", "-q", "--allow-empty", "-m", "the agent's commit"], { cwd: repo });
 		expect(commit.status).toBe(0);
 	});
+
+	test("a setup past its limit is ended with its tree and the trial is infra (0574, amended)", async () => {
+		const cases = tempDir();
+		const pidFile = join(tempDir(), "setup-grandchild.pid").replaceAll("\\", "/");
+		// Real time on purpose: the limit is the platform clock ending a child process tree, which fake timers can't drive.
+		const hang = `const c = require("node:child_process").spawn(process.execPath, ["-e", "setTimeout(() => {}, 120000)"], { stdio: "ignore" }); require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(c.pid)); for (;;) {}`;
+		writeFiles(cases, {
+			"slowsetup/case.yaml": JSON.stringify({
+				prompt: "p",
+				setup: `"${process.execPath}" -e ${JSON.stringify(hang)}`,
+				checks: [{ git_clean: true }],
+			}),
+		});
+		const started = Date.now();
+		await expect(
+			runEvals({ casesDir: cases, outDir: join(tempDir(), "run"), reps: 1, launcher: omp, setupTimeoutMs: 2_000 }),
+		).rejects.toThrow(/^slowsetup: setup `.*` killed at its time limit$/);
+		expect(Date.now() - started).toBeLessThan(40_000);
+		const grandchild = Number(readFileSync(pidFile, "utf8"));
+		expect(() => process.kill(grandchild, 0)).toThrow();
+	}, 60_000);
 });
 
 describe("end-state grader", () => {
-	function repo(): string {
-		const dir = tempDir();
-		for (const args of [
-			["init", "-q", "-b", "main"],
-			["config", "user.name", "Test"],
-			["config", "user.email", "test@example.org"],
-		]) {
-			spawnSync("git", args, { cwd: dir });
-		}
+	/** A committed repo with app.txt; `gradeCheck` only reads it. */
+	function repo(dir: string): string {
+		sh(dir, "init", "-q", "-b", "main");
 		writeFileSync(join(dir, "app.txt"), "version 2 for client-a\n");
-		spawnSync("git", ["add", "-A"], { cwd: dir });
-		spawnSync("git", ["commit", "-q", "-m", "init"], { cwd: dir });
+		sh(dir, "add", "-A");
+		sh(dir, "commit", "-q", "-m", "init");
 		return dir;
 	}
+
+	// The ten read-only cases share one repo; the test that changes a file makes its own.
+	let shared = "";
+	beforeAll(() => {
+		shared = repo(mkdtempSync(join(tmpdir(), "jocasta-evals-grader-")));
+	});
+	afterAll(() => removeTree(shared));
 
 	test.each<[string, Check, boolean]>([
 		["a command that exits 0", { command: "git rev-parse HEAD" }, true],
@@ -482,16 +480,152 @@ describe("end-state grader", () => {
 		["a file that should be absent", { file: "app.txt", absent: true }, false],
 		["a clean tree expected clean", { git_clean: true }, true],
 		["a clean tree expected dirty", { git_clean: false }, false],
-	])("%s", (_name, check, expected) => {
-		expect(gradeCheck(check, repo())).toBe(expected);
+	])("%s", async (_name, check, expected) => {
+		expect(await gradeCheck(check, shared)).toBe(expected);
 	});
 
-	test("git_clean sees uncommitted changes", () => {
-		const dir = repo();
+	test("git_clean sees uncommitted changes", async () => {
+		const dir = repo(tempDir());
 		writeFileSync(join(dir, "app.txt"), "changed\n");
-		expect(gradeCheck({ git_clean: true }, dir)).toBe(false);
-		expect(gradeCheck({ git_clean: false }, dir)).toBe(true);
+		expect(await gradeCheck({ git_clean: true }, dir)).toBe(false);
+		expect(await gradeCheck({ git_clean: false }, dir)).toBe(true);
 	});
+});
+
+describe("grading after the harness (0574)", () => {
+	/** A harness script: `--version` answers; otherwise it runs `body` (JavaScript) in the trial's checkout. */
+	const harness = (body: string) => {
+		const file = join(tempDir(), "harness.ts");
+		writeFileSync(
+			file,
+			`import { spawnSync } from "node:child_process";\nimport { writeFileSync } from "node:fs";\nif (process.argv.includes("--version")) { console.log("omp/0.0.0-stub"); process.exit(0); }\n${body}\n`,
+		);
+		return [process.execPath, file];
+	};
+	const bun = (script: string) => `"${process.execPath}" -e ${JSON.stringify(script)}`;
+
+	test("a hidden check past the grading limit is ended with its tree and grades 0, and the trial counts", async () => {
+		const cases = tempDir();
+		const pidFile = join(tempDir(), "grandchild.pid").replaceAll("\\", "/");
+		const hang = `const c = require("node:child_process").spawn(process.execPath, ["-e", "setTimeout(() => {}, 120000)"], { stdio: "ignore" }); require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(c.pid)); for (;;) {}`;
+		writeFiles(cases, {
+			"hang/case.yaml": JSON.stringify({
+				prompt: "Write out.txt: hello",
+				checks: [{ git_clean: false }],
+				hidden_checks: [{ command: bun(hang) }],
+			}),
+		});
+		const started = Date.now();
+		const [row] = await runEvals({
+			casesDir: cases,
+			outDir: join(tempDir(), "run"),
+			reps: 1,
+			launcher: omp,
+			gradingTimeoutMs: 2_000,
+		});
+		expect(Date.now() - started).toBeLessThan(40_000);
+		expect(row?.grade).toMatchObject({ "omp exited 0": 1, [`hidden: command: ${bun(hang)}`]: 0, "hidden: timeout": 0 });
+		expect(row?.hiddenPassed).toBe(false);
+		const grandchild = Number(readFileSync(pidFile, "utf8"));
+		expect(() => process.kill(grandchild, 0)).toThrow();
+	}, 60_000);
+
+	test("a grading setup the change broke grades 0; one that fails on the fixture commit too is infra", async () => {
+		const cases = tempDir();
+		const setup = bun(`process.exit(require("node:fs").readFileSync("dep.txt", "utf8").trim() === "ok" ? 0 : 1)`);
+		writeFiles(cases, {
+			"broke/case.yaml": JSON.stringify({
+				prompt: "Write dep.txt: broken",
+				setup,
+				checks: [{ git_clean: false }],
+				hidden_checks: [{ command: "git --version" }],
+			}),
+			"broke/fixture/dep.txt": "ok\n",
+		});
+		const [row] = await runEvals({ casesDir: cases, outDir: join(tempDir(), "run"), reps: 1, launcher: omp });
+		expect(row?.grade).toEqual({ "omp exited 0": 1, "git_clean: false": 1, "hidden: setup failed": 0 });
+		expect([row?.hiddenPassed, row?.passed]).toEqual([false, false]);
+
+		// Setup passes before the harness and fails after it on any commit: the setup itself is broken. The harness
+		// writes the marker into the trial root, beside the repo and the grading clones.
+		const infra = tempDir();
+		writeFiles(infra, {
+			"flaky/case.yaml": JSON.stringify({
+				prompt: "Write ../broken: x",
+				setup: bun(`process.exit(require("node:fs").existsSync("../broken") ? 1 : 0)`),
+				checks: [{ git_clean: true }],
+				hidden_checks: [{ command: "git --version" }],
+			}),
+		});
+		await expect(runEvals({ casesDir: infra, outDir: join(tempDir(), "run"), reps: 1, launcher: omp })).rejects.toThrow(
+			/flaky: setup `.*` failed/,
+		);
+	}, 60_000);
+
+	test("the fixture-commit confirmation runs within the same grading limit and, cut there, grades hidden: timeout (EVL-5)", async () => {
+		const cases = tempDir();
+		// 1.5 s each way: the trial's setup fails inside the 2.5 s limit; the confirmation would pass, but past it. Real
+		// time on purpose: the limit is the platform clock ending a child process tree, which fake timers can't drive.
+		const setup = bun(
+			`const ok = require("node:fs").readFileSync("dep.txt", "utf8").trim() === "ok"; setTimeout(() => process.exit(ok ? 0 : 1), 1500)`,
+		);
+		writeFiles(cases, {
+			"slow/case.yaml": JSON.stringify({
+				prompt: "Write dep.txt: broken",
+				setup,
+				checks: [{ git_clean: false }],
+				hidden_checks: [{ command: "git --version" }],
+			}),
+			"slow/fixture/dep.txt": "ok\n",
+		});
+		const [row] = await runEvals({
+			casesDir: cases,
+			outDir: join(tempDir(), "run"),
+			reps: 1,
+			launcher: omp,
+			gradingTimeoutMs: 2_500,
+		});
+		expect(row?.grade).toEqual({ "omp exited 0": 1, "git_clean: false": 1, "hidden: timeout": 0 });
+		expect(row?.hiddenPassed).toBe(false);
+	}, 60_000);
+
+	test("grading takes the commit the agent left, on a branch of its own too (EVL-8)", async () => {
+		const cases = tempDir();
+		const grader = `process.exit(require("node:fs").readFileSync("out.txt", "utf8").trim() === "hello" ? 0 : 1)`;
+		writeFiles(cases, {
+			"branch/case.yaml": JSON.stringify({
+				prompt: "Fix it",
+				checks: [{ git_clean: false }],
+				hidden_checks: [{ command: bun(grader) }],
+			}),
+		});
+		const launcher = harness(
+			`spawnSync("git", ["checkout", "-q", "-b", "fix/issue-3"]); writeFileSync("out.txt", "hello\\n");`,
+		);
+		const [row] = await runEvals({ casesDir: cases, outDir: join(tempDir(), "run"), reps: 1, launcher });
+		expect(row?.hiddenPassed).toBe(true);
+	}, 60_000);
+
+	test("Ponytail's leading comment stays out of the prompt every arm appends (0577)", async () => {
+		const cases = tempDir();
+		writeFiles(cases, { "c/case.yaml": "prompt: p\nchecks:\n  - git_clean: true\n" });
+		const prompt = join(tempDir(), "ponytail.md");
+		writeFileSync(
+			prompt,
+			"<!-- Ponytail, MIT License, example-org -->\n\n# Ponytail, lazy senior dev mode\n\nBe lazy.\n",
+		);
+		const calls = ompLog().calls;
+		await runEvals({
+			casesDir: cases,
+			outDir: join(tempDir(), "run"),
+			reps: 1,
+			launcher: omp,
+			variant: { ...DEFAULT_VARIANT, label: "a1", appendSystemPrompt: prompt },
+		});
+		const [call] = calls() as (OmpCall & { appendedText?: string })[];
+		expect(call?.appendedText).toBe("# Ponytail, lazy senior dev mode\n\nBe lazy.\n");
+		expect(readFileSync(prompt, "utf8")).toStartWith("<!-- Ponytail");
+	}, 60_000);
 });
 
 describe("case files", () => {
@@ -585,6 +719,30 @@ test("readClaudeResponse sums result events over turns and counts tool_use block
 		turns: 6,
 		toolCalls: 2,
 	});
+});
+
+test("a Claude Code run killed at the limit has no result: its turns are its distinct assistant messages (EVL-3)", () => {
+	const block = (id: string, type: string) =>
+		JSON.stringify({ type: "assistant", message: { id, content: [{ type }] } });
+	const transcript = [
+		JSON.stringify({ type: "system", subtype: "init" }),
+		block("msg_1", "text"),
+		block("msg_1", "tool_use"),
+		block("msg_2", "tool_use"),
+	].join("\n");
+	expect(readClaudeResponse(transcript)).toMatchObject({ turns: 2, requests: 2, toolCalls: 2 });
+});
+
+test("a last line torn by a kill is skipped by every transcript reader (DUP-1)", () => {
+	const omp = [
+		JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Done." }] } }),
+		'{"type":"message_end","message":{"role":"assistant","content":[{"type":"te',
+	].join("\n");
+	expect(readResponse(omp).turns).toBe(1);
+	expect(assistantText(omp, "omp")).toBe("Done.");
+	const claude = `${JSON.stringify({ type: "assistant", message: { id: "m", content: [{ type: "text", text: "Hi" }] } })}\n{"type":"res`;
+	expect(readClaudeResponse(claude).turns).toBe(1);
+	expect(assistantText(claude, "claude")).toBe("Hi");
 });
 
 test("trialArgs: a claude follow-up continues with -c and never takes omp's overlay or profile", () => {

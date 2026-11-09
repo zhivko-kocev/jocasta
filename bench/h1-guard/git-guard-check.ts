@@ -1,5 +1,5 @@
-// H1 (0482, 0501): measures omp 18.13.1's git guard instead of trusting git-guard.ts's reimplementation. For the VM
-// (a throwaway Windows 11 machine named JOCASTA-CLEAN); it RUNS corpus commands, so it refuses anywhere else.
+// H1 (0482, 0501, 0535): measures omp 18.18.2's git guard instead of trusting git-guard.ts's reimplementation. For
+// the VM (a throwaway Windows 11 machine named JOCASTA-CLEAN); it RUNS corpus commands, so it refuses anywhere else.
 //
 //   bun bench/h1-guard/git-guard-check.ts --corpus <corpus.jsonl> --out <dir> [--omp <package dir>] [--timeout 60]
 //     [--any-version] (--dry-run | --run)
@@ -7,29 +7,31 @@
 // Lines: every corpus line made only of git (any spelling the corpus uses: `git`, `git.exe`, the full path, `git -C …`,
 // also inside `pwsh -c`/`cmd /c`), `cd …` and `echo …`, split with omp's own tokenizer. For each line, twice, on a
 // fresh fixture at C:\work\demo (the corpus's path; recipe below): omp's own `executeBash` from
-// `exec/bash-executor.ts`, the call the bash tool makes (`tools/bash.ts:905-925,1616-1630`), in C:\work\demo with
-// `gitGuard: true`, then `gitGuard: false` as the control. git's config is isolated for the fixture and the runs
-// (`GIT_CONFIG_GLOBAL` to a temp file, `GIT_CONFIG_NOSYSTEM=1`, a temp HOME and USERPROFILE), and omp's settings come
-// from an empty agent folder, so nothing outside C:\work and the temp folder changes. Output is the shell's combined
-// stdout and stderr, as the bash tool gets it.
+// `exec/bash-executor.ts`, the call the bash tool makes (`tools/bash.ts:1100-1117,1892-1906`), in C:\work\demo (a main
+// checkout, where the guard applies its shared-checkout rules) with `gitGuard: true`, then `gitGuard: false` as the
+// control. The tool also passes `ovnfs`, which only fills the refusal's guidance text. git's config is isolated for
+// the fixture and the runs (`GIT_CONFIG_GLOBAL` to a temp file, `GIT_CONFIG_NOSYSTEM=1`, a temp HOME and USERPROFILE),
+// and omp's settings come from an empty agent folder, so nothing outside C:\work and the temp folder changes. Output
+// is the shell's combined stdout and stderr, as the bash tool gets it.
 //
 // It runs only with `--run`, on a machine named JOCASTA-CLEAN, with C:\work holding nothing but the fixture's two
 // folders. Writes `git-guard-check.jsonl` (per line: both runs' exit code and trimmed output, the guard's refusal
 // message, git-guard.ts's prediction, agreement) and `git-guard-check.json` (agreement per subcommand and per way of
 // writing, every disagreement listed). `omp-verdicts.ts --git-guard <git-guard-check.jsonl>` then uses the measured
 // refusals for these lines.
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { removeTree } from "../../src/shared/fsx.ts";
+import { runProgramSync } from "../../src/shared/process.ts";
 import { BenchUsageError, flag, parseBenchArgs, runScript } from "../lib/args.ts";
 import { appendRow, conditions, printPlan, writeJson } from "../lib/output.ts";
-import { type CorpusEntry, parseCorpus } from "./evaluate.ts";
+import { requireVm, VM_MACHINE } from "../lib/sandbox.ts";
+import { type CorpusEntry, readCorpus } from "./evaluate.ts";
 import { gitGuardRefusalOf, gitOnlyArgv, gitSubcommand } from "./git-guard.ts";
 import { findOmpDir, loadOmp } from "./omp-verdicts.ts";
 
-export const MACHINE = "JOCASTA-CLEAN";
 export const WORK_ROOT = "C:\\work";
 export const FIXTURE = "C:\\work\\demo";
 export const ORIGIN = "C:\\work\\demo-origin.git";
@@ -178,8 +180,7 @@ const describeStep = (step: Step) =>
 
 /** Refuses unless this is the VM and C:\work holds nothing but the fixture. */
 export function requireCleanMachine(machine: string, workEntries: readonly string[] | null): void {
-	if (machine.toUpperCase() !== MACHINE)
-		throw new BenchUsageError(`refusing to run corpus commands on ${machine}: only on the VM ${MACHINE}`);
+	requireVm(machine, "run corpus commands");
 	const strangers = (workEntries ?? []).filter((name) => !Object.hasOwn(FIXTURE_ENTRIES, name));
 	if (strangers.length > 0)
 		throw new BenchUsageError(`refusing: ${WORK_ROOT} holds more than the fixture (${strangers.join(", ")})`);
@@ -209,8 +210,8 @@ if (import.meta.main) {
 		const ompDir = ompText === undefined ? findOmpDir() : resolve(ompText);
 		if (ompDir === undefined) throw new BenchUsageError("omp's package not found; pass --omp <package dir>");
 		const omp = await loadOmp(ompDir, args.flags.has("any-version"));
-		const corpusText = readFileSync(corpusPath, "utf8");
-		const lines = checkLines(parseCorpus(corpusText, corpusPath), omp.tokenizeShellSegments);
+		const { entries: corpus, sha256: corpusSha256 } = readCorpus(corpusPath);
+		const lines = checkLines(corpus, omp.tokenizeShellSegments);
 		const temp = args.dryRun ? join(tmpdir(), "h1-git-guard-<random>") : mkdtempSync(join(tmpdir(), "h1-git-guard-"));
 		const gitEnv = isolatedGitEnv(temp);
 		const call = (gitGuard: boolean) =>
@@ -222,7 +223,7 @@ if (import.meta.main) {
 			printPlan(
 				"H1 git guard check",
 				[
-					`omp ${omp.version} from ${omp.dir}; refuses to run without --run, off ${MACHINE}, or with ${WORK_ROOT} holding more than demo and demo-origin.git`,
+					`omp ${omp.version} from ${omp.dir}; refuses to run without --run, off ${VM_MACHINE}, or with ${WORK_ROOT} holding more than demo and demo-origin.git`,
 					`${lines.length} lines made only of git, cd and echo (by subcommand: ${JSON.stringify(bySubcommand)})`,
 					`per line, twice (guard on, then the control), a fresh fixture: remove ${FIXTURE} and ${ORIGIN}, then, with git's config isolated (${JSON.stringify(gitEnv)}; ${join(temp, "gitconfig")} sets user.name/email):`,
 					...FIXTURE_RECIPE.map((step, i) => `  ${i + 1}. ${describeStep(step)}`),
@@ -271,13 +272,11 @@ if (import.meta.main) {
 					writeFileSync(path, step.text);
 					continue;
 				}
-				const result = Bun.spawnSync(["git", ...step.git], {
+				const result = runProgramSync(["git", ...step.git], {
 					cwd: step.cwd ?? FIXTURE,
 					env: { ...process.env, ...gitEnv },
-					stdin: "ignore",
 				});
-				if (result.exitCode !== 0)
-					throw new Error(`fixture step "${describeStep(step)}" failed: ${result.stderr.toString().trim()}`);
+				if (result.code !== 0) throw new Error(`fixture step "${describeStep(step)}" failed: ${result.stderr.trim()}`);
 			}
 		};
 		const runOnce = async (command: string, gitGuard: boolean): Promise<RunResult> => {
@@ -340,7 +339,7 @@ if (import.meta.main) {
 				versions: { ...started.versions, omp: omp.version },
 			},
 			omp: omp.version,
-			corpusSha256: new Bun.CryptoHasher("sha256").update(corpusText).digest("hex"),
+			corpusSha256,
 			fixture: FIXTURE_RECIPE.map(describeStep),
 			timeoutMs,
 			lines: rows.length,

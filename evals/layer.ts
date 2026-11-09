@@ -21,7 +21,7 @@ export const LAYER_MODULE = "src/frontier/layer/bench.ts";
 
 /** One trial as the layer sees it. */
 export interface LayerTrial {
-	/** The trial's root (outside the repo); the layer keeps its own state under it. */
+	/** The trial's root (outside the repo): the layer's prompt file and omp extension go there. */
 	root: string;
 	/** The trial's checkout, where the harness runs. */
 	repo: string;
@@ -45,12 +45,16 @@ export interface LayerSetup {
 	/** omp settings deep-merged into the trial's `--config` overlay. */
 	settings: Record<string, unknown>;
 	env: Record<string, string>;
-	/** Stops what `setUp` started; awaited after the last turn, also when the trial fails. */
+	/** How long the code index took to build during setup, before the trial's clock (0575); unset with the index off. */
+	indexBuildMs?: number;
+	/** Stops what `setUp` started and removes its data; awaited after the last turn, also when the trial fails. */
 	close(): Promise<void>;
 }
 
 export interface BenchLayer {
 	setUp(trial: LayerTrial): Promise<LayerSetup>;
+	/** Why a trial with these switches can't run on this machine (EVL-1: checked before any trial), or undefined. */
+	preflight(switches: LayerSwitches): Promise<string | undefined>;
 }
 
 export class LayerUnavailableError extends UserError {}
@@ -66,7 +70,9 @@ export async function loadBenchLayer(root = REPO_ROOT): Promise<BenchLayer> {
 	if (!layerBuilt(root)) throw new LayerUnavailableError(layerMissingMessage());
 	// Dynamic on purpose: the module is a later build's and may be absent; a static import would break typecheck now.
 	const module = (await import(join(root, LAYER_MODULE))) as { benchLayer?: BenchLayer };
-	if (typeof module.benchLayer?.setUp !== "function")
-		throw new LayerUnavailableError(`${LAYER_MODULE} does not export benchLayer with setUp(trial)`);
+	if (typeof module.benchLayer?.setUp !== "function" || typeof module.benchLayer.preflight !== "function")
+		throw new LayerUnavailableError(
+			`${LAYER_MODULE} does not export benchLayer with setUp(trial) and preflight(switches)`,
+		);
 	return module.benchLayer;
 }

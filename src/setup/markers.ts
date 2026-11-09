@@ -4,9 +4,9 @@
  * it did, so `jocasta uninstall` removes exactly what setup added.
  */
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import { join } from "node:path";
-import { asObject, writeAtomically } from "../shared/fsx.ts";
+import { readJsonObject, writeAtomically } from "../shared/fsx.ts";
 
 /** How one thing setup added is undone (0468). */
 export type Undo =
@@ -54,13 +54,7 @@ export function fingerprint(text: string): string {
 
 /** The marker `<name>.json`, or undefined when there is none (or it isn't one). */
 export function readMarker(jocastaConfigDir: string, name: string): Marker | undefined {
-	let value: unknown;
-	try {
-		value = JSON.parse(readFileSync(join(markersDir(jocastaConfigDir), `${name}.json`), "utf8"));
-	} catch {
-		return undefined;
-	}
-	const marker = asObject(value);
+	const marker = readJsonObject(join(markersDir(jocastaConfigDir), `${name}.json`));
 	if (!marker || typeof marker.fingerprint !== "string" || !Array.isArray(marker.undo)) return undefined;
 	return marker as unknown as Marker;
 }

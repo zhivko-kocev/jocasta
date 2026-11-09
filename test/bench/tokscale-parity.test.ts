@@ -1,6 +1,6 @@
-import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { benchPricing } from "../../bench/lib/ledger.ts";
 import { loadPriceTable } from "../../bench/lib/prices.ts";
@@ -13,11 +13,9 @@ import {
 	tokscaleTotals,
 } from "../../bench/tokscale-parity.ts";
 import { readOmpSession } from "../../src/shared/ledger.ts";
+import { useTempDirs } from "../shared/fixture.ts";
 
-const temps: string[] = [];
-afterEach(() => {
-	for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
+const tempDir = useTempDirs("jocasta-parity-");
 
 const SESSION_ID = "01b2c3d4-0000-7000-8000-00000000beef";
 const ompSession = [
@@ -82,14 +80,34 @@ test("the ledger's sessions match tokscale's by id (or an id holding it, as omp'
 	});
 });
 
+test("a run folder with nothing to compare exits 2 instead of passing (0576)", () => {
+	const runDir = tempDir();
+	writeFileSync(
+		join(runDir, "results.jsonl"),
+		`${JSON.stringify({ task: "t", arm: "a0", rep: 0, harness: "omp" })}\n${JSON.stringify({ task: "t", arm: "a4", rep: 0, harness: "claude" })}\n`,
+	);
+	// A sessions folder whose names match no trial, as after a rename.
+	mkdirSync(join(runDir, "sessions", "t-a0-0-renamed"), { recursive: true });
+	const run = spawnSync(
+		process.execPath,
+		[join(import.meta.dir, "..", "..", "bench", "tokscale-parity.ts"), "--out", runDir],
+		{
+			encoding: "utf8",
+		},
+	);
+	expect(run.status).toBe(2);
+	expect(run.stderr.trim()).toBe(
+		`bench: no saved sessions to compare in ${join(runDir, "sessions")} (results.jsonl names 2 trials)`,
+	);
+});
+
 const tokscale = Bun.which("tokscale");
 if (tokscale === null) console.log(`tokscale parity: skipped. ${TOKSCALE_MISSING}`);
 
 test.skipIf(tokscale === null)(
 	`tokscale ${TOKSCALE_VERSION} reads an omp session as the ledger does (skipped without tokscale on PATH: bench-only, VM)`,
 	() => {
-		const dir = mkdtempSync(join(tmpdir(), "jocasta-tokscale-"));
-		temps.push(dir);
+		const dir = tempDir();
 		writeFileSync(join(dir, `2026-11-09T10-00-00-000Z_${SESSION_ID}.jsonl`), `${ompSession}\n`);
 		const ledger = ledgerTotals([readOmpSession(ompSession, benchPricing(loadPriceTable()))]);
 		const rows = compareTotals("fixture", ledger, tokscaleFor([dir]));

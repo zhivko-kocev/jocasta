@@ -1,25 +1,28 @@
 import type { Database } from "bun:sqlite";
-import { type Dirent, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, join } from "node:path";
-import { asObject, writeAtomically } from "../../shared/fsx.ts";
+import { statSync } from "node:fs";
+import { basename } from "node:path";
+import { asObject, readJsonObject, writeAtomically } from "../../shared/fsx.ts";
 import { log } from "../../shared/log.ts";
-import { parseLine, readLines } from "./jsonl.ts";
-import { readHeader } from "./sessions.ts";
+import { readHeader, replaced, rewritten, SessionTail, SessionWalker } from "../../shared/omp-session.ts";
 
 /**
  * The session watcher (0389, 0400): saves the compaction and handoff summaries of his omp sessions to `catalog.db`
  * `summaries` and sends those from sessions under a watched project to Graphiti as episodes in the project's group.
  *
  * Each session file is read from where the last scan stopped (CR-03): `<data>/watcher.json` keeps `lastScan` and, per
- * file, the byte offset after its last complete line and its cwd. Graphiti gets the summaries of `handoff` and `soft`
- * compactions (and legacy ones without a method), as 0400 decided; `remote` and `snapcompact` ones stay in
- * `catalog.db` only (stored as already sent). A snapcompact transcript archive (`isTranscriptArchive`) never goes to
- * Graphiti whatever its method, and one already waiting in `catalog.db` is marked sent without a post. When a post
- * fails (Graphiti or Docker down) the scan stops posting and the next attempt waits, doubling from 30 s up to 30 min
- * (CR-13): at most one container start per attempt. At most `POSTS_PER_SCAN` episodes go per scan, so a first
- * start's backlog is paced. A summary keeps the watched project its cwd resolved to (`project_id`, 0440 (4)), so it
- * still posts when that folder is gone. The state stays in memory after the first read and is written only when an
- * offset, a cwd or the set of files changed.
+ * file, the byte offset after its last complete line, its cwd and its identity (`ino`, `birthtimeMs`): omp ≥ 18.10.4
+ * rewrites a session whole through a temp file and a rename (discards, retry marks, shake), possibly no shorter than
+ * the offset, so a file whose identity changed is read again from its start, and the summaries' key absorbs the
+ * re-read (SRV-B-3). Graphiti gets the summaries of `handoff` and `soft` compactions (and legacy ones without a
+ * method), as 0400 decided; `remote` and `snapcompact` ones stay in `catalog.db` only (stored as already sent). A
+ * snapcompact transcript archive (`isTranscriptArchive`) never goes to Graphiti whatever its method, and one already
+ * waiting in `catalog.db` is marked sent without a post. When a post fails (Graphiti or Docker down) the scan stops
+ * posting and the next attempt waits, doubling from 30 s up to 30 min (CR-13): at most one container start per
+ * attempt. At most `POSTS_PER_SCAN` episodes go per scan, so a first start's backlog is paced. A summary keeps the
+ * watched project its cwd resolved to (`project_id`, 0440 (4)), so it still posts when that folder is gone. A scan
+ * lets the service's other work run every few milliseconds (PERF-3). The state stays in memory after the first read
+ * and is written when the set of files changed, else at most every 5 minutes while offsets move, and at stop: a lost
+ * offset only re-reads a tail, which INSERT OR IGNORE absorbs.
  *
  * omp 18.10.3 shapes this relies on (omp-src `packages/coding-agent/src/session/`), and 18.12.6's moved sessions:
  * - layout: a session is `<sessions>/<cwd dir>/<stem>.jsonl` (`session-paths.ts:215` `sessionDirForCwd`); its subagents
@@ -52,7 +55,7 @@ export interface Episode {
 export interface WatcherOptions {
 	/** omp's sessions dir, `~/.omp/agent/sessions`. */
 	sessionsDir: string;
-	/** `<data>/watcher.json`: `{lastScan, files: {<session file>: {offset, cwd}}}`. */
+	/** `<data>/watcher.json`: `{lastScan, files: {<session file>: {offset, cwd, ino, birthtimeMs}}}`. */
 	stateFile: string;
 	/** `catalog.db` at v7 or later. */
 	db: Database;
@@ -86,8 +89,22 @@ interface SummaryRow {
 /** What `watcher.json` holds. */
 interface WatcherState {
 	lastScan: number;
-	files: Record<string, { offset: number; cwd?: string }>;
+	files: Record<string, FileState>;
 }
+
+/** One session file's place: the offset after its last complete line, its cwd and its identity when read. */
+interface FileState {
+	offset: number;
+	cwd?: string;
+	ino?: number;
+	birthtimeMs?: number;
+}
+
+/** A scan holds the event loop at most about this long before it lets other work run (PERF-3). */
+const SLICE_MS = 8;
+
+/** watcher.json is rewritten at most this often while only offsets move. */
+const STATE_WRITE_MS = 5 * 60_000;
 
 const SOURCE = "omp-session";
 
@@ -150,6 +167,17 @@ export function startWatcher(opts: WatcherOptions): Watcher {
 	let failures = 0;
 	/** `watcher.json` as last read or written; read once, at the first scan. */
 	let state: WatcherState | undefined;
+	/** Whether `state` holds offsets watcher.json doesn't yet, and when it was last written (`now()`). */
+	let unsaved = false;
+	let savedAt = Number.NEGATIVE_INFINITY;
+	/** The session files; cwd dirs unchanged since the last scan are answered from its listing (SRV-B-6). */
+	const walker = new SessionWalker(opts.sessionsDir);
+	const save = () => {
+		if (!state || !unsaved) return;
+		writeState(opts.stateFile, state);
+		unsaved = false;
+		savedAt = now();
+	};
 
 	async function runScan(): Promise<void> {
 		const started = now();
@@ -166,28 +194,40 @@ export function startWatcher(opts: WatcherOptions): Watcher {
 			}
 			return id;
 		};
-		for (const file of sessionFiles(opts.sessionsDir)) {
+		let slice = performance.now();
+		for (const file of walker.files()) {
 			if (stopped) return;
+			// Let the service's other work run every few milliseconds, unchanged files included (a first scan reads every
+			// session once; a steady one stats them all).
+			if (performance.now() - slice >= SLICE_MS) {
+				const { promise, resolve } = Promise.withResolvers<void>();
+				setImmediate(resolve);
+				await promise;
+				slice = performance.now();
+				if (stopped) return;
+			}
 			const known = previous.files[file];
 			try {
 				const stat = statSync(file, { throwIfNoEntry: false });
 				if (!stat) continue;
-				if (stat.mtimeMs < previous.lastScan) {
-					if (known && known.offset <= stat.size) {
-						files[file] = known;
+				const identity = { ino: stat.ino, birthtimeMs: stat.birthtimeMs };
+				// Another file took its name (a rewrite through a rename); a state from before identities were kept can't say.
+				if (stat.mtimeMs < previous.lastScan && !(known && replaced(stat, known))) {
+					if (known && !rewritten(stat, known)) {
+						files[file] = { ...known, ...identity };
 						continue;
 					}
 					if (!known && previous.lastScan > 0) {
 						// Read whole by a scan before offsets were kept: it is in `summaries`; follow it from its end.
 						const cwd = readHeader(file)?.cwd;
-						files[file] = { offset: stat.size, ...(cwd ? { cwd } : {}) };
+						files[file] = { offset: stat.size, ...(cwd ? { cwd } : {}), ...identity };
 						continue;
 					}
 				}
-				// A file that shrank was rewritten: read it again from its start.
-				const from: { offset: number; cwd?: string } = known && known.offset <= stat.size ? known : { offset: 0 };
+				// A file that was rewritten (replaced, or shorter than the offset) is read again from its start.
+				const from: FileState = known && !rewritten(stat, known) ? known : { offset: 0 };
 				const read = summariesIn(file, from.offset, stat.size, from.cwd, stat.mtimeMs);
-				files[file] = { offset: read.offset, ...(read.cwd ? { cwd: read.cwd } : {}) };
+				files[file] = { offset: read.offset, ...(read.cwd ? { cwd: read.cwd } : {}), ...identity };
 				if (read.moved) {
 					read.rows = read.rows.filter(({ row }) => !storedElsewhere.get(row.entry_id, row.cwd, file));
 				}
@@ -211,8 +251,6 @@ export function startWatcher(opts: WatcherOptions): Watcher {
 				if (known) files[file] = known;
 				onError(error);
 			}
-			// Let the service's other work run between files (a first scan reads every session once).
-			await Bun.sleep(0);
 		}
 		if (now() >= retryAt) {
 			let posted = 0;
@@ -253,7 +291,9 @@ export function startWatcher(opts: WatcherOptions): Watcher {
 			}
 		}
 		state = { lastScan: started, files };
-		if (!sameFiles(previous.files, files)) writeState(opts.stateFile, state);
+		if (!sameFiles(previous.files, files)) unsaved = true;
+		// A new or gone file is written at once; moved offsets at most every 5 minutes (and at stop).
+		if (unsaved && (!sameNames(previous.files, files) || now() - savedAt >= STATE_WRITE_MS || now() < savedAt)) save();
 	}
 
 	/** One scan at a time; a call during a scan runs another after it, so it sees files written before the call. */
@@ -279,28 +319,13 @@ export function startWatcher(opts: WatcherOptions): Watcher {
 		stop() {
 			stopped = true;
 			clearInterval(timer);
+			try {
+				save();
+			} catch (error) {
+				onError(error);
+			}
 		},
 	};
-}
-
-/** Session files: `*.jsonl` directly inside each cwd dir; subagent and advisor transcripts sit one level deeper. */
-function sessionFiles(sessionsDir: string): string[] {
-	if (!existsSync(sessionsDir)) return [];
-	const files: string[] = [];
-	for (const dir of readdirSync(sessionsDir, { withFileTypes: true })) {
-		if (!dir.isDirectory()) continue;
-		const path = join(sessionsDir, dir.name);
-		let names: Dirent[];
-		try {
-			names = readdirSync(path, { withFileTypes: true });
-		} catch {
-			continue; // removed since the listing
-		}
-		for (const entry of names) {
-			if (entry.isFile() && entry.name.endsWith(".jsonl")) files.push(join(path, entry.name));
-		}
-	}
-	return files;
 }
 
 /**
@@ -322,63 +347,79 @@ function summariesIn(
 } {
 	const rows: { row: Omit<SummaryRow, "project_id">; graph: boolean }[] = [];
 	let moved = false;
-	// A line still being written isn't complete; the next scan reads it.
-	const offset = readLines(file, from, to, (line) => {
-		const entry = parseLine(line);
-		if (!entry) return;
-		if (cwd === undefined) {
-			if (entry.type === "session" && typeof entry.cwd === "string") {
-				cwd = entry.cwd;
-				moved = typeof entry.parentSession === "string";
+	const tail = new SessionTail(file, {
+		// Read once from `from`, which the scan judged against a rewrite already.
+		reset() {},
+		entry(entry) {
+			if (cwd === undefined) {
+				if (entry.type === "session" && typeof entry.cwd === "string") {
+					cwd = entry.cwd;
+					moved = typeof entry.parentSession === "string";
+				}
+				return;
 			}
-			return;
-		}
-		if (entry.type !== "compaction" || typeof entry.id !== "string") return;
-		const summary = typeof entry.summary === "string" ? entry.summary.trim() : "";
-		if (!summary) return; // shake, and snapcompact or remote without text
-		const at = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
-		rows.push({
-			row: {
-				session_file: file,
-				entry_id: entry.id,
-				kind: entry.method === "handoff" ? "handoff" : "compact",
-				cwd,
-				at: Number.isFinite(at) ? at : mtimeMs,
-				summary,
-			},
-			graph:
-				GRAPH_METHODS.has(typeof entry.method === "string" ? entry.method : undefined) && !isTranscriptArchive(summary),
-		});
+			if (entry.type !== "compaction" || typeof entry.id !== "string") return;
+			const summary = typeof entry.summary === "string" ? entry.summary.trim() : "";
+			if (!summary) return; // shake, and snapcompact or remote without text
+			const at = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
+			rows.push({
+				row: {
+					session_file: file,
+					entry_id: entry.id,
+					kind: entry.method === "handoff" ? "handoff" : "compact",
+					cwd,
+					at: Number.isFinite(at) ? at : mtimeMs,
+					summary,
+				},
+				graph:
+					GRAPH_METHODS.has(typeof entry.method === "string" ? entry.method : undefined) &&
+					!isTranscriptArchive(summary),
+			});
+		},
 	});
+	tail.offset = from;
+	// A line still being written isn't complete; the next scan reads it.
+	const offset = tail.readTo(to);
 	return { rows, offset, cwd, moved };
 }
 
 /** The state file; a missing or unreadable one means scan everything. */
 function readState(stateFile: string): WatcherState {
-	try {
-		const value = asObject(JSON.parse(readFileSync(stateFile, "utf8")));
-		const lastScan = value?.lastScan;
-		const files: WatcherState["files"] = {};
-		for (const [file, entry] of Object.entries(asObject(value?.files) ?? {})) {
-			const offset = asObject(entry)?.offset;
-			const cwd = asObject(entry)?.cwd;
-			if (typeof offset === "number" && offset >= 0)
-				files[file] = { offset, ...(typeof cwd === "string" ? { cwd } : {}) };
-		}
-		return { lastScan: typeof lastScan === "number" && Number.isFinite(lastScan) ? lastScan : 0, files };
-	} catch {
-		return { lastScan: 0, files: {} };
+	const value = readJsonObject(stateFile);
+	const lastScan = value?.lastScan;
+	const files: WatcherState["files"] = {};
+	for (const [file, entry] of Object.entries(asObject(value?.files) ?? {})) {
+		const { offset, cwd, ino, birthtimeMs } = asObject(entry) ?? {};
+		if (typeof offset !== "number" || offset < 0) continue;
+		files[file] = {
+			offset,
+			...(typeof cwd === "string" ? { cwd } : {}),
+			...(typeof ino === "number" && typeof birthtimeMs === "number" ? { ino, birthtimeMs } : {}),
+		};
 	}
+	return { lastScan: typeof lastScan === "number" && Number.isFinite(lastScan) ? lastScan : 0, files };
 }
 
-/** Whether two states hold the same files with the same offsets and cwds. */
-function sameFiles(a: WatcherState["files"], b: WatcherState["files"]): boolean {
+/** Whether two states hold the same files. */
+function sameNames(a: WatcherState["files"], b: WatcherState["files"]): boolean {
 	const names = Object.keys(a);
-	if (names.length !== Object.keys(b).length) return false;
-	return names.every((name) => {
-		const other = b[name];
-		return other !== undefined && other.offset === a[name]?.offset && other.cwd === a[name]?.cwd;
-	});
+	return names.length === Object.keys(b).length && names.every((name) => b[name] !== undefined);
+}
+
+/** Whether two states hold the same files with the same offsets, cwds and identities. */
+function sameFiles(a: WatcherState["files"], b: WatcherState["files"]): boolean {
+	return (
+		sameNames(a, b) &&
+		Object.entries(a).every(([name, mine]) => {
+			const other = b[name];
+			return (
+				other?.offset === mine.offset &&
+				other.cwd === mine.cwd &&
+				other.ino === mine.ino &&
+				other.birthtimeMs === mine.birthtimeMs
+			);
+		})
+	);
 }
 
 function writeState(stateFile: string, state: WatcherState): void {

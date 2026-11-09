@@ -3,11 +3,13 @@
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { frontierFilePath, readFrontierFile } from "../../../src/frontier/server/frontier-file.ts";
+import { POPUP_READER_HEADER } from "../../../src/frontier/protocol.ts";
 import { askShutdown, SHUTDOWN_PATH } from "../../../src/frontier/server/launch.ts";
 import { CANCEL, STOP } from "../../../src/frontier/server/popups.ts";
 import { type ServerOptions, startServer } from "../../../src/frontier/server/server.ts";
+import { runStopSteps, type StopStep, undoStart } from "../../../src/frontier/server/stop-sequence.ts";
 import { dataDir } from "../../../src/shared/paths.ts";
+import { readServiceFile, serviceFilePath } from "../../../src/shared/service-file.ts";
 import { GIT_TEST_TIMEOUT, useTempJocasta } from "../../shared/fixture.ts";
 import { FakeHerdr } from "./fake-herdr.ts";
 import { demoProject, relayTestOptions, startTestServer, TEST_BOSS_KEY, type TestServer, until } from "./helpers.ts";
@@ -16,8 +18,8 @@ const env = useTempJocasta();
 
 /**
  * A server whose close question is answered with `answers` in turn (Stop everything, typed with its code, for true;
- * Cancel for false) through `POST /api/popup/<code>`, as what shows it would; every question, terminal opened and
- * container stop kept.
+ * Cancel for false) through `GET` then `POST /api/popup/<code>` with the reader secret, as what shows it would; every
+ * question, terminal opened and container stop kept.
  */
 async function guarded(answers: boolean[], options: ServerOptions = {}) {
 	const asked: string[] = [];
@@ -27,11 +29,16 @@ async function guarded(answers: boolean[], options: ServerOptions = {}) {
 		onQuestion: (popup) => {
 			asked.push(popup.view.message);
 			const choice = (answers.shift() ?? false) ? STOP : CANCEL;
-			void fetch(`http://127.0.0.1:${server.port}/api/popup/${popup.code}`, {
-				method: "POST",
-				headers: { authorization: `Bearer ${server.token}` },
-				body: JSON.stringify({ choice, typed: popup.view.code }),
-			});
+			const url = `http://127.0.0.1:${server.port}/api/popup/${popup.code}`;
+			const authorization = `Bearer ${server.token}`;
+			void (async () => {
+				const read = await fetch(url, { headers: { authorization } });
+				await fetch(url, {
+					method: "POST",
+					headers: { authorization, [POPUP_READER_HEADER]: read.headers.get(POPUP_READER_HEADER) ?? "" },
+					body: JSON.stringify({ choice, typed: popup.view.code }),
+				});
+			})();
 		},
 		reattach: () => {
 			reattached++;
@@ -68,13 +75,13 @@ test("with no thread at work, closing asks nothing and stops everything", async 
 	await server.stopped;
 	expect(asked).toEqual([]);
 	expect(steps).toHaveLength(1);
-	expect(existsSync(frontierFilePath())).toBe(false);
+	expect(existsSync(serviceFilePath())).toBe(false);
 });
 
 test(
 	"the guard asks only while a thread is working or awaiting him, counting them apart; Cancel leaves everything running (0434, 0438, 0549)",
 	async () => {
-		demoProject(env.root);
+		await demoProject(env.root);
 		const { server, asked, steps, reattached } = await guarded([false, false]);
 		try {
 			const paneId = await startThread(server);
@@ -82,14 +89,14 @@ test(
 			await until(() => server.service.busyThreads().working === 1);
 			const before = server.herdr.calls.length;
 			expect(await server.shutdown({ ask: true })).toBe("kept");
-			expect(asked).toEqual(["Stop 1 working thread? Their sessions are saved."]);
+			expect(asked).toEqual(["Stop 1 working thread? They pick up where they left off next time."]);
 
 			server.herdr.setState(paneId, "blocked");
 			await until(() => server.service.hud().blocked === 1);
 			expect(await server.shutdown({ ask: true })).toBe("kept");
 			expect(asked).toEqual([
-				"Stop 1 working thread? Their sessions are saved.",
-				"Stop 1 thread awaiting you? Their sessions are saved.",
+				"Stop 1 working thread? They pick up where they left off next time.",
+				"Stop 1 thread awaiting you? They pick up where they left off next time.",
 			]);
 			// The quit action asks where he is: no new terminal.
 			expect(reattached()).toBe(0);
@@ -100,7 +107,7 @@ test(
 			expect(after).not.toContain("stopServer");
 			expect(steps).toEqual([]);
 			expect(server.herdr.paneList.some((p) => p.paneId === paneId)).toBe(true);
-			expect(readFrontierFile()?.port).toBe(server.port);
+			expect(readServiceFile()?.port).toBe(server.port);
 			const health = await fetch(`http://127.0.0.1:${server.port}/api/mcp/thread_status`, {
 				method: "POST",
 				headers: { authorization: `Bearer ${server.token}` },
@@ -128,7 +135,7 @@ test(
 test(
 	"Stop: herdr is held down, mid-turn threads are kept for --restore, the service stops, then herdr's server, then the containers and what else registered (0434, 0549)",
 	async () => {
-		demoProject(env.root);
+		await demoProject(env.root);
 		const { server, asked, steps } = await guarded([true]);
 		server.stopsWith("the relay", () => void steps.push("relay"));
 		const paneId = await startThread(server);
@@ -137,7 +144,7 @@ test(
 		const before = server.herdr.calls.length;
 		expect(await server.shutdown({ ask: true })).toBe("stopped");
 		await server.stopped;
-		expect(asked).toEqual(["Stop 1 working thread? Their sessions are saved."]);
+		expect(asked).toEqual(["Stop 1 working thread? They pick up where they left off next time."]);
 		const methods = server.herdr.calls.slice(before).map((c) => c.method);
 		// Held down first; the service's last word to herdr (clearing its tokens) comes before the server stops.
 		expect(methods.indexOf("keepDown")).toBeGreaterThanOrEqual(0);
@@ -152,7 +159,7 @@ test(
 		>;
 		expect(panes[paneId]?.restore).toBe(join(env.root, "s.jsonl"));
 		expect(server.herdr.paneList).toEqual([]);
-		expect(existsSync(frontierFilePath())).toBe(false);
+		expect(existsSync(serviceFilePath())).toBe(false);
 		// Asked again once stopped: the same outcome, nothing more.
 		expect(await server.shutdown({ ask: true })).toBe("stopped");
 		expect(server.herdr.of("stopServer")).toHaveLength(1);
@@ -163,7 +170,7 @@ test(
 test(
 	"a close right after a service restart waits for the threads to be found, so a working one is still asked about (LC-9)",
 	async () => {
-		demoProject(env.root);
+		await demoProject(env.root);
 		const herdr = new FakeHerdr();
 		const first = await startTestServer({ herdr });
 		const paneId = await startThread(first);
@@ -204,7 +211,7 @@ test(
 			const outcome = second.shutdown({ ask: true });
 			gate.resolve();
 			expect(await outcome).toBe("kept");
-			expect(asked).toEqual(["Stop 1 working thread? Their sessions are saved."]);
+			expect(asked).toEqual(["Stop 1 working thread? They pick up where they left off next time."]);
 		} finally {
 			await second.ready.catch(() => {});
 			await second.stop();
@@ -223,7 +230,7 @@ test("a stop step that throws or hangs never keeps the close from finishing (LC-
 	expect(await server.shutdown({ ask: true })).toBe("stopped");
 	await server.stopped;
 	expect(server.herdr.of("stopServer")).toHaveLength(1);
-	expect(existsSync(frontierFilePath())).toBe(false);
+	expect(existsSync(serviceFilePath())).toBe(false);
 	rmSync(hud, { force: true, recursive: true });
 
 	// Containers that never answer are left after their bound.
@@ -233,7 +240,37 @@ test("a stop step that throws or hangs never keeps the close from finishing (LC-
 	});
 	expect(await hung.shutdown({ ask: true })).toBe("stopped");
 	await hung.stopped;
-	expect(existsSync(frontierFilePath())).toBe(false);
+	expect(existsSync(serviceFilePath())).toBe(false);
+});
+
+test("the stop runner: `all` steps only on Stop everything, `finally` steps last even after a throw or a step past its bound; a failed start's undo runs newest first (SRV-A-2, SRV-A-3)", async () => {
+	const ran: string[] = [];
+	const failed: string[] = [];
+	const timedOut: string[] = [];
+	const step = (name: string, more: Partial<StopStep> = {}): StopStep => ({ name, run: () => ran.push(name), ...more });
+	const steps: StopStep[] = [
+		step("last", { when: "finally" }),
+		step("first"),
+		step("only all", { when: "all" }),
+		step("throws", {
+			run: () => {
+				ran.push("throws");
+				throw new Error("no");
+			},
+		}),
+		step("hangs", { run: () => new Promise(() => {}), ms: 20, onTimeout: () => timedOut.push("hangs") }),
+		step("after"),
+	];
+	await runStopSteps(steps, false, (name) => failed.push(name));
+	expect(ran).toEqual(["first", "throws", "after", "last"]);
+	expect(failed).toEqual(["throws", "hangs"]);
+	expect(timedOut).toEqual(["hangs"]);
+	ran.length = 0;
+	await runStopSteps(steps.slice(0, 3), true, () => {});
+	expect(ran).toEqual(["first", "only all", "last"]);
+	ran.length = 0;
+	await undoStart([step("relay"), step("herdr"), step("server")]);
+	expect(ran).toEqual(["server", "herdr", "relay"]);
 });
 
 test("bare jocasta's POST /api/shutdown needs the token, is answered at once, and with nothing at work stops everything (0434, 0549)", async () => {
@@ -241,8 +278,8 @@ test("bare jocasta's POST /api/shutdown needs the token, is answered at once, an
 	const url = `http://127.0.0.1:${server.port}${SHUTDOWN_PATH}`;
 	expect((await fetch(url, { method: "POST", headers: { authorization: "Bearer nope" } })).status).toBe(401);
 	expect((await fetch(url, { method: "POST" })).status).toBe(401);
-	const file = readFrontierFile();
-	if (!file) throw new Error("no frontier.json");
+	const file = readServiceFile();
+	if (!file) throw new Error("no jocasta-service.json");
 	expect(await askShutdown(file)).toBe(true);
 	await server.stopped;
 	expect(asked).toEqual([]);
@@ -256,7 +293,7 @@ test("bare jocasta's POST /api/shutdown needs the token, is answered at once, an
 test(
 	"his client closing while a thread works opens a terminal on the session and asks there; Cancel keeps all, Stop stops all (0549)",
 	async () => {
-		demoProject(env.root);
+		await demoProject(env.root);
 		const { server, asked, steps, reattached } = await guarded([false, true]);
 		try {
 			const paneId = await startThread(server);
@@ -264,7 +301,7 @@ test(
 			await until(() => server.service.busyThreads().working === 1);
 			expect(await server.clientClosed()).toBe("kept");
 			expect(reattached()).toBe(1);
-			expect(asked).toEqual(["Stop 1 working thread? Their sessions are saved."]);
+			expect(asked).toEqual(["Stop 1 working thread? They pick up where they left off next time."]);
 			expect(server.herdr.of("stopServer")).toHaveLength(0);
 			expect(steps).toEqual([]);
 			expect(await server.clientClosed()).toBe("stopped");

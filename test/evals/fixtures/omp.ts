@@ -1,8 +1,9 @@
 // A stand-in for `omp`: `--version` prints a version; otherwise it prints canned `--mode json` lines (the session
 // header, a `task` tool's result with one subagent's usage, two assistant `message_end` turns). A prompt
 // `Write <file>: <text>` writes that file in the cwd; a prompt starting `Fail` exits 1; a prompt starting `Review`
-// answers with two findings, `[P1]` and `[P3]`. Each run appends its argv, its `--config` overlay's contents, its cwd
-// and git branch to `JOCASTA_TEST_OMP_LOG` when set. With `--session-dir <dir>` it also writes a session file there
+// answers with two findings, `[P1]` and `[P3]`. Each run appends its argv, its `--config` overlay's contents, its cwd,
+// git branch and `--append-system-prompt` file's text to `JOCASTA_TEST_OMP_LOG` when set. With `--session-dir <dir>` it
+// also writes a session file there
 // (one priced request on `claude-opus-5-5`, one `read` call and its result), as omp keeps one per session.
 import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -22,9 +23,10 @@ const config = after("--config");
 if (process.env.JOCASTA_TEST_OMP_LOG) {
 	const overlay = config === undefined ? undefined : JSON.parse(readFileSync(config, "utf8"));
 	const branch = spawnSync("git", ["branch", "--show-current"], { encoding: "utf8" }).stdout.trim();
+	const appended = after("--append-system-prompt");
 	appendFileSync(
 		process.env.JOCASTA_TEST_OMP_LOG,
-		`${JSON.stringify({ argv, overlay, cwd: process.cwd(), branch })}\n`,
+		`${JSON.stringify({ argv, overlay, cwd: process.cwd(), branch, appendedText: appended === undefined ? undefined : readFileSync(appended, "utf8") })}\n`,
 	);
 }
 const write = /^Write (\S+): (.*)$/.exec(prompt);

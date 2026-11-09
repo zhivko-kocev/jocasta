@@ -1,11 +1,14 @@
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { sameToken } from "../../shared/fsx.ts";
+import { appendJsonl } from "../../shared/jsonl.ts";
+import { ompModelCost } from "../../shared/ledger.ts";
+import { LineRpc } from "../../shared/line-rpc.ts";
 import { log } from "../../shared/log.ts";
-import { readSettings } from "../../shared/settings.ts";
-
-/** The endpoint's base path; an OpenAI client posts to `<base>/chat/completions`. */
-export const LLM_PATH = "/llm/v1";
+import { LLM_PATH } from "../../shared/memory/graph/callback.ts";
+import { dataDir } from "../../shared/paths.ts";
+import { checkSettings, readSettings, type Settings } from "../../shared/settings.ts";
 
 /** Graphiti's two model names (0341). */
 export type GraphModel = "main" | "small";
@@ -21,6 +24,8 @@ export interface CompletionRequest {
 interface Completion {
 	/** The id of the model that answered. */
 	model: string;
+	/** The omp provider the call was sent to, when its selector named one (`provider/id`); null for an omp role. */
+	provider: string | null;
 	text: string;
 	stopReason: "stop" | "length";
 	usage: { input: number; output: number; cacheRead: number; cacheWrite: number };
@@ -42,6 +47,50 @@ interface LlmEndpointOptions {
 	token?: string;
 	/** Test seam; his omp (`ompCompleter()`) by default. */
 	completer?: Completer;
+	/** Test seam; `<dataDir>/graph-usage.jsonl` by default. */
+	usageFile?: string;
+}
+
+/** One answered Graphiti model call in `<dataDir>/graph-usage.jsonl` (0582), read into "$ today". */
+export interface GraphUsageLine {
+	at: string;
+	model: string;
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	/** Dollars at omp's models.db prices; 0 for a model it doesn't price. */
+	cost: number;
+}
+
+/** Appends the call's usage, priced from omp's models.db (0582); a failed write is logged and the call still answers. */
+function recordUsage(file: string, reply: Completion): void {
+	const { input, output, cacheRead, cacheWrite } = reply.usage;
+	// The reply may name the model as `provider/id` or as the id alone; models.db rows hold the id.
+	const prefix = reply.provider === null ? undefined : `${reply.provider}/`;
+	const id = prefix && reply.model.startsWith(prefix) ? reply.model.slice(prefix.length) : reply.model;
+	const price = ompModelCost(reply.provider, id);
+	const cost = price
+		? (input * price.input + output * price.output + cacheRead * price.cacheRead + cacheWrite * price.cacheWrite) / 1e6
+		: 0;
+	const line: GraphUsageLine = {
+		at: new Date().toISOString(),
+		model: reply.model,
+		input,
+		output,
+		cacheRead,
+		cacheWrite,
+		cost,
+	};
+	try {
+		appendJsonl(file, line);
+	} catch (cause) {
+		log(
+			"warn",
+			"llm",
+			`couldn't record Graphiti's model usage in ${file}: ${cause instanceof Error ? cause.message : String(cause)}`,
+		);
+	}
 }
 
 /** The chat completion request as Graphiti 0.30.2's `OpenAIGenericClient._generate_response` sends it. */
@@ -148,6 +197,7 @@ export function createLlmEndpoint(options: LlmEndpointOptions = {}): LlmEndpoint
 				log("warn", "llm", `Graphiti's ${name} model call failed: ${message}`);
 				return error(502, message, "upstream_error");
 			}
+			recordUsage(options.usageFile ?? join(dataDir(), "graph-usage.jsonl"), reply);
 			const { input, output, cacheRead, cacheWrite } = reply.usage;
 			return Response.json({
 				id: `chatcmpl-${randomBytes(12).toString("hex")}`,
@@ -196,15 +246,17 @@ interface GatewayLine {
 	version?: string;
 }
 
-/** `graph.main` / `graph.small` in `jocasta.yaml`: an omp `provider/id`, or `undefined` for omp's role. */
+/**
+ * `graph.main` / `graph.small` in `jocasta.yaml`: an omp `provider/id`, or `undefined` for omp's role. A bad value of
+ * either throws `jocasta.yaml`'s line and turns Graphiti's model calls off (0584); a `graph` that isn't a mapping
+ * uses omp's roles, as its settings problem says.
+ */
 function configuredModel(settings: Record<string, unknown>, name: GraphModel): string | undefined {
-	const graph = settings.graph;
-	const value = graph && typeof graph === "object" && name in graph ? graph[name as keyof typeof graph] : undefined;
-	if (value === undefined) return undefined;
-	if (typeof value !== "string" || !/^[^/\s]+\/\S+$/.test(value)) {
-		throw new Error(`graph.${name} in jocasta.yaml must be an omp model as provider/id`);
-	}
-	return value;
+	const graph = (settings as Settings).graph;
+	if (graph === null || typeof graph !== "object" || Array.isArray(graph)) return undefined;
+	checkSettings(settings, "graph.main");
+	checkSettings(settings, "graph.small");
+	return graph[name];
 }
 
 /** A gateway answer as a completion; a non-200 status throws with the gateway's message. */
@@ -219,98 +271,31 @@ function completion(selector: string, status: number, body: unknown): Completion
 	const cached = reply.usage?.prompt_tokens_details?.cached_tokens ?? 0;
 	return {
 		model: reply.model ?? selector,
+		// `@role` selectors name no provider; `provider/id` ones do (configuredModel).
+		provider: selector.startsWith("@") ? null : selector.slice(0, selector.indexOf("/")),
 		text: choice?.message?.content ?? "",
 		stopReason: choice?.finish_reason === "length" ? "length" : "stop",
 		usage: { input: prompt - cached, output: reply.usage?.completion_tokens ?? 0, cacheRead: cached, cacheWrite: 0 },
 	};
 }
 
-/** One running `omp auth-gateway stdio` child: requests by id, answered in any order. */
-interface Gateway {
-	send(path: string, body: unknown, signal?: AbortSignal): Promise<GatewayLine>;
-	close(): void;
-}
-
-function startGateway(command: string[], onExit: () => void): Gateway {
-	const child = Bun.spawn([...command, "auth-gateway", "stdio"], {
+/** Starts one `omp auth-gateway stdio` child: requests by id, answered in any order. */
+function startGateway(command: string[], onExit: () => void): LineRpc<GatewayLine> {
+	const gateway = new LineRpc<GatewayLine>([...command, "auth-gateway", "stdio"], {
 		// Out of any project, so no project `.omp` settings or extensions load (as `omp -p` ran before, omp-adaptation §1).
 		cwd: tmpdir(),
-		stdin: "pipe",
-		stdout: "pipe",
-		stderr: "pipe",
-		windowsHide: true,
-	});
-	const pending = new Map<number, PromiseWithResolvers<GatewayLine>>();
-	let nextId = 1;
-	let stderrTail = "";
-	let gone: Error | undefined;
-
-	const answers = (async () => {
-		const decoder = new TextDecoder();
-		let buffered = "";
-		for await (const chunk of child.stdout) {
-			buffered += decoder.decode(chunk, { stream: true });
-			let newline = buffered.indexOf("\n");
-			while (newline >= 0) {
-				const text = buffered.slice(0, newline).trim();
-				buffered = buffered.slice(newline + 1);
-				newline = buffered.indexOf("\n");
-				let line: GatewayLine | null;
-				try {
-					line = JSON.parse(text) as GatewayLine | null;
-				} catch {
-					continue;
-				}
-				if (line?.ready) log("info", "llm", `omp auth-gateway stdio ready (omp ${line.version ?? "unknown"})`);
-				else if (typeof line?.id === "number") pending.get(line.id)?.resolve(line);
-			}
-		}
-	})().catch(() => undefined);
-	const errors = (async () => {
-		const decoder = new TextDecoder();
-		for await (const chunk of child.stderr) stderrTail = (stderrTail + decoder.decode(chunk)).slice(-500);
-	})().catch(() => undefined);
-	// Every line it wrote is read before the calls still waiting fail.
-	void Promise.all([child.exited, answers, errors]).then(([code]) => {
-		const tail = stderrTail.trim();
-		gone = new Error(`omp auth-gateway stdio exited ${code}${tail ? `: ${tail}` : ""}`);
-		for (const waiter of pending.values()) waiter.reject(gone);
-		pending.clear();
-		onExit();
+		exitError: (code, stderr) => {
+			const tail = stderr.trim();
+			return new Error(`omp auth-gateway stdio exited ${code}${tail ? `: ${tail}` : ""}`);
+		},
+		onOther: (line) => {
+			if (line.ready) log("info", "llm", `omp auth-gateway stdio ready (omp ${line.version ?? "unknown"})`);
+		},
+		onExit,
 	});
 	// The service's stdin pipe closing ends the child (the gateway serves until stdin ends), so it never pins the process.
-	child.unref();
-
-	return {
-		async send(path, body, signal) {
-			if (gone) throw gone;
-			if (signal?.aborted) throw new Error("model call aborted");
-			const id = nextId++;
-			const waiter = Promise.withResolvers<GatewayLine>();
-			pending.set(id, waiter);
-			// The protocol has no cancel line: an aborted call stops waiting and its late answer is dropped.
-			const abort = () => {
-				pending.delete(id);
-				waiter.reject(new Error("model call aborted"));
-			};
-			signal?.addEventListener("abort", abort, { once: true });
-			try {
-				child.stdin.write(`${JSON.stringify({ id, path, body })}\n`);
-				void child.stdin.flush();
-				return await waiter.promise;
-			} finally {
-				pending.delete(id);
-				signal?.removeEventListener("abort", abort);
-			}
-		},
-		close() {
-			try {
-				void child.stdin.end();
-			} catch {
-				// Already closed.
-			}
-		},
-	};
+	gateway.unref();
+	return gateway;
 }
 
 interface OmpCompleterOptions {
@@ -318,6 +303,8 @@ interface OmpCompleterOptions {
 	command?: string[];
 	/** Test seam; `readSettings()` by default. */
 	settings?: () => Record<string, unknown>;
+	/** Test seam: how long the gateway child may sit without calls before it is closed; 15 minutes by default. */
+	idleMs?: number;
 }
 
 interface OmpCompleter extends Completer {
@@ -325,20 +312,34 @@ interface OmpCompleter extends Completer {
 	close(): void;
 }
 
+/** The gateway child closes after this long without calls, as Graphiti's containers stop after 15 idle minutes (0073, 0340). */
+const GATEWAY_IDLE_MS = 15 * 60_000;
+
 /**
  * His omp as Graphiti's model (0390, 0463): `graph.main` / `graph.small` from `jocasta.yaml`, else omp's `@default` /
  * `@smol` roles with their `retry.fallbackChains`, through one `omp auth-gateway stdio` child started on the first
- * call and started again on the next call after it exits.
+ * call, closed 15 minutes after the last call ends, and started again on the next call after it exits or closes.
  */
 export function ompCompleter(options: OmpCompleterOptions = {}): OmpCompleter {
 	const command = options.command ?? ["omp"];
 	const settings = options.settings ?? readSettings;
-	let gateway: Gateway | undefined;
+	const idleMs = options.idleMs ?? GATEWAY_IDLE_MS;
+	let gateway: LineRpc<GatewayLine> | undefined;
+	let calls = 0;
+	let idle: Timer | undefined;
+	const close = () => {
+		clearTimeout(idle);
+		idle = undefined;
+		gateway?.close();
+		gateway = undefined;
+	};
 	return {
 		async complete(name, request) {
 			const selector = configuredModel(settings(), name) ?? `@${OMP_ROLE[name]}`;
+			clearTimeout(idle);
+			idle = undefined;
 			if (!gateway) {
-				const started: Gateway = startGateway(command, () => {
+				const started: LineRpc<GatewayLine> = startGateway(command, () => {
 					if (gateway === started) gateway = undefined;
 				});
 				gateway = started;
@@ -347,21 +348,28 @@ export function ompCompleter(options: OmpCompleterOptions = {}): OmpCompleter {
 				...(request.system === undefined ? [] : [{ role: "system", content: request.system }]),
 				...request.messages.map((content) => ({ role: "user", content })),
 			];
-			const line = await gateway.send(
-				CHAT_PATH,
-				{
+			calls++;
+			try {
+				const body = {
 					model: selector,
 					messages,
 					...(request.maxTokens === undefined ? {} : { max_tokens: request.maxTokens }),
-				},
-				request.signal,
-			);
-			return completion(selector, line.status ?? 500, line.body);
+				};
+				const line = await gateway.request((id) => ({ id, path: CHAT_PATH, body }), {
+					signal: request.signal,
+					abortMessage: "model call aborted",
+				});
+				return completion(selector, line.status ?? 500, line.body);
+			} finally {
+				calls--;
+				if (calls === 0) {
+					// Unref'd: the idle clock never keeps the service alive.
+					idle = setTimeout(close, idleMs);
+					idle.unref();
+				}
+			}
 		},
-		close() {
-			gateway?.close();
-			gateway = undefined;
-		},
+		close,
 	};
 }
 

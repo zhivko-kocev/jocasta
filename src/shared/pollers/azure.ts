@@ -1,4 +1,4 @@
-import type { NewEvent } from "../events/queue.ts";
+import type { NewEvent, PollRound } from "../events/queue.ts";
 import { type RunCli, runJson } from "./cli.ts";
 
 interface AzPr {
@@ -34,62 +34,89 @@ async function me(run: RunCli): Promise<string> {
 /**
  * One Azure DevOps round for each org in config (0301): active PRs where he is a reviewer and hasn't voted (normal,
  * 0298), and the latest run of each pipeline and branch that failed on main or master, or on a branch he pushed
- * (urgent, 0303).
+ * (urgent, 0303). A listing that fails (an org, or one project the account can't read) leaves that org's or project's
+ * events out of the observed scope, so they stay as they were, and is returned as a failure; the rest of the round
+ * goes on (SHR-8).
  */
-export async function pollAzure(run: RunCli, orgs: readonly string[]): Promise<NewEvent[]> {
-	if (orgs.length === 0) return [];
-	const user = await me(run);
+export async function pollAzure(run: RunCli, orgs: readonly string[]): Promise<PollRound> {
 	const events: NewEvent[] = [];
+	/** Source id prefixes whose listing failed this round. */
+	const unseen: string[] = [];
+	const failures: string[] = [];
+	const failed = (prefix: string, error: unknown): void => {
+		unseen.push(prefix);
+		const message = (error as Error).message;
+		if (!failures.includes(message)) failures.push(message);
+	};
+	const observed = (sourceId: string): boolean => !unseen.some((prefix) => sourceId.startsWith(prefix));
+	if (orgs.length === 0) return { events, observed, failures };
+	const user = await me(run);
 	for (const org of orgs) {
 		const base = org.replace(/\/+$/, "");
-		const prs = await runJson<AzPr[]>(
-			run,
-			"az",
-			["repos", "pr", "list", "--organization", base, "--reviewer", user, "--status", "active", "--output", "json"],
-			[],
-		);
-		for (const pr of prs) {
-			const mine = pr.reviewers?.find((r) => r.uniqueName?.toLowerCase() === user);
-			if (mine && (mine.vote ?? 0) !== 0) continue;
-			const project = pr.repository?.project?.name ?? "";
-			const repo = pr.repository?.name ?? "";
-			events.push({
-				sourceId: `azure:review:${base}/${project}/${repo}#${pr.pullRequestId}`,
-				source: "azure",
-				kind: "review",
-				priority: "normal",
-				text: `Review requested — ${pr.title} (${project}/${repo} !${pr.pullRequestId})`,
-				url: `${base}/${encodeURIComponent(project)}/_git/${encodeURIComponent(repo)}/pullrequest/${pr.pullRequestId}`,
-			});
-		}
-		const projects = await runJson<{ value?: { name: string }[] }>(
-			run,
-			"az",
-			["devops", "project", "list", "--organization", base, "--output", "json"],
-			{},
-		);
-		for (const { name } of projects.value ?? []) {
-			if (/["%]/.test(name)) continue;
-			const runs = await runJson<AzRun[]>(
+		try {
+			const prs = await runJson<AzPr[]>(
 				run,
 				"az",
-				[
-					"pipelines",
-					"runs",
-					"list",
-					"--organization",
-					base,
-					"--project",
-					name,
-					"--top",
-					RUNS_PER_PROJECT,
-					"--query-order",
-					"FinishTimeDesc",
-					"--output",
-					"json",
-				],
+				["repos", "pr", "list", "--organization", base, "--reviewer", user, "--status", "active", "--output", "json"],
 				[],
 			);
+			for (const pr of prs) {
+				const mine = pr.reviewers?.find((r) => r.uniqueName?.toLowerCase() === user);
+				if (mine && (mine.vote ?? 0) !== 0) continue;
+				const project = pr.repository?.project?.name ?? "";
+				const repo = pr.repository?.name ?? "";
+				events.push({
+					sourceId: `azure:review:${base}/${project}/${repo}#${pr.pullRequestId}`,
+					source: "azure",
+					kind: "review",
+					priority: "normal",
+					text: `Review requested — ${pr.title} (${project}/${repo} !${pr.pullRequestId})`,
+					url: `${base}/${encodeURIComponent(project)}/_git/${encodeURIComponent(repo)}/pullrequest/${pr.pullRequestId}`,
+				});
+			}
+		} catch (error) {
+			failed(`azure:review:${base}/`, error);
+		}
+		let projects: { value?: { name: string }[] };
+		try {
+			projects = await runJson<{ value?: { name: string }[] }>(
+				run,
+				"az",
+				["devops", "project", "list", "--organization", base, "--output", "json"],
+				{},
+			);
+		} catch (error) {
+			failed(`azure:pipeline:${base}/`, error);
+			continue;
+		}
+		for (const { name } of projects.value ?? []) {
+			if (/["%]/.test(name)) continue;
+			let runs: AzRun[];
+			try {
+				runs = await runJson<AzRun[]>(
+					run,
+					"az",
+					[
+						"pipelines",
+						"runs",
+						"list",
+						"--organization",
+						base,
+						"--project",
+						name,
+						"--top",
+						RUNS_PER_PROJECT,
+						"--query-order",
+						"FinishTimeDesc",
+						"--output",
+						"json",
+					],
+					[],
+				);
+			} catch (error) {
+				failed(`azure:pipeline:${base}/${name}/`, error);
+				continue;
+			}
 			// The newest finished run of each pipeline and branch decides whether it is red.
 			const latest = new Map<string, AzRun>();
 			for (const r of runs) {
@@ -113,5 +140,5 @@ export async function pollAzure(run: RunCli, orgs: readonly string[]): Promise<N
 			}
 		}
 	}
-	return events;
+	return { events, observed, failures };
 }

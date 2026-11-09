@@ -12,6 +12,6 @@ settings:
   async:
     enabled: false
   # 0567: every omp arm warms the cache only while a run streams (his config's `streaming`, 0541), so none pings
-  # between runs, as omp's default `idle` would. Only the follow-up arm f-keepalive sets `idle`.
+  # between runs, as omp's default `idle` would (0575: no arm measures pings; a trial has no idle gap).
   providers:
     cacheWarming: streaming

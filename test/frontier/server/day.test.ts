@@ -2,9 +2,11 @@ import { expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ServerMessage } from "../../../src/frontier/protocol.ts";
+import { graphUsagePath } from "../../../src/frontier/server/spend.ts";
 import { mergeWorklog, worklogPath, writeWorklog } from "../../../src/frontier/server/worklog.ts";
+import { appendJsonl } from "../../../src/shared/jsonl.ts";
 import { projectsFile } from "../../../src/shared/paths.ts";
-import { GIT_TEST_TIMEOUT, sh, useTempJocasta } from "../../shared/fixture.ts";
+import { GIT_TEST_TIMEOUT, readJsonl, sh, useTempJocasta } from "../../shared/fixture.ts";
 import { demoProject, Page, TEST_BOSS_KEY, type TestServer, until, withServer, writeSettings } from "./helpers.ts";
 
 const env = useTempJocasta();
@@ -36,7 +38,7 @@ function clock(start: Date): { now: () => Date; set: (at: Date) => void; add: (m
 }
 
 test("delivery (0299, 0405, 0554): each event is an [event] line and a notification through herdr; one reminder after 30 minutes (0303); quiet hours hold normal (0298)", async () => {
-	writeSettings(env.config, { frontier: { quietHours: "22:00-08:00" } });
+	writeSettings(env.config, { service: { quietHours: "22:00-08:00" } });
 	const time = clock(new Date(2026, 9, 8, 10, 0));
 	await withServer(
 		async (server) => {
@@ -47,7 +49,7 @@ test("delivery (0299, 0405, 0554): each event is an [event] line and a notificat
 					.map(([note]) => note)
 					.filter((note) => (note as { title: string }).title !== "Jocasta");
 			const page = await Page.open(server);
-			expect((await page.waitFor(is("snapshot"))).quietHours).toBe(false);
+			expect((await page.waitFor(is("snapshot"))).hud.quiet).toBe(false);
 			server.herdr.setState(server.herdr.paneList[0]?.paneId as string, "idle");
 			const { day } = server.service;
 
@@ -73,14 +75,12 @@ test("delivery (0299, 0405, 0554): each event is an [event] line and a notificat
 			// Through herdr to Windows, urgent ones with its request sound (0554); each call in notifications.jsonl.
 			await until(() => notes().length === 1);
 			expect(notes()).toEqual([{ title: "Pipeline red", body: "web on main", sound: "request" }]);
-			const logged = () =>
-				existsSync(join(env.data, "notifications.jsonl"))
-					? readFileSync(join(env.data, "notifications.jsonl"), "utf8")
-							.split("\n")
-							.filter(Boolean)
-							.map((l) => JSON.parse(l) as { title: string })
-							.find((n) => n.title === "Pipeline red")
+			const logged = () => {
+				const file = join(env.data, "notifications.jsonl");
+				return existsSync(file)
+					? readJsonl<{ title: string }>(file).find((n) => n.title === "Pipeline red")
 					: undefined;
+			};
 			await until(() => logged() !== undefined);
 			expect(logged()).toMatchObject({
 				paneId: null,
@@ -134,10 +134,10 @@ test("delivery (0299, 0405, 0554): each event is an [event] line and a notificat
 			await until(() => lines(server).includes("[event] sentinel"));
 			expect(lines(server)).toHaveLength(5);
 
-			// Quiet hours: the feed hears about it; normal waits for the morning; urgent goes through.
+			// Quiet hours: the HUD says so; normal waits for the morning; urgent goes through.
 			time.set(new Date(2026, 9, 8, 22, 30));
 			day.tick();
-			expect(await page.waitFor(is("quiet"))).toEqual({ type: "quiet", quiet: true });
+			expect(server.service.hud().quiet).toBe(true);
 			const notified = notes().length;
 			day.raise({
 				sourceId: "github:review:acme/api#43",
@@ -199,7 +199,7 @@ const FEED = [
 ].join("\r\n");
 
 test("today (0300, 0409): calendar with links (0429), awaiting you, landed, underway, next; a meeting in 5 minutes is urgent (0298)", async () => {
-	const project = demoProject(env.root);
+	const project = await demoProject(env.root);
 	const time = clock(new Date(2026, 9, 8, 9, 0));
 	const url = "https://calendar.example.test/private-abc123/basic.ics";
 	const fetchUrl = (async () => new Response(FEED)) as unknown as typeof fetch;
@@ -222,7 +222,9 @@ test("today (0300, 0409): calendar with links (0429), awaiting you, landed, unde
 			const snapshot = await page.waitFor(is("snapshot"));
 			expect(snapshot.today).toEqual({
 				date: "2026-10-08",
-				calendar: [{ time: "10:00", title: "standup (client-a)", url: "https://meet.google.com/abc-defg-hij" }],
+				calendar: [
+					{ time: "10:00", title: "standup (client-a)", url: "https://meet.google.com/abc-defg-hij", end: "10:15" },
+				],
 				needsYou: [
 					{
 						kind: "review",
@@ -234,8 +236,6 @@ test("today (0300, 0409): calendar with links (0429), awaiting you, landed, unde
 				underway: [],
 				next: [{ id: note.id, text: "try the new parser", project: "demo" }],
 			});
-			page.send({ type: "today.open" });
-			expect((await page.waitFor(is("today"))).today.calendar).toHaveLength(1);
 
 			// 09:56: the standup is 4 minutes out, so it is urgent, once.
 			time.set(new Date(2026, 9, 8, 9, 56));
@@ -265,7 +265,7 @@ test("today (0300, 0409): calendar with links (0429), awaiting you, landed, unde
 test(
 	"the boss's inbox and worklog tools (0302): note, remind, today, inbox_done and worklog through /api/mcp",
 	async () => {
-		demoProject(env.root);
+		await demoProject(env.root);
 		const time = clock(new Date(2026, 9, 8, 9, 0));
 		await withServer(
 			async (server) => {
@@ -361,7 +361,7 @@ function dashboardFetch(state: { newsDown: boolean }): typeof fetch {
 test("the dashboard (0429, 0442): news and weather feed the page only; a news failure is said once and the last list stays; today's activity", async () => {
 	writeSettings(env.config, {});
 	const time = clock(new Date(2026, 9, 8, 9, 0));
-	const project = demoProject(env.root);
+	const project = await demoProject(env.root);
 	const state = { newsDown: false };
 	await withServer(
 		async (server) => {
@@ -422,10 +422,10 @@ test("the dashboard (0429, 0442): news and weather feed the page only; a news fa
 			const failed = day.dashboard();
 			expect(failed.newsError).toBe("News (Hacker News): brutalist.report answered HTTP 503");
 			expect(failed.news.map((n) => n.items.length)).toEqual([1, 1, 1]);
-			// `today.open`'s reply comes after every broadcast sent before it.
-			page.send({ type: "today.open" });
-			const before = page.received.filter(is("today")).length;
-			await page.waitFor(() => page.received.filter(is("today")).length > before);
+			// A reply to this client comes after every broadcast sent before it.
+			const before = page.received.filter(is("error")).length;
+			page.send({ type: "link.open", url: "https://example.org/not-shown" });
+			await page.waitFor(() => page.received.filter(is("error")).length > before);
 			const said = page.received.filter(
 				(m) => m.type === "toast" && m.text === "News (Hacker News): brutalist.report answered HTTP 503",
 			);
@@ -454,6 +454,14 @@ test("the dashboard (0429, 0442): news and weather feed the page only; a news fa
 				"demo/Docs — done and reviewed: 1 new commit, 0 notes, tests pass",
 			]);
 			expect(activity.summaries).toEqual([{ at: time.now().toISOString(), project: "demo", text: "Ship the parser" }]);
+			expect(activity.worklog.some((line) => line.startsWith("graph memory"))).toBe(false);
+
+			// Graphiti's model calls today (0582): their share of "$ today" is named; yesterday's isn't counted.
+			appendJsonl(graphUsagePath(), { at: new Date(2026, 9, 7, 12).toISOString(), model: "m", cost: 5 });
+			appendJsonl(graphUsagePath(), { at: time.now().toISOString(), model: "m", cost: 0.5 });
+			appendJsonl(graphUsagePath(), { at: time.now().toISOString(), model: "m", cost: 0.35 });
+			day.tick();
+			expect(day.dashboard().activity.worklog).toContain("graph memory · $0.85");
 		},
 		{ day: { pollers: false, now: time.now, fetchUrl: dashboardFetch(state), diskFree: () => 0.5 } },
 	);
@@ -461,8 +469,8 @@ test("the dashboard (0429, 0442): news and weather feed the page only; a news fa
 
 test(
 	"the worklog (0302): one entry per project from the day's omp sessions and his commits, with time and links; his edits are kept",
-	() => {
-		const project = demoProject(env.root);
+	async () => {
+		const project = await demoProject(env.root);
 		sh(project.mainPath, "config", "user.email", "test@example.com");
 		sh(project.mainPath, "remote", "add", "origin", "git@github.com:acme/demo.git");
 		// The day of the project's commit, as git dates it: a run across midnight can't split the two (SH-20).
@@ -473,7 +481,7 @@ test(
 		// 10 minutes of work, a 2-hour break, then 5 more: 15 minutes.
 		const sessions = () => [{ label: "Readme line", times: [at(0), at(10), at(130), at(135)] }];
 
-		const written = writeWorklog([project], today, sessions);
+		const written = await writeWorklog([project], today, sessions);
 		expect(written).toEqual({ path: worklogPath(today), projects: ["demo"] });
 		const text = readFileSync(written.path, "utf8");
 		expect(text).toContain("## demo · 15m");
@@ -483,7 +491,7 @@ test(
 		// He edits the entry and adds his own line: both stay when it is written again.
 		const edited = text.replace("## demo · 15m", "## demo · 15m (pairing with A.)");
 		writeFileSync(written.path, `${edited}\nMy own note.\n`);
-		writeWorklog([project], today, sessions);
+		await writeWorklog([project], today, sessions);
 		const again = readFileSync(written.path, "utf8");
 		expect(again).toContain("(pairing with A.)");
 		expect(again).toContain("My own note.");
@@ -517,8 +525,8 @@ test("mergeWorklog replaces only untouched entries and appends new projects", ()
 	expect(next.indexOf("## c")).toBeGreaterThan(next.indexOf("## b"));
 });
 
-test("a malformed projects.yaml never ends the companion: the minute tick goes on, said once, with the last good list (CO-1)", async () => {
-	demoProject(env.root);
+test("a malformed projects.yaml never ends the service: the minute tick goes on, said once, with the last good list (CO-1)", async () => {
+	await demoProject(env.root);
 	const time = clock(new Date(2026, 9, 8, 10, 0));
 	await withServer(
 		async (server) => {

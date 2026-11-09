@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { quotaText, quotaWarning, readQuota } from "../../../src/frontier/server/quota.ts";
+import { quotaWarning, readQuota } from "../../../src/frontier/server/quota.ts";
 
 /** `omp usage --json` as omp 18.12.6 prints it (`cli/usage-cli.ts`), trimmed to what matters here. */
 const usage = {
@@ -48,13 +48,11 @@ test("the 5h and 7d windows are the most used of each across accounts, read as o
 		{ window: "5h", used: 0.75 },
 		{ window: "7d", used: 0.18 },
 	]);
-	expect(quotaText(quota)).toBe("5h 75% · 7d 18%");
 });
 
-test("no reports, or windows without amounts, give no windows and no HUD text", () => {
+test("no reports, or windows without amounts, give no windows", () => {
 	expect(readQuota(JSON.stringify({ reports: [] }))).toEqual([]);
 	expect(readQuota(JSON.stringify({ reports: [{ limits: [{ window: { id: "5h" }, amount: {} }] }] }))).toEqual([]);
-	expect(quotaText([])).toBe("");
 	expect(() => readQuota("not json")).toThrow();
 });
 

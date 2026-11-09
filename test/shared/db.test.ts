@@ -44,6 +44,41 @@ test("a failing migration rolls back and leaves the version where it was", () =>
 	raw.close();
 });
 
+test("a second process migrating the same old file at once makes the first skip that step, not fail (SHR-13)", async () => {
+	const path = join(env.root, "x.db");
+	openDb(path, []).close();
+	// Another process takes the write lock and runs migration 0 while this one has already read user_version 0. It
+	// commits after a real delay: openDb blocks this thread on the lock, so nothing here can tell it when to let go.
+	const holder = Bun.spawn(
+		[
+			process.execPath,
+			"-e",
+			`import { Database } from "bun:sqlite";
+const db = new Database(${JSON.stringify(path)});
+db.exec("BEGIN IMMEDIATE");
+db.exec(${JSON.stringify(MIGRATIONS[0])});
+db.exec("PRAGMA user_version = 1");
+console.log("holding");
+await Bun.sleep(500);
+db.exec("COMMIT");
+db.close();`,
+		],
+		{ stdout: "pipe", stderr: "inherit", windowsHide: true },
+	);
+	const reader = holder.stdout.getReader();
+	const { value } = await reader.read();
+	expect(new TextDecoder().decode(value)).toContain("holding");
+	const db = openDb(path, MIGRATIONS);
+	expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 2 });
+	expect(db.query("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all()).toEqual([
+		{ name: "a" },
+		{ name: "b" },
+	]);
+	db.close();
+	reader.releaseLock();
+	expect(await holder.exited).toBe(0);
+});
+
 test("a newer file is refused with 0101's message and left untouched", () => {
 	const path = join(env.root, "catalog.db");
 	const raw = new Database(path);

@@ -1,12 +1,12 @@
-// One service at a time (0362, 0549), and a hung one never blocks every later start (0534).
+// One service at a time (0362, 0549), and a hung one never blocks every later start (0534) nor ends herdr's (0582).
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { takeInstance } from "../../../src/frontier/server/instance.ts";
 import type { ServiceState } from "../../../src/frontier/server/launch.ts";
-import { killTree, processIdOf } from "../../../src/frontier/server/proctree.ts";
-import { pidAlive } from "../../../src/shared/fsx.ts";
+import { endProcesses, pidAlive, processIdOf } from "../../../src/shared/proctree.ts";
 import { useTempJocasta } from "../../shared/fixture.ts";
+import { killAll, settles } from "./sleepers.ts";
 
 const env = useTempJocasta();
 
@@ -21,6 +21,9 @@ test("a free lock is taken and given back; a dead holder's lock is taken at once
 	const mine = await takeInstance({ lockFile: file, state: async () => "down", kill: async () => {} });
 	expect(mine).toBeDefined();
 	expect(JSON.parse(readFileSync(file, "utf8"))).toEqual(self);
+	// The herdr server it starts is noted beside it (0582).
+	mine?.noteHerdr({ pid: 4242, start: 7 });
+	expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ ...self, herdr: { pid: 4242, start: 7 } });
 	mine?.release();
 	expect(existsSync(file)).toBe(false);
 	// A crashed holder (its pid runs no more, or another program reuses it with another start time).
@@ -67,7 +70,7 @@ test("a live holder that doesn't answer within the bound is hung: its tree is en
 				states.push("busy");
 				return "busy";
 			},
-			kill: killTree,
+			kill: (holder, spare) => endProcesses([holder], spare),
 			hungMs: 300,
 			sleep: (ms) => Bun.sleep(Math.min(ms, 50)),
 		});
@@ -82,3 +85,48 @@ test("a live holder that doesn't answer within the bound is hung: its tree is en
 		hung.kill();
 	}
 });
+
+test("a hung service's takeover spares the herdr server it started and what runs under it (0582)", async () => {
+	const file = lockFile();
+	// A hung service that started a "herdr server" (its child, detached as `connectHerdr` starts it), which runs a "pane"
+	// of its own; the two write their pids beside the lock. Each stand-in starts hidden with no inherited stdio: the
+	// detached one has no console, and a console program it started otherwise would get a console window of its own,
+	// which Windows hands to Windows Terminal. A hidden one gets a windowless console host as a child instead, so the
+	// stand-ins are named by their pid files, not by their place in the tree.
+	const pidFile = (name: string) => join(env.data, `${name}.pid`);
+	const announce = (name: string) =>
+		`require("node:fs").writeFileSync(${JSON.stringify(pidFile(name))}, String(process.pid));`;
+	const idle = "setInterval(() => {}, 1000)";
+	const pane = `${announce("pane")} ${idle}`;
+	const herdrServer = `${announce("herdr")} Bun.spawn([process.execPath, "-e", ${JSON.stringify(pane)}], { stdio: ["ignore", "ignore", "ignore"], windowsHide: true }); ${idle}`;
+	const service = `require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(herdrServer)}], { detached: true, stdio: "ignore", windowsHide: true }).unref(); ${idle}`;
+	const hung = Bun.spawn([process.execPath, "-e", service], {
+		stdio: ["ignore", "ignore", "ignore"],
+		windowsHide: true,
+	});
+	const spared = () =>
+		["herdr", "pane"]
+			.map((name) => (existsSync(pidFile(name)) ? Number(readFileSync(pidFile(name), "utf8")) : 0))
+			.filter((pid) => pid > 0);
+	try {
+		expect(await settles(() => spared().length === 2)).toBe(true);
+		const holder = processIdOf(hung.pid);
+		const herdr = processIdOf(spared()[0] as number);
+		if (!holder || !herdr) throw new Error("the stand-in service didn't start its herdr");
+		writeFileSync(file, JSON.stringify({ ...holder, herdr }));
+		const mine = await takeInstance({
+			lockFile: file,
+			state: async () => "busy",
+			kill: (h, spare) => endProcesses([h], spare),
+			hungMs: 0,
+			sleep: async () => {},
+		});
+		expect(mine).toBeDefined();
+		await hung.exited;
+		for (const pid of spared()) expect(pidAlive(pid)).toBe(true);
+		mine?.release();
+	} finally {
+		hung.kill();
+		killAll(spared());
+	}
+}, 30_000);

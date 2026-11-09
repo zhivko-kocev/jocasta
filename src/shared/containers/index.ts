@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { pidAlive } from "../fsx.ts";
 import { configDir } from "../paths.ts";
+import { runProgram } from "../process.ts";
+import { pidAlive } from "../proctree.ts";
 
 /** A Compose health check (0072); durations in Compose's syntax (`10s`). */
 export interface Healthcheck {
@@ -90,7 +91,7 @@ export function composeFile(): string {
 }
 
 /** Where a Jocasta image's build context is written: `~/.jocasta/agent/containers/<service>/`. */
-export function buildContextDir(service: string): string {
+function buildContextDir(service: string): string {
 	return join(configDir(), "containers", service);
 }
 
@@ -99,7 +100,7 @@ export function buildContextDir(service: string): string {
  * Jocasta process that uses a container runs its own manager; the last one using a resource stops it, so one process
  * exiting never stops Graphiti under another (0357).
  */
-export function leaseDir(resource: string): string {
+function leaseDir(resource: string): string {
 	return join(configDir(), "containers", "leases", resource);
 }
 
@@ -112,7 +113,7 @@ interface Lease {
 }
 
 /** A built image's tag: its build context's hash, so a changed Dockerfile builds a new image. */
-export function builtImageTag(service: ContainerService): string | undefined {
+function builtImageTag(service: ContainerService): string | undefined {
 	if (!service.build) return undefined;
 	const hash = createHash("sha256");
 	for (const name of Object.keys(service.build).sort()) hash.update(`${name}\0${service.build[name]}\0`);
@@ -161,25 +162,18 @@ function writeIfChanged(file: string, text: string): void {
 }
 
 /** `docker compose` on this machine (0071). */
-export const dockerCompose: ComposeRun = async (file, args, env) => {
-	let child: Bun.Subprocess<"ignore", "pipe", "pipe">;
+const dockerCompose: ComposeRun = async (file, args, env) => {
 	try {
-		child = Bun.spawn(["docker", "compose", "-f", file, "-p", composeProject(), ...args], {
-			stdin: "ignore",
-			stdout: "pipe",
-			stderr: "pipe",
-			windowsHide: true,
-			...(env ? { env: { ...process.env, ...env } } : {}),
-		});
+		const { code, stdout, stderr } = await runProgram(
+			["docker", "compose", "-f", file, "-p", composeProject(), ...args],
+			{
+				...(env ? { env: { ...process.env, ...env } } : {}),
+			},
+		);
+		return { code: code ?? 1, stdout, stderr };
 	} catch (error) {
 		throw new ContainerError(`docker isn't available: ${(error as Error).message}`);
 	}
-	const [stdout, stderr, code] = await Promise.all([
-		new Response(child.stdout).text(),
-		new Response(child.stderr).text(),
-		child.exited,
-	]);
-	return { code, stdout, stderr };
 };
 
 /** Errors that mean the service isn't there (stopped by another Jocasta process, or crashed). */
@@ -214,6 +208,58 @@ export function dockerEngineRunning(probe: DockerEngineProbe = {}): boolean {
 		return exists("\\\\.\\pipe\\dockerDesktopLinuxEngine") || exists("\\\\.\\pipe\\docker_engine");
 	}
 	return exists("/var/run/docker.sock") || exists(join(probe.home ?? homedir(), ".docker", "run", "docker.sock"));
+}
+
+/** What `nativeLinuxDocker` reads (test seams) beyond `DockerEngineProbe`: a file's text and a path's real target. */
+export interface DockerDesktopProbe extends DockerEngineProbe {
+	readText?: (path: string) => string | undefined;
+	realPath?: (path: string) => string;
+}
+
+/**
+ * Whether Docker here is Linux's own engine rather than Docker Desktop (SEC-LOC-10, 0584), checked without spawning:
+ * only Docker Desktop gives containers a `host.docker.internal` that reaches the host's 127.0.0.1, where Jocasta's model
+ * endpoint listens. Docker Desktop on Linux is its `desktop-linux` context (`DOCKER_CONTEXT`, else `currentContext` in
+ * `~/.docker/config.json`) or its socket under `~/.docker/desktop/`; WSL's Docker Desktop integration links
+ * `/var/run/docker.sock` into `docker-desktop`. Windows and macOS are always Docker Desktop.
+ */
+export function nativeLinuxDocker(probe: DockerDesktopProbe = {}): boolean {
+	if ((probe.platform ?? process.platform) !== "linux") return false;
+	const env = probe.env ?? process.env;
+	const home = probe.home ?? homedir();
+	const readText =
+		probe.readText ??
+		((path: string) => {
+			try {
+				return readFileSync(path, "utf8");
+			} catch {
+				return undefined;
+			}
+		});
+	const real =
+		probe.realPath ??
+		((path: string) => {
+			try {
+				return realpathSync(path);
+			} catch {
+				return path;
+			}
+		});
+	const host = env.DOCKER_HOST?.trim();
+	if (host) return !/docker-desktop|\.docker\/desktop\//.test(host);
+	let context = env.DOCKER_CONTEXT?.trim();
+	if (!context) {
+		try {
+			const config: unknown = JSON.parse(readText(join(home, ".docker", "config.json")) ?? "{}");
+			if (config && typeof config === "object" && "currentContext" in config) {
+				if (typeof config.currentContext === "string") context = config.currentContext;
+			}
+		} catch {
+			// An unreadable config is the default context.
+		}
+	}
+	if (context === "desktop-linux") return false;
+	return !real("/var/run/docker.sock").includes("docker-desktop");
 }
 
 export interface ContainersOptions {

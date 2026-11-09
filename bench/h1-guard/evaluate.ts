@@ -5,25 +5,22 @@
 //     [--resamples 10000] [--out <dir>] [--dry-run]
 //
 // Corpus lines: {"id", "command", "expected": "deny"|"prompt"|"allow", "group", "variant", "base", ...}. With
-// `--verdicts`, it scores omp 18.13.1's own verdicts, written by `omp-verdicts.ts` (the matcher of record). Without
-// it, it scores its own reimplementation below, which reads `guard.yml`'s rules only and misses omp's quote-aware
-// segmenting, the git guard, the critical patterns and the allow-rule compound rule (0501); it stays for the unit
-// tests and as the comparison column. Prints per group and per way of writing (0501): deny recall, must-deny asked,
-// must-ask stopped, false deny, false ask and ask rate, each with a bootstrap 95% CI over commands. With `--out`,
-// writes `h1-guard.json` (summary) and `h1-guard.jsonl` (one verdict per command). The `eval` tool and scripts are
-// outside the guard's reach (`config/guard.yml:10`); this measures pattern recall only, not containment.
+// `--verdicts`, it scores omp 18.18.2's own verdicts (0535), written by `omp-verdicts.ts` (the matcher of record).
+// Without it, it scores its own reimplementation below, which reads `guard.yml`'s rules only and misses omp's
+// quote-aware segmenting, the git guard, the critical patterns and the allow-rule compound rule (0501); it stays for
+// the unit tests and as the comparison column. Prints per group and per way of writing (0501): deny recall, must-deny
+// asked, must-ask stopped, false deny, false ask and ask rate, each with a bootstrap 95% CI over commands. With
+// `--out`, writes `h1-guard.json` (summary) and `h1-guard.jsonl` (one verdict per command). The `eval` tool and
+// scripts are outside the guard's reach (`config/guard.yml:10`); this measures pattern recall only, not containment.
 import { existsSync, readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
+import { type GuardRule, parseGuard as parseGuardText, type Verdict, verdict } from "../../src/shared/guard.ts";
 import { BenchUsageError, flag, parseBenchArgs, REPO_ROOT, runScript } from "../lib/args.ts";
+import { strictJsonLines } from "../lib/jsonl.ts";
 import { appendRow, conditions, printPlan, writeJson } from "../lib/output.ts";
 import { type Rate, rate } from "../lib/stats.ts";
 
-export type Verdict = "deny" | "prompt" | "allow";
-
-export interface GuardRule {
-	match: string;
-	approval: "deny" | "prompt";
-}
+export type { GuardRule, Verdict };
 
 export interface CorpusEntry {
 	command: string;
@@ -53,17 +50,13 @@ export const VARIANTS = [
 	"extra-spaces",
 ] as const;
 
-/** Reads a guard file's `bash.patterns` (omp's `bash.patterns` list of `{match, approval}`). */
+/** Reads a guard file's `bash.patterns`; a malformed file is a usage error (exit 2). */
 export function parseGuard(text: string, file = "guard"): GuardRule[] {
-	const parsed = Bun.YAML.parse(text) as { bash?: { patterns?: unknown } } | null;
-	const patterns = parsed?.bash?.patterns;
-	if (!Array.isArray(patterns)) throw new BenchUsageError(`${file}: no bash.patterns list`);
-	return patterns.map((rule, i) => {
-		const { match, approval } = (rule ?? {}) as { match?: unknown; approval?: unknown };
-		if (typeof match !== "string" || (approval !== "deny" && approval !== "prompt"))
-			throw new BenchUsageError(`${file}: bash.patterns[${i}] needs a string match and approval deny or prompt`);
-		return { match, approval };
-	});
+	try {
+		return parseGuardText(text, file);
+	} catch (error) {
+		throw new BenchUsageError((error as Error).message);
+	}
 }
 
 const OPTIONAL_FIELDS = ["id", "variant", "base", "category"] as const;
@@ -71,55 +64,31 @@ const OPTIONAL_FIELDS = ["id", "variant", "base", "category"] as const;
 /** Reads the corpus JSONL; a malformed line throws with its line number. */
 export function parseCorpus(text: string, file = "corpus"): CorpusEntry[] {
 	const entries: CorpusEntry[] = [];
-	text.split(/\r?\n/).forEach((line, i) => {
-		if (line.trim() === "") return;
-		let row: Record<string, unknown>;
-		try {
-			row = JSON.parse(line);
-		} catch {
-			throw new BenchUsageError(`${file}:${i + 1}: not JSON`);
-		}
+	for (const { row, where } of strictJsonLines(text, file)) {
 		if (
 			typeof row.command !== "string" ||
 			!VERDICTS.includes(row.expected as Verdict) ||
 			typeof row.group !== "string" ||
 			row.group === ""
 		)
-			throw new BenchUsageError(`${file}:${i + 1}: needs command, expected (deny|prompt|allow) and group`);
+			throw new BenchUsageError(`${where}: needs command, expected (deny|prompt|allow) and group`);
 		const entry: CorpusEntry = { command: row.command, expected: row.expected as Verdict, group: row.group };
 		for (const field of OPTIONAL_FIELDS) {
 			const value = row[field];
 			if (typeof value === "string") entry[field] = value;
 		}
 		entries.push(entry);
-	});
+	}
 	return entries;
 }
 
-const normalize = (text: string) => text.trim().replace(/\s+/g, " ");
-
 /**
- * The reimplementation (H1's first evaluator, as `test/config/guard.test.ts:19-29`): whitespace runs collapse, `*` is
- * the only wildcard, anchored and case-sensitive; the rule fires on the whole command or on any one segment of its
- * raw text split at `&&`, `||`, `;` and `|`. omp 18.13.1 splits with its quote-aware tokenizer instead (quotes
- * removed; also `&`, subshells and newlines), and adds what this leaves out (0501); `omp-verdicts.ts` asks omp itself.
+ * The corpus at `path`, parsed, with the SHA-256 of its text that every H1 script's summary records as
+ * `corpusSha256` (BEN-19: one read and hash instead of four).
  */
-export function matches(command: string, pattern: string): boolean {
-	const regex = new RegExp(
-		`^${normalize(pattern)
-			.split("*")
-			.map((part) => part.replace(/[\\^$+?.()|[\]{}]/g, "\\$&"))
-			.join(".*")}$`,
-	);
-	return (
-		regex.test(normalize(command)) || command.split(/&&|\|\||;|\|/).some((segment) => regex.test(normalize(segment)))
-	);
-}
-
-/** The reimplementation's verdict: the first matching rule wins; no match allows. */
-export function verdict(command: string, rules: readonly GuardRule[]): { verdict: Verdict; rule: string | null } {
-	const rule = rules.find((candidate) => matches(command, candidate.match));
-	return { verdict: rule?.approval ?? "allow", rule: rule?.match ?? null };
+export function readCorpus(path: string): { entries: CorpusEntry[]; sha256: string } {
+	const text = readFileSync(path, "utf8");
+	return { entries: parseCorpus(text, path), sha256: new Bun.CryptoHasher("sha256").update(text).digest("hex") };
 }
 
 export interface Metrics {
@@ -174,21 +143,14 @@ export interface OmpVerdictRow {
 /** Reads `omp-verdicts.jsonl`; a malformed line throws with its line number. */
 export function parseVerdicts(text: string, file = "verdicts"): OmpVerdictRow[] {
 	const rows: OmpVerdictRow[] = [];
-	text.split(/\r?\n/).forEach((line, i) => {
-		if (line.trim() === "") return;
-		let row: Record<string, unknown>;
-		try {
-			row = JSON.parse(line);
-		} catch {
-			throw new BenchUsageError(`${file}:${i + 1}: not JSON`);
-		}
+	for (const { row, where } of strictJsonLines(text, file)) {
 		if (
 			typeof row.id !== "string" ||
 			typeof row.command !== "string" ||
 			!VERDICTS.includes(row.verdict as Verdict) ||
 			typeof row.mechanism !== "string"
 		)
-			throw new BenchUsageError(`${file}:${i + 1}: needs id, command, verdict (deny|prompt|allow) and mechanism`);
+			throw new BenchUsageError(`${where}: needs id, command, verdict (deny|prompt|allow) and mechanism`);
 		rows.push({
 			id: row.id,
 			command: row.command,
@@ -196,7 +158,7 @@ export function parseVerdicts(text: string, file = "verdicts"): OmpVerdictRow[] 
 			mechanism: row.mechanism,
 			match: typeof row.match === "string" ? row.match : null,
 		});
-	});
+	}
 	return rows;
 }
 
@@ -351,8 +313,7 @@ if (import.meta.main) {
 		const resamples = Number(resamplesText);
 		for (const path of [corpusPath, guardPath, ...(verdictsPath === undefined ? [] : [verdictsPath])])
 			if (!existsSync(path)) throw new BenchUsageError(`${path} does not exist`);
-		const corpusText = readFileSync(corpusPath, "utf8");
-		const corpus = parseCorpus(corpusText, corpusPath);
+		const { entries: corpus, sha256: corpusSha256 } = readCorpus(corpusPath);
 		const rules = parseGuard(readFileSync(guardPath, "utf8"), guardPath);
 		const matcher =
 			verdictsPath === undefined
@@ -392,7 +353,7 @@ if (import.meta.main) {
 			conditions: { ...started, finishedAt: new Date().toISOString() },
 			matcher,
 			guard: relative(REPO_ROOT, guardPath).startsWith("..") ? guardPath : relative(REPO_ROOT, guardPath),
-			corpusSha256: new Bun.CryptoHasher("sha256").update(corpusText).digest("hex"),
+			corpusSha256,
 			...(verdictsPath === undefined
 				? {}
 				: {

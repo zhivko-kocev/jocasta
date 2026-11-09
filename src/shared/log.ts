@@ -13,7 +13,8 @@ type LogLevel = "info" | "warn" | "error";
 /** Days of log files kept, today included. */
 export const LOG_DAYS = 7;
 
-const FILE = /^jocasta-(\d{4}-\d{2}-\d{2})\.log$/;
+/** A log file's name, its local day captured: `jocasta-YYYY-MM-DD.log`. */
+export const LOG_FILE = /^jocasta-(\d{4}-\d{2}-\d{2})\.log$/;
 
 /** `<data>/logs`. */
 export function logsDir(): string {
@@ -27,7 +28,7 @@ let pruned = "";
 function pruneLogs(dir: string, today: string): void {
 	const oldest = localDay(dayStart(today, -(LOG_DAYS - 1)));
 	for (const name of readdirSync(dir)) {
-		const found = FILE.exec(name);
+		const found = LOG_FILE.exec(name);
 		if (found?.[1] && found[1] < oldest) rmSync(join(dir, name), { force: true });
 	}
 }

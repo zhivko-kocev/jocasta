@@ -24,6 +24,7 @@ export function fakeCompleter(respond: FakeResponder): FakeCompleter {
 			if (reply instanceof Error) throw reply;
 			return {
 				model: `fake-${model}`,
+				provider: null,
 				text: reply,
 				stopReason: "stop",
 				usage: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1 },
@@ -123,7 +124,7 @@ export interface ServedEndpoint {
 	stop(): void;
 }
 
-/** Serves the endpoint on its own 127.0.0.1 port, standing in for the companion's server in tests. */
+/** Serves the endpoint on its own 127.0.0.1 port, standing in for the service's server in tests. */
 export function serveLlmEndpoint(endpoint: ReturnType<typeof createLlmEndpoint>): ServedEndpoint {
 	const server = Bun.serve({
 		hostname: "127.0.0.1",

@@ -1,23 +1,25 @@
 /**
  * `jocasta uninstall` (0468): removes exactly what install and setup added. The installer records its part in
- * `install.json` (the folder, its PATH entry, the autostart value, the companion's WebView2 data); setup's migrations
- * record theirs in their markers (`setupUndo`). herdr session `jocasta` and Jocasta's per-project mise configs (0477)
- * go too. The data folder (memory, models) and the containers, images and volumes are each asked about separately.
- * Keys setup merged into his omp `config.yml` stay: they are his settings. In `keybindings.yml` and `lsp.json` only the
- * keys setup added go, and `WATCHDOG.md` only while it is still Jocasta's text (0479).
+ * `install.json` (the folder, the release's top-level entries, its PATH entry, the autostart value, the companion's
+ * WebView2 data); setup's migrations record theirs in their markers (`setupUndo`). herdr session `jocasta` and
+ * Jocasta's per-project mise configs (0477) go too. The data folder (memory, models) and the containers, images and
+ * volumes are each asked about separately. Keys setup merged into his omp `config.yml` stay: they are his settings. In
+ * `keybindings.yml` and `lsp.json` only the keys setup added go (in `keybindings.yml` only their lines, 0584), and
+ * `WATCHDOG.md` only while it is still Jocasta's text (0479). From the install folder only the release's entries go,
+ * and the folder once it is empty (0579); omp sessions still running programs from it are named and refused first.
  */
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readdirSync, readFileSync, rmdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, win32 } from "node:path";
 import type { ServiceState } from "../frontier/server/launch.ts";
 import { dockerEngineRunning } from "../shared/containers/index.ts";
 import { UserError } from "../shared/errors.ts";
-import { asObject, removeTree, writeAtomically } from "../shared/fsx.ts";
-import { normalizePathKey } from "../shared/identity.ts";
+import { asObject, readJsonObject, removeTree, writeAtomically } from "../shared/fsx.ts";
 import { INSTALL_MARKER } from "../shared/install.ts";
+import { isInside, samePath } from "../shared/pathkey.ts";
+import { editConfig, parseConfig } from "./config-file.ts";
 import { fingerprint } from "./markers.ts";
-import { ompYaml } from "./omp-settings.ts";
 import { deleteRunValue, RUN_KEY, readRunValue } from "./run-value.ts";
 import { answeredYes, type McpUndo, type RunProgram, type SetupIo, type SetupUndo } from "./setup.ts";
 
@@ -28,6 +30,8 @@ import { answeredYes, type McpUndo, type RunProgram, type SetupIo, type SetupUnd
 export interface InstallRecord {
 	/** The install folder. */
 	dir: string;
+	/** The release's top-level entries the installer put there (0579); absent in an install from before the list. */
+	entries?: string[];
 	/** The entry `install.ps1` put on the user PATH. */
 	path?: string;
 	/** The shell rc file `install.sh` appended its PATH line to. */
@@ -38,10 +42,9 @@ export interface InstallRecord {
 	appData?: string;
 }
 
-/** The same folder, whatever its slashes, case (Windows) or trailing separator. */
-function samePath(a: string, b: string): boolean {
-	return normalizePathKey(resolve(a)) === normalizePathKey(resolve(b));
-}
+/** A plain name in the install folder: never a path, `.` or `..`. */
+const plainName = (value: unknown): value is string =>
+	typeof value === "string" && value !== "" && value !== "." && value !== ".." && !/[\\/:]/.test(value);
 
 /**
  * `<dir>/install.json`, or undefined when there is none (a source run, a copy) or it names another folder (0484). The
@@ -52,18 +55,14 @@ export function readInstallRecord(
 	localAppData: string | undefined,
 	windows = process.platform === "win32",
 ): InstallRecord | undefined {
-	let value: Record<string, unknown> | undefined;
-	try {
-		value = asObject(JSON.parse(readFileSync(join(dir, INSTALL_MARKER), "utf8")));
-	} catch {
-		return undefined;
-	}
+	const value = readJsonObject(join(dir, INSTALL_MARKER));
 	if (!value || typeof value.dir !== "string" || !samePath(value.dir, dir)) return undefined;
 	const record: InstallRecord = { dir: value.dir };
+	if (Array.isArray(value.entries) && value.entries.every(plainName)) record.entries = value.entries;
 	for (const key of ["path", "rc", "autostart", "appData"] as const) {
 		if (typeof value[key] === "string") record[key] = value[key] as string;
 	}
-	if (windows && Object.keys(record).length === 1) {
+	if (windows && Object.keys(record).every((key) => key === "dir" || key === "entries")) {
 		record.path = value.dir;
 		record.autostart = "Jocasta";
 		if (localAppData) record.appData = join(localAppData, "local.jocasta.frontier");
@@ -102,7 +101,10 @@ export interface UninstallPaths {
 	composeFile: string;
 	/** The install this command removes; undefined in a source run. */
 	install: InstallRecord | undefined;
-	/** Whether this process runs from the install (its folder goes after it exits). */
+	/**
+	 * Whether this process runs from the install and Windows holds its program open: Jocasta's entries there go after
+	 * it exits. On Linux and macOS a running program's files can be removed at once.
+	 */
 	runningFromInstall: boolean;
 }
 
@@ -124,8 +126,10 @@ export interface UninstallDeps {
 	/** Removes Run value `name` when it starts `launcher`; false when it doesn't. */
 	removeRunValue(name: string, launcher: string): boolean;
 	deleteCredential(target: string): boolean;
-	/** Removes the install folder once this process has exited. */
-	removeAfterExit(dir: string): void;
+	/** Removes `entries` of the install folder `dir`, then `install.json` and the folder if empty, once this process exited. */
+	removeAfterExit(dir: string, entries: string[]): void;
+	/** The other processes running a program from the install folder (`processesUnder`); none when absent. */
+	processesUnder?(dir: string): InstallProcess[];
 	/** Starts herdr's server for `session` headless and waits for it, for `plugin unlink` (0558); absent in tests. */
 	startHerdr?(): Promise<void>;
 }
@@ -153,9 +157,7 @@ function present(path: string): boolean {
 export function unsafeFolder(path: string): string | undefined {
 	const full = resolve(path);
 	if (dirname(full) === full) return "it is a drive root";
-	const home = normalizePathKey(resolve(homedir()));
-	const key = normalizePathKey(full);
-	if (home === key || home.startsWith(`${key}/`)) return "it is your home folder or holds it";
+	if (isInside(full, homedir())) return "it is your home folder or holds it";
 	return undefined;
 }
 
@@ -183,12 +185,104 @@ function removeRecordedFolder(path: string, marker: string, holds: (dir: string)
 
 /** Whether `dir` is the install `install.json` names: the marker there names this same folder. */
 function holdsInstallMarker(dir: string): boolean {
-	try {
-		const marker = asObject(JSON.parse(readFileSync(join(dir, INSTALL_MARKER), "utf8")));
-		return typeof marker?.dir === "string" && samePath(marker.dir, dir);
-	} catch {
-		return false;
+	const marker = readJsonObject(join(dir, INSTALL_MARKER));
+	return typeof marker?.dir === "string" && samePath(marker.dir, dir);
+}
+
+/** The top-level names a release has shipped (appendix I), the companion's `app` (0552) included. */
+const RELEASE_NAMES = [
+	"jocasta.exe",
+	"jocasta",
+	"config",
+	"node",
+	"whiteboard",
+	"whiteboard-canvas",
+	"editor.worker.js",
+	"hunk",
+	"README.md",
+	"CHANGELOG.md",
+	"app",
+];
+
+/** What of the install folder uninstall removes (0579), and what it leaves there. */
+export interface InstallContents {
+	/** Jocasta's entries there now, `install.json` aside (it goes last). */
+	ours: string[];
+	/** His other entries: the folder stays for them. */
+	others: string[];
+}
+
+/**
+ * The install folder's entries by owner (0579): the ones `install.json` lists, with the `<name>.old-<stamp>` copies an
+ * upgrade renamed aside while they were in use (install.ps1); an install from before the list is all Jocasta's only when
+ * every entry is a release's name, else it is refused whole.
+ */
+export function installContents(record: InstallRecord, windows = process.platform === "win32"): InstallContents {
+	const key = (name: string) => (windows ? name.toLowerCase() : name);
+	const listed = new Set((record.entries ?? RELEASE_NAMES).map(key));
+	const isOurs = (name: string) => listed.has(key(name.replace(/\.old-\d+$/, "")));
+	const names = readdirSync(record.dir)
+		.filter((name) => key(name) !== key(INSTALL_MARKER))
+		.sort();
+	const contents = { ours: names.filter(isOurs), others: names.filter((name) => !isOurs(name)) };
+	if (!record.entries && contents.others.length > 0) {
+		throw new Error(
+			`kept ${record.dir}: it holds files that aren't Jocasta's (${contents.others.join(", ")}); remove Jocasta's files from it by hand`,
+		);
 	}
+	return contents;
+}
+
+/** Removes Jocasta's entries from the install folder, `install.json` last, then the folder when nothing else is left. */
+function removeInstall(dir: string, contents: InstallContents): string {
+	for (const name of contents.ours) removeTree(join(dir, name));
+	rmSync(join(dir, INSTALL_MARKER), { force: true });
+	if (contents.others.length > 0) return `removed Jocasta's files from ${dir}; kept the folder (it holds other files)`;
+	removeIfEmpty(dir);
+	return `removed ${dir}`;
+}
+
+/** A process whose program is under the install folder. */
+export interface InstallProcess {
+	pid: number;
+	/** Its program's full path. */
+	path: string;
+	/** Its command line as the OS reports it. */
+	commandLine: string;
+}
+
+/**
+ * How the refusal names a process (0579): its program and up to three arguments, a path inside the install shortened
+ * to its top-level entry (`node.exe whiteboard mcp (pid 5332)`). Windows paths: only Windows lists them.
+ */
+export function describeProcess(dir: string, proc: InstallProcess): string {
+	const words = [...proc.commandLine.matchAll(/"([^"]*)"|(\S+)/g)].map((m) => m[1] ?? m[2] ?? "").slice(1, 4);
+	const shown = words.map((word) => {
+		const inside = win32.isAbsolute(word) ? win32.relative(dir, word) : "";
+		return inside && !inside.startsWith("..") && !win32.isAbsolute(inside) ? (inside.split("\\")[0] as string) : word;
+	});
+	return `${[win32.basename(proc.path), ...shown].join(" ")} (pid ${proc.pid})`;
+}
+
+/** The processes, other than this one, whose program is under `dir` (Windows: Win32_Process); none elsewhere. */
+export function processesUnder(dir: string): InstallProcess[] {
+	if (process.platform !== "win32") return [];
+	const script = `
+$dir = $env:JOCASTA_INSTALL_DIR.TrimEnd('\\') + '\\'
+Get-CimInstance Win32_Process | Where-Object {
+	$_.ExecutablePath -and $_.ExecutablePath.StartsWith($dir, [StringComparison]::OrdinalIgnoreCase)
+} | ForEach-Object { "$($_.ProcessId)\`t$($_.ExecutablePath)\`t$($_.CommandLine)" }
+`;
+	const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+		env: { ...process.env, JOCASTA_INSTALL_DIR: dir },
+		encoding: "utf8",
+		windowsHide: true,
+	});
+	return result.stdout
+		.split(/\r?\n/)
+		.map((line) => line.split("\t"))
+		.filter(([pid, path]) => pid && path && Number(pid) !== process.pid)
+		.map(([pid, path, commandLine]) => ({ pid: Number(pid), path: path as string, commandLine: commandLine ?? "" }));
 }
 
 /** Whether `dir` holds the companion's WebView2 data: `<channel>/WebView2` (Electrobun's layout). */
@@ -255,37 +349,46 @@ function removeMcpServers(item: McpUndo): string {
 }
 
 /**
- * The keys setup added out of one of his omp files (0479), each only while it still has the value setup wrote; the
- * file goes when setup made it and nothing else is left.
+ * The keys setup added out of one of his omp files (0479), each only while it still has the value setup wrote; in a
+ * YAML file only their lines go, his comments and formatting stay (0584), and a file whose lines can't be edited is
+ * left as it is. The file goes when setup made it and nothing else is left in it: no key, comment or line of his.
  */
 function removeKeys(path: string, keys: Record<string, unknown>, created: boolean): string {
 	const names = Object.keys(keys);
-	const yaml = !path.endsWith(".json");
-	let config: Record<string, unknown> | undefined;
+	const unreadable = () => new Error(`${path} can't be read; remove ${names.join(", ")} from it by hand`);
+	let text: string;
 	try {
-		const text = readFileSync(path, "utf8");
-		config = asObject(text.trim() === "" ? {} : yaml ? Bun.YAML.parse(text) : JSON.parse(text));
+		text = readFileSync(path, "utf8");
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return `${path} was already gone`;
-		config = undefined;
+		throw unreadable();
 	}
-	if (!config) throw new Error(`${path} can't be read; remove ${names.join(", ")} from it by hand`);
+	let config: Record<string, unknown>;
+	try {
+		config = parseConfig(path, text);
+	} catch {
+		throw unreadable();
+	}
 	const gone: string[] = [];
 	const yours: string[] = [];
 	for (const name of names) {
 		if (config[name] === undefined) continue;
-		if (Bun.deepEquals(config[name], keys[name], true)) {
-			delete config[name];
-			gone.push(name);
-		} else {
-			yours.push(name);
-		}
+		if (Bun.deepEquals(config[name], keys[name], true)) gone.push(name);
+		else yours.push(name);
 	}
-	if (created && Object.keys(config).length === 0) {
+	const left = Object.fromEntries(Object.entries(config).filter(([name]) => !gone.includes(name)));
+	const edited = gone.length > 0 ? editConfig(path, text, left, [], gone) : text;
+	if (edited === undefined) {
+		throw new Error(
+			`${path} can't be edited line by line, so uninstall left it as it is; remove ${gone.join(", ")} from it by hand`,
+		);
+	}
+	// `{}` is what an emptied JSON file reads as; a YAML one with anything of his left still has lines.
+	if (created && Object.keys(left).length === 0 && ["", "{}"].includes(edited.trim())) {
 		rmSync(path, { force: true });
 		return `removed ${path}`;
 	}
-	if (gone.length > 0) writeAtomically(path, yaml ? ompYaml(config) : `${JSON.stringify(config, null, 2)}\n`);
+	if (gone.length > 0) writeAtomically(path, edited);
 	const said = gone.length > 0 ? `removed ${gone.join(", ")} from ${path}` : `${path} has none of Jocasta's keys left`;
 	return yours.length > 0 ? `${said}; kept ${yours.join(", ")} (you changed it)` : said;
 }
@@ -392,6 +495,15 @@ export async function runUninstall(paths: UninstallPaths, deps: UninstallDeps, i
 	if (state !== "down") {
 		throw new UserError(
 			"Jocasta is running: close it (quit herdr's client in the `jocasta` terminal), then run `jocasta uninstall` again.",
+			1,
+		);
+	}
+	// Open omp sessions run `jocasta.exe mcp` and whiteboard's node.exe from the install: its files can't go (0579).
+	const running = paths.install ? (deps.processesUnder?.(paths.install.dir) ?? []) : [];
+	if (paths.install && running.length > 0) {
+		const dir = paths.install.dir;
+		throw new UserError(
+			`omp sessions still run programs from ${dir}: ${running.map((p) => describeProcess(dir, p)).join(", ")}. Close them, then run jocasta uninstall again.`,
 			1,
 		);
 	}
@@ -517,18 +629,20 @@ export async function runUninstall(paths: UninstallPaths, deps: UninstallDeps, i
 		return `removed ${paths.jocastaConfigDir} except ${ownFiles.join(", ")}`;
 	});
 	if (install) {
-		const marker = `${INSTALL_MARKER} naming it`;
-		if (paths.runningFromInstall) {
-			await attempt(install.dir, async () => {
-				const unsafe = unsafeFolder(install.dir);
-				if (unsafe) throw new Error(`kept ${install.dir}: ${unsafe}`);
-				if (!holdsInstallMarker(install.dir)) throw new Error(`kept ${install.dir}: it no longer holds ${marker}`);
-				deps.removeAfterExit(install.dir);
-				return `${install.dir} goes when this command exits.`;
-			});
-		} else {
-			await attempt(install.dir, async () => removeRecordedFolder(install.dir, marker, holdsInstallMarker));
-		}
+		await attempt(install.dir, async () => {
+			if (!present(install.dir)) return `${install.dir} was already gone`;
+			const unsafe = unsafeFolder(install.dir);
+			if (unsafe) throw new Error(`kept ${install.dir}: ${unsafe}`);
+			if (!holdsInstallMarker(install.dir)) {
+				throw new Error(`kept ${install.dir}: it no longer holds ${INSTALL_MARKER} naming it`);
+			}
+			const contents = installContents(install);
+			if (!paths.runningFromInstall) return removeInstall(install.dir, contents);
+			deps.removeAfterExit(install.dir, contents.ours);
+			return contents.others.length > 0
+				? `Jocasta's files in ${install.dir} go when this command exits; the folder stays (it holds other files).`
+				: `${install.dir} goes when this command exits.`;
+		});
 	}
 	if (failed > 0) {
 		io.print(
@@ -574,12 +688,51 @@ export function removeRunValueFor(name: string, launcher: string): boolean {
 	return true;
 }
 
-/** The install folder, removed by a console-less `cmd` a few seconds after this process exits (it holds jocasta.exe). */
-export function removeAfterExit(dir: string): void {
-	spawn(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", `"ping -n 4 127.0.0.1 >nul & rmdir /s /q "${dir}""`], {
-		detached: true,
-		stdio: "ignore",
+/**
+ * Removes `entries` of the install folder `dir` once this process has exited (Windows holds the running jocasta.exe):
+ * a hidden PowerShell of its own console, so closing this terminal doesn't end it, tries every few seconds for five
+ * minutes, as omp sessions closing free their programs (0579); `install.json` goes, then the folder if empty, only once
+ * every entry is gone. .NET's recursive delete never follows a junction. The names reach it through the environment,
+ * never its command line. Throws when the remover didn't start.
+ */
+export function removeAfterExit(dir: string, entries: string[], pid = process.pid): void {
+	const script = `
+$dir = $env:JOCASTA_UNINSTALL_DIR
+$entries = @($env:JOCASTA_UNINSTALL_ENTRIES -split "\`n" | Where-Object { $_ })
+Wait-Process -Id ([int]$env:JOCASTA_UNINSTALL_PID) -Timeout 30 -ErrorAction SilentlyContinue
+for ($round = 0; $round -lt 60; $round++) {
+	$left = 0
+	foreach ($name in $entries) {
+		$path = Join-Path $dir $name
+		try {
+			if ([IO.Directory]::Exists($path)) { [IO.Directory]::Delete($path, $true) }
+			elseif ([IO.File]::Exists($path)) { [IO.File]::Delete($path) }
+		} catch { $left++ }
+	}
+	if ($left -eq 0) { break }
+	Start-Sleep -Seconds 5
+}
+if ($left -eq 0) {
+	[IO.File]::Delete((Join-Path $dir '${INSTALL_MARKER}'))
+	try { [IO.Directory]::Delete($dir) } catch {}
+}
+`;
+	// Started by a short-lived PowerShell's Start-Process: a detached console program gets no console and Windows
+	// PowerShell then never runs. The script goes as -EncodedCommand (UTF-16LE, base64), its quotes untouched.
+	const start =
+		"Start-Process powershell.exe -WindowStyle Hidden -ArgumentList '-NoProfile','-NonInteractive','-EncodedCommand',$env:JOCASTA_UNINSTALL_SCRIPT";
+	const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", start], {
+		encoding: "utf8",
 		windowsHide: true,
-		windowsVerbatimArguments: true,
-	}).unref();
+		env: {
+			...process.env,
+			JOCASTA_UNINSTALL_SCRIPT: Buffer.from(script, "utf16le").toString("base64"),
+			JOCASTA_UNINSTALL_DIR: dir,
+			JOCASTA_UNINSTALL_ENTRIES: entries.join("\n"),
+			JOCASTA_UNINSTALL_PID: String(pid),
+		},
+	});
+	if (result.status !== 0) {
+		throw new Error(`its remover didn't start (${(result.stderr || result.error?.message || "").trim()})`);
+	}
 }

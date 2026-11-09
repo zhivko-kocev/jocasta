@@ -30,9 +30,23 @@ export class FakeHerdr implements Herdr {
 	readonly screens = new Map<string, string>();
 	/** Whether Jocasta started this session's server (`connectHerdr`, 0495); a test of an existing session clears it. */
 	startedServer = true;
+	/**
+	 * The state a worktree's new pane reports at once, with herdr's event, as an omp that comes up before the service
+	 * first looks (TST-2); undefined: none until a test sets one, so `agentUp`'s polling stays covered.
+	 */
+	ompUpOnCreate: AgentState | undefined;
+	/** Thrown by `createWorktree` once it made the worktree, workspace and pane, as herdr's layout failing would. */
+	createWorktreeFails: Error | undefined;
+	/** Each pane's env as it was started (its pane key among it, 0578). */
+	private readonly envs = new Map<string, Record<string, string>>();
 	private next = 0;
 	private terminals = 0;
 	private watcher: ((event: { paneId: string; workspaceId: string; state: AgentState }) => void) | undefined;
+
+	/** The env `paneId` was started with; undefined for a pane started without one. */
+	envOf(paneId: string): Record<string, string> | undefined {
+		return this.envs.get(paneId);
+	}
 
 	private id(prefix: string): string {
 		return `${prefix}_${++this.next}`;
@@ -47,11 +61,18 @@ export class FakeHerdr implements Herdr {
 		return this.calls.filter((c) => c.method === method).map((c) => c.args);
 	}
 
-	private addPane(workspaceId: string, cwd: string, command?: string[], tabId?: string): PaneInfo {
+	private addPane(
+		workspaceId: string,
+		cwd: string,
+		command?: string[],
+		tabId?: string,
+		env?: Record<string, string>,
+	): PaneInfo {
 		const paneId = this.id("p");
 		const pane: PaneInfo = { paneId, tabId: tabId ?? this.id("t"), workspaceId, cwd, agentState: "unknown" };
 		pane.terminalId = `term_${++this.terminals}`;
 		if (command) pane.label = command.join(" ");
+		if (env) this.envs.set(paneId, env);
 		this.paneList.push(pane);
 		return pane;
 	}
@@ -105,7 +126,7 @@ export class FakeHerdr implements Herdr {
 		if (existing) return existing.id;
 		const id = this.id("w");
 		this.workspaceList.push({ id, label, cwd });
-		this.addPane(id, cwd, command);
+		this.addPane(id, cwd, command, undefined, env);
 		return id;
 	}
 
@@ -119,10 +140,10 @@ export class FakeHerdr implements Herdr {
 
 	async createTab(
 		workspaceId: string,
-		tab: { title: string; cwd: string; command: string[] },
+		tab: { title: string; cwd: string; command: string[]; env?: Record<string, string> },
 	): Promise<{ tabId: string; paneId: string }> {
 		this.record("createTab", workspaceId, tab);
-		const pane = this.addPane(workspaceId, tab.cwd, tab.command);
+		const pane = this.addPane(workspaceId, tab.cwd, tab.command, undefined, tab.env);
 		return { tabId: pane.tabId, paneId: pane.paneId };
 	}
 
@@ -150,7 +171,9 @@ export class FakeHerdr implements Herdr {
 		this.record("createWorktree", workspaceId, { ...recorded, env: { ...opts.env, ...extra } });
 		const id = this.id("w");
 		this.workspaceList.push({ id, label: opts.title, cwd: path });
-		const pane = this.addPane(id, path, opts.command);
+		const pane = this.addPane(id, path, opts.command, undefined, { ...opts.env, ...extra });
+		if (this.createWorktreeFails) throw this.createWorktreeFails;
+		if (this.ompUpOnCreate) this.setState(pane.paneId, this.ompUpOnCreate);
 		return { workspaceId: id, tabId: pane.tabId, paneId: pane.paneId, path };
 	}
 
@@ -171,7 +194,7 @@ export class FakeHerdr implements Herdr {
 		for (let i = this.paneList.length - 1; i >= 0; i--) {
 			if (this.paneList[i]?.tabId === target.tabId) this.paneList.splice(i, 1);
 		}
-		const pane = this.addPane(target.workspaceId, opts.cwd, opts.command, target.tabId);
+		const pane = this.addPane(target.workspaceId, opts.cwd, opts.command, target.tabId, opts.env);
 		return { tabId: pane.tabId, paneId: pane.paneId };
 	}
 
@@ -203,9 +226,12 @@ export class FakeHerdr implements Herdr {
 		this.record("sendKeys", paneId, keys);
 	}
 
+	/** What `notification.show` answers; `no_foreground_client` while no client is attached. */
+	notifyResult: NotificationResult = "shown";
+
 	async notify(note: { title: string; body?: string; sound: "request" | "none" }): Promise<NotificationResult> {
 		this.record("notify", note);
-		return "shown";
+		return this.notifyResult;
 	}
 
 	async focus(paneId: string): Promise<void> {
