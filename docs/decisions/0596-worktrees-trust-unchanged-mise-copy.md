@@ -41,7 +41,7 @@ His answer: "Jocasta trusts an unchanged copy".
 - Amends 0473: Jocasta trusts a thread worktree's unchanged copy of a config he trusted; 0473's worktree fact holds only without paranoid trust.
 - Builder's choices, listed as built (0363):
   - `trustCopies` in `src/frontier/server/mise.ts`, called from `threadPaneEnv` in `src/frontier/server/pane-launch.ts` before mise's env is read, and from `checksFor` in `src/frontier/server/review-flow.ts`, so a copy that a merge from trunk brought in is trusted again at the thread's next check, not only when its pane starts again;
-  - a path `mise trust --show` prints with `~` for the home folder (as on Linux and macOS) is read as under the home folder;
+  - a path `mise trust --show` prints with `~` for the home folder (as on Linux and macOS) is read as under the `HOME` mise ran with;
   - mise runs with the pane's `MISE_ENV`, as 0477's other calls do;
   - each trusted copy is logged once in Jocasta's log (`[mise]`), and a failed `mise trust` is logged and leaves the copy untrusted;
   - the repo's `mise.toml` comment and README's Development section say it needs `mise trust` once.

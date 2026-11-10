@@ -89,9 +89,12 @@ function sameBytes(a: string, b: string): boolean {
 	}
 }
 
-/** A path as `mise trust --show` prints it, its `~` for the home folder (Linux and macOS) expanded. */
-function shownPath(path: string): string {
-	return /^~(?=[\\/]|$)/.test(path) ? join(homedir(), path.slice(1)) : path;
+/**
+ * A path as `mise trust --show` prints it, its `~` for the home folder (Linux and macOS) expanded with the `HOME` mise
+ * ran with, which is the one it shortens by.
+ */
+function shownPath(path: string, home: string): string {
+	return /^~(?=[\\/]|$)/.test(path) ? join(home, path.slice(1)) : path;
 }
 
 /**
@@ -114,17 +117,18 @@ export async function trustCopies(
 		runMise(mise, ["trust", "--show"], main, env),
 	]);
 	if (!isParanoid(paranoid)) return [];
+	const home = base.HOME || homedir();
 	const trustedInMain = new Set(
 		trustList(there)
 			.filter((config) => config.trusted)
-			.map((config) => pathKey(realPath(shownPath(config.path)))),
+			.map((config) => pathKey(realPath(shownPath(config.path, home)))),
 	);
 	const root = realPath(cwd);
 	const mainRoot = realPath(main);
 	const trusted: string[] = [];
 	for (const config of trustList(here)) {
 		if (config.trusted) continue;
-		const copy = realPath(shownPath(config.path));
+		const copy = realPath(shownPath(config.path, home));
 		if (pathKey(copy) === pathKey(root) || !isInside(root, copy)) continue;
 		const original = join(mainRoot, relative(root, copy));
 		if (!trustedInMain.has(pathKey(original)) || !sameBytes(copy, original)) continue;
