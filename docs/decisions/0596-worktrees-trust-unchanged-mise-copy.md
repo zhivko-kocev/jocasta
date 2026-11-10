@@ -29,7 +29,7 @@ Verified 2026-11-10 with mise 2026.10.17 on Windows, on detached throwaway workt
 Jocasta trusts an unchanged copy.
 
 ## Choice
-- Before a thread's pane starts (a new thread, and a pane started again), when mise is on PATH and its paranoid config trust is on, Jocasta runs `mise trust` on each config that `mise trust --show` lists as untrusted inside the worktree, when the same file in the main checkout is listed as trusted and both have the same bytes.
+- Before a thread's pane starts (a new thread, and a pane started again) and before its checks run (the review, the check on idle and the `check` tool), when mise is on PATH and its paranoid config trust is on, Jocasta runs `mise trust` on each config that `mise trust --show` lists as untrusted inside the worktree, when the same file in the main checkout is listed as trusted and both have the same bytes.
 - Nothing else is ever trusted: not a changed copy, not a config outside the worktree, not a config the main checkout doesn't have trusted.
 - Without paranoid trust Jocasta trusts nothing (mise's own rule applies then).
 - The guard still denies `mise trust` in panes, and the mise skill still forbids agents to trust; only the service trusts.
@@ -40,7 +40,8 @@ His answer: "Jocasta trusts an unchanged copy".
 ## Consequences
 - Amends 0473: Jocasta trusts a thread worktree's unchanged copy of a config he trusted; 0473's worktree fact holds only without paranoid trust.
 - Builder's choices, listed as built (0363):
-  - `trustCopies` in `src/frontier/server/mise.ts`, called from `threadPaneEnv` in `src/frontier/server/pane-launch.ts` before mise's env is read;
+  - `trustCopies` in `src/frontier/server/mise.ts`, called from `threadPaneEnv` in `src/frontier/server/pane-launch.ts` before mise's env is read, and from `checksFor` in `src/frontier/server/review-flow.ts`, so a copy that a merge from trunk brought in is trusted again at the thread's next check, not only when its pane starts again;
+  - a path `mise trust --show` prints with `~` for the home folder (as on Linux and macOS) is read as under the home folder;
   - mise runs with the pane's `MISE_ENV`, as 0477's other calls do;
   - each trusted copy is logged once in Jocasta's log (`[mise]`), and a failed `mise trust` is logged and leaves the copy untrusted;
   - the repo's `mise.toml` comment and README's Development section say it needs `mise trust` once.

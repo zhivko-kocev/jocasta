@@ -8,6 +8,7 @@
  * own worktree rule, which paranoid trust turns off. Without mise on PATH nothing changes.
  */
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, relative } from "node:path";
 import { asObject } from "../../shared/fsx.ts";
 import { log } from "../../shared/log.ts";
@@ -88,6 +89,11 @@ function sameBytes(a: string, b: string): boolean {
 	}
 }
 
+/** A path as `mise trust --show` prints it, its `~` for the home folder (Linux and macOS) expanded. */
+function shownPath(path: string): string {
+	return /^~(?=[\\/]|$)/.test(path) ? join(homedir(), path.slice(1)) : path;
+}
+
 /**
  * Trusts each config mise lists as untrusted inside the thread worktree `cwd` whose counterpart in the main checkout
  * `main` mise lists as trusted and which has the same bytes (0596). Only under paranoid config trust: without it, mise's
@@ -111,14 +117,14 @@ export async function trustCopies(
 	const trustedInMain = new Set(
 		trustList(there)
 			.filter((config) => config.trusted)
-			.map((config) => pathKey(realPath(config.path))),
+			.map((config) => pathKey(realPath(shownPath(config.path)))),
 	);
 	const root = realPath(cwd);
 	const mainRoot = realPath(main);
 	const trusted: string[] = [];
 	for (const config of trustList(here)) {
 		if (config.trusted) continue;
-		const copy = realPath(config.path);
+		const copy = realPath(shownPath(config.path));
 		if (pathKey(copy) === pathKey(root) || !isInside(root, copy)) continue;
 		const original = join(mainRoot, relative(root, copy));
 		if (!trustedInMain.has(pathKey(original)) || !sameBytes(copy, original)) continue;

@@ -133,3 +133,21 @@ test("a changed copy, or a copy of a config the main checkout doesn't trust, sta
 	expect(await trustCopies("demo-1", main, wt, base(answers("untrusted")), MISE)).toEqual([]);
 	expect(trusts()).toEqual([]);
 });
+
+test("configs mise shows under the home folder as `~/…` (Linux and macOS) are found too (0596)", async () => {
+	const home = process.platform === "win32" ? "USERPROFILE" : "HOME";
+	const saved = process.env[home];
+	process.env[home] = env.root;
+	try {
+		const { main, wt } = checkouts('[tools]\nbun = "1.4.3"\n');
+		const shown = (dir: string, status: string) => `~${join(dir, "mise.toml").slice(env.root.length)}: ${status}\n`;
+		const answers = {
+			FAKE_MISE_PARANOID: PARANOID,
+			FAKE_MISE_TRUST_IN: JSON.stringify({ [main]: shown(main, "trusted"), [wt]: shown(wt, "untrusted") }),
+		};
+		expect(await trustCopies("demo-1", main, wt, base(answers), MISE)).toEqual([join(wt, "mise.toml")]);
+	} finally {
+		if (saved === undefined) delete process.env[home];
+		else process.env[home] = saved;
+	}
+});

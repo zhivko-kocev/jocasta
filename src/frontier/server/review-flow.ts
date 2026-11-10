@@ -10,7 +10,7 @@ import { log } from "../../shared/log.ts";
 import { type CheckRun, type CheckSpec, gateReply, shortTree } from "./checks.ts";
 import type { ServiceContext } from "./context.ts";
 import { hunkDiffArgs, listComments, proofSaid, type ReviewProof, reviewPrompt, reviewProof } from "./hunk.ts";
-import { miseCheck, miseEnv, skippedSaid } from "./mise.ts";
+import { miseCheck, miseEnv, skippedSaid, trustCopies } from "./mise.ts";
 import { reportLine } from "./report.ts";
 import { checkExits, checkedTests, type SessionStats, type TestsResult } from "./sessions.ts";
 import type { CheckExit } from "./task-file.ts";
@@ -324,12 +324,14 @@ export class ReviewFlow {
 	 * The task's checks (0453, 0473, 0540, 0542): the project's own (its trusted mise `verify`/`test` task, run as
 	 * `mise run -c <task>` so a failing task doesn't stop the others, 0559) and the task's `done_when` commands, with why
 	 * the project's own can't run when mise may not load its config (0559). The one place checks are decided: the
-	 * review, the check on idle and the `check` tool all run these through the runner.
+	 * review, the check on idle and the `check` tool all run these through the runner. The worktree's unchanged copies
+	 * of trusted mise configs are trusted first (0596), so a copy a merge brought in from trunk is trusted again here.
 	 */
 	private async checksFor(thread: Thread): Promise<{ specs: CheckSpec[]; skipped?: string }> {
 		const mise = this.c.options.mise;
-		const project =
-			mise === null ? undefined : await miseCheck(thread.project.id, thread.path, this.c.panes.checkEnv(), mise);
+		const env = this.c.panes.checkEnv();
+		if (mise !== null) await trustCopies(thread.project.id, thread.project.mainPath, thread.path, env, mise);
+		const project = mise === null ? undefined : await miseCheck(thread.project.id, thread.path, env, mise);
 		const argv = (mise ?? ["mise"]).map((word) => (/^[\w./:=-]+$/.test(word) ? word : `"${word}"`));
 		const doneWhen = thread.task?.doneWhen ?? [];
 		const task = project && "task" in project ? project.task : undefined;
