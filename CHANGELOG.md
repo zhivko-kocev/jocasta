@@ -410,4 +410,4 @@
 
   - The memory graph keeps following `default` and `smol`. omp's gateway drops a role's effort, so its main model runs Opus 5.5 at low effort.
   - The benchmark arms stay on Opus 5.5 at high.
-- `mise run check` passes: 885 pass, 13 skip, 0 fail. Five of the skips are the guard's checks through omp's own resolver, which run once omp 18.18.6 is installed.
+- `mise run check` passes: 885 pass, 13 skip, 0 fail. Five of the skips are the guard's checks through omp's own resolver; against the 18.18.6 package they pass, 11 of 11 in that file. CI run 42789927092 passes on Windows, Ubuntu and macOS after re-runs of three timing failures in earlier rounds' process code (open items in `docs/status.md`).
