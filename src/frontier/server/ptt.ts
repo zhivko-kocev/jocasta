@@ -1,6 +1,7 @@
 // Global push-to-talk in the service (0368, 0552, 0556): the Right Ctrl hook runs in a worker; each phase toggles omp's
 // own dictation in the boss pane through herdr. Windows only: elsewhere there is no global key.
 import { dlopen, FFIType } from "bun:ffi";
+import { installDir } from "../../shared/install.ts";
 import { log } from "../../shared/log.ts";
 import { DictationToggle, type PushToTalkPhase } from "./ptt-hold.ts";
 
@@ -26,7 +27,10 @@ export function startPushToTalk(toggle: () => Promise<void>): PushToTalk | undef
 	});
 	// The worker first sends its thread id, so the stop can end its message loop with WM_QUIT (`terminate` can't stop a
 	// thread blocked in GetMessageW).
-	const worker = new Worker(new URL("./ptt-worker.ts", import.meta.url).href);
+	// In the exe, import.meta.url is the exe's own root, so the worker goes by its path from the build's root (build.ts).
+	const worker = new Worker(
+		installDir() ? "./src/frontier/server/ptt-worker.ts" : new URL("./ptt-worker.ts", import.meta.url).href,
+	);
 	let thread: number | undefined;
 	let queue = Promise.resolve();
 	worker.onmessage = (event: MessageEvent<PushToTalkPhase | { thread: number }>) => {
