@@ -1,5 +1,6 @@
-# Development entry for the Jocasta repo (0476): the pinned Bun and Node, and the checks as tasks. Plain versions and
-# tasks only, so mise loads it without trust; `mise.lock` pins each tool's URL and checksum (`mise install --locked`).
+# Development entry for the Jocasta repo (0476): the pinned Bun and Node, and the checks as tasks. Under Jocasta's
+# paranoid mise trust it needs `mise trust` once, and again after each change (0596); `mise.lock` pins each tool's URL
+# and checksum (`mise install --locked`).
 # Bun matches package.json's packageManager; a bump changes both and is re-checked per 0383. What ships keeps
 # scripts/build.ts's own hash-checked Node and pnpm.
 [tools]

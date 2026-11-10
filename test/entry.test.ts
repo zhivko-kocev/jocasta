@@ -110,3 +110,18 @@ test("jocasta mcp answers initialize on stdio, and its tools say Jocasta isn't r
 		result: { content: [{ type: "text", text: NOT_RUNNING }], isError: true },
 	});
 }, 20_000);
+
+test("jocasta setup ends after its last answer while its console stays open, as a terminal's does", async () => {
+	const child = jocasta(["setup"], "pipe");
+	const stdin = child.stdin;
+	if (!stdin) throw new Error("jocasta setup has no stdin");
+	// Read as it goes, so a long diff never fills the pipe.
+	const out = new Response(child.stdout).text();
+	stdin.write("n\n");
+	stdin.flush();
+	const ended = await Promise.race([child.exited, Bun.sleep(15_000).then(() => "still running")]);
+	stdin.end();
+	child.kill();
+	expect(ended).toBe(0);
+	expect(await out).toContain("Nothing written.");
+}, 30_000);

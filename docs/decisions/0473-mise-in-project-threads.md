@@ -37,3 +37,4 @@ When mise is installed with paranoid config trust on (Jarvis's mise file sets `p
 - Whether Windows mise's PATH works in omp's Git Bash is checked by the builder.
 - Installing mise on his machine stays his decision.
 - Amended by 0476 and 0477: the paranoid setting comes from Jarvis's mise file; Jarvis's own per-project configs need no repo trust.
+- Amended by 0596: under paranoid trust, Jocasta trusts a thread worktree's unchanged copy of a config the main checkout has trusted; the worktree fact above holds only without paranoid trust.

@@ -32,3 +32,4 @@ Each install and setup step records its undo; `jarvis uninstall` runs them.
 - Amends 0446: its cleanup is `jarvis uninstall`, not a hand-written list.
 - Keys merged by 0466 stay in his `config.yml`.
 - mise itself (installed for 0476 by its script, not by Jarvis's installer) isn't removed by `jarvis uninstall`; the v1 cleanup lists it: `~/.local/bin/mise.exe` and `mise-shim.exe`, `~/.local/state/mise/`, `%TEMP%\mise\`, and the `%LOCALAPPDATA%\mise\shims` Path entry (the install also changed the user Path's registry type from REG_SZ to REG_EXPAND_SZ).
+- Amended by 0595: the Jarvis on his PC predates this command, so the cutover ran 0446's list by hand.

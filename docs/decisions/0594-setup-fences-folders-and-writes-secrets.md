@@ -52,6 +52,6 @@ OS folders on Windows only; `secrets.yml` on his PC only.
 
 ## Consequences
 - The `secrets.yml` choice differs from the recommendation.
-- Amends 0466 (one more migration) and 0479 (setup writes four omp files beside `config.yml`).
+- Amends 0451 (setup writes `secrets.yml` when it's missing), 0466 (one more migration) and 0479 (setup writes four omp files beside `config.yml`).
 - The template's text, the migration's number and its slug are the builder's, listed as built (0363).
-- README's setup list and config section, and plan appendix I's setup paragraph, list both.
+- README's setup list and config section, and plan appendix I, list both.

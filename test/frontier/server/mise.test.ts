@@ -1,7 +1,7 @@
 import { beforeEach, expect, test } from "bun:test";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { miseCheck, miseEnv } from "../../../src/frontier/server/mise.ts";
+import { miseCheck, miseEnv, trustCopies } from "../../../src/frontier/server/mise.ts";
 import { readJsonl, useTempJocasta } from "../../shared/fixture.ts";
 
 const env = useTempJocasta();
@@ -86,4 +86,50 @@ test("a repo config mise may not load says why the project's check didn't run: u
 	expect(await miseCheck("demo-1", env.root, base({ ...relaxed, FAKE_MISE_TRUST: "" }), MISE)).toBeUndefined();
 	// mise's tasks are never listed for a config it may not load.
 	expect(calls().some((c) => c.args === "tasks ls --json")).toBe(false);
+});
+
+/** A main checkout and a thread worktree, each with a root `mise.toml` and a `sub/mise.toml`, and mise's answers. */
+function checkouts(worktreeText: string) {
+	const main = join(env.root, "demo");
+	const wt = join(env.root, "demo.wt", "fix-x");
+	for (const dir of [main, wt]) mkdirSync(join(dir, "sub"), { recursive: true });
+	writeFileSync(join(main, "mise.toml"), '[tools]\nbun = "1.4.3"\n');
+	writeFileSync(join(main, "sub", "mise.toml"), "[tasks.x]\nrun = 'x'\n");
+	writeFileSync(join(wt, "mise.toml"), worktreeText);
+	writeFileSync(join(wt, "sub", "mise.toml"), "[tasks.x]\nrun = 'x'\n");
+	const show = (dir: string, mainSub: "trusted" | "untrusted", status: string) =>
+		`${join(dir, "mise.toml")}: ${status}\n${join(dir, "sub", "mise.toml")}: ${dir === main ? mainSub : "untrusted"}\n`;
+	const answers = (mainSub: "trusted" | "untrusted", paranoid = PARANOID) => ({
+		FAKE_MISE_PARANOID: paranoid,
+		FAKE_MISE_TRUST_IN: JSON.stringify({
+			[main]: show(main, mainSub, "trusted"),
+			[wt]: show(wt, mainSub, "untrusted"),
+		}),
+	});
+	return { main, wt, answers };
+}
+
+const trusts = () => calls().filter((c) => c.args.startsWith("trust ") && c.args !== "trust --show");
+
+test("a worktree's byte-for-byte copy of a config the main checkout trusts is trusted, under paranoid trust only (0596)", async () => {
+	const { main, wt, answers } = checkouts('[tools]\nbun = "1.4.3"\n');
+	expect(await trustCopies("demo-1", main, wt, base(answers("trusted")), MISE)).toEqual([
+		join(wt, "mise.toml"),
+		join(wt, "sub", "mise.toml"),
+	]);
+	expect(trusts().map((c) => c.args)).toEqual([
+		`trust ${join(wt, "mise.toml")}`,
+		`trust ${join(wt, "sub", "mise.toml")}`,
+	]);
+	expect(trusts().every((c) => c.miseEnv === "jocasta-demo-1")).toBe(true);
+	rmSync(log(), { force: true });
+	expect(await trustCopies("demo-1", main, wt, base(answers("trusted", "false\n")), MISE)).toEqual([]);
+	expect(trusts()).toEqual([]);
+	expect(await trustCopies("demo-1", main, wt, base({}), null)).toEqual([]);
+});
+
+test("a changed copy, or a copy of a config the main checkout doesn't trust, stays untrusted (0596)", async () => {
+	const { main, wt, answers } = checkouts('[tools]\nbun = "1.4.3"\n[env]\nX = "1"\n');
+	expect(await trustCopies("demo-1", main, wt, base(answers("untrusted")), MISE)).toEqual([]);
+	expect(trusts()).toEqual([]);
 });

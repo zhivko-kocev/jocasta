@@ -3,11 +3,15 @@
  * loads Jocasta's own config for that project, `~/.config/mise/config.jocasta-<project id>.override.toml` (global config,
  * trusted by path), in every worktree without a copy. With paranoid config trust on (`paranoid = ["config"]`, which
  * Jocasta's mise file sets, 0476) and every repo config in the folder trusted, `mise env --json` run there is merged
- * into the pane's env too (shims carry no `[env]`), and the review may run its `verify` (else `test`) task. Jocasta
- * never trusts a config itself. Without mise on PATH nothing changes.
+ * into the pane's env too (shims carry no `[env]`), and the review may run its `verify` (else `test`) task. The only
+ * config Jocasta trusts itself is a thread worktree's unchanged copy of one the main checkout has trusted (0596): mise's
+ * own worktree rule, which paranoid trust turns off. Without mise on PATH nothing changes.
  */
+import { readFileSync } from "node:fs";
+import { join, relative } from "node:path";
 import { asObject } from "../../shared/fsx.ts";
 import { log } from "../../shared/log.ts";
+import { isInside, pathKey, realPath } from "../../shared/pathkey.ts";
 import { onPath, runProgram } from "../../shared/process.ts";
 
 /** How long one mise call may take before it counts as failed. */
@@ -55,13 +59,74 @@ async function distrust(mise: string[], cwd: string, env: Env): Promise<string |
 		runMise(mise, ["settings", "get", "paranoid"], cwd, env),
 		runMise(mise, ["trust", "--show"], cwd, env),
 	]);
-	const configs = [...(show ?? "").matchAll(/^(.+): (trusted|untrusted)\s*$/gm)];
-	if (paranoid === undefined || !/\btrue\b|"config"/.test(paranoid)) {
-		return configs.length > 0 ? "mise's paranoid config trust is off" : "";
-	}
+	const configs = trustList(show);
+	if (!isParanoid(paranoid)) return configs.length > 0 ? "mise's paranoid config trust is off" : "";
 	if (show === undefined) return "mise didn't say whether its config is trusted";
-	const untrusted = configs.find((config) => config[2] === "untrusted");
-	return untrusted ? `${untrusted[1]} isn't trusted in mise` : undefined;
+	const untrusted = configs.find((config) => !config.trusted);
+	return untrusted ? `${untrusted.path} isn't trusted in mise` : undefined;
+}
+
+/** Whether `mise settings get paranoid` printed paranoid config trust on. */
+function isParanoid(paranoid: string | undefined): boolean {
+	return paranoid !== undefined && /\btrue\b|"config"/.test(paranoid);
+}
+
+/** The configs `mise trust --show` listed, each trusted or not. */
+function trustList(show: string | undefined): { path: string; trusted: boolean }[] {
+	return [...(show ?? "").matchAll(/^(.+): (trusted|untrusted)\s*$/gm)].map((m) => ({
+		path: m[1] as string,
+		trusted: m[2] === "trusted",
+	}));
+}
+
+/** Whether files `a` and `b` hold the same bytes; false when either can't be read as a file. */
+function sameBytes(a: string, b: string): boolean {
+	try {
+		return readFileSync(a).equals(readFileSync(b));
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Trusts each config mise lists as untrusted inside the thread worktree `cwd` whose counterpart in the main checkout
+ * `main` mise lists as trusted and which has the same bytes (0596). Only under paranoid config trust: without it, mise's
+ * own worktree rule applies. A changed copy stays untrusted, so trust still follows content. Returns what it trusted.
+ */
+export async function trustCopies(
+	projectId: string,
+	main: string,
+	cwd: string,
+	base: Env = process.env,
+	mise = findMise(),
+): Promise<string[]> {
+	if (!mise) return [];
+	const env = { ...base, MISE_ENV: withJocastaEnv(projectId, base) };
+	const [paranoid, here, there] = await Promise.all([
+		runMise(mise, ["settings", "get", "paranoid"], cwd, env),
+		runMise(mise, ["trust", "--show"], cwd, env),
+		runMise(mise, ["trust", "--show"], main, env),
+	]);
+	if (!isParanoid(paranoid)) return [];
+	const trustedInMain = new Set(
+		trustList(there)
+			.filter((config) => config.trusted)
+			.map((config) => pathKey(realPath(config.path))),
+	);
+	const root = realPath(cwd);
+	const mainRoot = realPath(main);
+	const trusted: string[] = [];
+	for (const config of trustList(here)) {
+		if (config.trusted) continue;
+		const copy = realPath(config.path);
+		if (pathKey(copy) === pathKey(root) || !isInside(root, copy)) continue;
+		const original = join(mainRoot, relative(root, copy));
+		if (!trustedInMain.has(pathKey(original)) || !sameBytes(copy, original)) continue;
+		if ((await runMise(mise, ["trust", copy], cwd, env)) === undefined) continue;
+		log("info", "mise", `trusted ${copy}: an unchanged copy of ${original}, which mise trusts (0596)`);
+		trusted.push(copy);
+	}
+	return trusted;
 }
 
 /**

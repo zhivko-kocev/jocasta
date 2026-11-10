@@ -33,3 +33,4 @@ Until he agrees v1 is done, changes are built and checked in a sandbox (0441), n
 - Ends 0440 (6)'s in-place installs.
 - Amended by 0468: the cleanup runs through `jarvis uninstall`, which undoes exactly what install and setup added.
 - Amended by 0487: after the 0481 campaign passes, the agent removes Jarvis by this list (keeping `private-names.txt`, moved to `~/.jocasta/agent/`, and mise) and installs Jocasta from the local build.
+- Amended by 0595: the cutover runs on 2026-11-10, before he agrees v1 is done; the data folder, the containers, their image and the volumes all go.

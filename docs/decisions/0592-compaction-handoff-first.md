@@ -85,4 +85,4 @@ Handoff first; idle compaction on at 100,000; the order and manual commands.
 - Amends 0399 (handoff first, shake fourth) and 0448 (the overlay's and the boss's order). 0399's own recommendation had been handoff first.
 - Every automatic compaction now writes a handoff, which the watcher feeds to Graphiti (0400).
 - A1's arm follows the overlay. No benchmark row has run on this build (0533), so nothing measured changes.
-- Plan appendix I's overlay paragraph lists the new order.
+- Plan appendix I lists the new order.

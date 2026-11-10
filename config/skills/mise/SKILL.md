@@ -5,7 +5,7 @@ description: Run a project's mise tasks and pinned tools without changing mise's
 
 # mise in Jocasta's panes
 
-mise pins a project's tools and runs its tasks. Jocasta set it up so that nothing about it changes without Zhivko (0476): its machine file is written only by `jocasta setup`, and trust is his call.
+mise pins a project's tools and runs its tasks. Jocasta set it up so that nothing about it changes without Zhivko (0476): its machine file is written only by `jocasta setup`, and trust is his call. The one exception is Jocasta's own: before a thread's pane starts, it trusts the worktree's unchanged copy of a config he trusted in the main checkout (0596). A copy the thread changed is untrusted again until he trusts it.
 
 ## Use
 

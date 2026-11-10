@@ -41,7 +41,10 @@ async function versionLine(): Promise<string> {
 	return `jocasta ${jocastaPackage.version} (omp ${versionOf(runProgramSync, onPath("omp"))}, herdr ${versionOf(runProgramSync, findHerdr() ?? null)}, bun ${Bun.version})`;
 }
 
-/** Lines to the console and questions from it: one reader for every question a command asks. */
+/**
+ * Lines to the console and questions from it: one reader for every question a command asks. `close` ends the reader
+ * once the command is done: an open one keeps the process alive in a terminal after its last line.
+ */
 function consoleIo() {
 	const lines = console[Symbol.asyncIterator]();
 	const ask = async (question: string) => {
@@ -62,6 +65,9 @@ function consoleIo() {
 			const rows = Math.max(1, Math.ceil((question.length + (answer?.length ?? 0)) / (process.stdout.columns || 80)));
 			process.stdout.write(`\x1b[28m${"\x1b[1A\r\x1b[2K".repeat(rows)}${question}\n`);
 			return answer;
+		},
+		close: async () => {
+			await lines.return?.();
 		},
 	};
 }
@@ -195,10 +201,15 @@ try {
 					? { runValue: { read: runValue.readRunValue, remove: runValue.deleteRunValue } }
 					: {}),
 			};
-			process.exitCode =
-				target.refresh === undefined
-					? await setup.runSetup(paths, deps, consoleIo())
-					: await setup.refreshSetup(paths, deps, consoleIo(), target.refresh);
+			const io = consoleIo();
+			try {
+				process.exitCode =
+					target.refresh === undefined
+						? await setup.runSetup(paths, deps, io)
+						: await setup.refreshSetup(paths, deps, io, target.refresh);
+			} finally {
+				await io.close();
+			}
 			break;
 		}
 		case "uninstall": {
@@ -228,52 +239,57 @@ try {
 			// Only the install this command runs from: a source run removes no install.
 			const dir = installDir();
 			const install = dir ? uninstall.readInstallRecord(dir, process.env.LOCALAPPDATA) : undefined;
-			process.exitCode = await uninstall.runUninstall(
-				{
-					jocastaConfigDir: configDir(),
-					dataDir: dataDir(),
-					miseConfigDir: miseConfigDir(),
-					composeFile: composeFile(),
-					install,
-					// Windows holds the running jocasta.exe: its files go after this exits. POSIX removes them at once.
-					runningFromInstall: install !== undefined && process.platform === "win32",
-				},
-				{
-					serviceState: () => serviceState(readServiceFile()),
-					herdr: findHerdr(),
-					session: herdrSession(),
-					run,
-					setupUndo: setupUndo(
-						defaultSetupPaths(shippedConfigDir(), selfCommand()),
-						readCredential(CALENDAR_CREDENTIAL) !== undefined,
-					),
-					composeDown: () =>
-						run([
-							"docker",
-							"compose",
-							"-f",
-							composeFile(),
-							"-p",
-							composeProject(),
-							"down",
-							"--rmi",
-							"all",
-							"--volumes",
-						]),
-					removePathEntry: uninstall.removeUserPathEntry,
-					removeRunValue: uninstall.removeRunValueFor,
-					deleteCredential,
-					removeAfterExit: uninstall.removeAfterExit,
-					processesUnder: uninstall.processesUnder,
-					// A headless server for `plugin unlink` (0558); the session's own step stops it.
-					startHerdr: async () => {
-						const herdr = await connectHerdr({ session: herdrSession() });
-						herdr.keepDown();
-						herdr.close();
+			const io = consoleIo();
+			try {
+				process.exitCode = await uninstall.runUninstall(
+					{
+						jocastaConfigDir: configDir(),
+						dataDir: dataDir(),
+						miseConfigDir: miseConfigDir(),
+						composeFile: composeFile(),
+						install,
+						// Windows holds the running jocasta.exe: its files go after this exits. POSIX removes them at once.
+						runningFromInstall: install !== undefined && process.platform === "win32",
 					},
-				},
-				consoleIo(),
-			);
+					{
+						serviceState: () => serviceState(readServiceFile()),
+						herdr: findHerdr(),
+						session: herdrSession(),
+						run,
+						setupUndo: setupUndo(
+							defaultSetupPaths(shippedConfigDir(), selfCommand()),
+							readCredential(CALENDAR_CREDENTIAL) !== undefined,
+						),
+						composeDown: () =>
+							run([
+								"docker",
+								"compose",
+								"-f",
+								composeFile(),
+								"-p",
+								composeProject(),
+								"down",
+								"--rmi",
+								"all",
+								"--volumes",
+							]),
+						removePathEntry: uninstall.removeUserPathEntry,
+						removeRunValue: uninstall.removeRunValueFor,
+						deleteCredential,
+						removeAfterExit: uninstall.removeAfterExit,
+						processesUnder: uninstall.processesUnder,
+						// A headless server for `plugin unlink` (0558); the session's own step stops it.
+						startHerdr: async () => {
+							const herdr = await connectHerdr({ session: herdrSession() });
+							herdr.keepDown();
+							herdr.close();
+						},
+					},
+					io,
+				);
+			} finally {
+				await io.close();
+			}
 			break;
 		}
 		case "diagnose": {

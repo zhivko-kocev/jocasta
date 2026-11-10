@@ -601,3 +601,5 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0592](0592-compaction-handoff-first.md) | Compaction: handoff first, shake and the image method last | product | v1 | program | 2026-11-10 |
 | [0593](0593-his-settings-pass.md) | His /settings pass: the values in his config and in Jocasta's | product | v1 | program | 2026-11-10 |
 | [0594](0594-setup-fences-folders-and-writes-secrets.md) | Setup fences the key folders and Windows' own, and writes an empty secrets.yml | product | v1 | program | 2026-11-10 |
+| [0595](0595-cutover-now.md) | The cutover now: Jarvis is Jocasta, everything from Jarvis is deleted | process | v1 | program | 2026-11-10 |
+| [0596](0596-worktrees-trust-unchanged-mise-copy.md) | A thread's worktree trusts an unchanged copy of a trusted mise config | product | v1 | program | 2026-11-10 |

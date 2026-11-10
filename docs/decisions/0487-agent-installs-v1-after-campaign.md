@@ -38,3 +38,4 @@ I do it after the campaign passes.
 ## Consequences
 - Amends 0446 (the agent, not he, installs v1 from the local build after the campaign; `private-names.txt` and mise stay).
 - Plan appendix I names `JOCASTA_INSTALL_FROM`.
+- Amended by 0595: the cutover runs on 2026-11-10, before the campaign ends and before he agrees v1 is done; everything from Jarvis is deleted, its data folder and graph included.

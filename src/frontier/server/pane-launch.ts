@@ -20,7 +20,7 @@ import { bossCommand, bossToolsMissing, ensureBossPane, newPaneKey, PANE_KEY_ENV
 import type { ServiceContext } from "./context.ts";
 import type { PaneInfo } from "./herdr.ts";
 import { ensureHunkDaemon, findHunk, HUNK_PORT, hunkEnv } from "./hunk.ts";
-import { miseEnv } from "./mise.ts";
+import { miseEnv, trustCopies } from "./mise.ts";
 import { ensureOverlay } from "./overlay.ts";
 import { configFiles, isLoopbackRelay, notLoopback, ompRelayUrl, RELAY_PORT } from "./relay.ts";
 import { launchPrompt, type TaskRecord } from "./task-file.ts";
@@ -235,14 +235,19 @@ export class PaneLauncher {
 	}
 
 	/**
-	 * A thread pane's env (0457, 0473): the hunk variables, the thread's own, then mise's; with the layer off, the
-	 * layer's switch too, so its `jocasta mcp` lists no thread tools (0576).
+	 * A thread pane's env (0457, 0473): the hunk variables, the thread's own, then mise's, once the worktree's unchanged
+	 * copies of the main checkout's trusted mise configs are trusted (0596); with the layer off, the layer's switch too,
+	 * so its `jocasta mcp` lists no thread tools (0576).
 	 */
 	async threadPaneEnv(project: Project, path: string): Promise<Record<string, string>> {
 		const open = this.c.threads.ofProject(project.id).map((t) => t.path);
 		const own = threadEnv(basename(project.mainPath), basename(path), this.c.numbers.of(path, open));
 		const layer: Record<string, string> = this.c.layer ? {} : { [LAYER_ENV]: "off" };
-		return this.withMise(project.id, path, { ...this.paneEnv, ...own, ...layer });
+		const env = { ...this.paneEnv, ...own, ...layer };
+		if (this.c.options.mise !== null) {
+			await trustCopies(project.id, project.mainPath, path, { ...process.env, ...env }, this.c.options.mise);
+		}
+		return this.withMise(project.id, path, env);
 	}
 
 	/** hunk's argv: the test seam's, else the shipped or npm binary; undefined when there is none. */

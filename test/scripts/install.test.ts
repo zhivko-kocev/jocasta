@@ -367,7 +367,7 @@ test.if(sh !== null)(
 		const result = installSh(bin, join(root, "home"));
 		expect(result.code).not.toBe(0);
 		expect(result.err).toMatch(
-			/^jocasta install: \S+install holds files that aren't Jocasta's; choose an empty folder for JOCASTA_INSTALL_DIR\.$/m,
+			/^jocasta install: .+install holds files that aren't Jocasta's; choose an empty folder for JOCASTA_INSTALL_DIR\.$/m,
 		);
 		expect(readdirSync(dir).sort()).toEqual(["his-tool", "jocasta"]);
 		expect(readFileSync(join(dir, "jocasta"), "utf8")).toBe("his copy");

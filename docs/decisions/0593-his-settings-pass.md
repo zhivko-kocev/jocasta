@@ -85,4 +85,4 @@ On scope: "recomended also in jocasta everywhere". He picked the recommended opt
 - Amends 0420: after his answers the agent wrote his config, on 2026-11-10; he didn't set the values by hand.
 - The fenced OS folders differ from the recommendation.
 - Plain sessions lose the Claude Code plugins' skills and servers, the Microsoft Learn docs among them, and start with an empty mnemopi memory.
-- README's config section and plan appendix I's omp row list the new keys.
+- README's config section, plan 5.4's omp row and appendix I list the new keys.
