@@ -17,7 +17,6 @@ import { shippedConfigDir } from "../../src/shared/install.ts";
 const file = join(shippedConfigDir(), "guard.yml");
 const text = readFileSync(file, "utf8");
 const rules = parseGuard(text, file);
-const gitGuard = (Bun.YAML.parse(text) as { bash: { gitGuard: boolean } }).bash.gitGuard;
 
 /** A case's verdict and the guard pattern that decided it, if one did. */
 type Resolved = CorpusEntry & { verdict: Verdict; rule: string | null };
@@ -69,8 +68,7 @@ function expectVerdicts(resolve: Resolver, expected: Partial<Record<Verdict, str
 	expect(rows.map((row) => [row.command, row.verdict])).toEqual(corpus.map((entry) => [entry.command, entry.expected]));
 }
 
-test("guard.yml turns git's guard on and lists every deny before any prompt (0450)", () => {
-	expect(gitGuard).toBe(true);
+test("guard.yml lists every deny before any prompt, each rule once (0450)", () => {
 	const firstPrompt = rules.findIndex((rule) => rule.approval === "prompt");
 	expect(rules.slice(firstPrompt).every((rule) => rule.approval === "prompt")).toBe(true);
 	expect(new Set(rules.map((rule) => rule.match)).size).toBe(rules.length);

@@ -13,7 +13,9 @@
 # aliases, and mise's `u`/`up` short forms beyond the ones below aren't covered; prompts are rejected in subagents.
 # Everything runs as him: an OS boundary for thread panes is after v1 (0485).
 bash:
-  gitGuard: true
+  # off until omp's git builtin runs git on Windows: with it on, omp 18.18.6's shell fails every git command it lets
+  # through with exit 127 (can1357/oh-my-pi#18722, 0598); the bump to a fixed omp turns it back on
+  gitGuard: false
   patterns:
     # deny: git and gh (the leading `*git *` also catches `git -C x`, `cd x &&`, `pwsh -c "…"`, `cmd /c`; `*git*push*`
     # also catches git.exe and a full path to git, 0485); force flags combined with -u, -v or -q, and pushes onto the
