@@ -63,7 +63,7 @@ Open items carried forward, each tied to the slice that decides it:
   - `thread_finish` removed a worktree that a just-started process worked in (macOS; `lsof`'s exit status isn't checked).
 
   Two more on Windows, on `3811e10` (2026-11-10, a docs-only commit whose code had passed on all three OSes in `b59c964`'s run), one per attempt, both in tests:
-  - CR-08's test failed in its cleanup: `removeTree` met `ENOTEMPTY` on the repo's `.git\worktrees\readme-line` five times. Fixed: `removeTree` listed a folder once and then only retried its `rmdir`, so an entry written after the listing could never go; each `ENOTEMPTY` try now lists the folder again (sync and async; with a writer adding files for 0.5 s, the old code failed 6 of 6, the new one removed 6 of 6).
+  - CR-08's test failed in its cleanup: `removeTree` met `ENOTEMPTY` on the repo's `.git\worktrees\readme-line` five times. Fixed in `ce75df9` (CI run 42809005490 passes on all three OSes): `removeTree` listed a folder once and then only retried its `rmdir`, so an entry written after the listing could never go; each `ENOTEMPTY` try now lists the folder again (sync and async; with a writer adding files for 0.5 s, the old code failed 6 of 6, the new one removed 6 of 6). The release is rebuilt with it.
   - 0574's grading-limit test (`test/evals/runner.test.ts:532`) found no pid file (`ENOENT`), so no grandchild was left alive and this isn't `killTree` again. Likely [not confirmed] the hidden check was cut at its 2 s limit before the bun it spawned had started and written the file; open.
 
   H3 and H5 end trees with `killTree`, so these are worth a look before the benchmarks.
