@@ -36,3 +36,4 @@ Handoff first + task-end `/shake`.
 - Differs from the recommendation (handoff first).
 - Shake and snapcompact entries carry no text summary; the watcher skips them (0389).
 - Amended by 0448: the pane settings carry the compaction block, with `compaction.thresholdTokens: 300000` instead of `thresholdPercent: 60`; the task-end `/handoff` carries a focus line.
+- Amended by 0592: `compaction.methodOrder` is `[handoff, remote, soft, shake, snapcompact]`; on his models a shake rewrites the warm cache and blocks the handoff behind it.

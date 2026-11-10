@@ -137,6 +137,8 @@ Verdict (0481): `pass (automated)` means the automated test named in the row pas
 | 0010 `omp-keybindings` | `src/setup/setup.ts:569` | `test/setup/setup.test.ts:563`, `:590` | VM | pass (live: VM run1 and run2, written) |
 | 0011 `omp-watchdog`: `WATCHDOG.md` | `src/setup/setup.ts:588` | `test/setup/setup.test.ts:605` | VM | pass (live: VM run1 and run2, written) |
 | 0012 `omp-lsp`: `lsp.json` | `src/setup/setup.ts:622` | `test/setup/setup.test.ts:563` | VM | pass (live: VM run1 and run2, written) |
+| 0003 on Windows: the fence also names `%SystemRoot%` and `%ProgramFiles%` (0594) | `src/setup/setup.ts:146`, `src/setup/omp-settings.ts:68` | `test/setup/setup.test.ts:748` | VM | pass (automated); VM: at its next setup run |
+| 0015 `omp-secrets`: `secrets.yml` written when missing, his own kept unshown (0594) | `src/setup/setup.ts:465`, `:803` | `test/setup/setup.test.ts:715` | VM | pass (automated); VM: at its next setup run |
 | Once per shipped version; a failure stops the rest | `src/setup/setup.ts:643` | `test/setup/setup.test.ts:383`, `:401` | VM | pass (automated) |
 | y/N answers (setup, `--refresh`, uninstall) | `src/setup/setup.ts:730` | `test/setup/setup.test.ts:505` | VM | pass (automated) |
 | Calendar secret into Credential Manager | `src/setup/setup.ts:670`, `:792`, `src/shared/credentials.ts:71` | `test/setup/setup.test.ts:681`, `:697`, `test/shared/platform.test.ts:94`, `:101` | VM | pass (automated) |

@@ -38,3 +38,4 @@ Numbered migrations shown as a diff, applied after `y`, with a start-up toast.
 - The migration folder, marker location and toast text are chosen by the builder and listed as built; plan appendix I names them.
 - Amended by 0476: setup also writes `~/.config/mise/conf.d/jarvis.toml` when mise is installed.
 - Amended by 0479: three more migrations for `keybindings.yml`, `WATCHDOG.md` and `lsp.json` in his omp folder.
+- Amended by 0594: one more migration writes `secrets.yml` in his omp folder when it's missing.

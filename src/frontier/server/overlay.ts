@@ -12,13 +12,13 @@ export function overlayFile(projectId: string): string {
 
 /**
  * The overlay's text: the project's own Mnemopi bank in its own file, shared by its worktrees (0400, 0447); new
- * sessions in plan mode; compaction at 300k tokens (0399, 0448); private notes from `AGENTS.local.md` (0449); the
- * project's lessons as the skill `lessons` (0459: omp lists `<dir>/<name>/SKILL.md`, so the project folder is the skill
- * directory and `lessons/` its one skill); no reviewer model, so omp's bundled reviewer runs on his `slow` role (0488);
- * the privacy settings, whatever his global
- * config says (0478): no Auto QA reports, no Claude Code plugins, web search on DuckDuckGo (an overlay's
- * `modelRoles.web` leaves his other roles alone; its `disabledProviders` replaces his list); every session hosted in
- * Jocasta's relay on `relayPort` and `/share` kept on this machine (0536, 0561). Paths are JSON strings, valid YAML.
+ * sessions in plan mode; compaction at 300k tokens, a handoff first (0399, 0448, 0592); private notes from
+ * `AGENTS.local.md` (0449); the project's lessons as the skill `lessons` (0459: omp lists `<dir>/<name>/SKILL.md`, so
+ * the project folder is the skill directory and `lessons/` its one skill); no reviewer model, so omp's bundled reviewer
+ * runs on his `slow` role (0488); the privacy settings, whatever his global config says (0478): no Auto QA reports, no
+ * Claude Code plugins, web search on DuckDuckGo (an overlay's `modelRoles.web` leaves his other roles alone; its
+ * `disabledProviders` replaces his list); every session hosted in Jocasta's relay on `relayPort` and `/share` kept on
+ * this machine (0536, 0561). Paths are JSON strings, valid YAML.
  */
 export function overlayText(projectId: string, relayPort = RELAY_PORT): string {
 	const path = (value: string) => JSON.stringify(value);
@@ -33,7 +33,7 @@ export function overlayText(projectId: string, relayPort = RELAY_PORT): string {
 		"plan:",
 		"  defaultOnStartup: true",
 		"compaction:",
-		"  methodOrder: [shake, handoff, soft, snapcompact, remote]",
+		"  methodOrder: [handoff, remote, soft, shake, snapcompact]",
 		"  thresholdTokens: 300000",
 		"  idleEnabled: true",
 		"  idleThresholdTokens: 100000",

@@ -16,7 +16,7 @@ import { editConfig } from "../../src/setup/config-file.ts";
 import { lineDiff } from "../../src/setup/diff.ts";
 import { fingerprint, markersDir, readMarker } from "../../src/setup/markers.ts";
 import { MISE_FRAGMENT } from "../../src/setup/mise.ts";
-import { mergeOmpSettings, ompYaml } from "../../src/setup/omp-settings.ts";
+import { mergeOmpSettings, ompSettingsText, ompYaml } from "../../src/setup/omp-settings.ts";
 import {
 	backupStamp,
 	type CalendarStore,
@@ -133,6 +133,7 @@ const miseFile = () => join(paths.miseConfigDir, "conf.d", "jocasta.toml");
 const keybindings = () => join(paths.ompAgentDir, "keybindings.yml");
 const watchdog = () => join(paths.ompAgentDir, "WATCHDOG.md");
 const lsp = () => join(paths.ompAgentDir, "lsp.json");
+const secrets = () => join(paths.ompAgentDir, "secrets.yml");
 
 test("a fresh machine: the diff names every file, and `n` writes nothing", async () => {
 	put(join(paths.jocastaConfigDir, "settings.json"), JSON.stringify({ frontier: { port: 47615 }, theme: "x" }));
@@ -152,6 +153,7 @@ test("a fresh machine: the diff names every file, and `n` writes nothing", async
 	);
 	expect(text).toContain(`the advisor's brief: ${watchdog()}`);
 	expect(text).toContain(`omp language servers: idle ones stop after 5 minutes: ${lsp()}`);
+	expect(text).toContain(`omp's secrets.yml: your own strings to hide, an empty list to fill: ${secrets()}`);
 	// No mise on this machine: no mise file (0476).
 	expect(text).not.toContain(miseFile());
 	expect(text).toEndWith("Nothing written.");
@@ -226,6 +228,7 @@ test("`y` writes every file, marks each migration, runs herdr's omp integration,
 	expect(readFileSync(keybindings(), "utf8")).toBe(ompYaml({ "app.live.toggle": [], "app.stt.toggle": "f9" }));
 	expect(readFileSync(watchdog(), "utf8")).toBe(readFileSync(join(ASSETS, "WATCHDOG.md"), "utf8"));
 	expect(JSON.parse(readFileSync(lsp(), "utf8"))).toEqual({ idleTimeoutMs: 300000 });
+	expect(readFileSync(secrets(), "utf8")).toBe(readFileSync(join(ASSETS, "secrets.yml"), "utf8"));
 	expect(readdirSync(markersDir(paths.jocastaConfigDir)).sort()).toEqual([
 		"0001-mcp.json",
 		"0002-boss-mcp.json",
@@ -239,6 +242,7 @@ test("`y` writes every file, marks each migration, runs herdr's omp integration,
 		"0011-omp-watchdog.json",
 		"0012-omp-lsp.json",
 		"0014-herdr-plugin.json",
+		"0015-omp-secrets.json",
 	]);
 
 	const again = await setup("y");
@@ -435,7 +439,7 @@ test("a failed migration stops the rest and says why; the ones before it are mar
 	const { code, text } = await setup("y");
 	expect(code).toBe(1);
 	expect(text).toContain(
-		"jocasta setup: 0004-herdr-integration (herdr's omp integration (`herdr integration install omp`)) failed: herdr integration install omp exited 3: no omp found; the 7 changes after it wait.",
+		"jocasta setup: 0004-herdr-integration (herdr's omp integration (`herdr integration install omp`)) failed: herdr integration install omp exited 3: no omp found; the 8 changes after it wait.",
 	);
 	expect(existsSync(globalMcp())).toBe(true);
 	expect(existsSync(herdrToml())).toBe(false);
@@ -706,6 +710,56 @@ test("WATCHDOG.md: written when missing, his own shown and kept, Jocasta's older
 		path: watchdog(),
 		fingerprint: fingerprint("# Advisor brief v3\n"),
 	});
+});
+
+test("secrets.yml: a list omp reads, written when missing, his own kept and never shown, Jocasta's older text follows (0594)", async () => {
+	// omp warns at every start about a file that isn't a YAML list (`secrets/index.ts:299-301`).
+	expect(Bun.YAML.parse(readFileSync(join(ASSETS, "secrets.yml"), "utf8"))).toEqual([]);
+	const assets = ownAssets();
+	const mine = "- type: plain\n  content: his-name-q7z\n";
+	put(secrets(), mine);
+	const his = await setup("y");
+	expect(his.text).not.toContain("his-name-q7z");
+	expect(his.text).not.toContain(secrets());
+	expect(readFileSync(secrets(), "utf8")).toBe(mine);
+	expect(JSON.stringify(setupUndo(paths, false))).not.toContain(JSON.stringify(secrets()));
+	// A newer shipped text leaves his alone, unshown.
+	put(join(assets, "secrets.yml"), "# v2\n[]\n");
+	const newer = await setup("y");
+	expect(newer.text).not.toContain("his-name-q7z");
+	expect(readFileSync(secrets(), "utf8")).toBe(mine);
+
+	// Missing: Jocasta's text is written; a newer one replaces it after `y` while he hasn't changed it.
+	rmSync(secrets());
+	rmSync(markersDir(paths.jocastaConfigDir), { recursive: true });
+	await setup("y");
+	expect(readFileSync(secrets(), "utf8")).toBe("# v2\n[]\n");
+	put(join(assets, "secrets.yml"), "# v3\n[]\n");
+	const follows = await setup("y");
+	expect(follows.text).toMatch(/^- # v2$/m);
+	expect(readFileSync(secrets(), "utf8")).toBe("# v3\n[]\n");
+	expect(setupUndo(paths, false)).toContainEqual({
+		kind: "text",
+		path: secrets(),
+		fingerprint: fingerprint("# v3\n[]\n"),
+	});
+});
+
+test("on Windows the shipped fence also names Windows' own folders, and a second run has nothing to do (0594)", async () => {
+	const shipped = readFileSync(join(ASSETS, "omp-config.yml"), "utf8");
+	const fence = (text: string) =>
+		(Bun.YAML.parse(text) as { tools: { restrictedFolders: string[] } }).tools.restrictedFolders;
+	expect(fence(shipped).length).toBeGreaterThan(0);
+	expect(ompSettingsText(shipped, undefined)).toBe(shipped);
+	expect(ompSettingsText("tools:\n  restrictedFolders: []\n", ["C:\\W"])).toBe(
+		'tools:\n  restrictedFolders: ["C:\\\\W"]\n',
+	);
+	expect(() => ompSettingsText("tools: {}\n", ["C:\\W"])).toThrow("no one-line tools.restrictedFolders list");
+
+	paths.systemFolders = ["C:\\WINDOWS", "D:\\Program Files"];
+	await setup("y");
+	expect(fence(readFileSync(ompConfig(), "utf8"))).toEqual([...fence(shipped), "C:\\WINDOWS", "D:\\Program Files"]);
+	expect((await setup("y")).text).toBe("Nothing to set up: everything Jocasta adds is in place.");
 });
 
 test("setupToast: one line when setup has changes waiting, none when everything is in place (0466)", async () => {

@@ -28,7 +28,10 @@ export type Undo =
 	 * only while it still has that value, and the file goes when setup made it and nothing else is left in it.
 	 */
 	| { kind: "keys"; path: string; keys: Record<string, unknown>; created: boolean }
-	/** A file setup wrote that he may make his own (`WATCHDOG.md`, 0479): it goes only while its text is still this one. */
+	/**
+	 * A file setup wrote that he may make his own (`WATCHDOG.md`, `secrets.yml`; 0479, 0594): it goes only while its
+	 * text is still this one.
+	 */
 	| { kind: "text"; path: string; fingerprint: string }
 	/** A Windows Credential Manager entry. */
 	| { kind: "credential"; target: string };

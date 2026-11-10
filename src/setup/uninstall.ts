@@ -5,8 +5,9 @@
  * Jocasta's per-project mise configs (0477) go too. The data folder (memory, models) and the containers, images and
  * volumes are each asked about separately. Keys setup merged into his omp `config.yml` stay: they are his settings. In
  * `keybindings.yml` and `lsp.json` only the keys setup added go (in `keybindings.yml` only their lines, 0584), and
- * `WATCHDOG.md` only while it is still Jocasta's text (0479). From the install folder only the release's entries go,
- * and the folder once it is empty (0579); omp sessions still running programs from it are named and refused first.
+ * `WATCHDOG.md` and `secrets.yml` only while each is still Jocasta's text (0479, 0594). From the install folder only
+ * the release's entries go, and the folder once it is empty (0579); omp sessions still running programs from it are
+ * named and refused first.
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readdirSync, readFileSync, rmdirSync, rmSync } from "node:fs";

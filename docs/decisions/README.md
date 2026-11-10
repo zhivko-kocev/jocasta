@@ -598,3 +598,6 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0589](0589-omp-18-18-6.md) | Jocasta moves to omp 18.18.6 | product, benchmark | v1 | program | 2026-11-10 |
 | [0590](0590-models-per-role-after-fable-5-2.md) | Models per role after Fable 5.2: the boss on Fable, heavy threads on his slow role | product, benchmark | v1 | program | 2026-11-10 |
 | [0591](0591-subagents-on-sonnet-memory-and-graph-unchanged.md) | Subagents on Sonnet 5.5; memory notes and the graph unchanged | product | v1 | program | 2026-11-10 |
+| [0592](0592-compaction-handoff-first.md) | Compaction: handoff first, shake and the image method last | product | v1 | program | 2026-11-10 |
+| [0593](0593-his-settings-pass.md) | His /settings pass: the values in his config and in Jocasta's | product | v1 | program | 2026-11-10 |
+| [0594](0594-setup-fences-folders-and-writes-secrets.md) | Setup fences the key folders and Windows' own, and writes an empty secrets.yml | product | v1 | program | 2026-11-10 |

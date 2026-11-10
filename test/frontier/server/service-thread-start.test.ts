@@ -55,7 +55,7 @@ test(
 					},
 					plan: { defaultOnStartup: true },
 					compaction: {
-						methodOrder: ["shake", "handoff", "soft", "snapcompact", "remote"],
+						methodOrder: ["handoff", "remote", "soft", "shake", "snapcompact"],
 						thresholdTokens: 300000,
 						idleEnabled: true,
 						idleThresholdTokens: 100000,

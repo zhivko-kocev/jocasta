@@ -38,3 +38,4 @@ The per-project overlay and the boss config set 0399's compaction block themselv
 - Amends 0399 (`thresholdPercent: 60` becomes `thresholdTokens: 300000`; the block moves into the pane settings).
 - The focus line is a shipped prompt chosen by the builder and listed as built (0363).
 - Plan appendix I lists the overlay's compaction keys.
+- Amended by 0592: the overlay's and boss's order is `[handoff, remote, soft, shake, snapcompact]`; 300,000 tokens and idle at 100,000 stay.

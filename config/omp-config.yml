@@ -1,17 +1,19 @@
-# omp settings Jocasta relies on (0396, 0398, 0399, 0400, 0451): deltas from omp's defaults only (principle 3), his
-# reference for the `/settings` pass (0420). Keys checked against omp 18.12.6's source.
+# omp settings Jocasta relies on (0396, 0398, 0399, 0400, 0451, 0592–0594): deltas from omp's defaults (principle 3),
+# and pins where a later default would send data out. His `/settings` pass (0420, 0593) took every value here into his
+# own config. Keys checked against omp 18.18.6's source.
 # Per-pane values are not here: every project and thread pane gets `--config <config>/guard.yml` (the guard, 0450) and
 # `--config <data>/projects/<pid>/omp.yml` (memory file, compaction, plan mode, AGENTS.local.md, lessons, and the
 # privacy settings `dev.autoqa`, `disabledProviders`, `modelRoles.web`; 0447–0449, 0459, 0478; no reviewer model, so
 # omp's reviewer runs on his `slow` role, 0488); the boss pane
 # gets `config/boss.yml` (the same privacy settings) and the guard.
 #
-# Outside config.yml, written by `jocasta setup` as a diff after his `y` (0451, 0479; his other keys kept):
+# Outside config.yml, written by `jocasta setup` as a diff after his `y` (0451, 0479, 0594; his other keys kept):
 # - ~/.omp/agent/keybindings.yml: `app.live.toggle: []` (Ctrl+L no longer starts omp's live voice, which sends mic
-#   audio and the session to OpenAI).
+#   audio and the session to OpenAI) and `app.stt.toggle: f9` (the key Right Ctrl sends, 0556).
 # - ~/.omp/agent/WATCHDOG.md: the advisor's brief, from `config/WATCHDOG.md`; one he changed is shown and kept.
 # - ~/.omp/agent/lsp.json: `"idleTimeoutMs": 300000` (idle language servers shut down; each pane holds its own).
-# By hand: ~/.omp/agent/secrets.yml, his own strings to redact (with `secrets.enabled` below); never in this repo.
+# - ~/.omp/agent/secrets.yml: from `config/secrets.yml` when missing, an empty list for his own strings to redact (with
+#   `secrets.enabled` below); his own is kept and never shown, and his strings never enter this repo.
 
 # One shared theme with herdr and Jocasta's canvas (0401).
 theme:
@@ -21,14 +23,24 @@ theme:
 memory:
   backend: mnemopi
 
-# One continuous thread (0399, 0448): compaction at 300k tokens, not a percent of a 1M window.
+# One continuous thread (0399, 0448, 0592): compaction at 300k tokens, not a percent of a 1M window. A handoff first,
+# prepared in the background; remote takes an overflow, shake and snapcompact are the no-model last resorts.
 compaction:
-  methodOrder: [shake, handoff, soft, snapcompact, remote]
+  methodOrder: [handoff, remote, soft, shake, snapcompact]
   thresholdTokens: 300000
   idleEnabled: true
   idleThresholdTokens: 100000
 
-# Nothing leaves the machine that doesn't have to (0398, 0451).
+# A warning once a session, its subagents included, has spent $50; threads start with the same (0541, 0593).
+session:
+  warnCost: 50
+
+# Every read, write, edit, search or command in these folders asks him first, whatever the mode (0593). On Windows
+# setup adds Windows' own folders, %SystemRoot% and %ProgramFiles% (0594): keep the list on one line.
+tools:
+  restrictedFolders: ["~/.ssh", "~/.aws", "~/.azure", "~/.docker"]
+
+# Nothing leaves the machine that doesn't have to (0398, 0451, 0593).
 telemetry:
   otlpExportEnabled: false
 dev:
@@ -54,14 +66,22 @@ find:
   enabled: "off"
 github:
   enabled: true
-# Pinned off: when on, every session is hosted through wss://my.omp.sh.
+# Pinned off for his own omp: when on, every session is hosted through wss://my.omp.sh. Jocasta's panes and the boss
+# host on Jocasta's loopback relay instead (`control`, 0561).
 collab:
   autoStart: "off"
+# Pinned off: when on, tool output goes to cloud.stencil.so to be shaped (0593).
+spotlight:
+  experiment:
+    enabled: false
 # Configured strings and credential-shaped tokens are replaced before provider requests (~/.omp/agent/secrets.yml).
 secrets:
   enabled: true
 providers:
   cacheWarming: streaming
+  # ChatGPT logins stay out of OpenAI's Daybreak program, whose sessions OpenAI may train on (0593).
+  openai-codex:
+    daybreak: false
 lsp:
   diagnosticsOnEdit: true
 paste:

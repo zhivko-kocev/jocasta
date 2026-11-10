@@ -33,3 +33,4 @@ Setup stays as built (writes `config.yml` only when missing). He sets 0398–040
 - Until he does, 0398's guard patterns are not active.
 - Amended by 0451: the reference config he sets gains more values and documents keybindings, `WATCHDOG.md` and `lsp.json`.
 - Amended by 0466: `jarvis setup` merges the shipped omp settings into his existing `config.yml` key by key, shown as a diff and applied after his `y`.
+- Amended by 0593: after his `/settings` pass the agent wrote the values into his `config.yml` on 2026-11-10.

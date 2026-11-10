@@ -38,3 +38,4 @@ Guard: `tools.approvalMode` stays `yolo`, `bash.gitGuard: true`, and `bash.patte
 - His personal rules (`~/.jarvis/agent/AGENTS.md`) don't move into omp for now; the Jarvis persona goes only into the boss pane's appended manual (0392 as decided), so threads and his daily omp stay plain.
 - Amended by 0450: the guard's corrected list moves to `config/guard.yml` in every pane; under yolo only `deny` and non-critical `prompt` rules act.
 - Amended by 0451: the reference config gains more values (disabled Claude plugins, web, find, startup, github, collab, secrets) and documented keybindings, `WATCHDOG.md` and `lsp.json`.
+- Amended by 0593: the reference also sets `session.warnCost: 50`, `tools.restrictedFolders` (his key folders, and Windows' own on Windows), `providers.openai-codex.daybreak: false` and `spotlight.experiment.enabled: false`; every value is in his own config too.

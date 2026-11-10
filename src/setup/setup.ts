@@ -17,20 +17,21 @@ import { editConfig, parseConfig, parseJsonObject, renderConfig } from "./config
 import { lineDiff } from "./diff.ts";
 import { fingerprint, type Marker, readMarker, recordedUndo, type Undo, writeMarker } from "./markers.ts";
 import { MISE_FRAGMENT } from "./mise.ts";
-import { mergeOmpSettings, ompYaml } from "./omp-settings.ts";
+import { mergeOmpSettings, ompSettingsText, ompYaml } from "./omp-settings.ts";
 import { RUN_KEY, RUN_VALUE, startsCompanion } from "./run-value.ts";
 
 /**
- * `jocasta setup` (0387, 0392, 0393, 0396, 0401, 0430, 0440, 0466, 0467, 0476, 0479): what Jocasta adds to omp, herdr, Windows
- * Terminal and mise, and the calendar's secret in Windows Credential Manager. Each thing is a numbered migration with
- * a marker in `~/.jocasta/agent/setup/` (0466): it is pending until applied, and again when what Jocasta ships for it
- * changes, so one runs once per shipped version and a file he edits afterwards is left alone until then (`--refresh`
- * resets one, 0467). Every pending change is shown as a diff and written only after his `y`, in order; a failed one
- * stops the rest, and so does a file changed since its diff was shown (0584). Jocasta's entries in omp's MCP configs
- * are merged beside his other servers; omp's settings are merged into his `config.yml` key by key, keys he set to
- * another value kept and shown, and so are its keys in his `keybindings.yml` (only their lines edited) and `lsp.json`
- * (0479, 0584); his own advisor brief (`WATCHDOG.md`) is shown and kept. Every file is written through a temp file and
- * a rename, so a crash never leaves one torn. Each marker names how to undo its migration (0468).
+ * `jocasta setup` (0387, 0392, 0393, 0396, 0401, 0430, 0440, 0466, 0467, 0476, 0479, 0594): what Jocasta adds to omp,
+ * herdr, Windows Terminal and mise, and the calendar's secret in Windows Credential Manager. Each thing is a numbered
+ * migration with a marker in `~/.jocasta/agent/setup/` (0466): it is pending until applied, and again when what Jocasta
+ * ships for it changes, so one runs once per shipped version and a file he edits afterwards is left alone until then
+ * (`--refresh` resets one, 0467). Every pending change is shown as a diff and written only after his `y`, in order; a
+ * failed one stops the rest, and so does a file changed since its diff was shown (0584). Jocasta's entries in omp's MCP
+ * configs are merged beside his other servers; omp's settings are merged into his `config.yml` key by key, keys he set
+ * to another value kept and shown, and so are its keys in his `keybindings.yml` (only their lines edited) and
+ * `lsp.json` (0479, 0584); his own advisor brief (`WATCHDOG.md`) is shown and kept, and his own `secrets.yml` is kept
+ * and never shown (0594). Every file is written through a temp file and a rename, so a crash never leaves one torn.
+ * Each marker names how to undo its migration (0468).
  */
 
 /** Where setup reads and writes; every path injectable so tests never touch his homes. */
@@ -45,6 +46,8 @@ export interface SetupPaths {
 	assetsDir: string;
 	/** `%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments`; undefined off Windows. */
 	terminalFragmentsDir?: string;
+	/** Windows' own folders omp fences (0594): `%SystemRoot%` and `%ProgramFiles%`; undefined off Windows. */
+	systemFolders?: string[];
 	/** mise's global config dir, `~/.config/mise` (`MISE_CONFIG_DIR` overrides it, as in mise). */
 	miseConfigDir: string;
 	/** How omp starts this Jocasta: `[jocasta.exe]`, or `[bun, <repo>/src/entry.ts]` in a source run. */
@@ -140,6 +143,10 @@ export function defaultSetupPaths(assetsDir: string, jocastaCommand: string[]): 
 		assetsDir,
 		terminalFragmentsDir:
 			process.platform === "win32" ? join(local, "Microsoft", "Windows Terminal", "Fragments") : undefined,
+		systemFolders:
+			process.platform === "win32"
+				? [process.env.SystemRoot || "C:\\Windows", process.env.ProgramFiles || "C:\\Program Files"]
+				: undefined,
 		miseConfigDir: miseConfigDir(),
 		jocastaCommand,
 		whiteboard: whiteboardRuntime(),
@@ -451,6 +458,35 @@ function ownedStep(title: string, path: string, wanted: string, undo: Undo[]): S
 	return { path, fingerprint: fingerprint(wanted), change: ownedFile(title, path, wanted), undo };
 }
 
+/**
+ * A shipped file he may make his own (0479, 0594): written when missing, following a newer shipped text while it is
+ * still Jocasta's. His own stays and is no longer setup's to undo; `yours` is what setup shows of it (none: nothing).
+ */
+function textStep(
+	title: string,
+	path: string,
+	wanted: string,
+	marker: Marker | undefined,
+	yours?: (has: string) => SetupChange,
+): Step {
+	const ours = fingerprint(wanted);
+	const step: Step = { path, fingerprint: ours, undo: [{ kind: "text", path, fingerprint: ours }] };
+	const has = readText(path);
+	if (has === undefined) {
+		step.change = newFile(title, path, wanted);
+		return step;
+	}
+	if (has === wanted) return step;
+	const before = marker?.undo.find((u) => u.kind === "text" && u.path === path);
+	if (before?.kind === "text" && before.fingerprint === fingerprint(has)) {
+		step.change = { title, path, diff: lineDiff(has, wanted), apply: async () => writeIfUnchanged(path, has, wanted) };
+		return step;
+	}
+	step.undo = [];
+	if (yours) step.change = yours(has);
+	return step;
+}
+
 /** The thread's `jocasta` server and whiteboard's, in omp's global `mcp.json` (migration 1). */
 function globalServers(paths: SetupPaths): Record<string, Record<string, unknown>> {
 	const servers: Record<string, Record<string, unknown>> = {
@@ -507,11 +543,12 @@ const MIGRATIONS: Migration[] = [
 		},
 	},
 	{
-		// The omp settings Jocasta ships (0396–0400, 0447–0465): the whole file when he has none, else merged key by key.
+		// The omp settings Jocasta ships (0396–0400, 0447–0465, 0592–0594): the whole file when he has none, else merged
+		// key by key; on Windows its fence also names Windows' own folders (0594).
 		id: 3,
 		slug: "omp-settings",
 		plan: ({ paths, marker }) => {
-			const text = readFileSync(join(paths.assetsDir, "omp-config.yml"), "utf8");
+			const text = ompSettingsText(readFileSync(join(paths.assetsDir, "omp-config.yml"), "utf8"), paths.systemFolders);
 			return mergedStep({
 				title: "omp settings Jocasta ships",
 				newTitle: "omp settings",
@@ -660,35 +697,15 @@ const MIGRATIONS: Migration[] = [
 		plan: ({ paths, marker }) => {
 			const path = join(paths.ompAgentDir, "WATCHDOG.md");
 			const wanted = readFileSync(join(paths.assetsDir, "WATCHDOG.md"), "utf8");
-			const ours = fingerprint(wanted);
-			const step: Step = { path, fingerprint: ours, undo: [{ kind: "text", path, fingerprint: ours }] };
 			const title = "the advisor's brief";
-			const has = readText(path);
-			if (has === undefined) {
-				step.change = newFile(title, path, wanted);
-				return step;
-			}
-			if (has === wanted) return step;
-			const before = marker?.undo.find((u) => u.kind === "text" && u.path === path);
-			if (before?.kind === "text" && before.fingerprint === fingerprint(has)) {
-				step.change = {
-					title,
-					path,
-					diff: lineDiff(has, wanted),
-					apply: async () => writeIfUnchanged(path, has, wanted),
-				};
-				return step;
-			}
-			step.undo = [];
-			step.change = {
+			return textStep(title, path, wanted, marker, (has) => ({
 				title: `${title} (yours kept; Jocasta's differs as shown)`,
 				path,
 				diff: lineDiff(has, wanted),
 				kept: ["yours stays as it is, never overwritten (Jocasta's text is config/WATCHDOG.md)"],
 				keepsOnly: true,
 				apply: async () => {},
-			};
-			return step;
+			}));
 		},
 	},
 	{
@@ -777,6 +794,20 @@ const MIGRATIONS: Migration[] = [
 				},
 			};
 		},
+	},
+	{
+		// His own strings omp hides before a request leaves (0593, 0594): the format and an empty list, written when
+		// missing and following Jocasta's text while it is still Jocasta's. His own is kept and never shown: it holds his
+		// strings.
+		id: 15,
+		slug: "omp-secrets",
+		plan: ({ paths, marker }) =>
+			textStep(
+				"omp's secrets.yml: your own strings to hide, an empty list to fill",
+				join(paths.ompAgentDir, "secrets.yml"),
+				readFileSync(join(paths.assetsDir, "secrets.yml"), "utf8"),
+				marker,
+			),
 	},
 ];
 

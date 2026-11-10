@@ -42,3 +42,5 @@ The listed settings.
 - `config/WATCHDOG.md` is a shipped text chosen by the builder and listed as built.
 - Amended by 0478: Auto QA off, Claude Code plugins off and DuckDuckGo web search also ride in every Jarvis pane.
 - Amended by 0479: setup writes `keybindings.yml`, `WATCHDOG.md` and `lsp.json` after a diff and his `y`; they are no longer by hand.
+- Amended by 0593: the reference also sets `session.warnCost: 50`, `tools.restrictedFolders`, `providers.openai-codex.daybreak: false` and `spotlight.experiment.enabled: false`.
+- Amended by 0594: setup writes `secrets.yml` from `config/secrets.yml` when it's missing; his strings still never enter the repo.

@@ -58,6 +58,20 @@ export function mergeOmpSettings(
 	return { merged, changed, kept };
 }
 
+/** The shipped `tools.restrictedFolders` line in `config/omp-config.yml`: a flow list on one line. */
+const FENCE_LINE = /^(\s*restrictedFolders: \[)(.*)\]$/m;
+
+/**
+ * The shipped settings' text with Windows' own folders added to the fence (0594); `systemFolders` is undefined off
+ * Windows, where the text is the shipped file's.
+ */
+export function ompSettingsText(shipped: string, systemFolders: string[] | undefined): string {
+	if (!systemFolders?.length) return shipped;
+	if (!FENCE_LINE.test(shipped)) throw new Error("config/omp-config.yml has no one-line tools.restrictedFolders list");
+	const added = systemFolders.map((folder) => JSON.stringify(folder)).join(", ");
+	return shipped.replace(FENCE_LINE, (_, head: string, list: string) => `${head}${list ? `${list}, ` : ""}${added}]`);
+}
+
 /** Settings as omp writes `config.yml` itself (`@oh-my-pi/pi-utils` `stringifyYamlConfig`). */
 export function ompYaml(value: unknown): string {
 	return Bun.YAML.stringify(value, null, 2).replace(/: +$/gm, ":");

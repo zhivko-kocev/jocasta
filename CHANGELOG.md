@@ -411,3 +411,33 @@
   - The memory graph keeps following `default` and `smol`. omp's gateway drops a role's effort, so its main model runs Opus 5.5 at low effort.
   - The benchmark arms stay on Opus 5.5 at high.
 - `mise run check` passes: 885 pass, 13 skip, 0 fail. Five of the skips are the guard's checks through omp's own resolver; against the 18.18.6 package they pass, 11 of 11 in that file. CI run 42789927092 passes on Windows, Ubuntu and macOS after re-runs of three timing failures in earlier rounds' process code (open items in `docs/status.md`).
+
+### His /settings pass (2026-11-10)
+- Records 0592–0594: the `/settings` pass 0420 had left to him, against omp 18.18.6's source. Plan rows, the index, "Amended by" lines (0398, 0399, 0420, 0448, 0451, 0466, 0479), plan 5.4's omp row, appendix I, the README's setup list and config section, and two rows in `docs/testing.md`.
+- **Compaction: a handoff first** (0592). On Opus 5.5, Fable 5.2 and Sonnet 5.5, a shake rewrites the warm cache: about $1.20 at 300k, against about $0.46 for a handoff, and it drops earlier turns' thinking. Worse, with shake first omp prepares no summary in the background, so the handoff behind it would run while he waits.
+  - The order is now `[handoff, remote, soft, shake, snapcompact]` in the reference, the project overlay, `config/boss.yml` and A1's arm.
+  - remote takes an overflow; shake and snapcompact are the no-model last resorts.
+  - 300,000 tokens and idle compaction at 100,000 stay.
+  - Every automatic compaction now writes a handoff note the watcher sends to Graphiti.
+- **The reference** (`config/omp-config.yml`, 0593):
+  - `session.warnCost: 50`, a warning once a session, subagents included, has spent $50, as threads have;
+  - `tools.restrictedFolders` with `~/.ssh`, `~/.aws`, `~/.azure` and `~/.docker`, where every action asks first;
+  - `providers.openai-codex.daybreak: false`, and `spotlight.experiment.enabled: false` pinned;
+  - its header and its `collab.autoStart` comment brought up to date.
+- **Setup** (0594):
+  - On Windows, migration 0003 also fences Windows' own folders, read from `%SystemRoot%` and `%ProgramFiles%` (`SetupPaths.systemFolders`, `ompSettingsText`).
+  - New migration 0015 `omp-secrets` writes `~/.omp/agent/secrets.yml` from the shipped `config/secrets.yml` (the format, an `acme` example, then `[]`) when it's missing, and follows a newer shipped text while the file is still Jocasta's.
+  - His own `secrets.yml` is kept and never shown, since it holds his strings, and `jocasta uninstall` removes it only while it's Jocasta's text.
+  - `WATCHDOG.md`'s migration and the new one share `textStep`.
+- **His own omp config** (outside the repo):
+  - all of the reference's values, with `methodOrder` handoff-first and `thresholdTokens: 300000` in place of `thresholdPercent: 60`;
+  - Auto QA off with consent denied: his plain sessions had sent 17 reports;
+  - DuckDuckGo first, not Parallel;
+  - his Claude Code plugins off;
+  - mnemopi memory in plain sessions; `local`'s notes stay on disk, unused;
+  - the fence, including `C:\WINDOWS` and `C:\Program Files`;
+  - the dead `auth.subscriptionOrder` removed;
+  - the security scanner kept on, his PC only;
+  - `app.stt.toggle: f9` in `keybindings.yml`;
+  - an empty `secrets.yml` for him to fill.
+- `mise run check` passes: 887 pass, 13 skip, 0 fail (the two new setup tests among them). One earlier run in this round had 2 failures that two full runs after it didn't repeat (`bun test` and `mise run check`); their names weren't kept.

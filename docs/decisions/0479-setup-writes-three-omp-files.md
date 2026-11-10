@@ -33,3 +33,4 @@ All three, each as a diff after `y`.
 ## Consequences
 - Amends 0451 (the three files are no longer by hand) and 0466 (three more migrations).
 - README's config section and plan appendix I's setup paragraph list them.
+- Amended by 0594: setup also writes `secrets.yml` from `config/secrets.yml` when it's missing; uninstall removes it only while it is still Jocasta's text.
