@@ -440,4 +440,4 @@
   - the security scanner kept on, his PC only;
   - `app.stt.toggle: f9` in `keybindings.yml`;
   - an empty `secrets.yml` for him to fill.
-- `mise run check` passes: 887 pass, 13 skip, 0 fail (the two new setup tests among them). One earlier run in this round had 2 failures that two full runs after it didn't repeat (`bun test` and `mise run check`); their names weren't kept.
+- `mise run check` passes: 887 pass, 13 skip, 0 fail (the two new setup tests among them). One earlier run in this round had 2 failures that two full runs after it didn't repeat (`bun test` and `mise run check`); their names weren't kept. Committed as `b59c964`; CI run 42805843946 passes on Windows, Ubuntu and macOS on the first try. The release is rebuilt with the new `config/` (`dist/jocasta-windows-x64.zip`, SHA-256 `97218faef4a8fa453d99eef46eba223753f7da462887fd5a2bec85444cc8ba61`).
