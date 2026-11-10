@@ -62,6 +62,10 @@ Open items carried forward, each tied to the slice that decides it:
   - a Stop everything host entry stayed (Windows; `removeHostEntries` passes over a file it can't remove);
   - `thread_finish` removed a worktree that a just-started process worked in (macOS; `lsof`'s exit status isn't checked).
 
+  Two more on Windows, on `3811e10` (2026-11-10, a docs-only commit whose code had passed on all three OSes in `b59c964`'s run), one per attempt, both in tests:
+  - CR-08's test failed in its cleanup: `removeTree` met `ENOTEMPTY` on the repo's `.git\worktrees\readme-line` five times (something still wrote there);
+  - 0574's grading-limit test found no pid file: the hidden check was cut at its 2 s limit before the bun it spawned had started and written it.
+
   H3 and H5 end trees with `killTree`, so these are worth a look before the benchmarks.
 
 Update this file when a slice's records are written, when its build lands, and when a grilling session stops (name the next slice); keep `AGENTS.md`'s one current-state line in step.
