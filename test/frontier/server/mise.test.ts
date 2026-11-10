@@ -12,9 +12,9 @@ const TRUSTED = "~/src/demo/mise.toml: trusted\n";
 const log = () => join(env.root, "mise.log");
 beforeEach(() => rmSync(log(), { force: true }));
 
-/** The env the fake mise answers from, with the pane's own env. */
+/** The env the fake mise answers from, with the pane's own env; never the `MISE_ENV` of a Jocasta pane they run in. */
 function base(answers: Record<string, string>, extra: Record<string, string> = {}): Record<string, string | undefined> {
-	return { ...process.env, FAKE_MISE_LOG: log(), ...answers, ...extra };
+	return { ...process.env, MISE_ENV: undefined, FAKE_MISE_LOG: log(), ...answers, ...extra };
 }
 
 function calls(): { args: string; miseEnv?: string }[] {
