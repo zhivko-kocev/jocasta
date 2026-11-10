@@ -149,7 +149,17 @@ export function removeTree(path: string): void {
 	}
 	if (stat.isDirectory()) {
 		for (const name of readdirSync(path)) removeTree(join(path, name));
-		retried(() => rmdirSync(path));
+		// An entry written after the listing (a git still finishing in a worktree) leaves the folder not empty: each try
+		// lists it again.
+		retried(() => {
+			try {
+				rmdirSync(path);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOTEMPTY") throw error;
+				for (const name of readdirSync(path)) removeTree(join(path, name));
+				rmdirSync(path);
+			}
+		});
 		return;
 	}
 	retried(() => {
@@ -191,7 +201,15 @@ export async function removeTreeAsync(path: string): Promise<void> {
 	}
 	if (stat.isDirectory()) {
 		for (const name of await readdir(path)) await removeTreeAsync(join(path, name));
-		await retriedAsync(() => rmdir(path));
+		await retriedAsync(async () => {
+			try {
+				await rmdir(path);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOTEMPTY") throw error;
+				for (const name of await readdir(path)) await removeTreeAsync(join(path, name));
+				await rmdir(path);
+			}
+		});
 		return;
 	}
 	await retriedAsync(async () => {

@@ -441,3 +441,4 @@
   - `app.stt.toggle: f9` in `keybindings.yml`;
   - an empty `secrets.yml` for him to fill.
 - `mise run check` passes: 887 pass, 13 skip, 0 fail (the two new setup tests among them). One earlier run in this round had 2 failures that two full runs after it didn't repeat (`bun test` and `mise run check`); their names weren't kept. Committed as `b59c964`; CI run 42805843946 passes on Windows, Ubuntu and macOS on the first try. The release is rebuilt with the new `config/` (`dist/jocasta-windows-x64.zip`, SHA-256 `97218faef4a8fa453d99eef46eba223753f7da462887fd5a2bec85444cc8ba61`).
+- `removeTree` and `removeTreeAsync` (`src/shared/fsx.ts`) list a folder again on each `ENOTEMPTY` try: an entry written after the first listing (a git still finishing in a worktree) made every try fail before, as on `3811e10`'s Windows CI. With a writer adding files for 0.5 s, the old code failed 6 of 6 and the new one removed 6 of 6.
