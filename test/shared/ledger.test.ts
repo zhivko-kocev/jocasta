@@ -323,7 +323,7 @@ test.each([
 		writeFileSync(main, lines([{ type: "session", id: "s-main", timestamp: iso(0) }, ...forkHistory((d) => d)]));
 		expect(threadLedger([main])?.requests).toBe(3);
 		expect(trialLedger(threadSessionRecords([main], perToken), perToken).totals.cost).toBeCloseTo(0.13725, 12);
-		// omp 18.18.2 writes the fork beside the parent's subagents: the parent's history again, cost zeroed, tokens kept.
+		// omp 18.18.6 writes the fork beside the parent's subagents: the parent's history again, cost zeroed, tokens kept.
 		writeFileSync(
 			join(artifacts, file),
 			lines([

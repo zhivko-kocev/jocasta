@@ -37,6 +37,12 @@ test("jocasta thread|worktree words become the service's commands; the changes a
 		args: { project: "demo", brief: "Fix it" },
 		asks: false,
 	});
+	// `--heavy` is a bare flag, anywhere among the others (0590).
+	expect(cliRequest("thread", ["new", "--heavy", "demo", "Migrate it", "--title", "Migrate"])).toEqual({
+		command: "thread new",
+		args: { project: "demo", brief: "Migrate it", title: "Migrate", heavy: true },
+		asks: false,
+	});
 	expect(cliRequest("thread", ["list"])).toEqual({ command: "thread list", args: {}, asks: false });
 	expect(cliRequest("thread", ["list", "demo"])).toEqual({
 		command: "thread list",
@@ -86,6 +92,9 @@ test("jocasta thread|worktree words become the service's commands; the changes a
 		["new", "demo", "brief", "--done-when"],
 		["new", "demo", "brief", "--title", "a", "--title", "b"],
 		["new", "demo", "brief", "--force"],
+		["new", "demo", "brief", "--heavy", "true"],
+		["new", "demo", "brief", "--heavy=true"],
+		["new", "demo", "brief", "--heavy", "--heavy"],
 		["list", "a", "b"],
 		["status"],
 		["send", "x"],

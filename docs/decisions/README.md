@@ -595,3 +595,6 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0586](0586-keep-alive-pings-are-not-measured.md) | Keep-alive pings are not measured | benchmark | v1 | program | 2026-11-09 |
 | [0587](0587-bench-refuses-omp-folder-mcp-servers.md) | The task benchmark refuses an omp folder that gives its omp arms MCP servers | benchmark | v1 | program | 2026-11-09 |
 | [0588](0588-benchmark-scripts-run-once-first.md) | Each benchmark script runs once before the full runs | benchmark | v1 | program | 2026-11-09 |
+| [0589](0589-omp-18-18-6.md) | Jocasta moves to omp 18.18.6 | product, benchmark | v1 | program | 2026-11-10 |
+| [0590](0590-models-per-role-after-fable-5-2.md) | Models per role after Fable 5.2: the boss on Fable, heavy threads on his slow role | product, benchmark | v1 | program | 2026-11-10 |
+| [0591](0591-subagents-on-sonnet-memory-and-graph-unchanged.md) | Subagents on Sonnet 5.5; memory notes and the graph unchanged | product | v1 | program | 2026-11-10 |

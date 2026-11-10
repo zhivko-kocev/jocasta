@@ -57,6 +57,7 @@ type JsonSchema = {
 				enum?: string[];
 		  }
 		| { type: "array"; items: { type: "string" }; description: string }
+		| { type: "boolean"; description: string }
 	>;
 	required?: string[];
 	additionalProperties: false;
@@ -126,7 +127,7 @@ const BOSS: McpTool[] = [
 	},
 	{
 		name: "thread_start",
-		description: `Start a thread in a project, in plan mode on its own worktree and branch.\nIt opens as a worktree workspace under its project's, running omp in plan mode. The brief is its first message; it and done_when go into its task file and its system prompt, and its review runs each done_when command. In a project other than the one of the last pane he focused: ${ASKS_HIM}`,
+		description: `Start a thread in a project, in plan mode on its own worktree and branch.\nIt opens as a worktree workspace under its project's, running omp in plan mode. The brief is its first message; it and done_when go into its task file and its system prompt, and its review runs each done_when command. With heavy, it runs on his slow role (his strongest model) from plan to execution. In a project other than the one of the last pane he focused: ${ASKS_HIM}`,
 		inputSchema: schema(
 			{
 				project: PROJECT,
@@ -136,6 +137,11 @@ const BOSS: McpTool[] = [
 					type: "array",
 					items: { type: "string" },
 					description: "Commands that must pass for the task to be done, e.g. bun test test/auth.test.ts",
+				},
+				heavy: {
+					type: "boolean",
+					description:
+						"Run the thread on his slow role, his strongest model, for ambitious or open-ended work (a migration, a deep bug, a large refactor); it spends his Fable allowance fastest. Leave it out otherwise",
 				},
 			},
 			["project", "title", "brief"],
@@ -307,6 +313,7 @@ function badArguments(tool: McpTool, args: Record<string, unknown>): string | un
 		) {
 			return `${tool.name}: ${key} must be a list of non-empty strings`;
 		}
+		if (property.type === "boolean" && typeof value !== "boolean") return `${tool.name}: ${key} must be true or false`;
 		if (property.type === "integer") {
 			// Models send numbers as strings now and then (F-11): digits count; the service reads them the same way.
 			const number = typeof value === "string" && /^\d+$/.test(value.trim()) ? Number(value) : value;

@@ -10,7 +10,7 @@ Zhivko's work surface around his daily omp. Three parts (0386, 0392, 0552):
 
 - Windows 11 (Linux and macOS builds exist; the test suite passes there, the builds themselves are untested; see below).
 - [herdr](https://herdr.dev) 0.9.5 or a later 0.9.x, from its official installer (0385, 0435); the plugin needs 0.9.5 (0553).
-- omp on PATH, signed in (`omp`, then `/login`; 0386). This build is checked against omp 18.18.2 (0535). Dictation is omp's own: omp downloads its speech model on first use or with `omp setup speech` (0556).
+- omp on PATH, signed in (`omp`, then `/login`; 0386). This build is checked against omp 18.18.6 (0535, 0589). Dictation is omp's own: omp downloads its speech model on first use or with `omp setup speech` (0556).
 - Docker Desktop, for the memory graph (Graphiti with FalkorDB; 0334). Without it everything else works. On Linux it must be Docker Desktop: with the native Docker Engine the Graphiti container can't reach Jocasta's model endpoint, so there is no memory there, and `today` shows "Graphiti down (needs Docker Desktop on Linux: the container can't reach Jocasta's model endpoint)" (0584).
 - [mise](https://mise.jdx.dev), optional: with it, setup pins herdr, hunk, gh and codebase-memory-mcp 0.12.1, the code index behind `graph_search` (0476, 0542, 0562); without mise there is no code index.
 
@@ -85,7 +85,7 @@ The boss's `show` opens a whiteboard review in your browser, on a page the servi
 | `jocasta diagnose` | writes `<data>\diagnose\` (state, the newest 400 log lines) and opens a read-only omp pane, tab "diagnose" in workspace Jocasta, to find what's wrong (0472). The state and log, with project names and folders, go to your model provider with its first message (0484) |
 | `jocasta mcp [--boss]` | the MCP server omp starts: `graph_search` everywhere, `report_result` and `check` only in thread panes (`JOCASTA_THREAD` set) while the layer is on, and the boss's tools with `--boss` (0577) |
 | `jocasta project list \| add <path> \| remove <name\|id>` | lists, adds or removes a project (0111) |
-| `jocasta thread new <project> "<brief>" [--title <t>] [--done-when "<cmd>"]...` | starts a thread through the running service, as the boss's `thread_start` does: plan mode, a task file, its `done_when` commands (0540, 0544) |
+| `jocasta thread new <project> "<brief>" [--title <t>] [--done-when "<cmd>"]... [--heavy]` | starts a thread through the running service, as the boss's `thread_start` does: plan mode, a task file, its `done_when` commands (0540, 0544); `--heavy` runs it on your omp `slow` role, from its plan through its execution (0590) |
 | `jocasta thread list [<project>] \| status <thread> \| send <thread> "<text>" \| stop <thread>` | lists threads, shows one, sends it a message or stops its run; `send` and `stop` ask your Allow first (0544) |
 | `jocasta thread finish <thread> merge\|pr` | merges the thread or opens its PR, after your Allow (0426, 0544) |
 | `jocasta worktree list \| remove <path>` | lists leftover worktrees, or removes one after your Allow (0456, 0544). The `thread` and `worktree` commands exit 1 when refused or failed (Deny included), 2 on bad usage and 3 when Jocasta isn't running |

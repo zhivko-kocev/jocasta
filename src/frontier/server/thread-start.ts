@@ -16,7 +16,7 @@ import { newPaneKey, PANE_KEY_ENV } from "./boss.ts";
 import type { ServiceContext } from "./context.ts";
 import type { PaneInfo } from "./herdr.ts";
 import { ensureOverlay } from "./overlay.ts";
-import { THREAD_FLAGS } from "./pane-launch.ts";
+import { afterOverlay, THREAD_FLAGS } from "./pane-launch.ts";
 import { newTask, taskDir } from "./task-file.ts";
 import { subject, type Thread } from "./thread.ts";
 import { branchSlug, COMMIT_LINE, type Door, LESSONS_LINE, START_PREFIX } from "./wording.ts";
@@ -37,6 +37,13 @@ export function doneWhenOf(value: unknown, door: Door): string[] {
 	if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
 		throw new UserError(`${START_PREFIX[door]}: done_when is a list of commands.`);
 	}
+	return value;
+}
+
+/** `heavy` as given (0590): absent, true or false; anything else is a refusal named by the door. */
+export function heavyOf(value: unknown, door: Door): boolean {
+	if (value === undefined) return false;
+	if (typeof value !== "boolean") throw new UserError(`${START_PREFIX[door]}: heavy is true or false.`);
 	return value;
 }
 
@@ -101,16 +108,17 @@ export class ThreadStarts {
 	 * running a fresh omp session with that overlay (so it opens in plan mode), the thread's env and pane key (0578) and
 	 * its task file's prompt appended to its system prompt, then the brief, told to read the project's lessons, once omp
 	 * is up. Each `done_when` goes through the shipped guard first (0580): deny refuses, prompt needs his Allow at the
-	 * boss's door and is refused at the CLI's, which asks nothing (0544). A start that fails once herdr made its
-	 * worktree takes back what it made (SVC-7). Its texts name the door (0581); `done` is false for a start that is only
-	 * half done (the brief not sent).
+	 * boss's door and is refused at the CLI's, which asks nothing (0544). A `heavy` thread (0590) is recorded so on its
+	 * task and its omp loads `config/heavy.yml` after the overlay, at this launch and every later one. A start that fails
+	 * once herdr made its worktree takes back what it made (SVC-7). Its texts name the door (0581); `done` is false for a
+	 * start that is only half done (the brief not sent).
 	 */
 	async start(
 		projectName: string,
 		title: string,
 		brief: string,
 		door: Door = "boss",
-		doneWhen: string[] = [],
+		{ doneWhen = [], heavy = false }: { doneWhen?: string[]; heavy?: boolean } = {},
 	): Promise<{ text: string; done: boolean }> {
 		const { c } = this;
 		const { herdr, panes } = c;
@@ -183,11 +191,12 @@ export class ThreadStarts {
 			title: title.trim(),
 			brief: brief.trim(),
 			doneWhen: checks,
+			...(heavy ? { heavy: true as const } : {}),
 			base: trunk ? ((await gitOut(project.mainPath, ["rev-parse", "--short", trunk])) ?? null) : null,
 		});
 		// A new thread never resumes a session saved for a reused folder (0455); a reopened one still does (0399). It
-		// warns at $50 (0541).
-		const fresh = [...command.filter((arg) => arg !== "--continue"), ...THREAD_FLAGS];
+		// warns at $50 (0541); a heavy one loads `heavy.yml` after the overlay (0590), as `PaneLauncher.respawn` does.
+		const fresh = [...command.filter((arg) => arg !== "--continue"), ...afterOverlay(task), ...THREAD_FLAGS];
 		// The project pane and the thread pane load the same overlays; the worktree is trunk's checkout of the project,
 		// so its own `.omp/config.yml` is the main checkout's (0561). Asked before anything is made.
 		const mainEnv = await panes.withMise(project.id, project.mainPath, panes.paneEnv);
@@ -293,11 +302,13 @@ export class ThreadStarts {
 				};
 			}
 		}
+		// A heavy thread says so (0590): it runs on his slow role, his strongest model.
+		const slow = task.heavy ? ` Heavy: it runs on ${door === "boss" ? "his" : "your"} slow role.` : "";
 		return {
 			text:
 				door === "boss"
-					? `${started}. It opens in plan mode and waits for his approval of its plan in its pane.`
-					: `${started}: it plans first; approve its plan in its pane.`,
+					? `${started}. It opens in plan mode and waits for his approval of its plan in its pane.${slow}`
+					: `${started}: it plans first; approve its plan in its pane.${slow}`,
 			done: true,
 		};
 	}

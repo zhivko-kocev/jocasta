@@ -135,7 +135,7 @@ test("tools/list: graph_search everywhere, report_result and check only in a thr
 		},
 	});
 	expect((await listed(boss)).find((t) => t.name === "thread_start")?.inputSchema).toMatchObject({
-		properties: { done_when: { type: "array", items: { type: "string" } } },
+		properties: { done_when: { type: "array", items: { type: "string" } }, heavy: { type: "boolean" } },
 		required: ["project", "title", "brief"],
 	});
 	expect(await names(boss)).toEqual([
@@ -335,7 +335,7 @@ test("malformed input gets JSON-RPC errors and the server keeps serving", async 
 	]);
 });
 
-test("report_result and thread_start's done_when are checked before the service is asked (0539, 0540)", async () => {
+test("report_result and thread_start's done_when and heavy are checked before the service is asked (0539, 0540, 0590)", async () => {
 	const report = {
 		outcome: "done",
 		summary: "Login retries back off",
@@ -368,10 +368,21 @@ test("report_result and thread_start's done_when are checked before the service 
 				name: "thread_start",
 				arguments: { project: "demo", title: "t", brief: "b", done_when: ["bun test", ""] },
 			}),
+			request(7, "tools/call", {
+				name: "thread_start",
+				arguments: { project: "demo", title: "t", brief: "b", heavy: "yes" },
+			}),
+			request(8, "tools/call", {
+				name: "thread_start",
+				arguments: { project: "demo", title: "t", brief: "b", heavy: true },
+			}),
 		],
 		{ boss: true },
 	);
 	expect(boss[0]?.result?.content?.[0]?.text).toBe("thread_start: done_when must be a list of non-empty strings");
+	expect(boss[1]?.result?.content?.[0]?.text).toBe("thread_start: heavy must be true or false");
+	// A boolean heavy goes on to the service; none runs here.
+	expect(boss[2]?.result?.content?.[0]?.text).toBe(NOT_RUNNING);
 });
 
 test("a Node stream works as input, split across chunks, with CRLF line ends", async () => {

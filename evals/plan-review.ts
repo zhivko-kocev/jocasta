@@ -1,19 +1,19 @@
 import { jsonLines } from "../src/shared/jsonl.ts";
 
 /**
- * Answering omp's plan review for A6 and its follow-up arms (0567). omp 18.18.2 offers "Approve and execute" and
- * "Approve and keep context" only in its interactive plan review (`modes/interactive-mode.ts`, `#handlePlanProposal`;
- * "execute" clears the session before the plan-approved prompt, `#approvePlan`'s `preserveContext: false`). Print mode
- * has only `--plan-yolo`, which approves inside the planning session, and ACP's approval keeps the context too, so
- * neither is "execute". The interactive review is answerable without keys: it emits `plan_review_requested` to
- * extensions, and `ctx.resolvePlanReview(reviewId, "execute" | "keep")` answers it "as if the operator picked"
- * (`extensibility/extensions/types.ts`). So such a trial's first turn runs omp interactive in a terminal (a bench herdr
- * pane: interactive mode needs a TTY on stdin, `main.ts`), starting in plan mode (`plan.defaultOnStartup`), with a
- * per-trial extension (this file's {@link planReviewExtension}) that answers the review with the arm's choice, logs
- * what it saw, and shuts omp down once the approved plan's execution has run: after the approval, the next run that
- * started (an `agent_start`, or a user message, as the synthetic plan-approved prompt is) and has an assistant reply,
- * at an `agent_end` with omp idle and nothing queued. A planning turn that ends without proposing a plan shuts down
- * too; the trial is graded as it stands.
+ * Answering omp's plan review for A6 and its follow-up arms (0567). omp 18.18.6 offers "Approve and execute" and
+ * "Approve and keep context" only in its interactive plan review (`modes/interactive-mode.ts:7795`
+ * `handlePlanApproval`; "execute" clears the session before the plan-approved prompt, `#approvePlan`'s
+ * `preserveContext: false`, `:6863`). Print mode has only `--plan-yolo`, which approves inside the planning session,
+ * and ACP's approval keeps the context too, so neither is "execute". The interactive review is answerable without
+ * keys: it emits `plan_review_requested` to extensions, and `ctx.resolvePlanReview(reviewId, "execute" | "keep")`
+ * answers it "as if the operator picked" (`extensibility/extensions/types.ts:818-830`). So such a trial's first turn
+ * runs omp interactive in a terminal (a bench herdr pane: interactive mode needs a TTY on stdin, `main.ts`), starting
+ * in plan mode (`plan.defaultOnStartup`), with a per-trial extension (this file's {@link planReviewExtension}) that
+ * answers the review with the arm's choice, logs what it saw, and shuts omp down once the approved plan's execution
+ * has run: after the approval, the next run that started (an `agent_start`, or a user message, as the synthetic
+ * plan-approved prompt is) and has an assistant reply, at an `agent_end` with omp idle and nothing queued. A planning
+ * turn that ends without proposing a plan shuts down too; the trial is graded as it stands.
  */
 
 export type PlanReviewChoice = "execute" | "keep";

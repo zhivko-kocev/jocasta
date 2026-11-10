@@ -6,12 +6,14 @@
  * for a subagent's own): they are not sessions, but their cost is the session's (CR-04; `omp stats` counts them the
  * same way, `@oh-my-pi/omp-stats` `parser.ts` `classifyAgentType`, `listSessionFiles`).
  *
- * omp 18.12.6's entry kinds (0464): `model_usage` entries (side calls: memory extraction, cache warming, advisor,
- * judges; `session-entries.ts` `ModelUsageEntry`) count toward spend like assistant turns (0452); an assistant turn
- * marked `retryRecovery` (an attempt a retry superseded, `turn-recovery.ts`) still costs, but never gives the last
- * line, the question or the test result; `memory_recall` entries are ignored; a session moved to a sibling file (its
- * header's `parentSession` names the old one, `session-manager.ts` `#moveOffSessionFile`) is followed there
- * (`SessionIndex.moved`), and the entries it copied from the old file aren't counted twice.
+ * omp's entry kinds (0464; checked against omp 18.18.6, 0589): `model_usage` entries (side calls: memory extraction,
+ * cache warming, advisor, judges, session titles; `session-entries.ts:119` `ModelUsageEntry`) count toward spend like
+ * assistant turns (0452); an assistant turn marked `retryRecovery` (an attempt a retry superseded, pi-ai
+ * `types.ts:1328`) still costs, but never gives the last line, the question or the test result; `memory_recall`
+ * entries are ignored; a session moved to a sibling file (its header's `parentSession` names the old one,
+ * `session-manager.ts` `#moveOffSessionFile`) is followed there (`SessionIndex.moved`), and the entries it copied from
+ * the old file aren't counted twice. Entries a file holds without ids are given ids when omp next loads it, and the
+ * file is rewritten (18.18.6 `session-migrations.ts:64-77`); the spend ledger keys a call by its ISO time, not its id.
  *
  * A session is a tree (0509): each entry names its `parentId`, and a rewind (`session-manager.ts` `branch`,
  * `branchWithSummary`) leaves the abandoned turns in the file. Cost, spend and message times count every entry in file
@@ -42,6 +44,7 @@ import {
 	transcriptsOf,
 } from "../../shared/omp-session.ts";
 import { ompAgentDir } from "../../shared/paths.ts";
+import { askQuestion } from "./ask-question.ts";
 
 /** omp's sessions dir: `<omp agent dir>/sessions` (guide §5, `docs/config-usage.md:80`). */
 function ompSessionsDir(): string {
@@ -76,16 +79,20 @@ export interface SessionStats {
 	costByDay: Map<string, number>;
 	/** The last assistant message's text, first line. */
 	lastLine: string | null;
-	/** The question of an `ask` call in the last assistant message: what a blocked omp waits on. */
+	/**
+	 * The question of an `ask` call in the last assistant message: what a blocked omp waits on. From omp 18.18.3 the
+	 * call is an HTML form, whose question `ask-question.ts` reads as omp does (0589).
+	 */
 	question: string | null;
 	/** Every message's time, epoch ms, in file order. */
 	messageTimes: number[];
 	/**
 	 * The title of a plan waiting for his approval in omp's Plan Review, or null. omp records the proposal as a
 	 * successful `write` to `xd://propose` (a `toolResult` whose `details.xdev` is `{tool: "propose", mode: "execute",
-	 * inner: {title, planFilePath}}`; `event-controller.ts:2196-2235`), then aborts the turn silently (an empty
-	 * assistant message). Approving leaves plan mode (`mode_change` to `none`, `interactive-mode.ts:5146`); refining
-	 * sends a user message; either, or any later assistant output, ends the wait.
+	 * inner: {title, planFilePath}}`; omp 18.18.6 `event-controller.ts:2425-2440`), then aborts the turn silently (an
+	 * empty assistant message). Approving leaves plan mode (`mode_change` to `none`, `interactive-mode.ts:6301`, and
+	 * a second one with `data.approvedPlanFilePath`, `:6957`); refining sends a user message; either, or any later
+	 * assistant output, ends the wait.
 	 */
 	planAwaiting: string | null;
 	/** Whether the session is in plan mode: its last `mode_change` was to `plan` (omp writes one on entering it). */
@@ -425,10 +432,7 @@ function effectOf(entry: Record<string, unknown>): Effect | undefined {
 	for (const value of Array.isArray(message.content) ? message.content : []) {
 		const part = asObject(value);
 		if (part?.type === "text" && typeof part.text === "string") text += part.text;
-		if (part?.type === "toolCall" && part.name === "ask") {
-			const first = asObject((asObject(part.arguments)?.questions as unknown[] | undefined)?.[0]);
-			if (typeof first?.question === "string") question = first.question;
-		}
+		if (part?.type === "toolCall" && part.name === "ask") question = askQuestion(part.arguments) ?? question;
 		if (part?.type === "toolCall" && part.name === "bash" && typeof part.id === "string") {
 			const command = asObject(part.arguments)?.command;
 			if (typeof command === "string") bash.push({ id: part.id, command, at: Number.isFinite(at) ? at : 0 });

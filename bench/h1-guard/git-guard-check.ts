@@ -1,5 +1,6 @@
-// H1 (0482, 0501, 0535): measures omp 18.18.2's git guard instead of trusting git-guard.ts's reimplementation. For
-// the VM (a throwaway Windows 11 machine named JOCASTA-CLEAN); it RUNS corpus commands, so it refuses anywhere else.
+// H1 (0482, 0501, 0535, 0589): measures omp 18.18.6's git guard instead of trusting git-guard.ts's reimplementation.
+// For the VM (a throwaway Windows 11 machine named JOCASTA-CLEAN); it RUNS corpus commands, so it refuses anywhere
+// else.
 //
 //   bun bench/h1-guard/git-guard-check.ts --corpus <corpus.jsonl> --out <dir> [--omp <package dir>] [--timeout 60]
 //     [--any-version] (--dry-run | --run)

@@ -100,10 +100,23 @@ test("the boss's settings carry the privacy settings, whatever his global config
 	>;
 	expect(settings.dev).toEqual({ autoqa: false });
 	expect(settings.disabledProviders).toEqual(["claude-plugins"]);
-	expect(settings.modelRoles).toEqual({ web: "web/duckduckgo", dictation: "local/parakeet-tdt-0.6b-v3" });
+	// The boss runs on Fable 5.2 at high, falling back to Opus 5.5 then Opus 5 at high (0590).
+	expect(settings.modelRoles).toEqual({
+		default: "anthropic/claude-fable-5-2:high",
+		web: "web/duckduckgo",
+		dictation: "local/parakeet-tdt-0.6b-v3",
+	});
 	// Dictation through omp's own speech-to-text, sent on release, never leaving this machine (0556).
 	expect(settings.stt).toEqual({ enabled: true, submitTrigger: "release" });
-	expect(settings.retry).toEqual({ fallbackChains: { dictation: [] } });
+	expect(settings.retry).toEqual({
+		fallbackChains: { default: ["anthropic/claude-opus-5-5:high", "anthropic/claude-opus-5:high"], dictation: [] },
+	});
+});
+
+test("a heavy thread's heavy.yml makes its default role his slow role, and sets nothing else (0590)", () => {
+	expect(Bun.YAML.parse(readFileSync(join(shippedConfigDir(), "heavy.yml"), "utf8"))).toEqual({
+		modelRoles: { default: "@slow" },
+	});
 });
 
 test("the boss's session hosts in Jocasta's relay, and its /share stays on this machine (0536, 0561)", () => {

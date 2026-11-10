@@ -311,7 +311,7 @@ test("the live check: seeded distinct picks, the ACP overlay and command line", 
 
 test("the recorder refuses an omp or settings it can't record (0585)", () => {
 	const ready = {
-		version: "18.18.2",
+		version: "18.18.6",
 		clientTerminalRoute: true,
 		permissionKinds: ["allow_once", "allow_always", "reject_once", "reject_always"],
 		approvalModeConfigured: true,
@@ -323,8 +323,8 @@ test("the recorder refuses an omp or settings it can't record (0585)", () => {
 	};
 	expect(recorderProblems(ready)).toEqual([]);
 	expect(recorderProblems({ ...ready, clientTerminalRoute: false, permissionKinds: [] })).toEqual([
-		"omp 18.18.2's bash tool has no ACP client-terminal route, so the recorder can't see what it runs",
-		"omp 18.18.2's ACP permission gate offers no reject_once, so a prompt can't be declined once",
+		"omp 18.18.6's bash tool has no ACP client-terminal route, so the recorder can't see what it runs",
+		"omp 18.18.6's ACP permission gate offers no reject_once, so a prompt can't be declined once",
 	]);
 	// The schema's implicit yolo makes ACP ask for every bash call: only an explicit one keeps a pane's gate.
 	expect(recorderProblems({ ...ready, approvalModeConfigured: false })).toEqual([

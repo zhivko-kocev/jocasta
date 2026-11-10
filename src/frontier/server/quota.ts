@@ -1,4 +1,4 @@
-// The subscription windows (0456): `omp usage --json` (omp 18.12.6, `cli/usage-cli.ts`) reports each account's limits
+// The subscription windows (0456): `omp usage --json` (omp 18.18.6, `cli/usage-cli.ts`) reports each account's limits
 // with `window.id` ("5h", "7d"), `amount` and `window.resetsAt`. The HUD and the rail show the most used of each window
 // across his accounts; one toast goes out when a window passes `QUOTA_WARN`.
 import { hhmm, weekday } from "../../shared/day.ts";

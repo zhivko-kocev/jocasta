@@ -259,7 +259,7 @@ describe("H2", () => {
 		]);
 	});
 
-	test("an ask's t0 is when omp completed the message, not when it started the request (omp 18.18.2's shape)", () => {
+	test("an ask's t0 is when omp completed the message, not when it started the request (omp 18.18.6's shape)", () => {
 		const start = Date.parse("2026-11-09T10:00:00Z");
 		const ask = (message: Record<string, unknown>, at: number) =>
 			JSON.stringify({

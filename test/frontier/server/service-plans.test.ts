@@ -236,13 +236,31 @@ const PLAN_REVIEW = [
 	"↑↓ navigate  enter select  esc cancel",
 ].join("\n");
 
-/** A question of omp's `ask` as `pane read` shows it. */
+/** A question of omp ≤ 18.18.2's `ask` as `pane read` shows it. */
 const QUESTION = [
 	"Which file?",
 	"> README.md",
 	"  docs/intro.md",
 	"  Other (type your own)",
 	"↑↓ navigate  enter select  esc cancel",
+].join("\n");
+
+/**
+ * omp 18.18.6's `ask` form as its TUI draws it (pi-tui `html-form/dialog.ts`, 0589), cut so each test screen shows only
+ * one of the two lines that tell a form: its Other row, or its footer.
+ */
+const FORM_OTHER_ROW = [
+	"╭─ Ask ──────────────────────────────────────────╮",
+	"│ Session store                                  │",
+	"│   ◉ SQLite: one file, no new service           │",
+	"│   ○ Redis: shared across instances, needs ops  │",
+	"│   ○ Other: type your own                       │",
+].join("\n");
+const FORM_FOOTER = [
+	"│   Submit                                       │",
+	"├────────────────────────────────────────────────┤",
+	"│ ⏎ choose · ↑/↓ move · ⇥ next field · ⎋ cancel  │",
+	"╰────────────────────────────────────────────────╯",
 ].join("\n");
 
 test(
@@ -287,10 +305,14 @@ test(
 	GIT_TEST_TIMEOUT * 2,
 );
 
-test(
-	"nothing is typed into a reopened thread while a question shows; once it is answered the plan's review comes back (0494)",
-	async () => {
-		const { server, herdr, fresh, look, typed, screenReads } = await reopened(proposedPlanFile, QUESTION);
+test.each([
+	["omp 18.18.2's question picker", QUESTION],
+	["an ask form's Other row", FORM_OTHER_ROW],
+	["an ask form's footer", FORM_FOOTER],
+])(
+	"nothing is typed into a reopened thread while a question shows (%s); once it is answered the plan's review comes back (0494, 0589)",
+	async (_name, screen) => {
+		const { server, herdr, fresh, look, typed, screenReads } = await reopened(proposedPlanFile, screen);
 		try {
 			await look(() => screenReads() >= 3);
 			expect(server.service.busyThreads().awaiting).toBe(1);

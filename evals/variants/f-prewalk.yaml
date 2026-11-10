@@ -1,4 +1,4 @@
-# Follow-up study (0543, 0541 K8): A6 with omp's prewalk on (`--prewalk`, omp 18.18.2 `cli/args.ts`): after the plan's
-# todo list exists, the first edit switches the session to the `smol` role.
+# Follow-up study (0543, 0541 K8): A6 with omp's prewalk on (`--prewalk`, omp 18.18.6 `cli/args.ts:379`): after the
+# plan's todo list exists, the first edit switches the session to the `smol` role.
 extends: [a6]
 args: [--prewalk]

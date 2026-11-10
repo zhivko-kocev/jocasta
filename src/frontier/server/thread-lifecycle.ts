@@ -21,14 +21,19 @@ const PLAN_POLL_MS = 100;
 /** After a line goes into the boss pane, its idle pane state is herdr's lag, not the end of the turn it started. */
 const BOSS_PROMPT_GRACE_MS = 10_000;
 
-/** omp's Plan Review on a pane's screen (omp 18.12's picker: "Approve and keep context", "Refine plan"; 0494). */
+/**
+ * omp's Plan Review on a pane's screen (0494): "Approve and keep context", "Refine plan" (omp 18.18.6
+ * `interactive-mode.ts:6598`, `:7849`).
+ */
 const PLAN_REVIEW_SCREEN = /Approve and keep context|Refine plan/;
 
 /**
- * Any other omp picker on a pane's screen (0494): a question's options end with "Other (type your own)", and every
- * picker's footer reads "… navigate … select … cancel".
+ * Any other omp picker on a pane's screen (0494, 0589): a select's footer reads "… navigate … select … cancel"
+ * (pi-tui `overlays/hook-selector.ts:323`); an `ask` form (omp ≥ 18.18.3, pi-tui `html-form/dialog.ts`) ends each
+ * choice group with `○ Other: type your own` (`:1306-1313`) and its footer reads "⏎ choose · ↑/↓ move · ⇥ next field ·
+ * ⎋ cancel" (`:1161-1180`); older omps' question picker ended with "Other (type your own)".
  */
-const PICKER_SCREEN = /Other \(type your own\)|\bnavigate\b.*\bcancel\b/;
+const PICKER_SCREEN = /Other \(type your own\)|\bOther: |\bnavigate\b.*\bcancel\b|\bnext field\b.*\bcancel\b/;
 
 /**
  * Where a state change came from: herdr's own event, omp's host registry (both pushed: the refresh tick's reconcile

@@ -1,6 +1,6 @@
-// H1's pre-registered live check (0482, design 4a; omp 18.18.2 per 0535, recorder per 0585): real omp, told by a cheap
-// model to run 30 random corpus commands once each, against the in-process verdicts of omp-verdicts.ts. For the VM; a
-// few cents.
+// H1's pre-registered live check (0482, design 4a; omp 18.18.6 per 0535 and 0589, recorder per 0585): real omp, told
+// by a cheap model to run 30 random corpus commands once each, against the in-process verdicts of omp-verdicts.ts. For
+// the VM; a few cents.
 //
 //   bun bench/h1-guard/live-check.ts --corpus <corpus.jsonl> --out <dir> [--guard config/guard.yml]
 //     [--verdicts <omp-verdicts.jsonl>] [--model anthropic/claude-haiku-5-5] [--sample 30] [--seed 482]
@@ -34,7 +34,7 @@ import { findOmpDir, loadOmp, ompJudge } from "./omp-verdicts.ts";
 
 export { LIVE_MARKER };
 
-/** Anthropic's cheapest model in omp 18.18.2's catalog (`pi-catalog/src/models.json`: $0.10/$0.50 per M tokens). */
+/** Anthropic's cheapest model in omp 18.18.6's catalog (`pi-catalog/src/models.json`: $0.10/$0.50 per M tokens). */
 export const DEFAULT_MODEL = "anthropic/claude-haiku-5-5";
 const CANARY_FILE = "h1-live-canary.txt";
 const CANARY = `echo h1-live-canary > ${CANARY_FILE}`;

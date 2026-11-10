@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { quotaWarning, readQuota } from "../../../src/frontier/server/quota.ts";
 
-/** `omp usage --json` as omp 18.12.6 prints it (`cli/usage-cli.ts`), trimmed to what matters here. */
+/** `omp usage --json` as omp 18.18.6 prints it (`cli/usage-cli.ts`), trimmed to what matters here. */
 const usage = {
 	generatedAt: 1,
 	reports: [

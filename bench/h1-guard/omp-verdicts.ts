@@ -1,10 +1,10 @@
-// H1 (0482, 0500, 0501, 0535): omp 18.18.2's own verdict on every corpus line, computed in-process from omp's installed
-// sources, with nothing executed.
+// H1 (0482, 0500, 0501, 0535, 0589): omp 18.18.6's own verdict on every corpus line, computed in-process from omp's
+// installed sources, with nothing executed.
 //
 //   bun bench/h1-guard/omp-verdicts.ts --corpus <corpus.jsonl> --guard <guard.yml> --out <dir> [--omp <package dir>]
 //     [--any-version] [--dry-run]
 //
-// How omp decides before a pane's bash tool runs a command (omp 18.18.2, `@oh-my-pi/pi-coding-agent/src`):
+// How omp decides before a pane's bash tool runs a command (omp 18.18.6, `@oh-my-pi/pi-coding-agent/src`):
 // - `extensibility/extensions/wrapper.ts:269-291,355-374` wraps every tool: `resolveApprovalFromContext`
 //   (`tools/approval.ts:97-113`) takes the mode from `tools.approvalMode` (default `yolo`, `tools/settings.ts:314-318`;
 //   Jocasta's guard and overlay set none) and `resolveApproval` decides, once on the call as made and again on the
@@ -51,7 +51,7 @@ import { appendRow, conditions, printPlan, writeJson } from "../lib/output.ts";
 import { type CorpusEntry, parseGuard, readCorpus, VARIANTS, type Verdict } from "./evaluate.ts";
 import { gitGuardRefusalOf, type MeasuredGitGuardLine, parseMeasuredGitGuard } from "./git-guard.ts";
 
-export const PINNED_OMP = "18.18.2";
+export const PINNED_OMP = "18.18.6";
 const PACKAGE = "@oh-my-pi/pi-coding-agent";
 
 type Decision = string | { tier: string; reason?: string; override?: boolean; policy?: Verdict };

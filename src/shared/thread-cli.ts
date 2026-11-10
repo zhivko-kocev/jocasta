@@ -16,7 +16,7 @@ export const CLI_PATH = "/api/cli";
 export const EXIT = { done: 0, refused: 1, usage: 2, notRunning: 3 } as const;
 
 export const THREAD_USAGE = [
-	'usage: jocasta thread new <project> "<brief>" [--title <t>] [--done-when "<cmd>"]...',
+	'usage: jocasta thread new <project> "<brief>" [--title <t>] [--done-when "<cmd>"]... [--heavy]',
 	"       jocasta thread list [<project>]",
 	"       jocasta thread status <thread>",
 	'       jocasta thread send <thread> "<text>"',
@@ -53,9 +53,14 @@ export function cliRequest(word: "thread" | "worktree", args: string[]): CliRequ
 			const positional: string[] = [];
 			const doneWhen: string[] = [];
 			let title: string | undefined;
+			let heavy = false;
 			for (let i = 0; i < rest.length; i++) {
 				const arg = rest[i] as string;
-				if (arg === "--title" || arg === "--done-when") {
+				// `--heavy` (0590) takes no value: the thread runs on his slow role.
+				if (arg === "--heavy") {
+					if (heavy) throw usage();
+					heavy = true;
+				} else if (arg === "--title" || arg === "--done-when") {
 					const value = rest[++i];
 					if (value === undefined || !value.trim()) throw usage();
 					if (arg === "--title") {
@@ -69,7 +74,13 @@ export function cliRequest(word: "thread" | "worktree", args: string[]): CliRequ
 			if (positional.length !== 2 || !project?.trim() || !brief?.trim()) throw usage();
 			return {
 				command: "thread new",
-				args: { project, brief, ...(title ? { title } : {}), ...(doneWhen.length > 0 ? { done_when: doneWhen } : {}) },
+				args: {
+					project,
+					brief,
+					...(title ? { title } : {}),
+					...(doneWhen.length > 0 ? { done_when: doneWhen } : {}),
+					...(heavy ? { heavy: true } : {}),
+				},
 				asks: false,
 			};
 		}

@@ -18,7 +18,7 @@ import { ensureLessonsSkill } from "./lessons.ts";
 import { parseReport, REPORT_RESULT } from "./report.ts";
 import { closeTask, findTask, newTask } from "./task-file.ts";
 import { subject, type Thread } from "./thread.ts";
-import { doneWhenOf } from "./thread-start.ts";
+import { doneWhenOf, heavyOf } from "./thread-start.ts";
 import { asker, branchSlug, briefTitle, type Door, person, quoted } from "./wording.ts";
 import { removeCheckout } from "./worktrees.ts";
 
@@ -116,7 +116,8 @@ export const TOOLS: Record<string, Tool> = {
 			const title = args.text("title");
 			const brief = args.text("brief");
 			const doneWhen = doneWhenOf(args.values.done_when, "boss");
-			return (await tools.c.starts.start(project, title, brief, "boss", doneWhen)).text;
+			const heavy = heavyOf(args.values.heavy, "boss");
+			return (await tools.c.starts.start(project, title, brief, "boss", { doneWhen, heavy })).text;
 		},
 	},
 	thread_status: { boss: true, run: (tools, { args }) => tools.c.status.threadStatus(args.optional("thread")) },
@@ -266,7 +267,8 @@ export const COMMANDS: Record<string, (tools: Tools, args: Args) => Promise<stri
 		const project = args.text("project");
 		const title = args.optional("title") ?? briefTitle(brief);
 		const doneWhen = doneWhenOf(args.values.done_when, "cli");
-		return (await tools.c.starts.start(project, title, brief, "cli", doneWhen)).text;
+		const heavy = heavyOf(args.values.heavy, "cli");
+		return (await tools.c.starts.start(project, title, brief, "cli", { doneWhen, heavy })).text;
 	},
 	"thread list": (tools, args) => {
 		const project = args.optional("project");

@@ -1,4 +1,5 @@
-// H1's live recorder on omp 18.18.2 (0585): an ACP client that gives omp a terminal and records what omp sends to it.
+// H1's live recorder on omp 18.18.6 (0585, 0589): an ACP client that gives omp a terminal and records what omp sends to
+// it.
 //
 // omp's ACP mode (`omp --mode acp`, `modes/acp/acp-mode.ts`) talks JSON-RPC 2.0 over stdio, one JSON object per line.
 // A client that advertises the `terminal` capability at `initialize` gets every bash call that passed omp's approval
@@ -14,7 +15,7 @@
 // and an async job, plus a working folder that is an internal URL (`skill://…`), as a `cwd` or a leading `cd`. The
 // recorder extension (`RECORDER_EXTENSION`, loaded with `-e`) closes them on the `tool_call` event, which omp emits
 // before the approval gate and whose returned `input` replaces the call's arguments (`session/agent-session.ts:
-// 5804-5843`): it drops `pty`, `name`, `ready` and `async` (none of them changes the approval of the command) and
+// 5802-5841`): it drops `pty`, `name`, `ready` and `async` (none of them changes the approval of the command) and
 // blocks a call whose working folder is a URL. The overlay also turns service launch and async jobs off.
 import { spawn } from "node:child_process";
 import { parseLine } from "../../src/shared/jsonl.ts";

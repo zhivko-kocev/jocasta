@@ -380,4 +380,34 @@
 - Tests never touch his folders: `test/preload.ts` points every Jocasta and omp root at a per-process sandbox, and the service's stop waits for its pending notifications, lines and worklog. Before this, one test file logged into his real data folder and late writes landed there; that folder (test output only, made that day) was removed.
 - After the review's report, an aggregated advisory review, checked against the code. Records 0587 and 0588: the task benchmark refuses to start, dry run included, while the omp folder it uses gives its omp arms an MCP server (setup writes `jocasta` and `whiteboard` there, and omp keeps that folder's `jocasta` over A6's own, so A6 would have lost `report_result` and `check`); on his PC that folder lists `jarvis` and `whiteboard`, and the dry run refuses with "bench: the omp arms would load MCP servers from …\.omp\agent\mcp.json: jarvis, whiteboard. Remove them (jocasta uninstall removes Jocasta's) or use a --profile without them; no trial ran." Each benchmark script runs once in the VM before the full runs (0588; `bench/README.md`). `ompAgentDir` names a profile's folder and follows `PI_CONFIG_DIR`, as omp does.
 - Fixes from that pass (as-built notes in 0580 and 0584): only notifications from before herdr first answered for a client wait for his terminal, for at most 10 minutes, each sent again once (the fix above had kept every unshown one, a blocked question included, for whenever a client came back); each `done_when` is also matched with its quotes removed, as omp matches (`git push --for"ce"` was allowed); the tests' git refuses an empty folder or this repo (a test had once set the repo's commit address); every test process that could open a window starts hidden (the process-tree stand-ins don't: hidden, each gains a console host, `conhost.exe`, in the trees they test); the canvas tests leave an Edge profile Windows still holds after Edge's tree has ended (with a warning) and remove it an hour later, instead of failing the run; `bench/README.md` says H3's herdr and pane faults time recovery from when the process tree is gone (about 50 ms after the bench's own kill did).
-- A miss in the 0490 path, found while checking that pass: under load Windows gave a just-ended omp's pid to a new process within milliseconds, the walk couldn't read that process's start yet, took the pid for another run's and found none of omp's workers, so a closed pane's omp workers could stay running (the shim test failed 2 of 15 times beside a full run; a replay of its steps missed 2 of 100). `endProcesses` now takes its walk again while a root's pid is held by a run whose start can't be read yet, within its 5 s; the replay then missed 0 of 200 and the test passed 30 of 30, each beside a full run.
+- A miss in the 0490 path, found while checking that pass: under load the process list still held a just-ended omp's pid while its start couldn't be read (it was ending), so the walk took the pid for another run's and found none of omp's workers, and a closed pane's omp workers could stay running (the shim test failed 2 of 15 times beside a full run; a replay of its steps missed 2 of 100). `endProcesses` now takes its walk again while a root's pid is still listed but its start can't be read, within its 5 s; the replay then missed 0 of 200 and the test passed 30 of 30, each beside a full run.
+
+### Models and omp 18.18.6 (2026-11-10)
+- Records 0589–0591, after Anthropic released Claude Fable 5.2 on 2026-11-09; omp 18.18.2 ran it as a text-only model without thinking, at the old price. Plan rows, the index, "Amended by" lines (0424, 0500, 0535, 0544), plan 5.4's omp row and appendix I.
+- omp 18.18.6 (0589): his PC now, the VM at the weekend's start, every benchmark row. Every seam in plan 5.4 and 5.5 was checked against its npm packages; three broke in Jocasta's own code and are fixed:
+  - **A thread's question:** read from the `ask` tool's HTML form the way omp reads it. The question is the first named field's label; else the text just before the field; else its fieldset's legend; else a lone checkbox's label; else the field's name. Older sessions' `questions` still read.
+  - **The picker check before `/plan-review` is typed:** it also matches the form's `○ Other: type your own` row and footer.
+  - **A5:** counts a plan approval once; approving now writes a second `mode_change`.
+  - `PINNED_OMP`, the README, `bench/README.md` (H1's results under `omp-18.18.6`), the tests and the comments that cite omp's lines move to 18.18.6.
+  - Spend now includes session-title calls, as `omp stats` does.
+- The boss runs on Fable 5.2 at high, falling back to Opus 5.5 at high, then Opus 5 at high (`config/boss.yml`, 0590).
+- **Heavy threads** (0590):
+  - `thread_start` takes `heavy`, and `jocasta thread new` takes `--heavy`.
+  - A heavy thread's task record keeps it, and its omp loads the shipped `config/heavy.yml` (`modelRoles.default: "@slow"`) after the project's overlay at every launch. It therefore plans and carries out its plan on his `slow` role. `--model @slow` alone wouldn't do: omp 18.18.6's plan review starts its "continue with" slider on `default`.
+  - The boss manual says when to start a thread heavy, and the start's reply says so.
+- **His omp roles** (0590, 0591; his own config, outside the repo):
+
+  | Role | Model and effort |
+  |---|---|
+  | `default` | Opus 5.5 at xhigh |
+  | `plan` and `slow` | Fable 5.2 at xhigh, falling back to Opus 5.5 at max |
+  | `advisor` | Fable 5.2 at medium |
+  | `vision` | Fable 5.2 at medium, falling back to Opus 5.5 at low |
+  | `task` | Sonnet 5.5 at medium, falling back to Opus 5.5 at medium |
+  | `smol` and `commit` | Haiku 5.5 at low |
+  | `judge` and `tiny`'s fallback | Haiku 5.5 |
+  | `memory` | Sonnet 5.5 at medium, unchanged |
+
+  - The memory graph keeps following `default` and `smol`. omp's gateway drops a role's effort, so its main model runs Opus 5.5 at low effort.
+  - The benchmark arms stay on Opus 5.5 at high.
+- `mise run check` passes: 885 pass, 13 skip, 0 fail. Five of the skips are the guard's checks through omp's own resolver, which run once omp 18.18.6 is installed.

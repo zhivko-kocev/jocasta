@@ -30,3 +30,4 @@ Ship config/boss.yml.
 
 ## Consequences
 - Closes slice G1 of 0375.
+- Amended by 0590: `config/boss.yml` runs the boss on Fable 5.2 at high (`modelRoles.default`), falling back to Opus 5.5 at high, then Opus 5 at high.

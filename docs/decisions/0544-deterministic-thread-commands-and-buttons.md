@@ -50,3 +50,4 @@ and Finish (merge or PR) and Stop buttons on a thread's card in the companion. A
 - `thread new` writes the task file and `done_when` like `thread_start` (0540).
 - 0513's measurement of the boss through a CLI can use these commands.
 - Amended by 0551 and 0552: Finish and Stop become keys in the `jocasta` pane; the CLI's confirmations are answered there, not in a window.
+- Amended by 0590: `jocasta thread new` takes `--heavy`, as `thread_start` takes `heavy`: the thread runs on his `slow` role.

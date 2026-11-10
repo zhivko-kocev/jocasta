@@ -1,7 +1,7 @@
 // The guard every pane loads (0450, 0476, 0580), through H1's evaluator (`bench/h1-guard/evaluate.ts`, the matcher
 // `src/shared/guard.ts` it wraps): whitespace runs collapse, `*` is the only wildcard, the match is anchored and
 // case-sensitive, a deny or prompt rule fires on the whole command or any one segment of a compound one, and the first
-// matching rule wins. Each case runs again through omp's own resolver where omp 18.18.2 (H1's pinned omp) is installed
+// matching rule wins. Each case runs again through omp's own resolver where omp 18.18.6 (H1's pinned omp) is installed
 // (`omp-verdicts.ts`: omp's `BashTool` approval and `resolveApproval` over the guard, nothing executed), asserting the
 // same verdicts; without it (CI) those tests are skipped and say why. omp's verdict here is its approval: `bash.gitGuard`
 // is a refusal by omp's embedded shell at run time, not an approval, and H1's live check measures it (0580).

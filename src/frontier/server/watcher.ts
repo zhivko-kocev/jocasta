@@ -24,19 +24,20 @@ import { readHeader, replaced, rewritten, SessionTail, SessionWalker } from "../
  * and is written when the set of files changed, else at most every 5 minutes while offsets move, and at stop: a lost
  * offset only re-reads a tail, which INSERT OR IGNORE absorbs.
  *
- * omp 18.10.3 shapes this relies on (omp-src `packages/coding-agent/src/session/`), and 18.12.6's moved sessions:
- * - layout: a session is `<sessions>/<cwd dir>/<stem>.jsonl` (`session-paths.ts:215` `sessionDirForCwd`); its subagents
- *   live in `<sessions>/<cwd dir>/<stem>/<AgentId>.jsonl` beside `__advisor*.jsonl` (`sub-sessions.ts:4-6`), so only
+ * The omp shapes this relies on (checked against omp 18.18.6's `pi-coding-agent/src/session/`, 0589):
+ * - layout: a session is `<sessions>/<cwd dir>/<stem>.jsonl` (`session-paths.ts:222` `sessionDirForCwd`); its subagents
+ *   live in `<sessions>/<cwd dir>/<stem>/<AgentId>.jsonl` beside `__advisor*.jsonl` (`sub-sessions.ts:4-7`), so only
  *   files directly in a cwd dir are sessions.
- * - header: `{type: "session", version, id, timestamp, cwd, …}` (`session-entries.ts:37-58`); since the title slot
- *   (`{type: "title", v: 1, …}`, `session-entries.ts:26-33`) it is the file's second line, not its first.
+ * - header: `{type: "session", version, id, timestamp, cwd, …}` (`session-entries.ts:42-75`); since the title slot
+ *   (`{type: "title", v: 1, …}`, `session-entries.ts:27-35`) it is the file's second line, not its first.
  * - compaction: `{type: "compaction", id, parentId, timestamp, summary, shortSummary?, firstKeptEntryId, tokensBefore,
- *   method?, …}` (`session-entries.ts:125-149`); the text is `summary`. `method` is one of `remote`, `snapcompact`,
- *   `handoff`, `soft`, `shake` (`compaction-methods.ts:11-38`), absent on legacy and extension compactions; `/handoff`
- *   writes one with `method: "handoff"` into the same session (`session-maintenance.ts:2060-2071`).
- * - message: `{type: "message", id, parentId, timestamp, message}` (`session-entries.ts:80-83`); an assistant message
+ *   method?, …}` (`session-entries.ts:163-187`); the text is `summary`. `method` is one of `remote`, `snapcompact`,
+ *   `handoff`, `soft`, `shake` (`compaction-methods.ts:11-39`), absent on legacy and extension compactions; `/handoff`
+ *   writes one with `method: "handoff"` into the same session (`session-maintenance.ts:2268-2279`).
+ * - message: `{type: "message", id, parentId, timestamp, message}` (`session-entries.ts:113-116`); an assistant message
  *   has `role: "assistant"`, `content` parts (`text` / `thinking` / `toolCall`) and `stopReason` `stop | length |
- *   toolUse | error | aborted` (pi-ai `types.ts:1041`), and is written once, at `message_end` (`agent-session.ts:3945`).
+ *   toolUse | error | aborted` (pi-ai `types.ts:1083`), and is written once, at `message_end` (`agent-session.ts:4430`
+ *   `#persistMessageEnd`).
  * - moved session (18.12.6, 0464): when another process wrote a session first, omp goes on in a sibling file whose
  *   header names the old session as `parentSession` and publishes the whole transcript there once
  *   (`session-manager.ts` `#moveOffSessionFile`); its compactions already stored from the old file are skipped. The

@@ -35,3 +35,4 @@ Every benchmark run (H1's live check, H2–H8, the pilot, the task benchmark and
 - Differs from the recommendation; the thesis names the change as one made before the run.
 - Neither the VM's omp nor his PC's is updated until A5 is done; an update before then is reported with A5.
 - Amended by 0535: the harness-OS build and the benchmarks on it pin the omp that is latest when that build starts; his PC's omp is already 18.18.2 (2026-11-08).
+- Amended by 0589: the benchmarks run on omp 18.18.6.

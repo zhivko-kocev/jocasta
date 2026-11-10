@@ -61,6 +61,11 @@ export interface TaskRecord {
 	brief: string;
 	/** Commands that must pass (0540), run by the review beside the project's check. */
 	doneWhen: string[];
+	/**
+	 * The boss started it heavy (0590): every launch of its omp loads `config/heavy.yml` after the project's overlay, so
+	 * it runs on his `slow` role. Absent: not heavy (records written before it was kept read the same).
+	 */
+	heavy?: true;
 	createdAt: number;
 	/** The state as `thread_status` says it. */
 	state: string;

@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import type { FeedEntry } from "../../bench/lib/service-feed.ts";
+import { planApprovalTimes } from "../../bench/lib/sessions.ts";
 import { a5Report } from "../../evals/a5.ts";
 
 const T = Date.parse("2026-10-24T09:00:00Z");
@@ -19,7 +20,8 @@ const planReady = (at: number) =>
 		timestamp: iso(at),
 		message: { role: "toolResult", toolName: "write", details: { xdev: { tool: "propose", mode: "execute" } } },
 	});
-const modeChange = (at: number, mode: string) => JSON.stringify({ type: "mode_change", timestamp: iso(at), mode });
+const modeChange = (at: number, mode: string, data?: Record<string, unknown>) =>
+	JSON.stringify({ type: "mode_change", timestamp: iso(at), mode, ...(data ? { data } : {}) });
 
 test("interventions, attention minutes and batch time from the feed and the sessions", () => {
 	const feed: FeedEntry[] = [
@@ -68,4 +70,26 @@ test("interventions, attention minutes and batch time from the feed and the sess
 	// 90 has no answer.
 	expect(report.attentionMinutes).toBeCloseTo(5, 10);
 	expect(report.batchMinutes).toBeCloseTo(49, 10);
+});
+
+test("an approval that keeps the context counts once, though omp 18.18.6 writes two mode changes to none (0589)", () => {
+	// "Approve and keep context": omp leaves plan mode (`none`), then records the approved plan with a second `none`
+	// (`interactive-mode.ts:6957`), both in the planning session.
+	const session = [
+		header(min(0)),
+		modeChange(min(0), "plan", { planFilePath: "local://PLAN.md" }),
+		user(min(0), "the brief"),
+		planReady(min(4)),
+		modeChange(min(8), "none"),
+		modeChange(min(8), "none", { approvedPlanFilePath: "local://PLAN.md" }),
+		user(min(9), "Execute the approved plan.", true),
+		// A second round of planning, approved again: a second approval.
+		modeChange(min(20), "plan", { planFilePath: "local://PLAN.md" }),
+		planReady(min(25)),
+		modeChange(min(30), "none"),
+		modeChange(min(30), "none", { approvedPlanFilePath: "local://PLAN.md" }),
+	].join("\n");
+	expect(planApprovalTimes(session)).toEqual([min(8), min(30)]);
+	const report = a5Report({ feed: [], boss: header(min(0)), threads: [{ name: "a", session }], capMs: 60 * 60_000 });
+	expect(report.threads).toEqual([{ name: "a", interventions: 2, messages: 0, approvals: 2 }]);
 });

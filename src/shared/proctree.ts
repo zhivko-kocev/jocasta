@@ -262,9 +262,9 @@ export async function endOmpLeftovers(sets: OmpProcesses[], waitMs: number): Pro
  * (0490): a process counts only when it started at or after its parent, so a live process that names a long-dead parent
  * whose pid Windows gave again is never reached (SRV-A-1; `taskkill /T` walks raw parent pids, so it isn't used). The
  * walk is taken again until nothing is left or 5 s pass: children started meanwhile, and the orphans of a process that
- * ended first (each process found stays a root by its own pid and start). A root whose pid another run holds that can't
- * be read yet (one being made or ending; Windows gives a freed pid again within milliseconds under load) hides that
- * root's orphans, so the walk isn't done while one does. Each process found gets SIGKILL (TerminateProcess on Windows);
+ * ended first (each process found stays a root by its own pid and start). A root whose pid is still listed while its
+ * start can't be read (seen under load as that process was ending) hides that root's orphans, so the walk isn't done
+ * while one is. Each process found gets SIGKILL (TerminateProcess on Windows);
  * on POSIX a found group leader's whole group too, unless a spared process or one under it is in that group. `spare` (a
  * process and what runs under it) is never entered or signalled while it is still that same run: the herdr server a
  * hung service started (0582). Never this process or its ancestors. Resolves the pids found.

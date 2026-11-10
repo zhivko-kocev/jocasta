@@ -5,8 +5,8 @@
 //     [--resamples 10000] [--out <dir>] [--dry-run]
 //
 // Corpus lines: {"id", "command", "expected": "deny"|"prompt"|"allow", "group", "variant", "base", ...}. With
-// `--verdicts`, it scores omp 18.18.2's own verdicts (0535), written by `omp-verdicts.ts` (the matcher of record).
-// Without it, it scores its own reimplementation below, which reads `guard.yml`'s rules only and misses omp's
+// `--verdicts`, it scores omp 18.18.6's own verdicts (0535, 0589), written by `omp-verdicts.ts` (the matcher of
+// record). Without it, it scores its own reimplementation below, which reads `guard.yml`'s rules only and misses omp's
 // quote-aware segmenting, the git guard, the critical patterns and the allow-rule compound rule (0501); it stays for
 // the unit tests and as the comparison column. Prints per group and per way of writing (0501): deny recall, must-deny
 // asked, must-ask stopped, false deny, false ask and ask rate, each with a bootstrap 95% CI over commands. With

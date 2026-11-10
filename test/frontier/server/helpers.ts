@@ -288,8 +288,18 @@ export function sessionFile(
 					usage: { cost: { total: m.cost } },
 					content: [
 						{ type: "text", text: m.text },
+						// omp 18.18.6's `ask` call: one HTML form, its question the text before the group (0589).
 						...(m.ask
-							? [{ type: "toolCall", id: "c1", name: "ask", arguments: { questions: [{ question: m.ask }] } }]
+							? [
+									{
+										type: "toolCall",
+										id: "c1",
+										name: "ask",
+										arguments: {
+											html: `<form><p>${m.ask.replaceAll("&", "&amp;").replaceAll("<", "&lt;")}</p><label><input type="radio" name="answer" value="yes" checked> Yes</label><label><input type="radio" name="answer" value="no"> No</label></form>`,
+										},
+									},
+								]
 							: []),
 						...(m.bash
 							? [{ type: "toolCall", id: `b${i}`, name: "bash", arguments: { command: m.bash.command } }]
@@ -322,11 +332,12 @@ export function sessionFile(
 
 /**
  * Starts a thread through the MCP endpoint. Its pane's omp reports idle as herdr makes it (TST-2), or, `late`, only
- * once herdr made the worktree, while `thread_start` already polls for it (agentUp's wait stays covered).
+ * once herdr made the worktree, while `thread_start` already polls for it (agentUp's wait stays covered); `heavy`
+ * starts it heavy (0590).
  */
 export async function startThread(
 	server: TestServer,
-	options: { project?: string; title?: string; brief?: string; late?: boolean } = {},
+	options: { project?: string; title?: string; brief?: string; late?: boolean; heavy?: boolean } = {},
 ): Promise<{ paneId: string; path: string; reply: string }> {
 	const before = server.herdr.of("createWorktree").length;
 	server.herdr.ompUpOnCreate = options.late ? undefined : "idle";
@@ -334,6 +345,7 @@ export async function startThread(
 		project: options.project ?? "demo",
 		title: options.title ?? "Readme line",
 		brief: options.brief ?? BRIEF,
+		...(options.heavy !== undefined ? { heavy: options.heavy } : {}),
 	});
 	try {
 		await until(() => server.herdr.of("createWorktree").length === before + 1);

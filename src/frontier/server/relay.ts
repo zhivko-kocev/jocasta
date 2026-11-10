@@ -2,7 +2,7 @@
  * Jocasta's local collab relay (0536, 0561): every omp pane Jocasta starts hosts its session into it
  * (`collab.autoStart: control`), so each omp publishes itself in omp's local host registry, where the service reads
  * whether it works or asks (`hosts.ts`). Content-blind, 127.0.0.1 only, one fixed port; it stops with Jocasta (0549).
- * The relay contract is omp 18.18.2's (`src/collab/relay-client.ts`, the spike's `relay.ts`): `GET /r/<roomId>?role=
+ * The relay contract is omp 18.18.6's (`src/collab/relay-client.ts`, the spike's `relay.ts`): `GET /r/<roomId>?role=
  * host|guest` upgrades to a WebSocket; binary frames are `[4-byte big-endian peer id][sealed payload]`, a host's peer
  * id 0 meaning every guest; a guest's frames reach the host with the guest's id; the host hears
  * `{"t":"peer-joined"|"peer-left","peer":N}`, a guest `{"t":"room-closed"}`; close codes 4001 room closed, 4004 no such

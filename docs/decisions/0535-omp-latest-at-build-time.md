@@ -34,3 +34,4 @@ The omp that is latest when the harness-OS build starts is pinned for the build 
 - Differs from the recommendation.
 - Amends 0500 (omp 18.13.1 for the runs).
 - Facts in this program's records that cite 18.18.2 are re-checked against the pinned version before its build.
+- Amended by 0589: Jocasta and every benchmark row move to omp 18.18.6 (his PC on 2026-11-10, the VM at the weekend's start), for Fable 5.2; the three seams that broke are fixed.

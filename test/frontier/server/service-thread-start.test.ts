@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { hunkDiffArgs, hunkEnv, reviewPrompt } from "../../../src/frontier/server/hunk.ts";
 import { overlayFile, overlayText } from "../../../src/frontier/server/overlay.ts";
 import { HANDOFF_PROMPT, shortModel, WHEN_YOU_FINISH } from "../../../src/frontier/server/wording.ts";
@@ -13,6 +13,7 @@ import { FakeHerdr } from "./fake-herdr.ts";
 import {
 	bossPane,
 	call,
+	cli,
 	commitIn,
 	demoProject,
 	GUARD,
@@ -24,6 +25,7 @@ import {
 	sessionFile,
 	startThread,
 	taskDirOf,
+	threadOmp,
 	until,
 	useHunkDaemon,
 	withServer,
@@ -107,6 +109,9 @@ test(
 						},
 					],
 				]);
+				// Not heavy: its record has no `heavy` and its omp no heavy.yml (0590).
+				const record = JSON.parse(readFileSync(join(taskDirOf(project.id), "thread.json"), "utf8"));
+				expect(record).not.toHaveProperty("heavy");
 				expect(path).toBe(join(env.root, "demo.wt", "readme-line"));
 				expect(sh(path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("feature/readme-line");
 				// The brief ends with the lessons line (0459); the commit step is in prompt.md's When you finish (0577).
@@ -155,6 +160,63 @@ test(
 				});
 			},
 			{ agentWaitMs: 10_000 },
+		);
+	},
+	GIT_TEST_TIMEOUT,
+);
+
+test(
+	"a heavy thread_start (0590) is recorded on its task and loads heavy.yml after the overlay, at its start and when started again; a heavy that isn't true or false is refused at both doors",
+	async () => {
+		const project = await demoProject(env.root);
+		const herdr = new FakeHerdr();
+		await withServer(
+			async (server) => {
+				const args = { project: "demo", title: "Readme line", brief: "Migrate it." };
+				expect(await call(server, "thread_start", { ...args, heavy: "yes" })).toEqual({
+					text: "thread_start: heavy is true or false.",
+					isError: true,
+				});
+				expect(await cli(server, "thread new", { ...args, heavy: 1 })).toEqual({
+					text: "jocasta thread new: heavy is true or false.",
+					isError: true,
+				});
+				expect(herdr.of("createWorktree")).toEqual([]);
+
+				const { path, reply } = await startThread(server, { heavy: true });
+				expect(reply).toBe(
+					"Started demo/Readme line on branch feature/readme-line. It opens in plan mode and waits for his approval of its plan in its pane. Heavy: it runs on his slow role.",
+				);
+				const heavy = ["--config", join(shippedConfigDir(), "heavy.yml")];
+				expect(JSON.parse(readFileSync(join(taskDirOf(project.id), "thread.json"), "utf8")).heavy).toBe(true);
+				expect(herdr.of("createWorktree")[0]?.[1]).toMatchObject({
+					command: [
+						"omp",
+						"--append-system-prompt",
+						join(taskDirOf(project.id), "prompt.md"),
+						...GUARD,
+						"--config",
+						overlayFile(project.id),
+						...heavy,
+						"--warn-cost",
+						"50",
+					],
+				});
+
+				// herdr restores its pane as a shell: omp starts again, still heavy, heavy.yml after the overlay.
+				await server.service.refresh();
+				herdr.restore();
+				const before = herdr.calls.length;
+				await server.service.refresh();
+				const respawned = herdr.calls
+					.slice(before)
+					.filter((c) => c.method === "respawn")
+					.map((c) => c.args[1] as { cwd: string; command: string[] });
+				expect(respawned.find((o) => resolve(o.cwd) === path)?.command).toEqual([...threadOmp(project.id), ...heavy]);
+				// The project pane is never heavy.
+				expect(respawned.find((o) => resolve(o.cwd) === project.mainPath)?.command).not.toContain(heavy[1]);
+			},
+			{ herdr, agentWaitMs: 10_000, ...HUNK_OPTIONS },
 		);
 	},
 	GIT_TEST_TIMEOUT,

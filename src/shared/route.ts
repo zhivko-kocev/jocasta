@@ -33,7 +33,7 @@ export const USAGE = [
 	"       jocasta diagnose         a read-only pane that explains what went wrong from Jocasta's log",
 	"       jocasta mcp [--boss]     the MCP server omp starts (graph_search, report_result and check; the boss's tools with --boss)",
 	"       jocasta project list | add <path> | remove <name|id>",
-	'       jocasta thread new <project> "<brief>" [--title <t>] [--done-when "<cmd>"]...',
+	'       jocasta thread new <project> "<brief>" [--title <t>] [--done-when "<cmd>"]... [--heavy]',
 	'       jocasta thread list [<project>] | status <thread> | send <thread> "<text>" | stop <thread>',
 	"       jocasta thread finish <thread> merge|pr",
 	"       jocasta worktree list | remove <path>",

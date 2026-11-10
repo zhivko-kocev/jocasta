@@ -1,6 +1,6 @@
 # The boss pane's omp settings (0424): a calm pane. The service starts the boss with
 # `omp --continue --config <this file> --config <config>/guard.yml` (0450), over his ~/.omp/agent/config.yml. Keys
-# checked against omp 18.12.6's source.
+# checked against omp 18.18.6's source (0589).
 
 # The boss's own memory, in its own file (0400, 0447): the boss pane runs in <data>/home, so this relative path is
 # <data>/home/mnemopi.db; `global` scoping keeps the boss's one bank in that file, apart from every project's.
@@ -25,18 +25,23 @@ dev:
   autoqa: false
 disabledProviders: [claude-plugins]
 modelRoles:
+  # The boss runs on Fable 5.2 at high (0590); his other roles stay his own.
+  default: anthropic/claude-fable-5-2:high
   web: web/duckduckgo
   # Dictation's engine (0556): omp's local Parakeet, kept on this machine.
   dictation: local/parakeet-tdt-0.6b-v3
 
 # Dictation through omp's own speech-to-text (0556): Right Ctrl, anywhere, sends `app.stt.toggle`'s key to this pane
 # through herdr on press and again on release; the text is sent as soon as recording stops. No fallback model: the
-# audio never leaves this machine. Keys checked against omp 18.18.2's source.
+# audio never leaves this machine. Keys checked against omp 18.18.6's source.
 stt:
   enabled: true
   submitTrigger: release
 retry:
   fallbackChains:
+    # The boss's own chain (0590): Opus 5.5 at high, then Opus 5 at high. Objects merge key by key, so his other
+    # chains stay.
+    default: [anthropic/claude-opus-5-5:high, anthropic/claude-opus-5:high]
     dictation: []
 
 # Thinking hidden.
@@ -54,11 +59,11 @@ statusLine:
   rightSegments: [cost, context_pct]
 
 # Tool output collapsed: omp already shows it collapsed (Ctrl+O expands it); there is no setting
-# for it (`toolOutputExpanded = false`, packages/coding-agent/src/modes/interactive-mode.ts:1220).
+# for it (`toolOutputExpanded = false`, packages/coding-agent/src/modes/interactive-mode.ts:1422).
 
 # Jocasta's local collab relay (0536, 0561): the boss's session hosts there (omp's host registry reports whether it
 # works or asks), never on omp's public relay; `/share` uploads to the same loopback port, which serves nothing else.
-# The port is `RELAY_PORT` in src/frontier/server/relay.ts. Keys checked against omp 18.18.2's source
+# The port is `RELAY_PORT` in src/frontier/server/relay.ts. Keys checked against omp 18.18.6's source
 # (`collab/settings.ts`, `commands/settings.ts`).
 collab:
   autoStart: control

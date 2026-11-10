@@ -30,6 +30,14 @@ import { threadEnv } from "./worktrees.ts";
 /** What every thread's omp starts with besides its pane's flags (0541, K10): a cost warning in its pane at $50. */
 export const THREAD_FLAGS = ["--warn-cost", "50"];
 
+/**
+ * What a thread's omp loads after the project's overlay (0590): `config/heavy.yml` for a heavy thread, which makes its
+ * `default` role his `slow` one; nothing for another. Its first launch and every relaunch take it from here.
+ */
+export function afterOverlay(task: Pick<TaskRecord, "heavy"> | undefined): string[] {
+	return task?.heavy ? ["--config", join(shippedConfigDir(), "heavy.yml")] : [];
+}
+
 /** The first wait before an omp that ended again in a Jocasta pane starts again; doubled with each ending (0521). */
 const OMP_AGAIN_MS = 10_000;
 /** The longest wait before an omp that keeps ending in a Jocasta pane starts again (0521). */
@@ -160,7 +168,8 @@ export class PaneLauncher {
 	 * with the project's overlay (0399, 0400), resuming its session, and its env: a thread's own variables (0457) or,
 	 * for a project pane, the hunk variables, both with mise's (0473, 0477); returns the new pane. With `restore` (a
 	 * session file), omp goes on with the turn that session's last process left unfinished (0549). A thread's omp
-	 * appends its task's brief and done-when again (0540). Each start gets its own pane key (0578), kept with the pane.
+	 * appends its task's brief and done-when again (0540), and a heavy thread's loads `heavy.yml` after the overlay
+	 * again (0590). Each start gets its own pane key (0578), kept with the pane.
 	 */
 	async respawn(
 		paneId: string,
@@ -170,7 +179,7 @@ export class PaneLauncher {
 		const overlay = await ensureOverlay(projectId, this.relayPort);
 		const pane = thread ? this.taskPrompted([...this.paneOmp, ...THREAD_FLAGS], thread.task) : this.paneOmp;
 		const omp = restore ? [...pane.filter((arg) => arg !== "--continue"), "--restore", restore] : pane;
-		const command = [...omp, "--config", overlay];
+		const command = [...omp, "--config", overlay, ...afterOverlay(thread?.task)];
 		const key = newPaneKey();
 		const paneEnv = { ...(env ?? (await this.withMise(projectId, cwd, this.paneEnv))), [PANE_KEY_ENV]: key };
 		await this.relayChecked(command, cwd, paneEnv);

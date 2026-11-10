@@ -1,4 +1,4 @@
-// A stand-in for one omp host in omp's local registry (omp 18.18.2 `src/collab/registry.ts`, protocol v1): a metadata
+// A stand-in for one omp host in omp's local registry (omp 18.18.6 `src/collab/registry.ts`, protocol v1): a metadata
 // file in `dir` and an endpoint (a named pipe on Windows, a socket elsewhere) answering one `snapshot` line for its
 // bearer token, with the state a test sets.
 import { randomBytes } from "node:crypto";
