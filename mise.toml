@@ -1,25 +1,32 @@
-# Development entry for the Jocasta repo (0476): the pinned Bun and Node, and the checks as tasks. Under Jocasta's
-# paranoid mise trust it needs `mise trust` once, and again after each change (0596); `mise.lock` pins each tool's URL
-# and checksum (`mise install --locked`).
+# Development entry for the Jocasta repo (0476): the pinned Bun, Node and Rust, and the checks as tasks. Under
+# Jocasta's paranoid mise trust it needs `mise trust` once, and again after each change (0596); `mise.lock` pins each
+# tool's URL and checksum (`mise install --locked`).
 # Bun matches package.json's packageManager; a bump changes both and is re-checked per 0383. What ships keeps
-# scripts/build.ts's own hash-checked Node and pnpm.
+# scripts/build.ts's own hash-checked Node and pnpm. Rust is the port's toolchain (0627) and cargo-deny its crates'
+# audit (0639); `.cargo/config.toml` holds crates to the 7-day rule.
 [tools]
 bun = "1.4.3"
 node = "24.21.0"
+rust = { version = "1.100.0", profile = "minimal", components = "clippy,rustfmt" }
+cargo-deny = "0.20.2"
 
 # `verify` is the name Jocasta's idle check looks for (else `test`, 0453); `check` is the same checks under the repo's
-# own name, so the commands are written once.
+# own name, so the commands are written once. Until the cutover both builds are checked (0628, 0630).
 [tasks.verify]
-description = "typecheck, lint, the tests and knip (what Jocasta's own check runs)"
+description = "typecheck, lint, the tests and knip; rustfmt, clippy, the Rust tests and cargo-deny (what Jocasta's own check runs)"
 run = [
 	"bun run typecheck",
 	"bun run lint",
 	"bun run test",
 	"bunx knip",
+	"cargo fmt --check",
+	"cargo clippy --all-targets --locked",
+	"cargo test --locked",
+	"cargo deny --log-level error check",
 ]
 
 [tasks.check]
-description = "typecheck, lint, the tests and knip (runs verify)"
+description = "the TypeScript and Rust checks (runs verify)"
 depends = ["verify"]
 
 [tasks.omp2-watch]

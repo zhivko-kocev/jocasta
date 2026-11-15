@@ -1,15 +1,55 @@
 {
 	"$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
 	"files": {
-		"includes": ["**", "!node_modules", "!dist", "!.claude", "!forks"]
+		"includes": ["**", "!node_modules", "!dist", "!.claude", "!forks", "!target"]
 	},
 	"formatter": {
 		"lineWidth": 120
+	},
+	"linter": {
+		"rules": {
+			"complexity": {
+				"noForEach": "error",
+				"noExcessiveCognitiveComplexity": { "level": "error", "options": { "maxAllowedComplexity": 40 } },
+				"noExcessiveLinesPerFunction": { "level": "error", "options": { "maxLines": 120 } },
+				"useMaxParams": { "level": "error", "options": { "max": 5 } }
+			},
+			"nursery": {
+				"useExhaustiveSwitchCases": "error",
+				"noFloatingPromises": "error",
+				"noExcessiveNestedCallbacks": "error"
+			},
+			"style": {
+				"noEnum": "error",
+				"noUselessElse": "error",
+				"noShoutyConstants": "error",
+				"noParameterAssign": "error",
+				"useCollapsedIf": "error",
+				"useDefaultSwitchClause": "error",
+				"noExcessiveLinesPerFile": { "level": "error", "options": { "maxLines": 1000 } }
+			},
+			"suspicious": {
+				"noImportCycles": "error"
+			}
+		}
 	},
 	"overrides": [
 		{
 			"includes": ["test/**"],
 			"linter": { "rules": { "correctness": { "useHookAtTopLevel": "off" } } }
+		},
+		{
+			"includes": ["bench/**", "evals/**", "test/**"],
+			"linter": {
+				"rules": {
+					"complexity": {
+						"noExcessiveCognitiveComplexity": "off",
+						"noExcessiveLinesPerFunction": "off",
+						"useMaxParams": "off"
+					},
+					"style": { "noExcessiveLinesPerFile": "off" }
+				}
+			}
 		}
 	]
 }

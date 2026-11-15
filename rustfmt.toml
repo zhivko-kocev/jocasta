@@ -1,0 +1,5 @@
+# As biome.json formats the TypeScript: tabs, 120 columns.
+edition = "2024"
+hard_tabs = true
+max_width = 120
+use_small_heuristics = "Max"

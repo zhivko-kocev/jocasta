@@ -1,0 +1,4 @@
+# The Rust twins of biome.json's ceilings (0610): parameters, function length and complexity.
+too-many-arguments-threshold = 5
+too-many-lines-threshold = 120
+cognitive-complexity-threshold = 40

@@ -1,0 +1,88 @@
+[package]
+name = "jocasta"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+description = "An orchestration environment around omp threads in herdr panes"
+license = "MIT"
+repository = "https://github.com/zhivko-kocev/jocasta"
+publish = false
+autobins = false
+autotests = true
+autobenches = false
+
+# The product (0629): one package, its modules in src/ beside the TypeScript files they replace until the cutover
+# (0628). The library is what both binaries build on; `jocasta-bench` is bench/ and evals/ (0636).
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "jocasta"
+path = "src/main.rs"
+
+[[bin]]
+name = "jocasta-bench"
+path = "bench/main.rs"
+
+# The crates of 0631–0640. Versions are the newest at the first lock (0640); .cargo/config.toml holds every later
+# addition and bump to the 7-day rule (0627).
+[dependencies]
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio", "ws"] }
+chrono = "0.4.45"
+clap = { version = "4.6.7", default-features = false, features = ["std", "help", "usage", "error-context", "derive"] }
+futures-util = "0.3.34"
+getrandom = "0.3.4"
+globset = "0.4.18"
+icalendar = { version = "0.17.17", features = ["recurrence"] }
+notify = "8.2.2"
+process-wrap = { version = "10.0.1", features = ["tokio1", "job-object", "process-group"] }
+ratatui = "0.30.2"
+regex = "1.13.1"
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
+rmcp = { version = "3.10.0", default-features = false, features = ["server", "transport-io", "macros"] }
+rusqlite = { version = "0.42.0", features = ["bundled"] }
+saphyr = "0.3.4"
+serde = { version = "1.0.228", features = ["derive"] }
+# preserve_order: objects keep their keys' order, as JavaScript's do (indexmap is already in the tree).
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+sha2 = "0.11.1"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "sync", "time", "process", "fs", "signal"] }
+tokio-tungstenite = "0.29.0"
+url = "2.5.8"
+uuid = { version = "1.29.2", features = ["v4"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+	"Wdk_System_Threading",
+	"Win32_Foundation",
+	"Win32_Security",
+	"Win32_Security_Credentials",
+	"Win32_System_Diagnostics_Debug",
+	"Win32_System_Diagnostics_ToolHelp",
+	"Win32_System_JobObjects",
+	"Win32_System_LibraryLoader",
+	"Win32_System_Threading",
+	"Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+# Rust's half of 0610's ceilings: Biome's limits (5 parameters, 120 lines a function, complexity 40, 1000 lines a file
+# by review) have clippy twins in clippy.toml.
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+too_many_arguments = "deny"
+too_many_lines = "deny"
+cognitive_complexity = "deny"
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+print_stderr = "allow"

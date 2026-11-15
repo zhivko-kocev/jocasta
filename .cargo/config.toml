@@ -1,0 +1,5 @@
+# A crate version must be 7 days old to enter Cargo.lock (0627), as bunfig.toml holds npm packages (0614): a name an
+# agent made up and someone registered, or a hijacked release, is caught by waiting. The first lock took the newest
+# versions once (0640); every addition and bump after it waits.
+[registry]
+global-min-publish-age = "7 days"
