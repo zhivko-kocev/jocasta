@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 
 /** Where an event came from (0298). */
 export type EventSource = "github" | "azure" | "calendar" | "thread" | "machine" | "inbox";
-export type EventPriority = "urgent" | "normal" | "low";
+type EventPriority = "urgent" | "normal" | "low";
 
 /** A new event: its `sourceId` deduplicates it (0298). */
 export interface NewEvent {

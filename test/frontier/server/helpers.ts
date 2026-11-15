@@ -6,9 +6,11 @@ import { reviewPrompt } from "../../../src/frontier/server/hunk.ts";
 import { overlayFile } from "../../../src/frontier/server/overlay.ts";
 import { type JocastaServer, type ServerOptions, startServer } from "../../../src/frontier/server/server.ts";
 import { HANDOFF_PROMPT } from "../../../src/frontier/server/wording.ts";
-import { shippedConfigDir } from "../../../src/shared/install.ts";
+import { selfCommand, shippedConfigDir } from "../../../src/shared/install.ts";
+import { PANE_CHECK_ENV, PANE_CHECK_EXTENSION, PANE_CHECK_ROLE } from "../../../src/shared/pane-check.ts";
 import { dataDir, projectDir } from "../../../src/shared/paths.ts";
 import { addProject, type Project } from "../../../src/shared/projects.ts";
+import { pushHookEnv } from "../../../src/shared/push-hook.ts";
 import { openCatalog } from "../../../src/shared/schema.ts";
 import { copyRepo, poll, sh } from "../../shared/fixture.ts";
 import { FakeHerdr } from "./fake-herdr.ts";
@@ -106,7 +108,7 @@ export function relayTestOptions(): Pick<ServerOptions, "relayPort" | "relayUrlO
 
 /**
  * Starts a server for tests: a fake herdr (`options.herdr`'s when it is one, so a test can restart the service on
- * the same panes), no knowledge graph (a test never starts Graphiti's containers), pollers off (never the real gh or
+ * the same panes), pollers off (never the real gh or
  * az), a free port (never `service.port`), an empty sessions dir, `cmd`-free commands, the boss key
  * `TEST_BOSS_KEY`, no terminal opened for the close question, every confirmation answered Allow (tests of Deny and of
  * the wait pass their own `confirm`), no steer for a missing report (its test passes `askReport: undefined`), and the
@@ -125,7 +127,6 @@ export async function startTestServer(options: ServerOptions = {}): Promise<Test
 	);
 	const server = await startServer({
 		herdr,
-		graph: null,
 		day: { pollers: false },
 		port: 0,
 		sessionsDir,
@@ -139,8 +140,6 @@ export async function startTestServer(options: ServerOptions = {}): Promise<Test
 		// Never his omp: the minute tick starts no weekly review (0470); a review would spawn a real `omp -p`.
 		weeklyReviews: false,
 		askReport: false,
-		// Never his Docker: a test closing Jocasta stops no containers.
-		stopContainers: async () => {},
 		bossKey: TEST_BOSS_KEY,
 		confirm: async () => ({ allow: true, how: "answered" }),
 		reattach: () => {},
@@ -288,7 +287,7 @@ export function sessionFile(
 					usage: { cost: { total: m.cost } },
 					content: [
 						{ type: "text", text: m.text },
-						// omp 18.18.6's `ask` call: one HTML form, its question the text before the group (0589).
+						// omp 18.20.2's `ask` call: one HTML form, its question the text before the group (0589).
 						...(m.ask
 							? [
 									{
@@ -359,9 +358,20 @@ export async function startThread(
 	}
 }
 
-/** A pane's env with its pane key (0578), whatever key it got. */
+/**
+ * A Jocasta pane's whole env (0578, 0613): `vars` with its pane key, whatever key it got, and git's pre-push hook
+ * entries, computed as the product computes them from how this Jocasta starts and the environment it runs in.
+ */
 export function keyed(vars: Record<string, string>): Record<string, string> {
-	return { ...vars, JOCASTA_PANE_KEY: expect.any(String) as unknown as string };
+	return { ...vars, ...pushHookEnv(selfCommand()), JOCASTA_PANE_KEY: expect.any(String) as unknown as string };
+}
+
+/** What a project pane's omp starts with beyond a thread's (0617): Jocasta's turn-end extension, loaded with `-e`. */
+export const PANE_CHECK_FLAGS = ["-e", join(shippedConfigDir(), PANE_CHECK_EXTENSION)];
+
+/** A project pane's whole env: `keyed`'s, with the argv of the turn-end check its extension runs (0617). */
+export function projectKeyed(vars: Record<string, string>): Record<string, string> {
+	return keyed({ ...vars, [PANE_CHECK_ENV]: JSON.stringify([...selfCommand(), PANE_CHECK_ROLE]) });
 }
 
 /** omp's proposal of a plan through `xd://propose`, its turn silently aborted (omp 18.10's shape), appended to `file`. */

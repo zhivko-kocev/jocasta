@@ -16,7 +16,7 @@ export const WS_PATH = "/ws";
  */
 export const TOKEN_QUERY = "t";
 /** The page cookie's name before its port (0254). */
-export const TOKEN_COOKIE = "jocasta_service";
+const TOKEN_COOKIE = "jocasta_service";
 
 /** The page cookie of the service on `port` (SEC-NET-4): cookies aren't kept apart by port, so the name is. */
 export function tokenCookie(port: number): string {
@@ -103,7 +103,7 @@ export function waitLabel(ms: number): string {
 }
 
 /** A subscription window this used or more (0456) gets its one toast and shows high on the rail: the builder's default. */
-export const QUOTA_WARN = 0.8;
+const QUOTA_WARN = 0.8;
 
 /** A window's use as the rail and the HUD say it, a whole percent: 0.796 is 80. */
 export function quotaPercent(q: Pick<QuotaWindow, "used">): number {
@@ -206,13 +206,12 @@ export interface Machine {
 }
 
 /**
- * A service Jocasta relies on (0429, 0444): `up` answers; `starting` while Jocasta starts it; `idle` while it isn't running
- * and starts when needed (Graphiti, 0073); `down` is broken.
+ * A service Jocasta relies on (0429, 0444): `up` answers; `starting` while Jocasta starts it; `down` is broken.
  */
 export interface ServiceHealth {
-	name: "Graphiti" | "whiteboard" | "herdr";
-	state: "up" | "starting" | "idle" | "down";
-	/** One plain line after the state, e.g. "starts when needed", "Docker isn't running". */
+	name: "whiteboard" | "herdr";
+	state: "up" | "starting" | "down";
+	/** One plain line after the state, e.g. "not started", "not answering". */
 	note?: string;
 }
 

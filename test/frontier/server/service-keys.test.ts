@@ -3,6 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, write
 import { basename, join, resolve } from "node:path";
 import { PLUGIN_ACTION_PATH, POPUP_PATH } from "../../../src/frontier/protocol.ts";
 import type { Confirmation } from "../../../src/frontier/server/allow.ts";
+import { searchHistory } from "../../../src/frontier/server/history.ts";
 import { overlayFile, overlayText } from "../../../src/frontier/server/overlay.ts";
 import type { Popup } from "../../../src/frontier/server/popups.ts";
 import {
@@ -438,10 +439,9 @@ test(
 );
 
 test(
-	"report_result: a thread's report is validated, stored in its task file and shown by thread_status; its decisions go to the project's graph and to the boss for lessons (0539)",
+	"report_result: a thread's report is validated, stored in its task file and shown by thread_status; its decisions become searchable in the project's history and go to the boss for lessons (0539, 0603)",
 	async () => {
 		const project = await demoProject(env.root);
-		const posts: unknown[] = [];
 		await withServer(
 			async (server) => {
 				const { paneId } = await startThread(server);
@@ -482,29 +482,19 @@ test(
 				expect((await call(server, "thread_status", { thread: "Readme line" })).text).toEndWith(
 					'\nreport: outcome done · "Readme line added" · tests 1/1 · files: README.md · decisions: Where the line goes = The top · follow-ups: Translate it',
 				);
-				await until(() => posts.length === 1);
-				expect(posts[0]).toEqual([
-					project.id,
+				const hits = searchHistory(server.service.catalog, project.id, "goes", 10);
+				expect(hits).toEqual([
 					{
-						name: expect.stringMatching(/^decisions t-[0-9a-f]{4} Readme line$/),
-						body: 'Decisions settled by the thread "Readme line" (feature/readme-line) in demo:\n- Where the line goes: The top. Why: Read first',
-						source: "report_result",
-						at: expect.any(String),
+						text: "- Where the line goes: The top. Why: Read first",
+						source: expect.stringMatching(/^decisions t-[0-9a-f]{4} Readme line$/),
+						at: expect.any(Number),
 					},
 				]);
 				const said =
 					"[event] demo/Readme line — reported its decisions: «Where the line goes = The top (Read first)» · offer him the lasting ones as lessons, once";
 				await until(() => server.herdr.of("prompt").some(([p, t]) => p === boss && t === said));
 			},
-			{
-				agentWaitMs: 10_000,
-				graph: {
-					search: async () => [],
-					post: async (projectId, episode) => {
-						posts.push([projectId, episode]);
-					},
-				},
-			},
+			{ agentWaitMs: 10_000 },
 		);
 	},
 	GIT_TEST_TIMEOUT,

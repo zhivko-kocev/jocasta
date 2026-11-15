@@ -1,3 +1,4 @@
+// biome-ignore-all lint/style/noExcessiveLinesPerFile: setup is one ordered `MIGRATIONS` table whose entries share the step helpers around it, read top to bottom; moving the table would export every helper for no gain (0610).
 import { copyFileSync, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -7,12 +8,12 @@ import { STT_TOGGLE_KEY, STT_TOGGLE_SETTING } from "../frontier/server/ptt-hold.
 import { WHITEBOARD_ENV, type WhiteboardRuntime, whiteboardRuntime } from "../frontier/server/whiteboard.ts";
 import { CALENDAR_CREDENTIAL, CALENDAR_ENV, readCredential, writeCredential } from "../shared/credentials.ts";
 import { UserError } from "../shared/errors.ts";
-import { asObject, writeAtomically } from "../shared/fsx.ts";
+import { asObject, removeTree, writeAtomically } from "../shared/fsx.ts";
 import { selfCommand, shippedConfigDir } from "../shared/install.ts";
 import { log } from "../shared/log.ts";
 import { pathKey, samePath } from "../shared/pathkey.ts";
 import { configDir, dataDir, ompAgentDir } from "../shared/paths.ts";
-import { onPath } from "../shared/process.ts";
+import { onPath, runProgram } from "../shared/process.ts";
 import { editConfig, parseConfig, parseJsonObject, renderConfig } from "./config-file.ts";
 import { lineDiff } from "./diff.ts";
 import { fingerprint, type Marker, readMarker, recordedUndo, type Undo, writeMarker } from "./markers.ts";
@@ -57,7 +58,7 @@ export interface SetupPaths {
 }
 
 /** One change setup proposes: its diff lines (`+ `, `- `, `  `) and how to make it. */
-export interface SetupChange {
+interface SetupChange {
 	title: string;
 	path: string;
 	diff: string[];
@@ -65,14 +66,14 @@ export interface SetupChange {
 	kept?: string[];
 	/** Nothing is written: the change only shows what of his stays (0479). */
 	keepsOnly?: true;
-	apply(): Promise<void>;
+	apply(io: SetupIo): Promise<void>;
 }
 
 /** Runs a program to completion; resolves its exit code and combined output. */
 export type RunProgram = (argv: string[]) => Promise<{ code: number; output: string }>;
 
 /** A change, or a migration already in place, with the marker written once it is applied. */
-export interface PlannedChange {
+interface PlannedChange {
 	/** The marker's name: `<NNNN>-<slug>` for a migration, `calendar` for the calendar's secret. */
 	name: string;
 	/** The file it is about. */
@@ -82,7 +83,7 @@ export interface PlannedChange {
 	marker: Omit<Marker, "appliedAt">;
 }
 
-export interface SetupPlan {
+interface SetupPlan {
 	/** Pending changes, in migration order. */
 	changes: PlannedChange[];
 	/** Migrations already in place without a current marker: marked when setup runs. */
@@ -108,6 +109,10 @@ export interface SetupDeps {
 	run: RunProgram;
 	/** The calendar secret's store; undefined where there is none (off Windows). */
 	calendar?: CalendarStore;
+	/** `herdr config check` on a config file, for setup's check of the herdr.toml it wrote (0608); `runProgram` by default. */
+	checkHerdrConfig?: (herdr: string, path: string) => Promise<{ code: number | null; output: string }>;
+	/** `git --version`'s output, or undefined when git can't run (0613); undefined here skips the check. */
+	gitVersion?: () => Promise<string | undefined>;
 	/** `herdr server reload-config` for Jocasta's session, after a herdr.toml refresh (0467). */
 	reloadHerdr?: () => Promise<{ code: number; output: string }>;
 	/**
@@ -334,6 +339,8 @@ interface Migration {
 	refresh?: string;
 	/** The MCP servers it writes, by name: uninstall compares his entries with them (0468). */
 	servers?(paths: SetupPaths): Record<string, Record<string, unknown>>;
+	/** The servers an earlier version of it wrote, for a marker from then: uninstall compares his entries with these. */
+	legacyServers?(paths: SetupPaths): Record<string, Record<string, unknown>>;
 	plan(context: PlanContext): Step | undefined;
 }
 
@@ -344,7 +351,7 @@ function markerName(migration: Migration): string {
 
 /**
  * omp's request timeout for the thread's MCP server (0577): a thread's `check` may run for 30 minutes, plus a minute;
- * omp's own default of 30 s would cut it, and the first `graph_search` on a cold code index.
+ * omp's own default of 30 s would cut it.
  */
 const MCP_TIMEOUT_MS = 1_860_000;
 /** omp's request timeout for the boss's MCP server (0484, 0577): a call may outlast its 30-minute bound with his Allow. */
@@ -487,59 +494,147 @@ function textStep(
 	return step;
 }
 
-/** The thread's `jocasta` server and whiteboard's, in omp's global `mcp.json` (migration 1). */
+/** The thread's `jocasta` server in omp's global `mcp.json` (migration 1). */
 function globalServers(paths: SetupPaths): Record<string, Record<string, unknown>> {
-	const servers: Record<string, Record<string, unknown>> = {
-		jocasta: { ...jocastaServer(paths, ["mcp"]), timeout: MCP_TIMEOUT_MS },
+	return { jocasta: { ...jocastaServer(paths, ["mcp"]), timeout: MCP_TIMEOUT_MS } };
+}
+
+/**
+ * whiteboard's `mcp` server, undefined while whiteboard isn't built. It finds the service's whiteboard server (its
+ * Desktop server, instance `stable`) through DEV_REVIEW_HOME.
+ */
+function whiteboardServer(paths: SetupPaths): Record<string, unknown> | undefined {
+	if (!paths.whiteboard) return undefined;
+	return {
+		type: "stdio",
+		command: paths.whiteboard.node,
+		args: [paths.whiteboard.cli, "mcp"],
+		env: { DEV_REVIEW_HOME: join(paths.dataDir, "whiteboard"), ...WHITEBOARD_ENV },
 	};
-	if (paths.whiteboard) {
-		// whiteboard mcp finds the service's whiteboard server (its Desktop server, instance `stable`) through
-		// DEV_REVIEW_HOME.
-		servers.whiteboard = {
-			type: "stdio",
-			command: paths.whiteboard.node,
-			args: [paths.whiteboard.cli, "mcp"],
-			env: { DEV_REVIEW_HOME: join(paths.dataDir, "whiteboard"), ...WHITEBOARD_ENV },
-		};
-	}
+}
+
+/** The boss's `jocasta --boss` server and whiteboard's (0607), in its folder's `mcp.json` (migration 2). */
+function bossServers(paths: SetupPaths): Record<string, Record<string, unknown>> {
+	const servers: Record<string, Record<string, unknown>> = {
+		jocasta: { ...jocastaServer(paths, ["mcp", "--boss"]), timeout: BOSS_MCP_TIMEOUT_MS },
+	};
+	const whiteboard = whiteboardServer(paths);
+	if (whiteboard) servers.whiteboard = whiteboard;
 	return servers;
 }
 
-/** The boss's `jocasta --boss` server in its folder's `mcp.json` (migration 2). */
-function bossServers(paths: SetupPaths): Record<string, Record<string, unknown>> {
-	return { jocasta: { ...jocastaServer(paths, ["mcp", "--boss"]), timeout: BOSS_MCP_TIMEOUT_MS } };
+/**
+ * What migration 1 wrote into the user-level `mcp.json` before 0607: `jocasta` and whiteboard's server. Uninstall
+ * and migration 17 recognise an entry of an install that never ran 17 by it.
+ */
+function userServersBefore0607(paths: SetupPaths): Record<string, Record<string, unknown>> {
+	const whiteboard = whiteboardServer(paths);
+	return { ...globalServers(paths), ...(whiteboard ? { whiteboard } : {}) };
+}
+
+/**
+ * Runs `herdr config check` on `path` (`HERDR_CONFIG_PATH`) and prints what it reports, each unknown-key line (0608).
+ * A check that can't run, or finds issues, never stops setup: the file is already written.
+ */
+async function printHerdrCheck(deps: SetupDeps, herdr: string, path: string, io: SetupIo): Promise<void> {
+	let result: { code: number | null; output: string };
+	try {
+		result = await (deps.checkHerdrConfig?.(herdr, path) ?? defaultHerdrCheck(herdr, path));
+	} catch (error) {
+		io.print(`herdr config check didn't run: ${error instanceof Error ? error.message : String(error)}`);
+		return;
+	}
+	io.print(`herdr config check (${path}):`);
+	for (const line of result.output.split(/\r?\n/)) if (line.trim()) io.print(`  ${line.trim()}`);
+	if (result.code !== 0)
+		io.print("  herdr ignores the keys named above: fix them in the shipped template or report them.");
+}
+
+/** `herdr config check` on `path`, with the output of both streams. */
+async function defaultHerdrCheck(herdr: string, path: string): Promise<{ code: number | null; output: string }> {
+	const result = await runProgram([herdr, "config", "check"], {
+		env: { ...process.env, HERDR_CONFIG_PATH: path },
+		timeoutMs: 30_000,
+	});
+	return { code: result.code, output: `${result.stdout}${result.stderr}` };
+}
+
+/**
+ * The one note when git is missing or older than 2.54 (0613): an older git ignores the pre-push hook Jocasta gives
+ * every pane through its environment, in silence, so pushes to main, master and develop would go unasked. Undefined
+ * when git is new enough.
+ */
+function gitVersionNote(output: string | undefined): string | undefined {
+	const found = output ? /(\d+)\.(\d+)/.exec(output) : null;
+	const [major, minor] = [Number(found?.[1]), Number(found?.[2])];
+	if (found && (major > 2 || (major === 2 && minor >= 54))) return undefined;
+	const has = found ? `git ${found[0]} is older than 2.54` : "git isn't installed";
+	return `${has}: Jocasta's check of pushes to main, master and develop needs git 2.54 or newer, so a pane's pushes there go unasked until you update git.`;
 }
 
 /** Said before the diff and in place of "Done" while herdr is missing: the plugin can't be linked (0558, 0584). */
 const HERDR_MISSING = "herdr isn't installed: install it from https://herdr.dev, then run `jocasta setup` again.";
 
+/**
+ * Takes the containers of the Compose project `file` names down while Docker's engine runs, then removes the file and
+ * the build context beside it (0603). Whether the old graph's images and volume go too is asked once; whatever stays is
+ * named with the one command that removes it later, which is the whole answer when Docker isn't running.
+ */
+async function removeGraphiti(file: string, run: RunProgram, io: SetupIo): Promise<void> {
+	const project = asObject(Bun.YAML.parse(readFileSync(file, "utf8")))?.name ?? "jocasta";
+	const compose = async (...args: string[]) => {
+		const { code, output } = await run(["docker", "compose", "-f", file, ...args]);
+		if (code !== 0) throw new Error(`docker compose ${args.join(" ")} exited ${code}: ${output.trim()}`);
+	};
+	// `docker info` succeeds only while the engine runs.
+	const engineRuns = await run(["docker", "info"]).then(
+		({ code }) => code === 0,
+		() => false,
+	);
+	let everythingGone = false;
+	if (engineRuns) {
+		await compose("down");
+		const question = "Also remove the old graph's images and volume (Graphiti and FalkorDB)? [y/N] ";
+		if (answeredYes(await io.ask(question))) {
+			await compose("down", "--rmi", "all", "--volumes");
+			everythingGone = true;
+		}
+	}
+	removeTree(file);
+	removeTree(join(dirname(file), "containers"));
+	if (!everythingGone) {
+		io.print(
+			`The old graph's images and volume stay; remove them with: docker compose -p ${project} down --rmi all --volumes`,
+		);
+	}
+}
+
 /** The migrations, in the order they apply. A new one takes the next number; numbers are never reused. */
 const MIGRATIONS: Migration[] = [
 	{
-		// Everyone's `graph_search` (0389) and whiteboard's own tools for drawing (0393, on the service's whiteboard
-		// state, telemetry off).
+		// Everyone's `history_search` (0389, 0603). whiteboard's tools are the boss's only (0607): its entry is in
+		// migration 2's file, and migration 17 removes the one this migration wrote before.
 		id: 1,
 		slug: "mcp",
 		refresh: "mcp.json",
 		servers: globalServers,
-		plan: ({ paths, notes }) => {
-			if (!paths.whiteboard) {
-				notes.push("whiteboard isn't built: run `bun run build` (or install a release), then `jocasta setup` again.");
-			}
-			return mcpStep(join(paths.ompAgentDir, "mcp.json"), globalServers(paths), ["jocasta", "whiteboard"]);
-		},
+		legacyServers: userServersBefore0607,
+		plan: ({ paths }) => mcpStep(join(paths.ompAgentDir, "mcp.json"), globalServers(paths), ["jocasta"]),
 	},
 	{
 		// The boss's tools only in its own folder (0392: project-level MCP config), with omp's request timeout past
-		// their own bounds (0577).
+		// their own bounds (0577); whiteboard's tools for drawing (0393, 0607) on the service's whiteboard state,
+		// telemetry off.
 		id: 2,
 		slug: "boss-mcp",
 		refresh: "mcp.json",
 		servers: bossServers,
-		plan: ({ paths }) => {
-			const step = mcpStep(join(paths.dataDir, "home", ".omp", "mcp.json"), bossServers(paths), ["jocasta"]);
-			if (step.change) step.change.title = `the boss's MCP server "jocasta" (--boss)`;
-			return step;
+		plan: ({ paths, notes }) => {
+			if (!paths.whiteboard) {
+				notes.push("whiteboard isn't built: run `bun run build` (or install a release), then `jocasta setup` again.");
+			}
+			const servers = bossServers(paths);
+			return mcpStep(join(paths.dataDir, "home", ".omp", "mcp.json"), servers, Object.keys(servers));
 		},
 	},
 	{
@@ -595,18 +690,34 @@ const MIGRATIONS: Migration[] = [
 		},
 	},
 	{
-		// Jocasta's own herdr config follows the shipped template (0440).
+		// Jocasta's own herdr config follows the shipped template (0440). herdr then checks what was written and names
+		// each key it ignores (0608).
 		id: 5,
 		slug: "herdr-config",
 		refresh: "herdr.toml",
-		plan: ({ paths }) => {
+		plan: ({ paths, deps, notes }) => {
 			const path = join(paths.jocastaConfigDir, "herdr.toml");
-			return ownedStep(
+			const step = ownedStep(
 				existsSync(path) ? "Jocasta's herdr config, to the shipped template" : "herdr config for session `jocasta`",
 				path,
 				herdrConfig(readFileSync(join(paths.assetsDir, "herdr.toml"), "utf8"), paths.dataDir),
 				[{ kind: "file", path }],
 			);
+			const { change } = step;
+			const herdr = deps.herdr;
+			if (!change) return step;
+			if (!herdr) {
+				notes.push(HERDR_MISSING);
+				return step;
+			}
+			step.change = {
+				...change,
+				apply: async (io) => {
+					await change.apply(io);
+					await printHerdrCheck(deps, herdr, path, io);
+				},
+			};
+			return step;
 		},
 	},
 	{
@@ -787,8 +898,8 @@ const MIGRATIONS: Migration[] = [
 					title: file?.title ?? "the `jocasta` herdr plugin, linked",
 					path,
 					diff: [...(file?.diff ?? []), `+ herdr plugin link ${dir}`],
-					apply: async () => {
-						await file?.apply();
+					apply: async (io) => {
+						await file?.apply(io);
 						await link();
 					},
 				},
@@ -808,6 +919,73 @@ const MIGRATIONS: Migration[] = [
 				readFileSync(join(paths.assetsDir, "secrets.yml"), "utf8"),
 				marker,
 			),
+	},
+	{
+		// Graphiti and its containers are gone (0603): Jocasta's compose file marks an install that still has them.
+		id: 16,
+		slug: "graphiti-removed",
+		plan: ({ paths, deps }) => {
+			const file = join(paths.jocastaConfigDir, "compose.yaml");
+			if (!existsSync(file)) return undefined;
+			return {
+				path: file,
+				fingerprint: fingerprint("graphiti-removed"),
+				undo: [],
+				change: {
+					title: "Graphiti is gone: its containers come down and their compose file is removed",
+					path: file,
+					diff: [`- ${file}`, `- ${join(paths.jocastaConfigDir, "containers")}`],
+					apply: (io) => removeGraphiti(file, deps.run, io),
+				},
+			};
+		},
+	},
+	{
+		// whiteboard's tools are the boss's only (0607): the entry migration 1 wrote into the user-level `mcp.json` goes,
+		// while it still is what setup wrote; the boss's file got its entry from migration 2. One he changed stays and
+		// is named.
+		id: 17,
+		slug: "whiteboard-boss-only",
+		plan: ({ paths }) => {
+			const path = join(paths.ompAgentDir, "mcp.json");
+			const text = readText(path);
+			const step: Step = { path, fingerprint: fingerprint("whiteboard-boss-only"), undo: [] };
+			if (text === undefined) return step;
+			const config = parseJsonObject(path, text);
+			const servers = asObject(config.mcpServers);
+			const has = servers?.whiteboard;
+			if (!servers || has === undefined) return step;
+			// What setup wrote: today's entry, or, with the others there, what migration 1's marker fingerprinted.
+			const wrote = readMarker(paths.jocastaConfigDir, markerName(MIGRATIONS[0] as Migration));
+			const present = Object.fromEntries(
+				Object.keys(userServersBefore0607(paths))
+					.filter((name) => servers[name] !== undefined)
+					.map((name) => [name, servers[name]]),
+			);
+			const asWritten =
+				Bun.deepEquals(has, whiteboardServer(paths), true) ||
+				(wrote !== undefined && fingerprint(JSON.stringify(present)) === wrote.fingerprint);
+			if (!asWritten) {
+				step.change = {
+					title: `omp MCP server "whiteboard" in your own MCP config stays: it isn't what Jocasta wrote, and only the boss mounts whiteboard now`,
+					path,
+					diff: [],
+					kept: [`"whiteboard" in ${path} is yours; remove it by hand if you don't want it in every omp session`],
+					keepsOnly: true,
+					apply: async () => {},
+				};
+				return step;
+			}
+			const { whiteboard: _gone, ...rest } = servers;
+			const after = json({ ...config, mcpServers: rest });
+			step.change = {
+				title: `whiteboard's tools are the boss's only: its omp MCP server "whiteboard" leaves your MCP config`,
+				path,
+				diff: lineDiff(text, after),
+				apply: async () => writeIfUnchanged(path, text, after),
+			};
+			return step;
+		},
 	},
 ];
 
@@ -889,7 +1067,8 @@ export function setupUndo(paths: SetupPaths, calendarStored: boolean): SetupUndo
 	for (const migration of MIGRATIONS) {
 		const marker = readMarker(paths.jocastaConfigDir, markerName(migration));
 		if (!migration.servers || !marker?.undo.some((u) => u.kind === "mcp")) continue;
-		const writes = migration.servers(paths);
+		// A marker from before 0607 names whiteboard too: its entry is the one migration 1 wrote then.
+		const writes = { ...migration.servers(paths), ...migration.legacyServers?.(paths) };
 		for (const u of marker.undo) {
 			if (u.kind === "mcp") written.set(pathKey(u.path), { writes, wrote: marker.fingerprint });
 		}
@@ -948,7 +1127,7 @@ async function applyInOrder(paths: SetupPaths, changes: PlannedChange[], io: Set
 	for (const [index, planned] of changes.entries()) {
 		const change = planned.change as SetupChange;
 		try {
-			await change.apply();
+			await change.apply(io);
 		} catch (error) {
 			const waiting = changes.length - index - 1;
 			io.print(
@@ -980,6 +1159,8 @@ async function reloadHerdrSaying(deps: SetupDeps, io: SetupIo): Promise<void> {
 export async function runSetup(paths: SetupPaths, deps: SetupDeps, io: SetupIo): Promise<number> {
 	const { changes, settled, notes } = planSetup(paths, deps);
 	for (const note of notes) io.print(note);
+	const gitNote = deps.gitVersion ? gitVersionNote(await deps.gitVersion()) : undefined;
+	if (gitNote) io.print(gitNote);
 	const herdrMissing = notes.includes(HERDR_MISSING);
 	if (changes.length === 0) {
 		for (const planned of settled) mark(paths, planned);

@@ -2,7 +2,7 @@
  * Windows Credential Manager (0430): generic credentials read and written through `advapi32.dll`'s `CredReadW`,
  * `CredWriteW` and `CredDeleteW` with Bun's FFI (no dependency). The calendar's secret iCal URL lives in target
  * `jocasta/calendar-ical`; the env var `JOCASTA_CALENDAR_ICAL_SECRET` stays a fallback (0301), taken out of this
- * process's environment at the service's start so no child (herdr and its panes, whiteboard, docker, omp) inherits
+ * process's environment at the service's start so no child (herdr and its panes, whiteboard, omp) inherits
  * it (SEC-5). Off Windows there is no store: reads find nothing and writes refuse.
  */
 import { dlopen, FFIType, type Pointer, ptr, read, toArrayBuffer } from "bun:ffi";
@@ -97,7 +97,7 @@ let calendarEnv: string | undefined;
 
 /**
  * Moves `JOCASTA_CALENDAR_ICAL_SECRET` from `process.env` into this module (SEC-5) and returns it: every process
- * started afterwards (herdr's server and so every pane, whiteboard, docker, omp) inherits an environment without it.
+ * started afterwards (herdr's server and so every pane, whiteboard, omp) inherits an environment without it.
  * The service and the `jocasta` command call it before they start anything; later calls return the value taken.
  */
 export function takeCalendarEnv(): string | undefined {

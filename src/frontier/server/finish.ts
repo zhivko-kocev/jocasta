@@ -6,7 +6,7 @@ import { UserError } from "../../shared/errors.ts";
 import { gitAsync } from "../../shared/git.ts";
 import { runProgram } from "../../shared/process.ts";
 import type { ServiceContext } from "./context.ts";
-import { closeTask } from "./task-file.ts";
+import { closeTask, type TaskClose } from "./task-file.ts";
 import { setPhase, subject, type Thread } from "./thread.ts";
 import { asker, type Door, overlapSaid, person, prRequest } from "./wording.ts";
 import { GIT_MS, gitOut, removeCheckout } from "./worktrees.ts";
@@ -18,7 +18,7 @@ const MERGE_TIMEOUT_MS = 60_000;
 /** The squash commit, with the repo's hooks and signing (CO-10). */
 const COMMIT_TIMEOUT_MS = 600_000;
 /** How long one gh call may take before it is ended (CO-8). */
-export const GH_TIMEOUT_MS = 60_000;
+const GH_TIMEOUT_MS = 60_000;
 
 /** What Finish says about a thread before it asks (`finishable`). */
 interface Finishable {
@@ -265,12 +265,10 @@ export class Finisher {
 			const why = committed.stderr.trim() || committed.stdout.trim() || `exit ${committed.code}`;
 			throw new UserError(`${name}: the squash commit failed (${why}); nothing was merged.`);
 		}
-		const commit = await gitOut(main, ["rev-parse", "--short", "HEAD"]);
+		const [full, commit] = ((await gitOut(main, ["log", "-1", "--format=%H%n%h"])) ?? "").split("\n");
 		this.c.day.landed(thread.paneId, thread.title, thread.project.id, `merged into ${trunk} as ${commit}`);
-		// The project's code index follows its main checkout (0562): re-indexed in the background, never failing here.
-		void this.c.options.codeIndex?.refresh(thread.project);
 		const merged = `Merged ${name} into ${trunk} as ${commit} (${ahead} commit${ahead === 1 ? "" : "s"} squashed)`;
-		const removed = await this.removeThread(thread);
+		const removed = await this.removeThread(thread, { how: "merged", commit: full || null });
 		if (removed) return `${merged}, but ${removed}.`;
 		if ((await gitAsync(main, ["branch", "-D", thread.branch], GIT_MS)).code !== 0) {
 			return `${merged}; its worktree and workspace are removed, but branch ${thread.branch} couldn't be deleted.`;
@@ -279,13 +277,14 @@ export class Finisher {
 	}
 
 	/**
-	 * Removes a finished thread's workspace and worktree; what stays and why when it couldn't. herdr's own
-	 * `worktree.remove` stops the workspace's terminals and on Windows restarts them as shells in the worktree, which
-	 * keep the folder locked (F-02). So the workspace is closed first, then git removes the checkout once the panes'
-	 * processes are gone, trying again for a while. While it runs, the refresh tick neither finds the thread again nor
-	 * reports its workspace closed (CR-11).
+	 * Removes a finished thread's workspace and worktree, and records how it closed and its commit (0621) once its
+	 * workspace is closed, so a folder that stays locked doesn't keep a merged or PR'd thread open; what stays and why
+	 * when it couldn't. herdr's own `worktree.remove` stops the workspace's terminals and on Windows restarts
+	 * them as shells in the worktree, which keep the folder locked (F-02). So the workspace is closed first, then git
+	 * removes the checkout once the panes' processes are gone, trying again for a while. While it runs, the refresh tick
+	 * neither finds the thread again nor reports its workspace closed (CR-11).
 	 */
-	private async removeThread(thread: Thread): Promise<string | undefined> {
+	private async removeThread(thread: Thread, close: Omit<TaskClose, "at">): Promise<string | undefined> {
 		const { threads, finishing } = this.c;
 		threads.drop(thread.paneId);
 		finishing.set(thread.workspaceId, "removing");
@@ -301,6 +300,7 @@ export class Finisher {
 		// Kept until a refresh no longer sees the workspace: one read during the closing may still list its panes.
 		finishing.set(thread.workspaceId, "removed");
 		this.c.day.threadUnblocked(thread.paneId);
+		if (thread.task) closeTask(thread.task, close, (error) => this.c.warn(error));
 		const failed = await removeCheckout(thread.project.mainPath, thread.path);
 		if (failed) {
 			return `its workspace is closed, but its worktree folder ${thread.path} couldn't be removed (${failed}); the folder and branch stay`;
@@ -308,7 +308,6 @@ export class Finisher {
 		this.c.reviewed.mark(thread.path, undefined);
 		this.c.numbers.forget(thread.path);
 		this.c.status.forget(thread);
-		if (thread.task) closeTask(thread.task, "finished", (error) => this.c.warn(error));
 		return undefined;
 	}
 
@@ -383,7 +382,7 @@ export class Finisher {
 			await this.c.events.thread(thread, `no PR: ${reason}; everything stays`, "normal");
 			return;
 		}
-		const removed = await this.removeThread(thread);
+		const removed = await this.removeThread(thread, { how: "pr", commit: pr.headRefOid ?? null });
 		this.c.day.landed(thread.paneId, thread.title, thread.project.id, "PR open");
 		await this.c.events.thread(
 			thread,

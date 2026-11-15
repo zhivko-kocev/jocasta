@@ -64,6 +64,7 @@ export interface TrialRecords {
 export const OMP_KEYS = [
 	"plan_first",
 	"plan_review",
+	"plan_review_role",
 	"configs",
 	"extensions",
 	"tools",
@@ -189,7 +190,7 @@ export function ompSessionText(dir: string): string {
  * {@link readResponse} counts the JSON stream, the trial's own assistant messages give the model, `usage`, the turns
  * and their `toolCall` blocks; the subagents' files beside them add to `totalUsage` and `requests`.
  */
-export function readOmpSessionsResponse(dir: string): HarnessResponse {
+function readOmpSessionsResponse(dir: string): HarnessResponse {
 	const usage = emptyUsage();
 	const subagentUsage = emptyUsage();
 	let subagentRequests = 0;
@@ -218,6 +219,24 @@ export function readOmpSessionsResponse(dir: string): HarnessResponse {
 	const totalUsage = { ...usage };
 	for (const key of Object.keys(totalUsage) as (keyof Usage)[]) totalUsage[key] += subagentUsage[key];
 	return { model, usage, totalUsage, requests: turns + subagentRequests, turns, toolCalls };
+}
+
+/**
+ * Whether omp's prewalk switched the trial's model (0608): the trial's own session files in `dir` hold a `model_change`
+ * entry with the role `prewalk`. omp 18.20.2 writes that entry only when the hand-off fires: `PrewalkCoordinator.
+ * advanceAtTurnEnd` (`session/prewalk.ts`) calls `setModelTemporary` after the first `edit`/`write` once the plan's
+ * todo list exists, and the session's host passes `{ prewalk: true }` (`session/agent-session.ts`), so
+ * `ModelControls.setModelTemporary` (`session/model-controls.ts`) appends it with `PREWALK_MODEL_CHANGE_ROLE`
+ * (`session/session-entries.ts`). A noop (the target is already the active model) or a never-armed prewalk writes none.
+ */
+export function readPrewalkSwitch(dir: string): boolean {
+	return ompSessionFiles(dir)
+		.filter((file) => file.main)
+		.some((file) =>
+			jsonLines<{ type?: string; role?: string }>(readFileSync(file.path, "utf8")).some(
+				(entry) => entry.type === "model_change" && entry.role === "prewalk",
+			),
+		);
 }
 
 /** Claude Code's usage shape in its stream-json `result` events. */

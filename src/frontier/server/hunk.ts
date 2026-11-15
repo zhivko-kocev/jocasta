@@ -14,7 +14,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { gitAsync } from "../../shared/git.ts";
-import { installDir } from "../../shared/install.ts";
+import { installDir, shippedConfigDir } from "../../shared/install.ts";
 import { waitFor } from "../../shared/poll.ts";
 import { runProgram } from "../../shared/process.ts";
 import { REVIEW_LEAD } from "./wording.ts";
@@ -97,7 +97,8 @@ export interface ReviewContext {
  * checks has the turn run its tests as one bash command and end on a `TESTS: pass|fail — <command>` (or `TESTS:
  * none`) line the service checks against the session's bash results (`sessions.ts` `checkedTests`). Then its own
  * `verify` skill when it has one, then omp's reviewer subagent on the range with the approved plan, the project's
- * rules and its lessons, told to report only material findings; every finding goes into the live hunk session with
+ * rules and its lessons, told to report only material findings, then at most three design findings judged by the
+ * shipped design rubric (0611; posted as `[P3] Design: …`, so they never count as blocking); every finding goes into the live hunk session with
  * one `comment apply` batch, each summary led by its priority (`[P0]`…`[P3]`). The shipped platform binary doesn't
  * carry hunk's `hunk-review` skill (`hunk skill path` fails there), so the commands and the batch shape are spelled
  * out here. hunk's argv becomes one command line for the thread's bash tool: odd words double-quoted, `\` as `/`.
@@ -133,7 +134,10 @@ export function reviewPrompt(hunk: string[], range: string, context: ReviewConte
 			? "when the project has a `verify` skill, read skill://verify and run it too. Don't fix failures in this turn."
 			: "When the project has a `verify` skill, read skill://verify and run it. Don't fix failures in this turn.",
 		`Then run the reviewer subagent on \`git diff ${range}\` in this worktree. In its task give it ${given.join(", ")},`,
-		"and tell it: report only material findings; prefer one strong finding over several weak ones.",
+		"and tell it: report only material findings; prefer one strong finding over several weak ones; then, after those,",
+		`read the design rubric (${slash(join(shippedConfigDir(), "design-rubric.md"))}) and report at most three design findings judged by it,`,
+		"each naming the code this change could delete where there is some. Post a design finding as [P3] with its summary",
+		'led by "Design:"; design findings never block.',
 		`A hunk window beside you shows the same diff. Post every finding in it as one batch: pipe`,
 		'`{"comments":[{"filePath":"<path>","newLine":<n>,"summary":"[P<priority>] <one sentence>","rationale":"<why>","author":"reviewer"}]}`',
 		`into \`${cli} session comment apply --repo . --stdin\` (each summary starts with the reviewer's priority, [P0] to [P3];`,
@@ -201,13 +205,21 @@ export async function listComments(
 	return countComments(await runHunk(hunk, ["session", "comment", "list", "--repo", worktree, "--json"], port), since);
 }
 
-/** What a reviewed diff did (0453): its size, the test files it changed, the test files it added a skip/only to. */
+/**
+ * What a reviewed diff did (0453, 0610): its size, the test files it changed, and the test files that weaken the tests:
+ * an added skip/only, a removed test, fewer assertions. A review whose proof names any of the three fails.
+ */
 export interface ReviewProof {
 	added: number;
 	deleted: number;
 	files: number;
 	testFiles: string[];
+	/** Test files that add a skip/only mark. */
 	skipped: string[];
+	/** Test files that lost a test declaration no test in the diff replaces (a deleted file counts). Absent in proofs stored before 0610. */
+	removedTests?: string[];
+	/** Changed test files that lost more assertions than they gained. Absent in proofs stored before 0610. */
+	fewerAssertions?: string[];
 }
 
 /** A test file by its path: under a `test`/`tests`/`__tests__`/`spec` folder, or named like one. */
@@ -218,6 +230,112 @@ const TEST_FILE =
 const SKIP_MARK =
 	/\b(it|test|describe|context|suite)\.(skip|only|todo)\s*\(|\b(xit|xdescribe|xtest|fit|fdescribe)\s*\(|@pytest\.mark\.(skip|xfail)|@unittest\.skip|#\[ignore\]|\bt\.Skip(Now|f)?\s*\(/;
 
+/** A line that is only a comment (`//`, `#`, `*`, `/*`, `--`): never a test or an assertion, so commenting one out removes it. */
+const COMMENT_LINE = /^\s*(\/\/|#(?!\[)|\*|\/\*|--)/;
+
+/**
+ * A test declaration at the start of a changed line, its name in the group `name`: JS/TS and Ruby/Elixir `it`/`test`/
+ * `specify` with a string (`it("x"`, `test "x" do`, `test.each`-less forms), Python `def test_*`, Go `func Test*` and
+ * `t.Run("x"`, Ruby minitest `def test_*`.
+ */
+const TEST_DECLARATION = new RegExp(
+	[
+		String.raw`^\s*(?:it|test|specify|scenario|example)(?:\.\w+)*\s*\(?\s*(["'\x60])(?<js>.+?)\1`,
+		String.raw`^\s*(?:async\s+)?def\s+(?<py>test\w*)\s*\(`,
+		String.raw`^\s*func\s+(?<go>(?:Test|Benchmark|Fuzz|Example)\w*)\s*\(`,
+		String.raw`\bt\.Run\(\s*"(?<sub>.+?)"`,
+	].join("|"),
+);
+
+/** Rust's test attribute (`#[test]`, `#[tokio::test]`, `#[test_case(..)]`): the declaration is its next `fn`. */
+const RUST_TEST_ATTRIBUTE = /^\s*#\[(?:\w+::)*test(?:_case)?\b/;
+
+/** The `fn` a Rust test attribute introduces. */
+const RUST_FN = /^\s*(?:pub\s+)?(?:async\s+)?fn\s+(?<name>\w+)/;
+
+/**
+ * An assertion on a changed line: `expect(`/`expect {`, `assert*(` and `assert_eq!(` (any language), a bare Python
+ * `assert `, Go's `t.Error*`/`t.Fatal*`/`t.Fail` and testify's `require.X(`, RSpec's `.should` and `is_expected`.
+ */
+const ASSERTION =
+	/\b(?:expect|assert[A-Za-z_]*|should)\s*[.(!{]|^\s*assert\s|\bt\.(?:Errorf?|Fatalf?|Fail|FailNow)\s*\(|\brequire\.[A-Za-z]+\s*\(|\.should\b|\bis_expected\b/;
+
+/** One test file's changed lines, as the proof reads them from a `-U0` diff. */
+interface TestFileChange {
+	file: string;
+	/** Names of the test declarations removed and added. */
+	removedTests: string[];
+	addedTests: string[];
+	removedAssertions: number;
+	addedAssertions: number;
+	skips: boolean;
+	/** The file is gone after the change: its tests count as removed, its assertions are not "fewer". */
+	gone: boolean;
+}
+
+/** The changes of one `diff --git` part (its header text without the `diff --git ` start); undefined for a binary file. */
+function testFileChange(part: string): TestFileChange | undefined {
+	const file = /^\+\+\+ b\/(.+)$/m.exec(part)?.[1] ?? /^--- a\/(.+)$/m.exec(part)?.[1];
+	const hunks = part.indexOf("\n@@");
+	if (!file || hunks < 0) return undefined;
+	const change: TestFileChange = {
+		file,
+		removedTests: [],
+		addedTests: [],
+		removedAssertions: 0,
+		addedAssertions: 0,
+		skips: false,
+		gone: !/^\+\+\+ b\//m.test(part),
+	};
+	let rustAttribute: "+" | "-" | undefined;
+	for (const line of part.slice(hunks).split("\n")) {
+		const sign = line[0];
+		if (sign !== "+" && sign !== "-") continue;
+		const text = line.slice(1);
+		const tests = sign === "+" ? change.addedTests : change.removedTests;
+		if (sign === "+" && SKIP_MARK.test(text)) change.skips = true;
+		if (COMMENT_LINE.test(text)) continue;
+		if (RUST_TEST_ATTRIBUTE.test(text)) {
+			rustAttribute = sign;
+			continue;
+		}
+		const rust = rustAttribute === sign ? RUST_FN.exec(text)?.groups?.name : undefined;
+		if (rust) tests.push(rust);
+		if (!/^\s*(#\[|$)/.test(text)) rustAttribute = undefined;
+		const named = TEST_DECLARATION.exec(text)?.groups;
+		const name = named?.js ?? named?.py ?? named?.go ?? named?.sub;
+		if (name !== undefined) tests.push(name);
+		if (ASSERTION.test(text)) {
+			if (sign === "+") change.addedAssertions++;
+			else change.removedAssertions++;
+		}
+	}
+	return change;
+}
+
+/**
+ * The test files that lost tests: a removed declaration counts unless a declaration of the same name is added anywhere
+ * in the diff (a moved or renamed file) or, failing that, the same file adds another declaration for it (a test
+ * renamed in place).
+ */
+function filesWithRemovedTests(changes: TestFileChange[]): string[] {
+	const addedByName = new Map<string, TestFileChange[]>();
+	for (const change of changes) {
+		for (const name of change.addedTests) addedByName.set(name, [...(addedByName.get(name) ?? []), change]);
+	}
+	const spare = new Map(changes.map((change) => [change.file, change.addedTests.length]));
+	const lost = new Map<string, number>();
+	for (const change of changes) {
+		for (const name of change.removedTests) {
+			const match = addedByName.get(name)?.shift();
+			if (match) spare.set(match.file, (spare.get(match.file) ?? 1) - 1);
+			else lost.set(change.file, (lost.get(change.file) ?? 0) + 1);
+		}
+	}
+	// Names matched elsewhere used up added declarations of their own; what is left in a file replaces its own losses.
+	return changes.flatMap((change) => ((lost.get(change.file) ?? 0) > (spare.get(change.file) ?? 0) ? change.file : []));
+}
+
 /** One git call of the proof (CO-10): 30 s at most, off the event loop. */
 const PROOF_GIT_MS = 30_000;
 
@@ -225,9 +343,10 @@ const PROOF_GIT_MS = 30_000;
 const PROOF_FILES_PER_CALL = 100;
 
 /**
- * The proof line's facts for `range` (`<trunk>...<branch>`) in `cwd`, from git without holding the event loop: one
- * `--numstat` for the size and the files, and one `-U0` diff of the test files (split at its `diff --git` headers)
- * for added skip/only markers. Undefined when git can't tell.
+ * The proof's facts for `range` (`<trunk>...<branch>`) in `cwd`, from git without holding the event loop: one
+ * `--numstat` for the size and the files, and `-U0` diffs of the test files in chunks (split at their `diff --git`
+ * headers) for added skip/only marks, removed tests and fewer assertions (0610; the patterns above are heuristics:
+ * they read changed lines only and no language's syntax). Undefined when git can't tell.
  */
 export async function reviewProof(cwd: string, range: string): Promise<ReviewProof | undefined> {
 	// Paths as they are (no C-quoting of non-ASCII), so the test files' names match and split back out.
@@ -244,30 +363,44 @@ export async function reviewProof(cwd: string, range: string): Promise<ReviewPro
 		paths.push(path.join("\t"));
 	}
 	const testFiles = paths.filter((path) => TEST_FILE.test(path));
-	const marked = new Set<string>();
+	const changes: TestFileChange[] = [];
 	for (let at = 0; at < testFiles.length; at += PROOF_FILES_PER_CALL) {
 		const files = testFiles.slice(at, at + PROOF_FILES_PER_CALL);
 		const args = [...unquoted, "diff", "-U0", "--no-color", "--no-renames", range, "--", ...files];
 		const diff = await gitAsync(cwd, args, PROOF_GIT_MS);
 		for (const part of diff.stdout.split(/^diff --git /m)) {
-			const file = /^\+\+\+ b\/(.+)$/m.exec(part)?.[1];
-			if (!file) continue;
-			const skips = part
-				.split("\n")
-				.some((line) => line.startsWith("+") && !line.startsWith("+++") && SKIP_MARK.test(line));
-			if (skips) marked.add(file);
+			const change = testFileChange(part);
+			if (change) changes.push(change);
 		}
 	}
-	const skipped = testFiles.filter((file) => marked.has(file));
-	return { added, deleted, files: paths.length, testFiles, skipped };
+	const skipped = new Set(changes.filter((change) => change.skips).map((change) => change.file));
+	const weaker = new Set(
+		changes
+			.filter((change) => !change.gone && change.removedAssertions > change.addedAssertions)
+			.map((change) => change.file),
+	);
+	return {
+		added,
+		deleted,
+		files: paths.length,
+		testFiles,
+		skipped: testFiles.filter((file) => skipped.has(file)),
+		removedTests: filesWithRemovedTests(changes),
+		fewerAssertions: testFiles.filter((file) => weaker.has(file)),
+	};
 }
 
-/** The proof as the review event says it: `+12/−3 in 2 files, test files changed: a.test.ts, adds skip/only in a.test.ts`. */
+/**
+ * The proof as the review event says it: `+12/−3 in 2 files, test files changed: a.test.ts, adds skip/only in a.test.ts,
+ * removes tests in b.test.ts, fewer assertions in a.test.ts`.
+ */
 export function proofSaid(proof: ReviewProof): string {
 	const parts = [`+${proof.added}/−${proof.deleted} in ${proof.files} file${proof.files === 1 ? "" : "s"}`];
 	if (proof.testFiles.length > 0) parts.push(`test files changed: ${proof.testFiles.join(", ")}`);
 	else parts.push("no test files changed");
 	if (proof.skipped.length > 0) parts.push(`adds skip/only in ${proof.skipped.join(", ")}`);
+	if (proof.removedTests?.length) parts.push(`removes tests in ${proof.removedTests.join(", ")}`);
+	if (proof.fewerAssertions?.length) parts.push(`fewer assertions in ${proof.fewerAssertions.join(", ")}`);
 	return parts.join(", ");
 }
 

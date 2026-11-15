@@ -7,9 +7,24 @@
 bun = "1.4.3"
 node = "24.21.0"
 
+# `verify` is the name Jocasta's idle check looks for (else `test`, 0453); `check` is the same checks under the repo's
+# own name, so the commands are written once.
+[tasks.verify]
+description = "typecheck, lint, the tests and knip (what Jocasta's own check runs)"
+run = [
+	"bun run typecheck",
+	"bun run lint",
+	"bun run test",
+	"bunx knip",
+]
+
 [tasks.check]
-description = "typecheck, lint and the tests"
-run = ["bun run typecheck", "bun run lint", "bun run test"]
+description = "typecheck, lint, the tests and knip (runs verify)"
+depends = ["verify"]
+
+[tasks.omp2-watch]
+description = "print omp's npm dist-tags and the last commit on its omp2 branch (0608)"
+run = "bun scripts/omp2-watch.ts"
 
 [tasks.build]
 description = "the per-platform build (scripts/build.ts)"
@@ -20,6 +35,12 @@ description = "the eval runner (evals/run.ts)"
 run = "bun run evals"
 
 [tasks.smoke]
-description = "the opt-in smokes on this machine: a throwaway herdr session and Graphiti in Docker"
-env = { JOCASTA_HERDR_SMOKE = "1", JOCASTA_GRAPHITI_SMOKE = "1" }
-run = "bun test test/herdr/herdr.test.ts test/graph/smoke.test.ts"
+description = "the opt-in smoke on this machine: a throwaway herdr session"
+env = { JOCASTA_HERDR_SMOKE = "1" }
+run = "bun test test/herdr/herdr.test.ts"
+
+# What Jocasta's weekly review runs for a project that has this task (0616); here Biome's counts, jscpd's duplicated
+# share and the `bun audit` line (0610, 0614). It prints and fails nothing.
+[tasks.scorecard]
+description = "the quality scorecard the weekly review keeps week on week (scripts/scorecard.ts)"
+run = "bun scripts/scorecard.ts"

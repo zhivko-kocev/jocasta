@@ -1,6 +1,6 @@
 /// <reference lib="dom" />
-// Jocasta as whiteboard's canvas host (0393, 0411): the `ReviewCanvasBridge` the canvas mounts with, as whiteboard's
-// Code-OSS desktop implements it (`apps/review-desktop/code-oss/src/vs/review/browser/parts/canvas/reviewCanvasPart.ts`,
+// Jocasta as whiteboard's canvas host (0393, 0411, 0615): the `ReviewCanvasBridge` the canvas mounts with, as
+// whiteboard v0.5.2's Code-OSS desktop implements it (`apps/review-desktop/code-oss/src/vs/review/browser/parts/canvas/reviewCanvasPart.ts`,
 // `services/reviewApiSourceService.ts`, `services/reviewDesktopConnectionService.ts`): requests go straight to
 // whiteboard's loopback server with its token, code peeks and diffs are Monaco (0411) on Tokyo Night (0401), "open the
 // code" shows a source panel over the canvas, and the server's `/control` stream (the Desktop's slot) lets an agent's
@@ -11,6 +11,7 @@ import type {
 	ReviewCanvasContent,
 	ReviewCanvasHandle,
 	ReviewCanvasModule,
+	ReviewDiffLayoutScope,
 	ReviewDiffSide,
 	ReviewInlineEditorRange,
 	ReviewSourcePins,
@@ -20,10 +21,10 @@ import type {
 	WhiteboardConnection,
 } from "./contract.ts";
 import { attachControl } from "./control.ts";
-import { diffView, layout } from "./diff.ts";
+import { diffView, layout, peekLayout } from "./diff.ts";
 import { showMenu } from "./menu.ts";
 import { SourcePanel } from "./panel.ts";
-import { findInPeek, inlineEditor } from "./peek.ts";
+import { findInPeek, inlineEditor, inlineLineNumbers } from "./peek.ts";
 import { disposable, Emitter, failure, ReviewSource } from "./source.ts";
 
 /** How long a request to whiteboard's server may take before it counts as failed. */
@@ -31,6 +32,9 @@ const REQUEST_TIMEOUT_MS = 30_000;
 
 /** Verbs a Code-OSS window answers that Jocasta's canvas page has no part for. */
 const unsupported = (name: string): ReviewVerbResponse => ({ ok: false, error: `${name} isn't available in Jocasta` });
+
+/** The stored layout of a diff layout scope. */
+const layoutOf = (scope: ReviewDiffLayoutScope) => (scope === "diff" ? layout : peekLayout);
 
 export interface HostEvents {
 	/** The shown review's title, or null on Home. */
@@ -59,9 +63,8 @@ export class WhiteboardHost {
 	private homeLoad: Promise<void> | undefined;
 	/** The review list Home last mounted, as JSON: an unchanged list isn't mounted again (PM-5). */
 	private homeShown: string | undefined;
-	/** Home's callbacks, the same each refresh, so an unchanged list stays unchanged for the canvas. */
-	private readonly openFromHome = (id: string) => this.openReview(id);
-	private readonly tutorialFromHome = () => void this.openTutorial();
+	/** Home's host object, the same each refresh, so an unchanged list stays unchanged for the canvas. */
+	private readonly homeHost = { openReview: (id: string) => this.openReview(id) };
 	/** The poll stops while the window is hidden and Home refreshes once when it shows again. */
 	private readonly onVisibility = () => {
 		this.pollHome();
@@ -86,7 +89,7 @@ export class WhiteboardHost {
 		if (this.handle) this.handle.update(content);
 		else
 			this.handle = this.module.mountReviewCanvas(this.container, content, {
-				confirmDelete: async (title) => window.confirm(`Delete “${title}”?`),
+				confirmDelete: async (titles) => window.confirm(`Delete ${titles.map((title) => `“${title}”`).join(", ")}?`),
 				showMenu,
 			});
 	}
@@ -146,7 +149,7 @@ export class WhiteboardHost {
 			this.events.onEmpty(false);
 			const shown = JSON.stringify(reviews);
 			if (shown === this.homeShown) return;
-			this.mount({ kind: "home", reviews, openReview: this.openFromHome, openTutorial: this.tutorialFromHome });
+			this.mount({ kind: "home", data: { reviews }, host: this.homeHost });
 			this.homeShown = shown;
 		};
 		this.homeShown = undefined;
@@ -159,14 +162,6 @@ export class WhiteboardHost {
 				this.events.onEmpty(false);
 				this.mount({ kind: "error", message: (error as Error).message });
 			}
-		}
-	}
-
-	/** whiteboard's tutorial review (`POST /tutorial/open`), opened on the canvas. */
-	async openTutorial(): Promise<void> {
-		const body: unknown = await (await this.api("/tutorial/open", { method: "POST" })).json();
-		if (body && typeof body === "object" && "reviewUuid" in body && typeof body.reviewUuid === "string") {
-			this.openReview(body.reviewUuid);
 		}
 	}
 
@@ -185,16 +180,9 @@ export class WhiteboardHost {
 			range: ReviewInlineEditorRange,
 		) => this.panel.showCode(source, target, range);
 		const bridge: ReviewCanvasBridge = {
-			config: {
-				serverUrl: this.connection.url,
-				reviewId,
-				token: this.connection.token,
-				wasmUrl: new URL(this.connection.canvas.wasm, location.href).href,
-				appVersion: this.connection.version,
-				theme: "dark",
-				host: "desktop",
-			},
-			inlineEditors: {
+			wasmUrl: new URL(this.connection.canvas.wasm, location.href).href,
+			appVersion: this.connection.version,
+			peeks: {
 				create: (spec) => inlineEditor(source, spec),
 				find: (spec, query) => findInPeek(source, spec, query),
 			},
@@ -202,7 +190,12 @@ export class WhiteboardHost {
 				create: (spec) => diffView(source, spec),
 				files: (scope) => source.files(scope?.commit),
 			},
-			request: (url, init) => fetch(url, init),
+			// The canvas passes a `/reviews-api/…` path: the origin and the token are the host's to add.
+			request: (path, init) => {
+				const headers = new Headers(init?.headers);
+				headers.set("x-review-token", this.connection.token);
+				return fetch(`${this.connection.url}${path}`, { ...init, headers });
+			},
 			post: async (request) => {
 				switch (request.name) {
 					case "reveal":
@@ -224,9 +217,12 @@ export class WhiteboardHost {
 			subscribe: (listener) => this.surface.add(listener),
 			currentTheme: () => "dark",
 			onDidChangeTheme: () => disposable(() => {}),
-			currentDiffLayout: () => layout.get(),
-			setDiffLayout: async (value) => layout.set(value),
-			onDidChangeDiffLayout: (listener) => layout.changed.add(listener),
+			currentDiffLayout: (scope) => layoutOf(scope).get(),
+			setDiffLayout: async (scope, value) => layoutOf(scope).set(value),
+			onDidChangeDiffLayout: (scope, listener) => layoutOf(scope).changed.add(listener),
+			currentInlineLineNumbers: () => inlineLineNumbers.get(),
+			setInlineLineNumbers: async (show) => inlineLineNumbers.set(show),
+			onDidChangeInlineLineNumbers: (listener) => inlineLineNumbers.changed.add(listener),
 			ready: () => {
 				this.container.dataset.reviewCanvasReady = "true";
 			},
@@ -234,17 +230,18 @@ export class WhiteboardHost {
 				(diagnostic.level === "error" ? console.error : console.warn)(
 					`[whiteboard ${diagnostic.source}] ${diagnostic.message}`,
 				),
+			setTitle: (title) => this.events.onTitle(title),
+			setSourceView: (_selection, view) => {
+				source.view = view;
+			},
+			openSource: (target, range) => showCode(target, range),
 		};
 		delete this.container.dataset.reviewCanvasReady;
 		this.mount({
 			kind: "api",
 			reviewId,
 			bridge,
-			setTitle: (title) => this.events.onTitle(title),
-			setSourceView: (_selection, view) => {
-				source.view = view;
-			},
-			openSource: (target, range) => showCode(target, range),
+			settings: { softwareMapEnabled: true },
 		});
 	}
 
@@ -252,14 +249,23 @@ export class WhiteboardHost {
 	private async dispatch(request: ReviewVerbRequest): Promise<ReviewVerbResponse> {
 		switch (request.name) {
 			case "authoringCapabilities":
-				// Software maps route: the page's policy lets libavoid's glue build its functions (0493).
-				return { ok: true, result: { softwareMapEnabled: true } };
+				// Software maps route: the page's policy lets libavoid's glue build its functions (0493). Animations on
+				// (0615): the server's agent tools for them follow this answer while the page is attached.
+				return { ok: true, result: { softwareMapEnabled: true, animationsEnabled: true } };
 			case "openReview":
 				this.openReview(request.args.reviewUuid);
 				return { ok: true };
 			case "openApiReview":
 				this.openReview(request.args.reviewId);
-				return { ok: true };
+				// whiteboard's relay parses `{ softwareMapEnabled }` out of this answer.
+				return { ok: true, result: { softwareMapEnabled: true } };
+			case "renderAnimation":
+				// The canvas could show the frame, but a browser page can't capture a picture of it (0615).
+				return {
+					ok: false,
+					error:
+						"This canvas shows the animation to the user and cannot return pictures, so there is no frame image to give. Check the animation by its frames and code, and ask the user what the animation shows.",
+				};
 			case "focusWindow":
 				window.focus();
 				return { ok: true };

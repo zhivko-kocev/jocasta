@@ -105,7 +105,7 @@ test("initialize echoes an older supported version and offers its own for an unk
 	expect(replies.map((r) => r.result?.protocolVersion)).toEqual(["2025-06-18", MCP_PROTOCOL_VERSION]);
 });
 
-test("tools/list: graph_search everywhere, report_result and check only in a thread with the layer on, the boss's tools only with --boss; the boss's graph_search names the project", async () => {
+test("tools/list: history_search everywhere, report_result and check only in a thread with the layer on, the boss's tools only with --boss; the boss's history_search names the project", async () => {
 	const listed = async (options: Partial<McpServerOptions>) => {
 		const [reply] = await session([request(1, "tools/list", {})], options);
 		const tools = reply?.result?.tools ?? [];
@@ -116,15 +116,15 @@ test("tools/list: graph_search everywhere, report_result and check only in a thr
 	const thread = { env: THREAD_ENV };
 	const boss = { boss: true };
 	const names = async (options: Partial<McpServerOptions>) => (await listed(options)).map((t) => t.name);
-	const graphSearch = async (options: Partial<McpServerOptions>) =>
-		(await listed(options)).find((t) => t.name === "graph_search")?.inputSchema;
-	expect(await graphSearch(thread)).toMatchObject({ required: ["query"] });
-	expect(await graphSearch(thread)).not.toHaveProperty("properties.project");
-	expect(await graphSearch(boss)).toMatchObject({ required: ["project", "query"] });
-	expect(await names(thread)).toEqual(["graph_search", "report_result", "check"]);
+	const historySearch = async (options: Partial<McpServerOptions>) =>
+		(await listed(options)).find((t) => t.name === "history_search")?.inputSchema;
+	expect(await historySearch(thread)).toMatchObject({ required: ["query"] });
+	expect(await historySearch(thread)).not.toHaveProperty("properties.project");
+	expect(await historySearch(boss)).toMatchObject({ required: ["project", "query"] });
+	expect(await names(thread)).toEqual(["history_search", "report_result", "check"]);
 	// His other omp sessions and the project panes load the same server (0577), and the layer can be off (0576).
-	expect(await names({})).toEqual(["graph_search"]);
-	expect(await names({ env: { ...THREAD_ENV, JOCASTA_LAYER: "off" } })).toEqual(["graph_search"]);
+	expect(await names({})).toEqual(["history_search"]);
+	expect(await names({ env: { ...THREAD_ENV, JOCASTA_LAYER: "off" } })).toEqual(["history_search"]);
 	expect(await names({ ...boss, env: THREAD_ENV })).not.toContain("check");
 	// report_result's schema (0539): the outcome, a summary of at most 200 characters, the lists.
 	expect((await listed(thread)).find((t) => t.name === "report_result")?.inputSchema).toMatchObject({
@@ -139,7 +139,7 @@ test("tools/list: graph_search everywhere, report_result and check only in a thr
 		required: ["project", "title", "brief"],
 	});
 	expect(await names(boss)).toEqual([
-		"graph_search",
+		"history_search",
 		"projects",
 		"thread_start",
 		"thread_status",
@@ -174,7 +174,7 @@ test("tools/call posts args, pane key and boss key to /api/mcp/<tool> with the b
 		[
 			...HANDSHAKE,
 			request(2, "tools/call", {
-				name: "graph_search",
+				name: "history_search",
 				arguments: { project: "demo", query: "why sqlite", limit: 5 },
 			}),
 			request(3, "tools/call", {
@@ -187,7 +187,7 @@ test("tools/call posts args, pane key and boss key to /api/mcp/<tool> with the b
 		{ boss: true, service: () => fake.address, paneKey: "pk-7", bossKey: "key-1" },
 	);
 	const byId = new Map(replies.map((r) => [r.id, r]));
-	expect(byId.get(2)?.result).toEqual({ content: [{ type: "text", text: "ok graph_search" }], isError: false });
+	expect(byId.get(2)?.result).toEqual({ content: [{ type: "text", text: "ok history_search" }], isError: false });
 	expect(byId.get(3)?.result).toEqual({ content: [{ type: "text", text: "ok thread_start" }], isError: false });
 	expect(byId.get(4)?.result).toEqual({ content: [{ type: "text", text: "No thread named x." }], isError: true });
 	expect(byId.get(5)?.result).toEqual({ content: [{ type: "text", text: "ok today" }], isError: false });
@@ -195,7 +195,7 @@ test("tools/call posts args, pane key and boss key to /api/mcp/<tool> with the b
 	const from = { paneKey: "pk-7", bossKey: "key-1" };
 	expect(sorted).toEqual([
 		{
-			tool: "graph_search",
+			tool: "history_search",
 			auth: "Bearer tok-1",
 			body: { args: { project: "demo", query: "why sqlite", limit: 5 }, ...from },
 		},
@@ -211,7 +211,7 @@ test("tools/call posts args, pane key and boss key to /api/mcp/<tool> with the b
 
 test("a thread pane's call sends its pane key and no boss key", async () => {
 	const fake = fakeService(() => Response.json({ text: "ok" }));
-	await session([request(1, "tools/call", { name: "graph_search", arguments: { query: "why" } })], {
+	await session([request(1, "tools/call", { name: "history_search", arguments: { query: "why" } })], {
 		service: () => fake.address,
 		paneKey: "pk-9",
 	});
@@ -246,7 +246,7 @@ test("no service: every tool answers the not-running text", async () => {
 	expect(NOT_RUNNING).toBe("Jocasta isn't running; start it with jocasta.");
 	const replies = await session(
 		[
-			request(1, "tools/call", { name: "graph_search", arguments: { project: "demo", query: "x" } }),
+			request(1, "tools/call", { name: "history_search", arguments: { project: "demo", query: "x" } }),
 			request(2, "tools/call", { name: "projects", arguments: {} }),
 		],
 		{ boss: true, service: () => undefined },
@@ -258,7 +258,7 @@ test("a refused connection is the not-running text too", async () => {
 	const closed = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("") });
 	const port = closed.port as number;
 	closed.stop(true);
-	const [reply] = await session([request(1, "tools/call", { name: "graph_search", arguments: { query: "x" } })], {
+	const [reply] = await session([request(1, "tools/call", { name: "history_search", arguments: { query: "x" } })], {
 		service: () => ({ port, token: "t" }),
 	});
 	expect(reply?.result).toEqual(notRunning);
@@ -270,7 +270,7 @@ test("by default a call goes to the service <data>/jocasta-service.json names wh
 	const dir = tempDir();
 	process.env.JOCASTA_DATA_DIR = dir;
 	const call = async () => {
-		const [reply] = await session([request(1, "tools/call", { name: "graph_search", arguments: { query: "x" } })], {
+		const [reply] = await session([request(1, "tools/call", { name: "history_search", arguments: { query: "x" } })], {
 			service: undefined,
 		});
 		return reply?.result?.content?.[0]?.text;
@@ -307,10 +307,10 @@ test("malformed input gets JSON-RPC errors and the server keeps serving", async 
 			"",
 			request(3, "resources/list"),
 			request(4, "tools/call", { name: "nope" }),
-			request(5, "tools/call", { name: "graph_search", arguments: {} }),
-			request(6, "tools/call", { name: "graph_search", arguments: { query: "x", limit: 0 } }),
-			request(7, "tools/call", { name: "graph_search", arguments: { query: "x", extra: 1 } }),
-			request(8, "tools/call", { name: "graph_search", arguments: "x" }),
+			request(5, "tools/call", { name: "history_search", arguments: {} }),
+			request(6, "tools/call", { name: "history_search", arguments: { query: "x", limit: 0 } }),
+			request(7, "tools/call", { name: "history_search", arguments: { query: "x", extra: 1 } }),
+			request(8, "tools/call", { name: "history_search", arguments: "x" }),
 			request(9, "tools/call", { name: "thread_start", arguments: { project: "demo", title: "t", brief: "b" } }),
 			request(10, "ping"),
 		],
@@ -326,9 +326,9 @@ test("malformed input gets JSON-RPC errors and the server keeps serving", async 
 		{ jsonrpc: "2.0", id: null, error: error(-32600) },
 		{ jsonrpc: "2.0", id: 3, error: error(-32601) },
 		{ jsonrpc: "2.0", id: 4, error: error(-32602) },
-		{ jsonrpc: "2.0", id: 5, result: tool("graph_search: missing query") },
-		{ jsonrpc: "2.0", id: 6, result: tool("graph_search: limit must be an integer in range") },
-		{ jsonrpc: "2.0", id: 7, result: tool("graph_search: unknown argument extra") },
+		{ jsonrpc: "2.0", id: 5, result: tool("history_search: missing query") },
+		{ jsonrpc: "2.0", id: 6, result: tool("history_search: limit must be an integer in range") },
+		{ jsonrpc: "2.0", id: 7, result: tool("history_search: unknown argument extra") },
 		{ jsonrpc: "2.0", id: 8, error: error(-32602) },
 		{ jsonrpc: "2.0", id: 9, error: error(-32602) },
 		{ jsonrpc: "2.0", id: 10, result: {} },

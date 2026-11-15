@@ -4,7 +4,7 @@ import { UserError } from "./errors.ts";
 import { writeAtomically } from "./fsx.ts";
 import { samePath } from "./pathkey.ts";
 import { projectsFile } from "./paths.ts";
-import { parseYamlFile, YamlFileError } from "./yaml.ts";
+import { parseYamlFile, YamlFileError, type YamlPath } from "./yaml.ts";
 
 /** One watched root (0109). */
 interface WatchedRoot {
@@ -19,7 +19,12 @@ export interface ProjectsFile {
 	add: string[];
 	exclude: string[];
 	names: Record<string, string>;
+	/** What each repo (its main checkout's folder, as the file writes it) answered about pushes to trunk (0613), with its line. */
+	push: Record<string, { way: PushWay; line: number }>;
 }
+
+/** How a repo takes changes to its protected branches (0613): pushes straight onto them, or pull requests. */
+export type PushWay = "direct" | "pull-requests";
 
 /** A list key may be left empty (`add:`), which YAML reads as null. */
 const PathList = Type.Union([Type.Array(Type.String()), Type.Null()]);
@@ -46,6 +51,12 @@ const ProjectsFileSchema = Type.Union([
 		add: Type.Optional(PathList),
 		exclude: Type.Optional(PathList),
 		names: Type.Optional(Type.Union([Type.Record(Type.String(), Type.String()), Type.Null()])),
+		push: Type.Optional(
+			Type.Union([
+				Type.Record(Type.String(), Type.Union([Type.Literal("direct"), Type.Literal("pull-requests")])),
+				Type.Null(),
+			]),
+		),
 	}),
 	Type.Null(),
 ]);
@@ -59,12 +70,15 @@ export function readProjectsFile(file = projectsFile()): ProjectsFile {
 	try {
 		text = readFileSync(file, "utf8");
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return { roots: [], add: [], exclude: [], names: {} };
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+			return { roots: [], add: [], exclude: [], names: {}, push: {} };
+		}
 		throw error;
 	}
 	let doc: Static<typeof ProjectsFileSchema>;
+	let lineOf: (path: YamlPath) => number;
 	try {
-		doc = parseYamlFile(ProjectsFileSchema, text, file).value;
+		({ value: doc, lineOf } = parseYamlFile(ProjectsFileSchema, text, file));
 	} catch (error) {
 		if (error instanceof YamlFileError) throw new UserError(error.message, 1);
 		throw error;
@@ -74,6 +88,9 @@ export function readProjectsFile(file = projectsFile()): ProjectsFile {
 		add: doc?.add ?? [],
 		exclude: doc?.exclude ?? [],
 		names: doc?.names ?? {},
+		push: Object.fromEntries(
+			Object.entries(doc?.push ?? {}).map(([repo, way]) => [repo, { way, line: lineOf(["push", repo]) }]),
+		),
 	};
 }
 
@@ -172,5 +189,52 @@ export function removeFromList(key: "add" | "exclude", path: string, file = proj
 		const matches = block?.items.filter((item) => samePath(item.value, path)) ?? [];
 		for (const item of matches.reverse()) lines.splice(item.line, 1);
 		return matches.length > 0;
+	});
+}
+
+/**
+ * Records `way` for `repo` in the `push:` map (0613), keeping the rest of the file, its comments and its order: an
+ * entry for the same folder is changed in place, a new one goes at the map's end, and a file without the map gets it
+ * at its end. False when the file already says so.
+ */
+export function setPushWay(repo: string, way: PushWay, file = projectsFile()): boolean {
+	return edit(file, (lines) => {
+		const entry = `${yamlScalar(repo)}: ${way}`;
+		const keyLine = lines.findIndex((l) => /^push:(\s|$)/.test(l));
+		if (keyLine === -1) {
+			lines.push("push:", `  ${entry}`);
+			return true;
+		}
+		// A flow map (`push: {}`) is rewritten as a block first, as `findBlock` does for a list.
+		const flow = /^push:\s*(\{.*\})\s*(#.*)?$/.exec(lines[keyLine] ?? "");
+		if (flow?.[1]) {
+			const parsed: unknown = Bun.YAML.parse(`x: ${flow[1]}`);
+			const map = typeof parsed === "object" && parsed !== null && "x" in parsed ? parsed.x : undefined;
+			const rows = Object.entries((map ?? {}) as Record<string, unknown>);
+			lines.splice(
+				keyLine,
+				1,
+				`push:${flow[2] ? ` ${flow[2]}` : ""}`,
+				...rows.map(([key, value]) => `  ${yamlScalar(key)}: ${String(value)}`),
+			);
+		}
+		let end = keyLine + 1;
+		let indent = "  ";
+		for (let i = keyLine + 1; i < lines.length; i++) {
+			const line = lines[i] ?? "";
+			if (line.trim() === "" || /^\s+#/.test(line)) continue;
+			if (!/^\s/.test(line)) break;
+			indent = /^\s*/.exec(line)?.[0] ?? indent;
+			end = i + 1;
+			const parsed: unknown = Bun.YAML.parse(line.trim());
+			const key = typeof parsed === "object" && parsed !== null ? Object.keys(parsed)[0] : undefined;
+			if (key === undefined || !samePath(key, repo)) continue;
+			const old = /:\s+(direct|pull-requests)(\s+#.*)?$/.exec(line);
+			if (old?.[1] === way) return false;
+			lines[i] = `${indent}${entry}${old?.[2] ?? ""}`;
+			return true;
+		}
+		lines.splice(end, 0, `${indent}${entry}`);
+		return true;
 	});
 }

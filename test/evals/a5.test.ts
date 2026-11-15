@@ -72,9 +72,9 @@ test("interventions, attention minutes and batch time from the feed and the sess
 	expect(report.batchMinutes).toBeCloseTo(49, 10);
 });
 
-test("an approval that keeps the context counts once, though omp 18.18.6 writes two mode changes to none (0589)", () => {
+test("an approval that keeps the context counts once, though omp 18.20.2 writes two mode changes to none (0589)", () => {
 	// "Approve and keep context": omp leaves plan mode (`none`), then records the approved plan with a second `none`
-	// (`interactive-mode.ts:6957`), both in the planning session.
+	// (`interactive-mode.ts:6932`), both in the planning session.
 	const session = [
 		header(min(0)),
 		modeChange(min(0), "plan", { planFilePath: "local://PLAN.md" }),

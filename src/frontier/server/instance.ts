@@ -11,9 +11,9 @@ import { type ProcessId, processIdOf } from "../../shared/proctree.ts";
 import type { ServiceState } from "./launch.ts";
 
 /** How long a live holder may go without answering before it counts as hung (0534). */
-export const HUNG_MS = 15_000;
+const HUNG_MS = 15_000;
 /** How long a holder that says it is closing is waited for before it counts as hung. */
-export const CLOSING_MS = 60_000;
+const CLOSING_MS = 60_000;
 
 export interface InstanceOptions {
 	/** `<data>/service.lock`. */

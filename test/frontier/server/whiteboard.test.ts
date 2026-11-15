@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { contentPolicy, pageGuarded } from "../../../src/frontier/server/server.ts";
 import {
 	CANVAS_PATH,
 	canvasAsset,
@@ -90,13 +91,16 @@ test("the canvas build's entry, stylesheets and wasm come from vite's manifest; 
 	writeFileSync(
 		join(dir, ".vite", "manifest.json"),
 		JSON.stringify({
+			// 0.5.2's shape: the entry lists no wasm; a lazily loaded chunk and the wasm's own entry do (0615).
 			"src/desktop-entry.tsx": {
 				file: "assets/canvas-1.js",
 				name: "canvas",
 				isEntry: true,
 				css: ["assets/canvas-1.css"],
-				assets: ["assets/libavoid-1.wasm", "assets/font.woff2"],
+				assets: ["assets/stage-1.html", "assets/font.woff2"],
 			},
+			"elkjs-libavoid/index.mjs": { file: "assets/dist-1.js", name: "dist", assets: ["assets/libavoid-1.wasm"] },
+			"libavoid-js/libavoid.wasm": { file: "assets/libavoid-1.wasm" },
 		}),
 	);
 	writeFileSync(join(dir, "assets", "canvas-1.js"), "export {}");
@@ -110,6 +114,35 @@ test("the canvas build's entry, stylesheets and wasm come from vite's manifest; 
 	);
 	expect(canvasAsset(dir, `${CANVAS_PATH}.vite/manifest.json`)).toBeUndefined();
 	expect(canvasAsset(dir, `${CANVAS_PATH}assets/..%2F..%2Fsecret`)).toBeUndefined();
+});
+
+test("the animation stage's file is served as HTML without the page's policy and frameable from the page; a neighbouring asset and the page keep today's headers (0615)", async () => {
+	const dir = join(env.root, "canvas-stage");
+	mkdirSync(join(dir, "assets"), { recursive: true });
+	writeFileSync(join(dir, "assets", "stage-1.html"), "<!doctype html>");
+	writeFileSync(join(dir, "assets", "canvas-1.js"), "export {}");
+	const stage = `${CANVAS_PATH}assets/stage-1.html`;
+	const script = `${CANVAS_PATH}assets/canvas-1.js`;
+	const served = canvasAsset(dir, stage) as Response;
+	expect(served.headers.get("content-type")).toBe("text/html; charset=utf-8");
+
+	const guardedStage = pageGuarded(served, stage, 1234);
+	expect(guardedStage.headers.get("content-security-policy")).toBeNull();
+	expect(guardedStage.headers.get("cross-origin-resource-policy")).toBe("cross-origin");
+	expect(guardedStage.headers.get("cross-origin-embedder-policy")).toBe("require-corp");
+
+	for (const [response, pathname] of [
+		[canvasAsset(dir, script) as Response, script],
+		[new Response("<!doctype html>", { headers: { "content-type": "text/html" } }), "/"],
+		// The stage's path with nothing behind it (a refusal, a 404) is the page's own response.
+		[new Response("Not found", { status: 404 }), stage],
+	] as const) {
+		const guarded = pageGuarded(response, pathname, 1234);
+		expect(guarded.headers.get("content-security-policy")).toBe(contentPolicy(1234));
+		expect(guarded.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+		expect(guarded.headers.get("cross-origin-resource-policy")).toBe("same-origin");
+		expect(guarded.headers.get("cross-origin-embedder-policy")).toBe("require-corp");
+	}
 });
 
 test("the page gets whiteboard's server behind its token, and the CSP lets it connect there (0393)", async () => {
@@ -127,7 +160,7 @@ test("the page gets whiteboard's server behind its token, and the CSP lets it co
 			const body = await page.json();
 			// The repo's clone may be unbuilt in a test run: then the page hears why.
 			if (page.status === 200) {
-				expect(body).toMatchObject({ url: origin, token: "wb-token", version: "0.2.4" });
+				expect(body).toMatchObject({ url: origin, token: "wb-token", version: "0.5.2" });
 				expect(body.canvas.script).toStartWith(CANVAS_PATH);
 			} else {
 				expect(page.status).toBe(503);

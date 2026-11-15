@@ -2,7 +2,7 @@
  * omp's local host registry (0547, 0561): every omp hosting a collab room (Jocasta's panes, through its relay) has
  * `<home>/.omp/run/collab-hosts/<entry>.json` (`{version, instanceId, pid, endpoint, createdAt, token}`) and answers
  * one JSON line on that endpoint, a named pipe on Windows: `{"v":1,"token":…,"op":"snapshot"}` →
- * `{ok, v, snapshot: {pid, cwd, busy, inputRequired, relayConnected, …}}` (omp 18.18.6 `src/collab/registry.ts`,
+ * `{ok, v, snapshot: {pid, cwd, busy, inputRequired, relayConnected, …}}` (omp 18.20.2 `src/collab/registry.ts`,
  * protocol v1, documented for dashboards). Read directly: `omp collab list` takes about 0.7 s a call, a pipe 0–5 ms.
  */
 import { readdirSync, readFileSync, rmSync } from "node:fs";
@@ -22,7 +22,7 @@ const QUERY_TIMEOUT_MS = 1_000;
 const MAX_ANSWER = 64 * 1024;
 
 /** `~/.omp/run/collab-hosts` (omp's `collabHostsRuntimeDir`: `PI_CONFIG_DIR` renames `.omp`; no profile in it). */
-export function hostsDir(): string {
+function hostsDir(): string {
 	return join(homedir(), process.env.PI_CONFIG_DIR || ".omp", "run", "collab-hosts");
 }
 

@@ -34,6 +34,43 @@ export interface CliRequest {
 	asks: boolean;
 }
 
+/** `thread new <project> <brief> [--title t] [--done-when c]… [--heavy]` as a request; bad usage throws `usage()`. */
+function newThreadRequest(rest: string[], usage: () => UserError): CliRequest {
+	const positional: string[] = [];
+	const doneWhen: string[] = [];
+	let title: string | undefined;
+	let heavy = false;
+	for (let i = 0; i < rest.length; i++) {
+		const arg = rest[i] as string;
+		// `--heavy` (0590) takes no value: the thread runs on his slow role.
+		if (arg === "--heavy") {
+			if (heavy) throw usage();
+			heavy = true;
+		} else if (arg === "--title" || arg === "--done-when") {
+			const value = rest[++i];
+			if (value === undefined || !value.trim()) throw usage();
+			if (arg === "--title") {
+				if (title !== undefined) throw usage();
+				title = value;
+			} else doneWhen.push(value);
+		} else if (arg.startsWith("--")) throw usage();
+		else positional.push(arg);
+	}
+	const [project, brief] = positional;
+	if (positional.length !== 2 || !project?.trim() || !brief?.trim()) throw usage();
+	return {
+		command: "thread new",
+		args: {
+			project,
+			brief,
+			...(title ? { title } : {}),
+			...(doneWhen.length > 0 ? { done_when: doneWhen } : {}),
+			...(heavy ? { heavy: true } : {}),
+		},
+		asks: false,
+	};
+}
+
 /** `jocasta thread|worktree <args>` as a request; bad usage is a `UserError` with exit 2 and the usage. */
 export function cliRequest(word: "thread" | "worktree", args: string[]): CliRequest {
 	const [verb, ...rest] = args;
@@ -50,39 +87,7 @@ export function cliRequest(word: "thread" | "worktree", args: string[]): CliRequ
 	}
 	switch (verb) {
 		case "new": {
-			const positional: string[] = [];
-			const doneWhen: string[] = [];
-			let title: string | undefined;
-			let heavy = false;
-			for (let i = 0; i < rest.length; i++) {
-				const arg = rest[i] as string;
-				// `--heavy` (0590) takes no value: the thread runs on his slow role.
-				if (arg === "--heavy") {
-					if (heavy) throw usage();
-					heavy = true;
-				} else if (arg === "--title" || arg === "--done-when") {
-					const value = rest[++i];
-					if (value === undefined || !value.trim()) throw usage();
-					if (arg === "--title") {
-						if (title !== undefined) throw usage();
-						title = value;
-					} else doneWhen.push(value);
-				} else if (arg.startsWith("--")) throw usage();
-				else positional.push(arg);
-			}
-			const [project, brief] = positional;
-			if (positional.length !== 2 || !project?.trim() || !brief?.trim()) throw usage();
-			return {
-				command: "thread new",
-				args: {
-					project,
-					brief,
-					...(title ? { title } : {}),
-					...(doneWhen.length > 0 ? { done_when: doneWhen } : {}),
-					...(heavy ? { heavy: true } : {}),
-				},
-				asks: false,
-			};
+			return newThreadRequest(rest, usage);
 		}
 		case "list": {
 			if (rest.length > 1) throw usage();

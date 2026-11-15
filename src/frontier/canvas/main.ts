@@ -120,18 +120,9 @@ class CanvasPage {
 		}
 		if (this.empty) return;
 		const shown = element("div", "wb-empty");
-		const notice = element("p", "notice error");
-		notice.setAttribute("role", "alert");
 		shown.append(
 			element("h2", "", "Nothing on the canvas yet."),
-			element("p", "", "Ask Jocasta or a thread to draw a diagram or a review; it appears here."),
-			button("Take the whiteboard tour", () => {
-				notice.remove();
-				this.host?.openTutorial().catch((caught: Error) => {
-					notice.textContent = `The tour didn't open: ${caught.message}`;
-					shown.append(notice);
-				});
-			}),
+			element("p", "", "Ask Jocasta or a thread to draw a diagram, a review or an animation; it appears here."),
 		);
 		this.empty = shown;
 		this.overlay.before(shown);

@@ -11,8 +11,7 @@ import { BenchUsageError } from "./args.ts";
  * They run only against a sandbox (the 0441 walkthrough's, or 0481's VM) with its own data folder, herdr session and
  * config folder (0502, 0576): `JOCASTA_DATA_DIR` set and not the OS default, `JOCASTA_HERDR_SESSION` naming a session
  * that isn't his own (`jocasta`, or `jarvis` before the cutover), and `JOCASTA_CODING_AGENT_DIR` set and not
- * `~/.jocasta/agent`: the config folder picks the projects, herdr's config and the Graphiti compose project
- * (`composeProject()` is `jocasta` for his), so a sandbox on it would recreate his Graphiti container with its token.
+ * `~/.jocasta/agent`: the config folder picks the projects and herdr's config, so a sandbox on it would act on his.
  */
 
 const HIS_SESSIONS: Record<string, true> = { jocasta: true, jarvis: true };
@@ -30,7 +29,7 @@ export function requireVm(machine: string, what: string): void {
 }
 
 /** Whether `session` is one of his own herdr sessions. */
-export function isHisSession(session: string): boolean {
+function isHisSession(session: string): boolean {
 	return HIS_SESSIONS[session.toLowerCase()] === true;
 }
 
@@ -70,7 +69,7 @@ export function requireSandbox(
 		throw new BenchUsageError("set JOCASTA_HERDR_SESSION to a sandbox herdr session (not jocasta or jarvis)");
 	if (!configDir || pathKey(configDir, platform) === pathKey(join(homedir(), ".jocasta", "agent"), platform))
 		throw new BenchUsageError(
-			"set JOCASTA_CODING_AGENT_DIR to the sandbox's config folder; with ~/.jocasta/agent the sandbox uses his projects, herdr config and Graphiti containers",
+			"set JOCASTA_CODING_AGENT_DIR to the sandbox's config folder; with ~/.jocasta/agent the sandbox uses his projects and herdr config",
 		);
 	return { dataDir, herdrSession, configDir };
 }

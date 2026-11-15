@@ -15,7 +15,9 @@ import {
 	GUARD,
 	handoffEntry,
 	keyed,
+	PANE_CHECK_FLAGS,
 	Page,
+	projectKeyed,
 	README_THREAD_ENV,
 	review,
 	sessionFile,
@@ -219,7 +221,7 @@ test(
 					.slice(before)
 					.filter((c) => c.method === "respawn")
 					.map((c) => c.args) as [string, { cwd: string; command: string[]; env?: Record<string, string> }][];
-				const overlay = ["omp", "--continue", ...GUARD, "--config", overlayFile(project.id)];
+				const overlay = ["omp", "--continue", ...GUARD, "--config", overlayFile(project.id), ...PANE_CHECK_FLAGS];
 				const thread = threadOmp(project.id);
 				expect(respawned).toHaveLength(3);
 				expect(respawned[0]?.[1].command.slice(0, 3)).toEqual(["omp", "--continue", "--config"]);
@@ -227,7 +229,7 @@ test(
 				expect(respawned[0]?.[1].cwd).toEndWith("home");
 				expect(respawned.slice(1).map(([, o]) => ({ ...o, cwd: resolve(o.cwd) }))).toEqual([
 					{ cwd: path, command: thread, env: keyed({ ...hunkEnv(HUNK_OPTIONS.hunkPort), ...README_THREAD_ENV }) },
-					{ cwd: project.mainPath, command: overlay, env: keyed(hunkEnv(HUNK_OPTIONS.hunkPort)) },
+					{ cwd: project.mainPath, command: overlay, env: projectKeyed(hunkEnv(HUNK_OPTIONS.hunkPort)) },
 				]);
 				// The thread is known by its new pane.
 				const fresh = herdr.paneList.find((p) => resolve(p.cwd ?? "") === path)?.paneId as string;
@@ -271,11 +273,11 @@ test(
 				expect(respawned[0]?.[1].command.slice(0, 3)).toEqual(["omp", "--continue", "--config"]);
 				expect(respawned[0]?.[1].command[3]).toEndWith("boss.yml");
 				expect(respawned[0]?.[1].env).toEqual(keyed({ JOCASTA_BOSS_KEY: TEST_BOSS_KEY }));
-				const overlay = ["omp", "--continue", ...GUARD, "--config", overlayFile(project.id)];
+				const overlay = ["omp", "--continue", ...GUARD, "--config", overlayFile(project.id), ...PANE_CHECK_FLAGS];
 				const thread = threadOmp(project.id);
 				expect(respawned.slice(1).map(([, o]) => ({ ...o, cwd: resolve(o.cwd) }))).toEqual([
 					{ cwd: path, command: thread, env: keyed({ ...hunkEnv(HUNK_OPTIONS.hunkPort), ...README_THREAD_ENV }) },
-					{ cwd: project.mainPath, command: overlay, env: keyed(hunkEnv(HUNK_OPTIONS.hunkPort)) },
+					{ cwd: project.mainPath, command: overlay, env: projectKeyed(hunkEnv(HUNK_OPTIONS.hunkPort)) },
 				]);
 				// The new omps are still starting: one ending started each once.
 				await server.service.refresh();

@@ -8,14 +8,16 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { BOSS_KEY_ENV } from "../../shared/boss-key.ts";
 import { writeAtomically } from "../../shared/fsx.ts";
-import { shippedConfigDir } from "../../shared/install.ts";
+import { selfCommand, shippedConfigDir } from "../../shared/install.ts";
 import { LAYER_ENV } from "../../shared/layer.ts";
 import { log } from "../../shared/log.ts";
+import { PANE_CHECK_ENV, PANE_CHECK_EXTENSION, PANE_CHECK_ROLE } from "../../shared/pane-check.ts";
 import { pathKey, realPath } from "../../shared/pathkey.ts";
 import { dataDir } from "../../shared/paths.ts";
 import { endProcesses, type ProcessId, processStart } from "../../shared/proctree.ts";
 import type { Project } from "../../shared/projects.ts";
 import { withoutLeadingComment } from "../../shared/prompt.ts";
+import { pushHookEnv } from "../../shared/push-hook.ts";
 import { bossCommand, bossToolsMissing, ensureBossPane, newPaneKey, PANE_KEY_ENV } from "./boss.ts";
 import type { ServiceContext } from "./context.ts";
 import type { PaneInfo } from "./herdr.ts";
@@ -85,8 +87,13 @@ export class PaneLauncher {
 	readonly paneOmp: string[];
 	/** The panes' shipped prompt file (Ponytail), or null; a thread's own launch prompt starts with it (0540). */
 	private readonly panePrompt: string | null;
-	/** Jocasta's hunk port and no update notice, for every hunk the service starts and every thread pane (F-02, F-03). */
+	/**
+	 * What every project and thread pane starts with: Jocasta's hunk port and no update notice (F-02, F-03), and git's
+	 * pre-push hook through its configuration (`hookEnv`).
+	 */
 	readonly paneEnv: Record<string, string>;
+	/** `GIT_CONFIG_*` giving git the pre-push hook that asks the service about pushes to protected branches (0613). */
+	private readonly hookEnv: Record<string, string>;
 	readonly hunkPort: number;
 	/** The relay port the panes' overlays name (0561). */
 	readonly relayPort: number;
@@ -117,7 +124,8 @@ export class PaneLauncher {
 		];
 		this.hunkPort = options.hunkPort ?? HUNK_PORT;
 		this.relayPort = options.relayPort ?? RELAY_PORT;
-		this.paneEnv = hunkEnv(this.hunkPort);
+		this.hookEnv = pushHookEnv(selfCommand());
+		this.paneEnv = { ...hunkEnv(this.hunkPort), ...this.hookEnv };
 	}
 
 	/**
@@ -131,7 +139,7 @@ export class PaneLauncher {
 		const pane = await ensureBossPane(this.c.herdr, {
 			command: this.c.options.bossCommand ?? bossCommand(this.omp),
 			check: (command, cwd, env) => this.relayChecked(command, cwd, env),
-			env: { [BOSS_KEY_ENV]: this.bossKey },
+			env: { [BOSS_KEY_ENV]: this.bossKey, ...this.hookEnv },
 			launched: this.c.launched,
 			adopt,
 			stale: (p) => this.unkeyedBoss(p),
@@ -179,13 +187,29 @@ export class PaneLauncher {
 		const overlay = await ensureOverlay(projectId, this.relayPort);
 		const pane = thread ? this.taskPrompted([...this.paneOmp, ...THREAD_FLAGS], thread.task) : this.paneOmp;
 		const omp = restore ? [...pane.filter((arg) => arg !== "--continue"), "--restore", restore] : pane;
-		const command = [...omp, "--config", overlay, ...afterOverlay(thread?.task)];
+		const started = [...omp, "--config", overlay, ...afterOverlay(thread?.task)];
+		const command = thread ? started : this.projectPane(started);
 		const key = newPaneKey();
-		const paneEnv = { ...(env ?? (await this.withMise(projectId, cwd, this.paneEnv))), [PANE_KEY_ENV]: key };
+		const own = { ...(env ?? (await this.withMise(projectId, cwd, this.paneEnv))), [PANE_KEY_ENV]: key };
+		const paneEnv = thread ? own : this.projectEnv(own);
 		await this.relayChecked(command, cwd, paneEnv);
 		const respawned = await this.c.herdr.respawn(paneId, { cwd, command, env: paneEnv });
 		this.c.launched.add(respawned.paneId, cwd, key);
 		return respawned.paneId;
+	}
+
+	/**
+	 * A project pane's omp argv from `command` (0617): Jocasta's turn-end extension loaded with `-e`, which adds to the
+	 * extensions his own settings list (a settings array from a later `--config` file would replace them). Thread panes
+	 * and the boss's start without it; the project pane's first start and every respawn take it from here.
+	 */
+	projectPane(command: string[]): string[] {
+		return [...command, "-e", join(shippedConfigDir(), PANE_CHECK_EXTENSION)];
+	}
+
+	/** `env` of a project pane (0617) with the argv of the turn-end check its extension runs. */
+	projectEnv(env: Record<string, string>): Record<string, string> {
+		return { ...env, [PANE_CHECK_ENV]: JSON.stringify([...selfCommand(), PANE_CHECK_ROLE]) };
 	}
 
 	/**
@@ -226,12 +250,12 @@ export class PaneLauncher {
 
 	/**
 	 * The env the task's checks run with (0542, 0559, SVC-16): the service's own without Jocasta's, herdr's and omp's
-	 * keys, and the hunk variables its panes get.
+	 * keys, and the hunk variables its panes get (not the push hook: a check pushes nothing).
 	 */
 	checkEnv(): Record<string, string> {
 		const base: Record<string, string> = {};
 		for (const [key, value] of Object.entries(process.env)) if (value !== undefined) base[key] = value;
-		return { ...withoutJocastaKeys(base), ...this.paneEnv };
+		return { ...withoutJocastaKeys(base), ...hunkEnv(this.hunkPort) };
 	}
 
 	/**

@@ -24,6 +24,7 @@ import {
 	assistantText,
 	HARNESSES,
 	ompSessionText,
+	readPrewalkSwitch,
 	saveSessions,
 	type Turn,
 	type Usage,
@@ -43,10 +44,10 @@ import { DEFAULT_VARIANT, deepMerge, type Harness, type Variant, variantArgs } f
  */
 
 /** The overlay every trial starts from: eval sessions never enter his memory. A variant's settings layer over it. */
-export const BASE_OVERLAY: Readonly<Record<string, unknown>> = { memory: { backend: "off" } };
+const BASE_OVERLAY: Readonly<Record<string, unknown>> = { memory: { backend: "off" } };
 
 /** What A7's key becomes in its transcript and exports when an agent printed it (EVL-13). */
-export const A7_KEY_MARK = "<A7 key>";
+const A7_KEY_MARK = "<A7 key>";
 
 /**
  * The grading limit (0574): the end-state checks, and the hidden grading's setup and checks together, each get this
@@ -73,7 +74,7 @@ const CheckSchema = Type.Object(
 );
 
 /** `case.yaml`: the prompt, tags for splits and grouping, the end-state checks, and an optional setup command. */
-export const CaseSchema = Type.Object(
+const CaseSchema = Type.Object(
 	{
 		prompt: Type.String({ minLength: 1 }),
 		tags: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
@@ -157,8 +158,8 @@ export interface ResultRow {
 	passed: boolean;
 	/** A plan-review trial's review (0567): requested, the choice given and taken, and why omp was shut down. */
 	planReview?: PlanReviewSummary;
-	/** A layered trial's code index build, done during setup before the trial's clock (0575); not in `wallMs`. */
-	layer?: { indexBuildMs: number };
+	/** A `--prewalk` trial (0608): omp's prewalk switched the model, read from the session files; absent without `--prewalk`. */
+	prewalkSwitched?: boolean;
 	/** A7's key was in the trial's output or exports; it was replaced there with {@link A7_KEY_MARK} (EVL-13). */
 	keyExposed?: true;
 }
@@ -354,16 +355,17 @@ export async function runTrial(
 		});
 		// 0567: plan first answered in omp's interactive plan review; the first turn runs in a terminal.
 		const planReview = adapter.sessionFiles ? variant.planReview : undefined;
-		if (variant.layer !== undefined) {
-			// A6 (0543): Jocasta's layer build sets the trial up, its code index built before the clock (0575); without
-			// the build this throws before any model call.
+		const planReviewRole = planReview ? variant.planReviewRole : undefined;
+		// 0608: whether prewalk's switch fired is read from the session files, so they are kept for such a trial.
+		const prewalk = adapter.sessionFiles && variant.args.includes("--prewalk");
+		if (variant.layer) {
+			// A6 (0543): Jocasta's layer build sets the trial up; without the build this throws before any model call.
 			layer = await (await loadBenchLayer()).setUp({
 				root,
 				repo,
 				baseCommit: fixtureCommit,
 				prompt: evalCase.prompt,
 				...(variant.appendSystemPrompt === undefined ? {} : { appendSystemPrompt: variant.appendSystemPrompt }),
-				switches: variant.layer,
 				env,
 			});
 		}
@@ -371,13 +373,15 @@ export async function runTrial(
 		writeFileSync(overlay, `${JSON.stringify(overlaySettings.reduce(deepMerge, { ...BASE_OVERLAY }), null, 2)}\n`);
 		const planReviewLog = join(root, "plan-review.jsonl");
 		const extension = join(root, "plan-review.js");
-		if (planReview) writeFileSync(extension, planReviewExtension(planReview, planReviewLog));
+		if (planReview) writeFileSync(extension, planReviewExtension(planReview, planReviewLog, planReviewRole));
 		const [command = "", ...launcherArgs] = options.launcher;
 		const prompts = [evalCase.prompt, ...variant.followups.map((text) => text.replaceAll("{base}", fixtureCommit))];
 		// omp writes its session files into the trial root (the ledger's and a plan-review trial's record); opencode's
 		// exports are needed for its usage either way.
 		const sessionDir =
-			(options.sessionsDir !== undefined || planReview) && adapter.sessionFiles ? join(root, "sessions") : undefined;
+			(options.sessionsDir !== undefined || planReview || prewalk) && adapter.sessionFiles
+				? join(root, "sessions")
+				: undefined;
 		const harnessEnv =
 			adapter.apiKeyEnv !== undefined ? { ...env, ANTHROPIC_API_KEY: secret } : { ...env, ...layer?.env };
 		const outputs: string[] = [];
@@ -408,7 +412,7 @@ export async function runTrial(
 				const ended = await terminal(command, args, repo, harnessEnv, left);
 				const log = existsSync(planReviewLog) ? readFileSync(planReviewLog, "utf8") : "";
 				// herdr reports no exit code: the turn counts as ended well when the extension shut omp down.
-				const ok = !ended.timedOut && readPlanReviewLog(log, planReview).shutdown !== null;
+				const ok = !ended.timedOut && readPlanReviewLog(log, planReview, planReviewRole).shutdown !== null;
 				run = {
 					status: ended.timedOut ? null : ok ? 0 : 1,
 					stdout: "",
@@ -499,10 +503,11 @@ export async function runTrial(
 						planReview: readPlanReviewLog(
 							existsSync(planReviewLog) ? readFileSync(planReviewLog, "utf8") : "",
 							planReview,
+							planReviewRole,
 						),
 					}
 				: {}),
-			...(layer?.indexBuildMs === undefined ? {} : { layer: { indexBuildMs: layer.indexBuildMs } }),
+			...(prewalk ? { prewalkSwitched: readPrewalkSwitch(sessionDir as string) } : {}),
 			...(keyExposed ? { keyExposed: true as const } : {}),
 		};
 	} finally {
@@ -517,9 +522,9 @@ export async function runTrial(
 }
 
 /** The grade a hidden grading cut by {@link GRADING_LIMIT_MS} gets (0574). */
-export const HIDDEN_TIMEOUT = "hidden: timeout";
+const HIDDEN_TIMEOUT = "hidden: timeout";
 /** The grade of a grading setup that the trial's change broke: it passes on the fixture commit (0574). */
-export const HIDDEN_SETUP_FAILED = "hidden: setup failed";
+const HIDDEN_SETUP_FAILED = "hidden: setup failed";
 
 /**
  * Ends every process whose working folder is in `root` (EVL-12): what a harness or an agent started detached outlives
@@ -864,7 +869,7 @@ function runHarness(
 	return promise;
 }
 
-export function checkLabel(check: Check): string {
+function checkLabel(check: Check): string {
 	if (check.command !== undefined) return `command: ${check.command}`;
 	if (check.git_clean !== undefined) return `git_clean: ${check.git_clean}`;
 	if (check.absent) return `file: ${check.file} absent`;
@@ -922,7 +927,7 @@ const escapeHtml = (text: string) =>
 	text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 /** A static page: the pass rate with its noise floor (about 1/sqrt(trials), 0079) and one row per trial. */
-export function renderReport(
+function renderReport(
 	rows: ResultRow[],
 	cases: EvalCase[],
 	options: Pick<RunOptions, "reps" | "variant"> & { harnessVersion: string },

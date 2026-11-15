@@ -1,8 +1,4 @@
-import { statSync } from "node:fs";
-import { join } from "node:path";
 import { dayStart, localDay } from "../../shared/day.ts";
-import { SessionTail } from "../../shared/omp-session.ts";
-import { dataDir } from "../../shared/paths.ts";
 import type { SessionIndex } from "./sessions.ts";
 
 /** How often the whole sessions folder is listed for today's files (CO-15, PERF-3); known files are read every call. */
@@ -20,8 +16,8 @@ const known = new WeakMap<SessionIndex, SpendFiles>();
 
 /**
  * Today's spend (0274, 0403, 0433, 0452): the `usage.cost.total` of today's model calls (local day) in every omp
- * session, its subagent and advisor transcripts included, as `omp stats` counts it (CR-04, F-06), plus Graphiti's
- * model calls (0582, `graphSpentOn`). Every session counts, wherever it ran: a merged thread's worktree is gone, yet
+ * session, its subagent and advisor transcripts included, as `omp stats` counts it (CR-04, F-06). Every session
+ * counts, wherever it ran: a merged thread's worktree is gone, yet
  * its spend was today's. Each call counts once, by the session index's ledger (0464): a moved session's copies don't
  * count twice, and a call stays counted when the file holding it is rewritten without it, moved or deleted, so the
  * figure never drops within the day.
@@ -31,7 +27,7 @@ const known = new WeakMap<SessionIndex, SpendFiles>();
  * off this call (`SessionIndex.warm`), so a refresh never parses a large session in one block; its spend shows once
  * read (`spendSettled`).
  */
-export function spendToday(sessions: SessionIndex, now = Date.now(), graphFile = graphUsagePath()): number {
+export function spendToday(sessions: SessionIndex, now = Date.now()): number {
 	const today = localDay(now);
 	let state = known.get(sessions);
 	if (!state || state.day !== today) {
@@ -58,53 +54,10 @@ export function spendToday(sessions: SessionIndex, now = Date.now(), graphFile =
 		}
 	}
 	for (const file of state.files) sessions.read(file);
-	return sessions.spentOn(today) + graphSpentOn(today, graphFile);
+	return sessions.spentOn(today);
 }
 
 /** Resolves once the sessions `spendToday` found new are read (tests; the next refresh shows their spend). */
 export function spendSettled(sessions: SessionIndex): Promise<void> {
 	return known.get(sessions)?.warming ?? Promise.resolve();
-}
-
-/** `<data>/graph-usage.jsonl` (0582): one line per Graphiti model call the LLM endpoint answered, with its cost. */
-export function graphUsagePath(): string {
-	return join(dataDir(), "graph-usage.jsonl");
-}
-
-/** The graph usage file as read so far (`SessionTail`: offset and identity) and the cost per local day. */
-interface GraphTail {
-	reader: SessionTail;
-	byDay: Map<string, number>;
-}
-
-const graphTails = new Map<string, GraphTail>();
-
-/**
- * What Graphiti's model calls cost on `day` (local, `YYYY-MM-DD`; 0582 SRV-B-12): the `cost` of each line of
- * `graph-usage.jsonl` by its `at`. The file is read incrementally; a replaced or shorter one is read again.
- */
-export function graphSpentOn(day: string, file = graphUsagePath()): number {
-	const stat = statSync(file, { throwIfNoEntry: false });
-	if (!stat) {
-		graphTails.delete(file);
-		return 0;
-	}
-	let tail = graphTails.get(file);
-	if (!tail) {
-		const byDay = new Map<string, number>();
-		const reader = new SessionTail(file, {
-			entry(row) {
-				const at = typeof row.at === "string" ? Date.parse(row.at) : Number.NaN;
-				const cost = row.cost;
-				if (!Number.isFinite(at) || typeof cost !== "number" || !Number.isFinite(cost)) return;
-				const of = localDay(at);
-				byDay.set(of, (byDay.get(of) ?? 0) + cost);
-			},
-			reset: () => byDay.clear(),
-		});
-		tail = { reader, byDay };
-		graphTails.set(file, tail);
-	}
-	tail.reader.advance(stat);
-	return tail.byDay.get(day) ?? 0;
 }

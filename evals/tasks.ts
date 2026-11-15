@@ -18,7 +18,7 @@ import type { EvalCase, ResultRow } from "./runner.ts";
  * {@link EvalCase}, the leak scan, the infra classifier and the resume state. `evals/bench.ts` schedules the trials.
  */
 
-export const TASK_LANGUAGES = ["Python", "TypeScript", "JavaScript", "Go"] as const;
+const TASK_LANGUAGES = ["Python", "TypeScript", "JavaScript", "Go"] as const;
 export type TaskLanguage = (typeof TASK_LANGUAGES)[number];
 
 /** One line of `tasks.jsonl`: the fields the benchmark uses (the file's README lists them all). */
@@ -88,7 +88,7 @@ export function loadTasks(file: string): BenchTask[] {
 /** The prompt of every arm (0482): this line, a blank line, then the task's issue text verbatim. */
 export const TASK_PROMPT_PREFIX = "Fix the issue below in the repository in the current folder.\n\n";
 
-export const taskPrompt = (task: BenchTask): string => `${TASK_PROMPT_PREFIX}${task.problem_statement}`;
+const taskPrompt = (task: BenchTask): string => `${TASK_PROMPT_PREFIX}${task.problem_statement}`;
 
 /** A Fisher–Yates shuffle of a copy of `items` with {@link seededRandom}. */
 export function shuffle<T>(items: readonly T[], seed: number): T[] {
@@ -102,7 +102,7 @@ export function shuffle<T>(items: readonly T[], seed: number): T[] {
 }
 
 /** The pilot's strata (0482: 25 trials = 5 tasks × 5 arms × 1 rep). */
-export const PILOT_STRATA: readonly { languages: readonly TaskLanguage[]; count: number }[] = [
+const PILOT_STRATA: readonly { languages: readonly TaskLanguage[]; count: number }[] = [
 	{ languages: ["Python"], count: 2 },
 	{ languages: ["TypeScript", "JavaScript"], count: 2 },
 	{ languages: ["Go"], count: 1 },
@@ -335,15 +335,15 @@ function nearestTag(task: BenchTask, dir: string): string | undefined {
  */
 export const PYTHON_SETUP_PREFIX =
 	"(if not exist ..\\venv\\Scripts\\python.exe python -m venv ..\\venv) && python -m pip install -q --upgrade pip && ";
-export const PYTHON_PATH_PREFIX = ["venv/Scripts"];
+const PYTHON_PATH_PREFIX = ["venv/Scripts"];
 /**
  * Hidden grading's Python setup (0574): a fresh venv at the trial root's `gvenv/` for every grading, so nothing the
  * agent installed or upgraded in `venv/` during the trial reaches the hidden tests. The old one is removed first, so
  * `python` is the system's again when the new one is made.
  */
-export const PYTHON_GRADE_SETUP_PREFIX =
+const PYTHON_GRADE_SETUP_PREFIX =
 	"(if exist ..\\gvenv rmdir /s /q ..\\gvenv) && python -m venv ..\\gvenv && python -m pip install -q --upgrade pip && ";
-export const PYTHON_GRADE_PATH_PREFIX = ["gvenv/Scripts"];
+const PYTHON_GRADE_PATH_PREFIX = ["gvenv/Scripts"];
 
 /**
  * The task as the runner's case: the fixed prompt, the task's setup (wrapped in a venv for Python, a fresh grading
@@ -426,7 +426,7 @@ const RATE =
  * `rate_limit_event` whose status isn't `allowed`; opencode's `error` events. Never the run's free text: a tool
  * result's line numbers or a token count.
  */
-export function endSignal(transcript: string, harness: ResultRow["harness"]): string {
+function endSignal(transcript: string, harness: ResultRow["harness"]): string {
 	return HARNESSES[harness].endSignal(transcript);
 }
 

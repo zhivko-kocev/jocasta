@@ -1,32 +1,27 @@
 /**
  * The harness-OS layer for the benchmark's A6 arm (0543, 0567), built from Jocasta's own parts so a trial gets what a
- * thread gets, without a Jocasta service, herdr or Graphiti:
+ * thread gets, without a Jocasta service or herdr:
  *
  * - the task file's brief and Done-when appended to the system prompt (`taskPrompt`, 0540), after the variant's own
  *   prompt file (omp keeps only the last `--append-system-prompt`), titled as New thread titles a brief, with the
  *   checkout's folder as the project (0577);
  * - `jocasta mcp` as the trial's MCP server "jocasta", through an omp extension root (`-e <root>/layer/omp`, whose
- *   `.mcp.json` omp reads), answering from this process: `report_result` (0539), `check` (0542, 0546) and
- *   `graph_search` (0562): its code locations for relationship questions, with no facts (the bench has no Graphiti);
- * - the check runner on the trial's checkout, the project's own mise check as the product decides it;
- * - the code index on the trial's checkout as its main checkout, built during setup, before the trial's clock (0575).
+ *   `.mcp.json` omp reads), answering from this process: `report_result` (0539), `check` (0542, 0546, 0571) and
+ *   `history_search` (0604), which has no past sessions to search in a trial and answers as for an empty history;
+ * - the check runner on the trial's checkout, the project's own mise check as the product decides it.
  *
- * `switches.index` off answers `graph_search` with facts only, here none (`f-index-off`); `check` is always on (0571).
  * The ledger is the bench's own, from the trial's saved sessions (`src/shared/ledger.ts`). The layer's data (checks,
- * code index, `jocasta-service.json`) lives in a per-trial folder under the OS temp folder, inside the user's profile (EVL-1:
- * codebase-memory-mcp refuses a folder other users may write to, such as the VM's short `--work` root), and goes on
- * `close()`.
+ * `jocasta-service.json`) lives in a per-trial folder under the OS temp folder and goes on `close()`.
  */
 import { randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import type { BenchLayer, LayerSetup, LayerTrial } from "../../../evals/layer.ts";
-import type { LayerSwitches } from "../../../evals/variants.ts";
 import { removeTree, sameToken } from "../../shared/fsx.ts";
 import { writeServiceFile } from "../../shared/service-file.ts";
 import { CheckRunner, checksDir, gateReply, shortTree } from "../server/checks.ts";
-import { CodeIndex, codeAnswer, relationshipOf } from "../server/code-index.ts";
+import { HISTORY_SEARCH, historyAnswer } from "../server/history.ts";
 import { miseCheck, skippedSaid } from "../server/mise.ts";
 import { parseReport, REPORT_RESULT, reportLine } from "../server/report.ts";
 import { taskPrompt } from "../server/task-file.ts";
@@ -54,7 +49,6 @@ interface Trial {
 	project: string;
 	env: Record<string, string | undefined>;
 	checks: CheckRunner;
-	index: CodeIndex | undefined;
 	reports: string;
 }
 
@@ -80,18 +74,9 @@ async function answer(trial: Trial, tool: string, args: Record<string, unknown>)
 			if (!run) throw new Error("check: the checks couldn't run here.");
 			return gateReply(run) || `checks: PASS (tree ${shortTree(run.tree)})`;
 		}
-		case "graph_search": {
-			const query = typeof args.query === "string" ? args.query : "";
-			if (!query.trim()) throw new Error("graph_search: query is required.");
-			const relationship = relationshipOf(query);
-			const locations =
-				trial.index && relationship
-					? await trial.index.locations({ id: PROJECT_ID, mainPath: trial.repo }, query)
-					: undefined;
-			return locations && relationship
-				? codeAnswer(trial.project, relationship, locations)
-				: `Nothing in ${trial.project}'s graph for that.`;
-		}
+		case HISTORY_SEARCH:
+			// A trial has no past sessions: the tool answers as it does for a project with nothing in its history (0604).
+			return historyAnswer(trial.project, []);
 		default:
 			throw new Error(`no tool ${tool}.`);
 	}
@@ -102,33 +87,20 @@ async function setUp(trial: LayerTrial): Promise<LayerSetup> {
 	const plugin = join(layer, "omp");
 	mkdirSync(plugin, { recursive: true });
 	const data = layerDataDir();
-	let index: CodeIndex | undefined;
-	let indexBuildMs: number | undefined;
 	let checks: CheckRunner | undefined;
 	let server: Bun.Server<undefined> | undefined;
 	const close = async () => {
 		server?.stop(true);
 		await checks?.stop();
-		await index?.stop();
 		removeTree(data);
 	};
 	try {
-		if (trial.switches.index) {
-			index = new CodeIndex({ dataDir: data });
-			const refused = await index.unavailable();
-			if (refused) throw new Error(`A6's code index can't run for this trial: ${refused}`);
-			// 0575: built now, before the trial's clock: in daily use his projects' index is already built.
-			const started = performance.now();
-			await index.build({ id: PROJECT_ID, mainPath: trial.repo });
-			indexBuildMs = Math.round(performance.now() - started);
-		}
 		checks = new CheckRunner({ dir: checksDir(data) });
 		const state: Trial = {
 			repo: trial.repo,
 			project: basename(trial.repo),
 			env: trial.env,
 			checks,
-			index,
 			reports: join(layer, "reports.jsonl"),
 		};
 		const token = randomBytes(24).toString("hex");
@@ -191,7 +163,6 @@ async function setUp(trial: LayerTrial): Promise<LayerSetup> {
 			args: ["--append-system-prompt", prompt, "-e", plugin],
 			settings: {},
 			env,
-			...(indexBuildMs === undefined ? {} : { indexBuildMs }),
 			close,
 		};
 	} catch (error) {
@@ -200,16 +171,4 @@ async function setUp(trial: LayerTrial): Promise<LayerSetup> {
 	}
 }
 
-/** EVL-1: whether a trial's code index could keep its data where the layer puts it and find codebase-memory-mcp. */
-async function preflight(switches: LayerSwitches): Promise<string | undefined> {
-	if (!switches.index) return undefined;
-	const data = layerDataDir();
-	try {
-		const refused = await new CodeIndex({ dataDir: data }).unavailable();
-		return refused === undefined ? undefined : `A6's code index can't run: ${refused}`;
-	} finally {
-		removeTree(data);
-	}
-}
-
-export const benchLayer: BenchLayer = { setUp, preflight };
+export const benchLayer: BenchLayer = { setUp };

@@ -128,12 +128,10 @@ test("the request helpers: cookie by name, bearer, the Hosts answered, args only
 	expect(cookieValue(request({ cookie: "a=1" }), "b")).toBeUndefined();
 	expect(bearerToken(request({ authorization: "Bearer abc" }))).toBe("abc");
 	expect(bearerToken(request({ authorization: "Basic abc" }))).toBe("");
-	expect(hostAllowed("127.0.0.1:9", 9, "/")).toBe(true);
-	expect(hostAllowed("localhost:9", 9, "/")).toBe(true);
-	expect(hostAllowed("127.0.0.1:8", 9, "/")).toBe(false);
-	expect(hostAllowed("host.docker.internal:9", 9, "/llm/v1/chat/completions")).toBe(true);
-	expect(hostAllowed("host.docker.internal:9", 9, "/llm/v10")).toBe(false);
-	expect(hostAllowed("host.docker.internal:9", 9, "/health")).toBe(false);
+	expect(hostAllowed("127.0.0.1:9", 9)).toBe(true);
+	expect(hostAllowed("localhost:9", 9)).toBe(true);
+	expect(hostAllowed("127.0.0.1:8", 9)).toBe(false);
+	expect(hostAllowed("host.docker.internal:9", 9)).toBe(false);
 	expect(objectArgs({ a: 1 })).toEqual({ a: 1 });
 	for (const value of [null, [1], "x", undefined]) expect(objectArgs(value)).toEqual({});
 	const page = refusedPage(request({ accept: "text/html" }));
@@ -163,17 +161,15 @@ test("the MCP endpoint takes the service token as a bearer and answers {text, is
 	});
 });
 
-test("only its own Host is answered (DNS rebinding); Graphiti's container may use host.docker.internal for /llm/v1 (SE-3)", async () => {
+test("only its own Host is answered (DNS rebinding), a container's host.docker.internal no longer (SE-3, 0603)", async () => {
 	await withServer(async (server) => {
 		const base = `http://127.0.0.1:${server.port}`;
 		const authorization = `Bearer ${server.token}`;
-		const evil = await fetch(`${base}/health`, { headers: { authorization, host: `evil.test:${server.port}` } });
-		expect(evil.status).toBe(403);
+		for (const host of [`evil.test:${server.port}`, `host.docker.internal:${server.port}`]) {
+			expect((await fetch(`${base}/health`, { headers: { authorization, host } })).status).toBe(403);
+		}
 		const local = await fetch(`${base}/health`, { headers: { authorization, host: `localhost:${server.port}` } });
 		expect(local.status).toBe(200);
-		const docker = { host: `host.docker.internal:${server.port}`, authorization: "Bearer nope" };
-		expect((await fetch(`${base}/llm/v1/chat/completions`, { method: "POST", headers: docker })).status).toBe(401);
-		expect((await fetch(`${base}/health`, { headers: { authorization, host: docker.host } })).status).toBe(403);
 	});
 });
 

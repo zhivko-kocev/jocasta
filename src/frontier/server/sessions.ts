@@ -6,14 +6,14 @@
  * for a subagent's own): they are not sessions, but their cost is the session's (CR-04; `omp stats` counts them the
  * same way, `@oh-my-pi/omp-stats` `parser.ts` `classifyAgentType`, `listSessionFiles`).
  *
- * omp's entry kinds (0464; checked against omp 18.18.6, 0589): `model_usage` entries (side calls: memory extraction,
+ * omp's entry kinds (0464; checked against omp 18.20.2, 0623): `model_usage` entries (side calls: memory extraction,
  * cache warming, advisor, judges, session titles; `session-entries.ts:119` `ModelUsageEntry`) count toward spend like
  * assistant turns (0452); an assistant turn marked `retryRecovery` (an attempt a retry superseded, pi-ai
- * `types.ts:1328`) still costs, but never gives the last line, the question or the test result; `memory_recall`
+ * `types.ts:1361`) still costs, but never gives the last line, the question or the test result; `memory_recall`
  * entries are ignored; a session moved to a sibling file (its header's `parentSession` names the old one,
  * `session-manager.ts` `#moveOffSessionFile`) is followed there (`SessionIndex.moved`), and the entries it copied from
  * the old file aren't counted twice. Entries a file holds without ids are given ids when omp next loads it, and the
- * file is rewritten (18.18.6 `session-migrations.ts:64-77`); the spend ledger keys a call by its ISO time, not its id.
+ * file is rewritten (18.20.2 `session-migrations.ts:64-77`); the spend ledger keys a call by its ISO time, not its id.
  *
  * A session is a tree (0509): each entry names its `parentId`, and a rewind (`session-manager.ts` `branch`,
  * `branchWithSummary`) leaves the abandoned turns in the file. Cost, spend and message times count every entry in file
@@ -58,7 +58,7 @@ type SessionFile = SessionHeader & { mtimeMs: number };
  * One bash call of a session and how it ended (0453): exit 0, a failure, or still running in the background; `exit` its
  * exit code (omp's `details.exitCode` on a failed call), null when the result doesn't say.
  */
-export interface BashRun {
+interface BashRun {
 	command: string;
 	/** When the call was made, epoch ms. */
 	at: number;
@@ -89,9 +89,9 @@ export interface SessionStats {
 	/**
 	 * The title of a plan waiting for his approval in omp's Plan Review, or null. omp records the proposal as a
 	 * successful `write` to `xd://propose` (a `toolResult` whose `details.xdev` is `{tool: "propose", mode: "execute",
-	 * inner: {title, planFilePath}}`; omp 18.18.6 `event-controller.ts:2425-2440`), then aborts the turn silently (an
-	 * empty assistant message). Approving leaves plan mode (`mode_change` to `none`, `interactive-mode.ts:6301`, and
-	 * a second one with `data.approvedPlanFilePath`, `:6957`); refining sends a user message; either, or any later
+	 * inner: {title, planFilePath}}`; omp 18.20.2 `event-controller.ts:2371-2411`), then aborts the turn silently (an
+	 * empty assistant message). Approving leaves plan mode (`mode_change` to `none`, `interactive-mode.ts:6276`, and
+	 * a second one with `data.approvedPlanFilePath`, `:6932`); refining sends a user message; either, or any later
 	 * assistant output, ends the wait.
 	 */
 	planAwaiting: string | null;
@@ -213,12 +213,11 @@ function contextOf(usage: unknown): number | undefined {
  */
 function addCost(
 	stats: SessionStats,
-	entry: Record<string, unknown>,
-	usage: unknown,
-	at: number,
+	call: { entry: Record<string, unknown>; usage: unknown; at: number },
 	copied: boolean,
 	ledger?: SpendLedger,
 ): void {
+	const { entry, usage, at } = call;
 	const cost = costOf(usage);
 	if (cost === undefined) return;
 	ledger?.add(entry, usage, at, cost);
@@ -388,21 +387,29 @@ function effectOf(entry: Record<string, unknown>): Effect | undefined {
 	if (entry.type !== "message") return undefined;
 	const message = asObject(entry.message);
 	if (!message) return undefined;
-	if (message.role === "toolResult") {
-		const effect: Effect = {};
-		const title = proposedPlan(message);
-		if (title) effect.plan = { title, file: proposedPlanFile(message) };
-		if (typeof message.toolCallId === "string") {
-			const details = asObject(message.details);
-			const outcome = asObject(details?.async) ? "background" : message.isError === true ? "fail" : "ok";
-			const code = details?.exitCode;
-			const exit = outcome === "ok" ? 0 : outcome === "fail" && typeof code === "number" ? code : null;
-			effect.result = { callId: message.toolCallId, outcome, exit };
-		}
-		return effect.plan || effect.result ? effect : undefined;
-	}
+	if (message.role === "toolResult") return toolResultEffect(message);
 	if (message.role === "user") return { user: { synthetic: message.synthetic === true } };
 	if (message.role !== "assistant") return undefined;
+	return assistantEffect(entry, message);
+}
+
+/** A tool result's effect: the plan it proposed and/or the outcome of its call; undefined when it has neither. */
+function toolResultEffect(message: Record<string, unknown>): Effect | undefined {
+	const effect: Effect = {};
+	const title = proposedPlan(message);
+	if (title) effect.plan = { title, file: proposedPlanFile(message) };
+	if (typeof message.toolCallId === "string") {
+		const details = asObject(message.details);
+		const outcome = asObject(details?.async) ? "background" : message.isError === true ? "fail" : "ok";
+		const code = details?.exitCode;
+		const exit = outcome === "ok" ? 0 : outcome === "fail" && typeof code === "number" ? code : null;
+		effect.result = { callId: message.toolCallId, outcome, exit };
+	}
+	return effect.plan || effect.result ? effect : undefined;
+}
+
+/** An assistant message's effect: what the thread said, asked and ran, and the context it used. */
+function assistantEffect(entry: Record<string, unknown>, message: Record<string, unknown>): Effect {
 	const at = entryTime(entry, message);
 	const model =
 		typeof message.model !== "string"
@@ -541,18 +548,17 @@ function addEntry(
 	stats: SessionStats,
 	branches: Branches,
 	entry: Record<string, unknown>,
-	seen?: Set<string>,
-	ledger?: SpendLedger,
-	costOnly = false,
+	context: { seen?: Set<string>; ledger?: SpendLedger; costOnly?: boolean } = {},
 ): void {
+	const { seen, ledger, costOnly = false } = context;
 	// A copy of an entry the old file holds: its cost and time are counted there.
 	const copied = seen !== undefined && typeof entry.id === "string" && seen.has(entry.id);
-	if (entry.type === "model_usage") addCost(stats, entry, entry.usage, entryTime(entry), copied, ledger);
+	if (entry.type === "model_usage") addCost(stats, { entry, usage: entry.usage, at: entryTime(entry) }, copied, ledger);
 	const message = entry.type === "message" ? asObject(entry.message) : undefined;
 	if (message) {
 		const at = entryTime(entry, message);
 		if (Number.isFinite(at) && !copied && !costOnly) stats.messageTimes.push(at);
-		if (message.role === "assistant") addCost(stats, entry, message.usage, at, copied, ledger);
+		if (message.role === "assistant") addCost(stats, { entry, usage: message.usage, at }, copied, ledger);
 	}
 	if (costOnly) return;
 	const effect = effectOf(entry);
@@ -607,7 +613,7 @@ class Tail implements TailVisitor {
 	}
 
 	entry(entry: Record<string, unknown>): void {
-		addEntry(this.stats, this.branches, entry, this.seen, this.ledger, this.costOnly);
+		addEntry(this.stats, this.branches, entry, { seen: this.seen, ledger: this.ledger, costOnly: this.costOnly });
 	}
 
 	/** A rewritten file (omp's rewrite through a rename, possibly larger) is read again from its start. */

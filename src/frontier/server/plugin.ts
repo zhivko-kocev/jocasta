@@ -14,7 +14,7 @@ import { finishQuestion, MERGE, newThreadQuestion, type Popup, PR, START } from 
 import type { JocastaService } from "./service.ts";
 
 /** The plugin's id in `config/herdr-plugin/herdr-plugin.toml`. */
-export const PLUGIN_ID = "jocasta";
+const PLUGIN_ID = "jocasta";
 /** The boss's share of its tab beside `today` (0553): boss 65 / `today` 35. */
 const BOSS_SHARE = 0.65;
 /** The first wait before `today` opens again after it went soon after opening; doubled each time, up to 5 minutes. */

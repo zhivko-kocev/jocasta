@@ -57,7 +57,7 @@ function fakeServer() {
 		{
 			url: `http://127.0.0.1:${server.port}`,
 			token: "t",
-			version: "0.2.4",
+			version: "0.5.2",
 			canvas: { script: "", styles: [], wasm: "" },
 			worker: "",
 		},

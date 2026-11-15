@@ -109,6 +109,50 @@ test("keep-context answers keep; a planning turn that ends without a proposal sh
 	});
 });
 
+test("a role is passed through as resolvePlanReview's { role } and logged (0608)", async () => {
+	const dir = tempDir();
+	const log = join(dir, "smol.jsonl");
+	const file = join(dir, "smol.js");
+	writeFileSync(file, planReviewExtension("keep", log, "smol"));
+	const handlers = new Map<string, (event: Record<string, unknown>, ctx: unknown) => void>();
+	const calls: unknown[][] = [];
+	const module = (await import(file)) as { default: (pi: unknown) => void };
+	module.default({ on: (event: string, handler: never) => handlers.set(event, handler) });
+	handlers.get("plan_review_requested")?.(
+		{ reviewId: "r1" },
+		{
+			resolvePlanReview: (...args: unknown[]) => {
+				calls.push(args);
+				return true;
+			},
+		},
+	);
+	expect(calls).toEqual([["r1", "keep", { role: "smol" }]]);
+	expect(readPlanReviewLog(readFileSync(log, "utf8"), "keep", "smol")).toMatchObject({
+		choice: "keep",
+		role: "smol",
+		answered: true,
+	});
+	// Without a role the third argument stays undefined, as before.
+	const plain = join(dir, "plain.js");
+	writeFileSync(plain, planReviewExtension("keep", join(dir, "plain.jsonl")));
+	const plainCalls: unknown[][] = [];
+	const plainHandlers = new Map<string, (event: Record<string, unknown>, ctx: unknown) => void>();
+	((await import(plain)) as { default: (pi: unknown) => void }).default({
+		on: (event: string, handler: never) => plainHandlers.set(event, handler),
+	});
+	plainHandlers.get("plan_review_requested")?.(
+		{ reviewId: "r2" },
+		{
+			resolvePlanReview: (...args: unknown[]) => {
+				plainCalls.push(args);
+				return true;
+			},
+		},
+	);
+	expect(plainCalls).toEqual([["r2", "keep", undefined]]);
+});
+
 test("a pane's environment carries what the trial changed, and empties what it dropped", () => {
 	expect(envDelta({ A: "1", B: "changed", D: "new" }, { A: "1", B: "2", C: "3" })).toEqual({
 		B: "changed",

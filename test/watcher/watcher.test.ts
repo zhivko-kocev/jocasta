@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { type Episode, startWatcher, type WatcherOptions } from "../../src/frontier/server/watcher.ts";
+import { searchHistory } from "../../src/frontier/server/history.ts";
+import { startWatcher } from "../../src/frontier/server/watcher.ts";
 import { openCatalog } from "../../src/shared/schema.ts";
 import { useTempJocasta } from "../shared/fixture.ts";
 
@@ -71,10 +72,10 @@ interface Row {
 	cwd: string;
 	at: number;
 	summary: string;
-	sent: number;
+	indexed: number;
 }
 
-function setup(post: WatcherOptions["post"]) {
+function setup() {
 	const db = openCatalog();
 	const sessionsDir = join(env.root, "sessions");
 	const stateFile = join(env.data, "watcher.json");
@@ -83,7 +84,6 @@ function setup(post: WatcherOptions["post"]) {
 		stateFile,
 		db,
 		projectFor: (cwd) => (cwd.startsWith(PROJECT) ? { projectId: "p-demo" } : undefined),
-		post,
 		intervalMs: 3_600_000,
 		now: () => NOW,
 		onError: () => {},
@@ -95,17 +95,21 @@ function setup(post: WatcherOptions["post"]) {
 	const rows = () =>
 		db
 			.query<Row, []>(
-				"SELECT session_file, entry_id, kind, cwd, at, summary, sent FROM summaries ORDER BY at, entry_id",
+				"SELECT session_file, entry_id, kind, cwd, at, summary, indexed FROM summaries ORDER BY at, entry_id",
 			)
 			.all();
-	return { db, sessionsDir, stateFile, watcher, rows };
+	/** Everything the history holds, whatever its project. */
+	const history = () =>
+		db
+			.query<{ project_id: string; source: string; text: string; at: number }, []>(
+				"SELECT project_id, source, text, at FROM history ORDER BY at, text",
+			)
+			.all();
+	return { db, sessionsDir, stateFile, watcher, rows, history };
 }
 
-test("soft and handoff compactions with text become rows; shake without text and subagent transcripts don't", async () => {
-	const posted: [string, Episode][] = [];
-	const { sessionsDir, stateFile, watcher, rows } = setup(async (projectId, episode) => {
-		posted.push([projectId, episode]);
-	});
+test("soft and handoff compactions with text become rows and history lines; shake without text and subagent transcripts don't", async () => {
+	const { sessionsDir, stateFile, watcher, rows, history } = setup();
 	const cwdDir = join(sessionsDir, "--C--work--demo--");
 	const stem = "2026-10-13T10-00-00-000Z_01a1";
 	const file = writeSession(cwdDir, stem, [
@@ -113,19 +117,19 @@ test("soft and handoff compactions with text become rows; shake without text and
 		header("s1", PROJECT),
 		user("u1", "add a README line"),
 		assistant("a1", [{ type: "text", text: "Done." }], "stop"),
-		compaction("c1", "Soft summary of the work.", "soft", "2026-10-13T10:05:00.000Z"),
+		compaction("c1", "Soft summary of the work done.\nShort.", "soft", "2026-10-13T10:05:00.000Z"),
 		compaction("c2", "", "shake", "2026-10-13T10:06:00.000Z"),
-		compaction("c3", "Handoff document.", "handoff", "2026-10-13T10:07:00.000Z"),
-		compaction("c4", "Legacy summary.", undefined, "2026-10-13T10:08:00.000Z"),
+		compaction("c3", "Handoff document for the next run.", "handoff", "2026-10-13T10:07:00.000Z"),
+		compaction("c4", "Legacy summary of the earlier work.", undefined, "2026-10-13T10:08:00.000Z"),
 	]);
 	// A subagent's transcript in `<stem>/<AgentId>.jsonl` and an advisor's beside it.
 	writeSession(join(cwdDir, stem), "0-Explore", [
 		header("s2", PROJECT),
-		compaction("x1", "Subagent summary.", "soft", "2026-10-13T10:05:00.000Z"),
+		compaction("x1", "Subagent summary of its search.", "soft", "2026-10-13T10:05:00.000Z"),
 	]);
 	writeSession(join(cwdDir, stem), "__advisor", [
 		header("s3", PROJECT),
-		compaction("x2", "Advisor summary.", "soft", "2026-10-13T10:05:00.000Z"),
+		compaction("x2", "Advisor summary of the whole run.", "soft", "2026-10-13T10:05:00.000Z"),
 	]);
 
 	await watcher.scan();
@@ -137,8 +141,8 @@ test("soft and handoff compactions with text become rows; shake without text and
 			kind: "compact",
 			cwd: PROJECT,
 			at: Date.parse("2026-10-13T10:05:00.000Z"),
-			summary: "Soft summary of the work.",
-			sent: 1,
+			summary: "Soft summary of the work done.\nShort.",
+			indexed: 1,
 		},
 		{
 			session_file: file,
@@ -146,8 +150,8 @@ test("soft and handoff compactions with text become rows; shake without text and
 			kind: "handoff",
 			cwd: PROJECT,
 			at: Date.parse("2026-10-13T10:07:00.000Z"),
-			summary: "Handoff document.",
-			sent: 1,
+			summary: "Handoff document for the next run.",
+			indexed: 1,
 		},
 		{
 			session_file: file,
@@ -155,69 +159,78 @@ test("soft and handoff compactions with text become rows; shake without text and
 			kind: "compact",
 			cwd: PROJECT,
 			at: Date.parse("2026-10-13T10:08:00.000Z"),
-			summary: "Legacy summary.",
-			sent: 1,
+			summary: "Legacy summary of the earlier work.",
+			indexed: 1,
 		},
 	]);
-	expect(posted).toEqual([
-		[
-			"p-demo",
-			{
-				name: `compact ${stem}`,
-				body: "Soft summary of the work.",
-				source: "omp-session",
-				at: "2026-10-13T10:05:00.000Z",
-			},
-		],
-		[
-			"p-demo",
-			{ name: `handoff ${stem}`, body: "Handoff document.", source: "omp-session", at: "2026-10-13T10:07:00.000Z" },
-		],
-		[
-			"p-demo",
-			{ name: `compact ${stem}`, body: "Legacy summary.", source: "omp-session", at: "2026-10-13T10:08:00.000Z" },
-		],
+	// Only lines long enough to find: the 6-character "Short." stays out.
+	expect(history()).toEqual([
+		{
+			project_id: "p-demo",
+			source: `compact ${stem}`,
+			text: "Soft summary of the work done.",
+			at: Date.parse("2026-10-13T10:05:00.000Z"),
+		},
+		{
+			project_id: "p-demo",
+			source: `handoff ${stem}`,
+			text: "Handoff document for the next run.",
+			at: Date.parse("2026-10-13T10:07:00.000Z"),
+		},
+		{
+			project_id: "p-demo",
+			source: `compact ${stem}`,
+			text: "Legacy summary of the earlier work.",
+			at: Date.parse("2026-10-13T10:08:00.000Z"),
+		},
 	]);
 	expect(JSON.parse(readFileSync(stateFile, "utf8"))).toMatchObject({ lastScan: NOW });
 
-	// A second scan of the same file inserts nothing new and posts nothing again.
+	// A second scan of the same file inserts nothing new and indexes nothing again.
 	utimesSync(file, NOW / 1000, NOW / 1000);
 	await watcher.scan();
 	expect(rows()).toHaveLength(3);
-	expect(posted).toHaveLength(3);
+	expect(history()).toHaveLength(3);
 });
 
-test("summaries outside watched projects are stored but never posted", async () => {
-	const posted: Episode[] = [];
-	const { sessionsDir, watcher, rows } = setup(async (_, episode) => {
-		posted.push(episode);
-	});
+test("a summary is found by its words in its project's history, and in no other project's", async () => {
+	const { db, sessionsDir, watcher } = setup();
+	writeSession(join(sessionsDir, "--C--work--demo--"), "findable", [
+		header("s1", PROJECT),
+		compaction("c1", "The importer streams rows to avoid loading the file.", "soft", "2026-10-13T10:01:00.000Z"),
+	]);
+	await watcher.scan();
+	expect(searchHistory(db, "p-demo", "importer streams", 5).map((hit) => hit.text)).toEqual([
+		"The importer streams rows to avoid loading the file.",
+	]);
+	expect(searchHistory(db, "p-other", "importer streams", 5)).toEqual([]);
+});
+
+test("summaries outside watched projects are stored but never indexed", async () => {
+	const { sessionsDir, watcher, rows, history } = setup();
 	writeSession(join(sessionsDir, "--C--scratch--"), "2026-10-13T10-00-00-000Z_01a2", [
 		titleSlot("scratch"),
 		header("s1", OUTSIDE),
-		compaction("c1", "Scratch summary.", "soft", "2026-10-13T10:05:00.000Z"),
+		compaction("c1", "Scratch summary of an unrelated run.", "soft", "2026-10-13T10:05:00.000Z"),
 	]);
 	await watcher.scan();
 	await watcher.scan();
-	expect(rows().map((r) => [r.entry_id, r.cwd, r.sent])).toEqual([["c1", OUTSIDE, 0]]);
-	expect(posted).toEqual([]);
+	expect(rows().map((r) => [r.entry_id, r.cwd, r.indexed])).toEqual([["c1", OUTSIDE, 0]]);
+	expect(history()).toEqual([]);
 });
 
 test("a session moved to a sibling file gives its copied compactions once; its own new ones are rows (0464)", async () => {
-	const posted: Episode[] = [];
-	const { sessionsDir, watcher, rows } = setup(async (_, episode) => {
-		posted.push(episode);
-	});
+	const { sessionsDir, watcher, rows, history } = setup();
 	const cwdDir = join(sessionsDir, "--C--work--demo--");
 	const old = writeSession(cwdDir, "2026-10-13T10-00-00-000Z_old1", [
 		titleSlot("demo"),
 		header("old1", PROJECT),
-		compaction("c1", "Soft summary.", "soft", "2026-10-13T10:05:00.000Z"),
+		compaction("c1", "Soft summary before the move.", "soft", "2026-10-13T10:05:00.000Z"),
 	]);
 	const moved = writeSession(cwdDir, "2026-10-13T10-10-00-000Z_new2", [
 		titleSlot("demo"),
 		JSON.stringify({ type: "session", version: 3, id: "new2", parentSession: "old1", cwd: PROJECT }),
-		compaction("c1", "Soft summary.", "soft", "2026-10-13T10:05:00.000Z"),
+		compaction("c1", "Soft summary before the move.", "soft", "2026-10-13T10:05:00.000Z"),
 		JSON.stringify({ type: "model_usage", id: "u9", usage: { cost: { total: 0.1 } } }),
 		JSON.stringify({ type: "memory_recall", id: "m9", text: "recalled" }),
 		compaction("c2", "Handoff after the move.", "handoff", "2026-10-13T10:12:00.000Z"),
@@ -227,113 +240,24 @@ test("a session moved to a sibling file gives its copied compactions once; its o
 		[old, "c1"],
 		[moved, "c2"],
 	]);
-	expect(posted.map((e) => e.body)).toEqual(["Soft summary.", "Handoff after the move."]);
+	expect(history().map((line) => line.text)).toEqual(["Soft summary before the move."]);
 });
 
-test("a failing post leaves the row unsent, stops the scan's posting, and the retry waits", async () => {
-	let down = true;
-	let clock = NOW;
-	const attempts: string[] = [];
-	const posted: Episode[] = [];
-	const errors: unknown[] = [];
-	const db = openCatalog();
-	const sessionsDir = join(env.root, "sessions");
-	const stateFile = join(env.data, "watcher.json");
-	const watcher = startWatcher({
-		sessionsDir,
-		stateFile,
-		db,
-		projectFor: () => ({ projectId: "p-demo" }),
-		post: async (_, episode) => {
-			attempts.push(episode.body);
-			if (down) throw new Error("graphiti down");
-			posted.push(episode);
-		},
-		intervalMs: 3_600_000,
-		now: () => clock,
-		onError: (e) => errors.push(e),
-	});
-	env.defer(() => {
-		watcher.stop();
-		db.close();
-	});
-	writeSession(join(sessionsDir, "--C--work--demo--"), "2026-10-13T10-00-00-000Z_01a3", [
-		titleSlot("demo"),
-		header("s1", PROJECT),
-		compaction("c1", "Summary to retry.", "soft", "2026-10-13T10:05:00.000Z"),
-		compaction("c2", "Second summary.", "soft", "2026-10-13T10:06:00.000Z"),
-	]);
-	await watcher.scan();
-	const sent = () => db.query<{ sent: number }, []>("SELECT sent FROM summaries ORDER BY entry_id").all();
-	expect(sent()).toEqual([{ sent: 0 }, { sent: 0 }]);
-	// One attempt per scan: the second row isn't tried against a graph that is down (CR-13).
-	expect(attempts).toEqual(["Summary to retry."]);
-	expect(errors.map((e) => (e instanceof Error ? e.message : e)).join("\n")).toContain("graphiti down");
-	expect(JSON.parse(readFileSync(stateFile, "utf8"))).toMatchObject({ lastScan: NOW });
-
-	// Within the wait, a scan doesn't post at all.
-	down = false;
-	clock = NOW + 10_000;
-	await watcher.scan();
-	expect(attempts).toHaveLength(1);
-
-	// After it, the unsent rows go; the file is older than lastScan, so it isn't reread.
-	clock = NOW + 31_000;
-	await watcher.scan();
-	expect(sent()).toEqual([{ sent: 1 }, { sent: 1 }]);
-	expect(posted.map((e) => e.body)).toEqual(["Summary to retry.", "Second summary."]);
-});
-
-test("a backlog is posted a few episodes per scan", async () => {
-	const posted: Episode[] = [];
-	const db = openCatalog();
-	const sessionsDir = join(env.root, "sessions");
-	const watcher = startWatcher({
-		sessionsDir,
-		stateFile: join(env.data, "watcher.json"),
-		db,
-		projectFor: () => ({ projectId: "p-demo" }),
-		post: async (_, episode) => {
-			posted.push(episode);
-		},
-		intervalMs: 3_600_000,
-		now: () => NOW,
-		onError: () => {},
-		postsPerScan: 1,
-	});
-	env.defer(() => {
-		watcher.stop();
-		db.close();
-	});
-	writeSession(join(sessionsDir, "--C--work--demo--"), "backlog", [
-		header("s1", PROJECT),
-		...[1, 2, 3, 4].map((n) => compaction(`c${n}`, `Summary ${n}.`, "soft", `2026-10-13T10:0${n}:00.000Z`)),
-	]);
-	// The watcher's first scan (at its start) and this one: one episode each, oldest first.
-	await watcher.scan();
-	expect(posted.map((e) => e.body)).toEqual(["Summary 1.", "Summary 2."]);
-	await watcher.scan();
-	expect(posted.map((e) => e.body)).toEqual(["Summary 1.", "Summary 2.", "Summary 3."]);
-});
-
-test("remote and snapcompact summaries are stored but not sent to the graph (0400)", async () => {
-	const posted: Episode[] = [];
-	const { sessionsDir, watcher, rows } = setup(async (_, episode) => {
-		posted.push(episode);
-	});
+test("remote and snapcompact summaries are stored but not indexed (0400)", async () => {
+	const { sessionsDir, watcher, rows, history } = setup();
 	writeSession(join(sessionsDir, "--C--work--demo--"), "methods", [
 		header("s1", PROJECT),
-		compaction("c1", "Remote summary.", "remote", "2026-10-13T10:01:00.000Z"),
-		compaction("c2", "Snap summary.", "snapcompact", "2026-10-13T10:02:00.000Z"),
-		compaction("c3", "Soft summary.", "soft", "2026-10-13T10:03:00.000Z"),
+		compaction("c1", "Remote summary of the whole run.", "remote", "2026-10-13T10:01:00.000Z"),
+		compaction("c2", "Snap summary of the whole run.", "snapcompact", "2026-10-13T10:02:00.000Z"),
+		compaction("c3", "Soft summary of the whole run.", "soft", "2026-10-13T10:03:00.000Z"),
 	]);
 	await watcher.scan();
-	expect(rows().map((r) => [r.entry_id, r.sent])).toEqual([
+	expect(rows().map((r) => [r.entry_id, r.indexed])).toEqual([
 		["c1", 1],
 		["c2", 1],
 		["c3", 1],
 	]);
-	expect(posted.map((e) => e.body)).toEqual(["Soft summary."]);
+	expect(history().map((line) => line.text)).toEqual(["Soft summary of the whole run."]);
 });
 
 // A synthetic snapcompact transcript archive (omp's `snapcompact-summary.md` shape): a preamble, a scope legend naming
@@ -352,44 +276,38 @@ const ARCHIVE = [
 	"===================",
 ].join("\n");
 
-test("snapcompact transcript archives never go to the graph, whatever their method", async () => {
-	const posted: Episode[] = [];
-	const { sessionsDir, watcher, rows } = setup(async (_, episode) => {
-		posted.push(episode);
-	});
+test("snapcompact transcript archives never reach the history, whatever their method", async () => {
+	const { sessionsDir, watcher, rows, history } = setup();
 	writeSession(join(sessionsDir, "--C--work--demo--"), "archives", [
 		header("s1", PROJECT),
 		compaction("c1", ARCHIVE, undefined, "2026-10-13T10:01:00.000Z"),
 		compaction("c2", ARCHIVE, "soft", "2026-10-13T10:02:00.000Z"),
-		compaction("c3", "Soft summary.", "soft", "2026-10-13T10:03:00.000Z"),
+		compaction("c3", "Soft summary of the whole run.", "soft", "2026-10-13T10:03:00.000Z"),
 	]);
 	await watcher.scan();
-	expect(rows().map((r) => [r.entry_id, r.sent])).toEqual([
+	expect(rows().map((r) => [r.entry_id, r.indexed])).toEqual([
 		["c1", 1],
 		["c2", 1],
 		["c3", 1],
 	]);
-	expect(posted.map((e) => e.body)).toEqual(["Soft summary."]);
+	expect(history().map((line) => line.text)).toEqual(["Soft summary of the whole run."]);
 });
 
-test("an archive already waiting in catalog.db is marked sent without a post and no longer holds the queue", async () => {
+test("an archive already waiting in catalog.db is marked indexed without lines and no longer holds the queue", async () => {
 	const seed = openCatalog();
 	const insert = seed.query(
-		"INSERT INTO summaries (session_file, entry_id, kind, cwd, at, summary, sent) VALUES (?, ?, 'compact', ?, ?, ?, 0)",
+		"INSERT INTO summaries (session_file, entry_id, kind, cwd, at, summary, indexed) VALUES (?, ?, 'compact', ?, ?, ?, 0)",
 	);
 	insert.run("old.jsonl", "a1", PROJECT, NOW - 7_200_000, ARCHIVE);
-	insert.run("old.jsonl", "a2", PROJECT, NOW - 3_600_000, "Older soft summary.");
+	insert.run("old.jsonl", "a2", PROJECT, NOW - 3_600_000, "Older soft summary of the run.");
 	seed.close();
-	const posted: Episode[] = [];
-	const { watcher, rows } = setup(async (_, episode) => {
-		posted.push(episode);
-	});
+	const { watcher, rows, history } = setup();
 	await watcher.scan();
-	expect(rows().map((r) => [r.entry_id, r.sent])).toEqual([
+	expect(rows().map((r) => [r.entry_id, r.indexed])).toEqual([
 		["a1", 1],
 		["a2", 1],
 	]);
-	expect(posted.map((e) => e.body)).toEqual(["Older soft summary."]);
+	expect(history().map((line) => line.text)).toEqual(["Older soft summary of the run."]);
 });
 
 test("a modified file is read from where the last scan stopped (CR-03)", async () => {
@@ -402,7 +320,6 @@ test("a modified file is read from where the last scan stopped (CR-03)", async (
 		stateFile,
 		db,
 		projectFor: () => undefined,
-		post: async () => {},
 		intervalMs: 3_600_000,
 		now: () => clock,
 		onError: () => {},
@@ -429,7 +346,7 @@ test("a modified file is read from where the last scan stopped (CR-03)", async (
 });
 
 test("files not modified since lastScan are not reread; modified ones are", async () => {
-	const { sessionsDir, stateFile, watcher, rows } = setup(async () => {});
+	const { sessionsDir, stateFile, watcher, rows } = setup();
 	mkdirSync(env.data, { recursive: true });
 	writeFileSync(stateFile, `${JSON.stringify({ lastScan: NOW - 30_000 })}\n`);
 	const dir = join(sessionsDir, "--C--work--demo--");
@@ -449,68 +366,24 @@ test("files not modified since lastScan are not reread; modified ones are", asyn
 	expect(rows().map((r) => r.summary)).toEqual(["New summary."]);
 });
 
-test("a summary posts to the project stored with it once its cwd folder is gone (0440 (4))", async () => {
+test("a summary is indexed under the project stored with it once its cwd folder is gone, and one from before projects were stored under the project its cwd names (0440 (4))", async () => {
 	const seed = openCatalog();
-	// A row from before v7: its project is resolved at its first post attempt and stored.
-	seed
-		.query(
-			"INSERT INTO summaries (session_file, entry_id, kind, cwd, at, summary, sent) VALUES ('old.jsonl', 'a1', 'compact', ?, ?, 'Older summary.', 0)",
-		)
-		.run(PROJECT, NOW - 7_200_000);
+	const insert = seed.query(
+		"INSERT INTO summaries (session_file, entry_id, kind, cwd, at, summary, indexed, project_id) VALUES (?, ?, 'compact', ?, ?, ?, 0, ?)",
+	);
+	insert.run("kept.jsonl", "a1", "C:\\gone\\folder", NOW - 7_200_000, "Kept summary of a removed folder.", "p-demo");
+	insert.run("old.jsonl", "a2", PROJECT, NOW - 3_600_000, "Older summary from before projects were stored.", null);
 	seed.close();
-	let clock = NOW;
-	let gone = false;
-	let down = true;
-	const posted: [string, string][] = [];
-	const db = openCatalog();
-	const sessionsDir = join(env.root, "sessions");
-	const watcher = startWatcher({
-		sessionsDir,
-		stateFile: join(env.data, "watcher.json"),
-		db,
-		projectFor: (cwd) => (!gone && cwd.startsWith(PROJECT) ? { projectId: "p-demo" } : undefined),
-		post: async (projectId, episode) => {
-			if (down) throw new Error("graphiti down");
-			posted.push([projectId, episode.body]);
-		},
-		intervalMs: 3_600_000,
-		now: () => clock,
-		onError: () => {},
-	});
-	env.defer(() => {
-		watcher.stop();
-		db.close();
-	});
-	writeSession(join(sessionsDir, "--C--work--demo--"), "kept", [
-		header("s1", PROJECT),
-		compaction("c1", "Kept summary.", "soft", "2026-10-13T10:01:00.000Z"),
-	]);
+	const { watcher, history } = setup();
 	await watcher.scan();
-	const projects = () =>
-		db
-			.query<{ entry_id: string; project_id: string | null }, []>(
-				"SELECT entry_id, project_id FROM summaries ORDER BY at",
-			)
-			.all();
-	expect(projects()).toEqual([
-		{ entry_id: "a1", project_id: "p-demo" },
-		{ entry_id: "c1", project_id: "p-demo" },
-	]);
-	expect(posted).toEqual([]);
-
-	// The folder is gone: `projectFor` no longer knows the cwd, the stored project still takes the posts.
-	gone = true;
-	down = false;
-	clock = NOW + 31_000;
-	await watcher.scan();
-	expect(posted).toEqual([
-		["p-demo", "Older summary."],
-		["p-demo", "Kept summary."],
+	expect(history().map((line) => [line.project_id, line.text])).toEqual([
+		["p-demo", "Kept summary of a removed folder."],
+		["p-demo", "Older summary from before projects were stored."],
 	]);
 });
 
 test("scans that change nothing leave watcher.json alone", async () => {
-	const { sessionsDir, stateFile, watcher } = setup(async () => {});
+	const { sessionsDir, stateFile, watcher } = setup();
 	writeSession(join(sessionsDir, "--C--work--demo--"), "still", [
 		header("s1", PROJECT),
 		compaction("c1", "Summary.", "soft", "2026-10-13T10:01:00.000Z"),
@@ -534,7 +407,6 @@ test("a session omp rewrote through a rename, no shorter than before, is read ag
 		stateFile: join(env.data, "watcher.json"),
 		db,
 		projectFor: () => ({ projectId: "p-demo" }),
-		post: async () => {},
 		intervalMs: 3_600_000,
 		now: () => clock,
 		onError: () => {},
@@ -581,7 +453,6 @@ test("watcher.json is written when its files change, at most every 5 minutes whi
 		stateFile,
 		db,
 		projectFor: () => undefined,
-		post: async () => {},
 		intervalMs: 3_600_000,
 		now: () => clock,
 		onError: () => {},

@@ -74,52 +74,49 @@ export function exhaustedNote(fallback: string): string {
 	return `Wrong code three times; ${fallback} was taken.`;
 }
 
-/** Applies one key; resolves the answer it gives, if any. */
-export function press(state: AskState, key: Key): PopupAnswer | undefined {
+/** New thread's form: Tab swaps field; the project list picks by arrows or first letter, the brief takes text. */
+function pressForm(state: AskState, key: Key, form: NonNullable<AskState["view"]["form"]>): PopupAnswer | undefined {
 	const { view } = state;
-	if (key.name === "escape" || (key.ctrl && key.name === "c")) return { choice: view.fallback };
-	if (key.name === "pageup" || key.name === "pagedown") {
-		// The layout clamps it to the text's length.
-		state.scroll = Math.max(0, state.scroll + (key.name === "pageup" ? -1 : 1) * PAGE);
+	const projects = form.projects;
+	if (key.name === "tab") {
+		state.field = state.field === "project" ? "brief" : "project";
 		return undefined;
 	}
-	if (view.form) {
-		const projects = view.form.projects;
-		if (key.name === "tab") {
-			state.field = state.field === "project" ? "brief" : "project";
-			return undefined;
-		}
-		if (state.field === "project") {
-			const char = typedChar(key);
-			if (key.name === "up") state.project = (state.project + projects.length - 1) % projects.length;
-			else if (key.name === "down") state.project = (state.project + 1) % projects.length;
-			else if (key.name === "return" || key.name === "enter") state.field = "brief";
-			else if (char && char !== " ") {
-				// Type-to-find (UX-15): the next project, after the picked one, that starts with the letter.
-				for (let step = 1; step <= projects.length; step++) {
-					const at = (state.project + step) % projects.length;
-					if (projects[at]?.toLowerCase().startsWith(char.toLowerCase())) {
-						state.project = at;
-						break;
-					}
+	if (state.field === "project") {
+		const char = typedChar(key);
+		if (key.name === "up") state.project = (state.project + projects.length - 1) % projects.length;
+		else if (key.name === "down") state.project = (state.project + 1) % projects.length;
+		else if (key.name === "return" || key.name === "enter") state.field = "brief";
+		else if (char && char !== " ") {
+			// Type-to-find (UX-15): the next project, after the picked one, that starts with the letter.
+			for (let step = 1; step <= projects.length; step++) {
+				const at = (state.project + step) % projects.length;
+				if (projects[at]?.toLowerCase().startsWith(char.toLowerCase())) {
+					state.project = at;
+					break;
 				}
 			}
-			return undefined;
-		}
-		if (key.name === "backspace") state.brief = state.brief.slice(0, -1);
-		else if (key.name === "return" || key.name === "enter") {
-			const brief = state.brief.trim();
-			if (!brief) {
-				state.note = "Write the brief first.";
-				return undefined;
-			}
-			return { choice: view.choices[0] as string, project: projects[state.project] as string, brief };
-		} else {
-			const char = typedChar(key);
-			if (char) state.brief += char;
 		}
 		return undefined;
 	}
+	if (key.name === "backspace") state.brief = state.brief.slice(0, -1);
+	else if (key.name === "return" || key.name === "enter") {
+		const brief = state.brief.trim();
+		if (!brief) {
+			state.note = "Write the brief first.";
+			return undefined;
+		}
+		return { choice: view.choices[0] as string, project: projects[state.project] as string, brief };
+	} else {
+		const char = typedChar(key);
+		if (char) state.brief += char;
+	}
+	return undefined;
+}
+
+/** A plain choice popup: arrows and Tab move, Enter takes, and a coded choice takes the letters of its code. */
+function pressChoices(state: AskState, key: Key): PopupAnswer | undefined {
+	const { view } = state;
 	const count = view.choices.length;
 	const choice = view.choices[state.picked] as string;
 	if (key.name === "left" || key.name === "up" || (key.name === "tab" && key.shift)) {
@@ -142,6 +139,18 @@ export function press(state: AskState, key: Key): PopupAnswer | undefined {
 		}
 	}
 	return undefined;
+}
+
+/** Applies one key; resolves the answer it gives, if any. */
+export function press(state: AskState, key: Key): PopupAnswer | undefined {
+	const { view } = state;
+	if (key.name === "escape" || (key.ctrl && key.name === "c")) return { choice: view.fallback };
+	if (key.name === "pageup" || key.name === "pagedown") {
+		// The layout clamps it to the text's length.
+		state.scroll = Math.max(0, state.scroll + (key.name === "pageup" ? -1 : 1) * PAGE);
+		return undefined;
+	}
+	return view.form ? pressForm(state, key, view.form) : pressChoices(state, key);
 }
 
 /** Pasted text (already stripped of escape sequences): into New thread's brief, one line. */

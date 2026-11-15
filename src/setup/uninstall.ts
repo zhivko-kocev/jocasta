@@ -2,9 +2,9 @@
  * `jocasta uninstall` (0468): removes exactly what install and setup added. The installer records its part in
  * `install.json` (the folder, the release's top-level entries, its PATH entry, the autostart value, the companion's
  * WebView2 data); setup's migrations record theirs in their markers (`setupUndo`). herdr session `jocasta` and
- * Jocasta's per-project mise configs (0477) go too. The data folder (memory, models) and the containers, images and
- * volumes are each asked about separately. Keys setup merged into his omp `config.yml` stay: they are his settings. In
- * `keybindings.yml` and `lsp.json` only the keys setup added go (in `keybindings.yml` only their lines, 0584), and
+ * Jocasta's per-project mise configs (0477) go too. The data folder (history, models) is asked about separately. Keys
+ * setup merged into his omp `config.yml` stay: they are his settings. In `keybindings.yml` and `lsp.json` only the
+ * keys setup added go (in `keybindings.yml` only their lines, 0584), and
  * `WATCHDOG.md` and `secrets.yml` only while each is still Jocasta's text (0479, 0594). From the install folder only
  * the release's entries go, and the folder once it is empty (0579); omp sessions still running programs from it are
  * named and refused first.
@@ -14,7 +14,6 @@ import { existsSync, lstatSync, readdirSync, readFileSync, rmdirSync, rmSync } f
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, win32 } from "node:path";
 import type { ServiceState } from "../frontier/server/launch.ts";
-import { dockerEngineRunning } from "../shared/containers/index.ts";
 import { UserError } from "../shared/errors.ts";
 import { asObject, readJsonObject, removeTree, writeAtomically } from "../shared/fsx.ts";
 import { INSTALL_MARKER } from "../shared/install.ts";
@@ -98,8 +97,6 @@ export interface UninstallPaths {
 	dataDir: string;
 	/** mise's global config dir, for Jocasta's per-project configs (0477). */
 	miseConfigDir: string;
-	/** `~/.jocasta/agent/compose.yaml`, Jocasta's containers. */
-	composeFile: string;
 	/** The install this command removes; undefined in a source run. */
 	install: InstallRecord | undefined;
 	/**
@@ -118,10 +115,6 @@ export interface UninstallDeps {
 	run: RunProgram;
 	/** How to undo what setup added here (`setupUndo`). */
 	setupUndo: SetupUndo[];
-	/** `docker compose down --rmi all --volumes` for Jocasta's project. */
-	composeDown(): Promise<{ code: number; output: string }>;
-	/** Whether Docker's engine runs now; `dockerEngineRunning` by default (test seam). */
-	dockerRunning?: () => boolean;
 	/** Removes `entry` from the user PATH; false when it wasn't there. */
 	removePathEntry(entry: string): boolean;
 	/** Removes Run value `name` when it starts `launcher`; false when it doesn't. */
@@ -467,6 +460,10 @@ function undoRemoval(item: SetupUndo, deps: UninstallDeps): Removal {
 				remove: async () =>
 					deps.deleteCredential(item.target) ? `removed ${item.target}` : `${item.target} was already gone`,
 			};
+		default: {
+			const unknown: never = item;
+			throw new Error(`no undo kind ${JSON.stringify(unknown)}.`);
+		}
 	}
 }
 
@@ -490,7 +487,7 @@ function removeIfEmpty(dir: string): void {
 	}
 }
 
-/** Shows what goes, asks, and removes it; the data folder and the containers are asked about separately. */
+/** Shows what goes, asks, and removes it; the data folder is asked about separately. */
 export async function runUninstall(paths: UninstallPaths, deps: UninstallDeps, io: SetupIo): Promise<number> {
 	const state = await deps.serviceState();
 	if (state !== "down") {
@@ -562,9 +559,6 @@ export async function runUninstall(paths: UninstallPaths, deps: UninstallDeps, i
 			});
 		}
 	}
-	// The containers' compose file lives in the config folder: they go before it.
-	const containers = existsSync(paths.composeFile);
-
 	io.print("jocasta uninstall will remove what install and setup added:");
 	for (const removal of removals) io.print(`- ${removal.what}`);
 	io.print(`- Jocasta's config folder: ${paths.jocastaConfigDir}`);
@@ -580,14 +574,7 @@ export async function runUninstall(paths: UninstallPaths, deps: UninstallDeps, i
 		return 0;
 	}
 	const data = existsSync(paths.dataDir)
-		? answeredYes(await io.ask(`Also remove Jocasta's data folder ${paths.dataDir} (memory, models, logs)? [y/N] `))
-		: false;
-	const volumes = containers
-		? answeredYes(
-				await io.ask(
-					"Also remove Jocasta's containers, images and volumes (Graphiti and FalkorDB, with the memory graph)? [y/N] ",
-				),
-			)
+		? answeredYes(await io.ask(`Also remove Jocasta's data folder ${paths.dataDir} (history, models, logs)? [y/N] `))
 		: false;
 
 	let failed = 0;
@@ -601,14 +588,6 @@ export async function runUninstall(paths: UninstallPaths, deps: UninstallDeps, i
 		}
 	};
 	for (const removal of removals) await attempt(removal.what, removal.remove);
-	if (volumes) {
-		await attempt("Jocasta's containers, images and volumes", async () => {
-			if (!(deps.dockerRunning ?? dockerEngineRunning)()) throw new Error("Docker isn't running, so they stay");
-			const { code, output } = await deps.composeDown();
-			if (code !== 0) throw new Error(`docker compose down exited ${code}: ${output.trim()}`);
-			return "removed Jocasta's containers, images and volumes";
-		});
-	}
 	if (data) {
 		await attempt(paths.dataDir, async () => {
 			const said = removePath(paths.dataDir);

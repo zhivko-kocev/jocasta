@@ -89,7 +89,7 @@ describe("shared flags", () => {
 			"not jocasta or jarvis",
 		);
 		const refusal =
-			"set JOCASTA_CODING_AGENT_DIR to the sandbox's config folder; with ~/.jocasta/agent the sandbox uses his projects, herdr config and Graphiti containers";
+			"set JOCASTA_CODING_AGENT_DIR to the sandbox's config folder; with ~/.jocasta/agent the sandbox uses his projects and herdr config";
 		expect(() => requireSandbox({ ...sandbox, JOCASTA_CODING_AGENT_DIR: undefined }, "linux", his)).toThrow(refusal);
 		expect(() => requireSandbox({ ...sandbox, JOCASTA_CODING_AGENT_DIR: "~/.jocasta/agent" }, "linux", his)).toThrow(
 			refusal,
@@ -259,7 +259,7 @@ describe("H2", () => {
 		]);
 	});
 
-	test("an ask's t0 is when omp completed the message, not when it started the request (omp 18.18.6's shape)", () => {
+	test("an ask's t0 is when omp completed the message, not when it started the request (omp 18.20.2's shape)", () => {
 		const start = Date.parse("2026-11-09T10:00:00Z");
 		const ask = (message: Record<string, unknown>, at: number) =>
 			JSON.stringify({
@@ -492,12 +492,12 @@ describe("H4", () => {
 			leaked: leakedTokens,
 			isError,
 		});
-		// Graphiti down: every query errored, nothing was checked, and nothing bounds a leak rate.
+		// The search tool down: every query errored, nothing was checked, and nothing bounds a leak rate.
 		const down = scoreH4([result([], true), result([], true)], [result([], true)], 50);
 		expect(down).toMatchObject({ checks: 0, erroredQueries: 2, inconclusive: true, upperBound95: null });
 		// B leaked nothing, but A's own pane found no canary either: inconclusive.
 		const blind = scoreH4([result([]), result([])], [result([]), result([])], 50);
-		expect(blind).toMatchObject({ checks: 100, graphLeaks: 0, inconclusive: true, upperBound95: null });
+		expect(blind).toMatchObject({ checks: 100, searchLeaks: 0, inconclusive: true, upperBound95: null });
 		expect(h4Line(blind)).toBe(
 			"0 leaks in 100 answered checks (0 queries errored); positive control found no canary: inconclusive",
 		);
@@ -603,7 +603,7 @@ describe("H7", () => {
 });
 
 describe("H8", () => {
-	test("K11: a thread's sessions since the run started, its planning session included; layer-on counters are the service's hit and reuse logs", () => {
+	test("K11: a thread's sessions since the run started, its planning session included; layer-on counters are the service's hit log", () => {
 		const dir = tempDir();
 		const worktree = (n: number) => join(tmpdir(), "repo.wt", `h8-r0-n4-t${n}`);
 		const header = (id: string, at: string, extra = {}) =>
@@ -631,12 +631,10 @@ describe("H8", () => {
 			Date.parse("2026-11-09T09:30:00Z"),
 		);
 		expect([...files]).toEqual([["h8-r0-n4-t0", [planning, execution]]]);
-		expect(readLayerCounters(dir)).toEqual({ checkHits: 0, indexReuse: 0 });
+		expect(readLayerCounters(dir)).toEqual({ checkHits: 0 });
 		mkdirSync(join(dir, "checks"), { recursive: true });
-		mkdirSync(join(dir, "code-index"), { recursive: true });
 		writeFileSync(join(dir, "checks", "hits.log"), "1\n2\n3\n");
-		writeFileSync(join(dir, "code-index", "reuse.log"), "1\n");
-		expect(readLayerCounters(dir)).toEqual({ checkHits: 3, indexReuse: 1 });
+		expect(readLayerCounters(dir)).toEqual({ checkHits: 3 });
 	});
 
 	test("pairs share a file or an interface; status lines parse; the score counts", () => {

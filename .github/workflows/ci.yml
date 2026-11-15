@@ -1,6 +1,7 @@
-# Type check (0037), lint (0036) and the tests on windows, ubuntu and macos (plan section 7). Evals run his real omp
-# and never run here (0384); opt-in smokes (herdr, Graphiti, omp's SDK, dictation) stay off. Read-only token; every
-# action is pinned to the commit its tag named when it was pinned.
+# Type check (0037), lint (0036), knip and the advisory audit (0614) and the tests on windows, ubuntu and macos (plan
+# section 7).
+# Evals run his real omp and never run here (0384); opt-in smokes (herdr, omp's SDK, dictation) stay off. Read-only
+# token; every action is pinned to the commit its tag named when it was pinned.
 name: ci
 
 on:
@@ -31,3 +32,10 @@ jobs:
       - run: bun run typecheck
       - run: bun run lint
       - run: bun run test
+      # Dead code, as in `mise run check` (0614); once per run, like the audit.
+      - if: matrix.os == 'ubuntu-latest'
+        run: bunx knip
+      # Fails on high and critical advisories only; it needs the network, so it is not in `mise run check`. Once per run
+      # (the advisories don't depend on the OS).
+      - if: matrix.os == 'ubuntu-latest'
+        run: bun audit --audit-level=high

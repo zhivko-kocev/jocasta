@@ -23,9 +23,9 @@ import { branchSlug, COMMIT_LINE, type Door, LESSONS_LINE, START_PREFIX } from "
 import { copyWorktreeInclude, GIT_MS, gitOut, removeCheckout, threadPlace } from "./worktrees.ts";
 
 /** How long `thread_start` waits for omp to come up in the new pane before sending the brief. */
-export const AGENT_WAIT_MS = 20_000;
+const AGENT_WAIT_MS = 20_000;
 /** How long `thread_start` waits for the pane to start working on the brief before sending one Enter. */
-export const SUBMIT_WAIT_MS = 5_000;
+const SUBMIT_WAIT_MS = 5_000;
 /** How often a start looks at the new pane meanwhile. */
 const POLL_MS = 250;
 /** How long taking back a failed start waits for its checkout's processes to let go (SVC-7). */
@@ -113,6 +113,7 @@ export class ThreadStarts {
 	 * once herdr made its worktree takes back what it made (SVC-7). Its texts name the door (0581); `done` is false for a
 	 * start that is only half done (the brief not sent).
 	 */
+	// biome-ignore lint/complexity/noExcessiveLinesPerFunction: one start sequence whose steps (worktree, copy-in, launch, brief) share the cleanup that takes back what a failed step made (SVC-7); splitting would scatter that rollback across helpers (0610).
 	async start(
 		projectName: string,
 		title: string,
@@ -211,8 +212,8 @@ export class ThreadStarts {
 				let projectWs = await this.projectWorkspace(project);
 				if (!projectWs) {
 					const projectKey = newPaneKey();
-					const env = { ...mainEnv, [PANE_KEY_ENV]: projectKey };
-					const made = await herdr.ensureWorkspace(project.name, project.mainPath, command, env);
+					const env = panes.projectEnv({ ...mainEnv, [PANE_KEY_ENV]: projectKey });
+					const made = await herdr.ensureWorkspace(project.name, project.mainPath, panes.projectPane(command), env);
 					const pane = (await herdr.panes()).find((p) => p.workspaceId === made);
 					if (pane) c.launched.add(pane.paneId, project.mainPath, projectKey);
 					projectWs = made;

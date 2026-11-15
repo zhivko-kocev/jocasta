@@ -1,3 +1,4 @@
+// biome-ignore-all lint/style/noExcessiveLinesPerFile: the one module that talks to herdr (principle 7, 0392): its wire types, `Client` (one socket and request/reply state machine) and `HerdrClient` read as one protocol top to bottom (0610).
 /**
  * The one module that talks to herdr (principle 7; 0392). herdr 0.9.x's socket API: newline-delimited JSON over a named
  * pipe on Windows (a Unix socket elsewhere); a `{id, method, params}` request line is answered by a line echoing `id`

@@ -103,6 +103,7 @@ export class StatusViews {
 	 * Sidebar tokens per thread pane and project workspace (0402, UX-04, UX-27), each expiring unless renewed (UX-13),
 	 * then the HUD (0403).
 	 */
+	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: one report pass: each thread's sidebar meta is built from one session read and one ledger read, then pushed with the project counts the same loop builds; splitting would pass that state through helpers (0610).
 	async report(): Promise<void> {
 		const { herdr, sessions } = this.c;
 		// A project's workspace is the first with its name (as `projectWorkspace` finds it): a thread titled like its

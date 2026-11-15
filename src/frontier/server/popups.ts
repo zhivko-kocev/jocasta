@@ -29,7 +29,7 @@ const CODE_LETTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ";
 export const WRONG_CODES = 3;
 
 /** Three random letters he types to take a coded question's choices other than its fallback (0558, 0568). */
-export function typedCode(): string {
+function typedCode(): string {
 	return Array.from({ length: 3 }, () => CODE_LETTERS[randomInt(CODE_LETTERS.length)]).join("");
 }
 

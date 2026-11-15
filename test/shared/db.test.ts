@@ -142,3 +142,27 @@ test("catalog.db opens at its migration ledger version with STRICT tables", () =
 	).toThrow(); // only the home thread lives in catalog.db (0125)
 	catalog.close();
 });
+
+test("catalog v9 queues the summaries of known projects to be indexed and leaves the rest as they were (0603)", () => {
+	const path = join(env.root, "catalog.db");
+	const v8 = openDb(path, CATALOG_MIGRATIONS.slice(0, 8));
+	const insert = v8.query(
+		"INSERT INTO summaries (session_file, entry_id, kind, cwd, at, summary, sent, project_id) VALUES (?, ?, 'compact', 'C:\\work', 1, 'A summary of the work.', 1, ?)",
+	);
+	insert.run("a.jsonl", "known", "p-demo");
+	insert.run("a.jsonl", "unknown", null);
+	v8.close();
+	const catalog = openDb(path, CATALOG_MIGRATIONS);
+	try {
+		expect(catalog.query("SELECT entry_id, indexed FROM summaries ORDER BY entry_id").all()).toEqual([
+			{ entry_id: "known", indexed: 0 },
+			{ entry_id: "unknown", indexed: 1 },
+		]);
+		const indexes = catalog.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'index'").all();
+		expect(indexes.map((i) => i.name)).toContain("summaries_unindexed");
+		expect(indexes.map((i) => i.name)).not.toContain("summaries_unsent");
+		expect(catalog.query("SELECT count(*) AS n FROM history").get()).toEqual({ n: 0 });
+	} finally {
+		catalog.close();
+	}
+});

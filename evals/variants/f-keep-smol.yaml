@@ -1,0 +1,5 @@
+# Follow-up study (0608): A6 with omp's plan review answered "Approve and keep context" and the work that follows done
+# on the `smol` role (`resolvePlanReview(reviewId, "keep", { role: "smol" })`). Its baseline is A6.
+extends: [a6]
+plan_review: keep
+plan_review_role: smol

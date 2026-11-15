@@ -171,6 +171,7 @@ export class Refresher {
 	 * Jocasta started omp in or that runs omp (CR-01) — never a hunk pane or a plain shell. The thread's other pane in
 	 * its workspace that runs hunk is its review pane (CR-02), so a later task reuses it.
 	 */
+	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: one pass over the panes whose admission filters and the found thread's fields are read top to bottom; the filters share the pass's `taken` set and the fields share its reads, so a split would only pass them around (0610).
 	async discover(snapshot: HerdrSnapshot): Promise<void> {
 		const { c } = this;
 		const { panes } = snapshot;
@@ -334,9 +335,8 @@ export class Refresher {
 		for (const thread of c.threads.all()) {
 			if (!thread.plan?.reopened) continue;
 			if (thread.plan.awaiting) await c.lifecycle.reopenPlanReview(thread);
-			else if (isIdle(thread.state) && thread.sessionPath) {
-				if (!c.sessions.read(thread.sessionPath, true).planAwaiting) thread.plan.reopened = false;
-			}
+			else if (isIdle(thread.state) && thread.sessionPath && !c.sessions.read(thread.sessionPath, true).planAwaiting)
+				thread.plan.reopened = false;
 		}
 	}
 

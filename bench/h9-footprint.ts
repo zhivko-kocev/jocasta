@@ -166,7 +166,7 @@ if (import.meta.main) {
 		if (!install || !uninstall) throw new BenchUsageError("--install and --uninstall are required");
 		const out = args.out as string;
 		claimRows(out, "h9-install-added", "h9-use-added", "h9-uninstall-left");
-		const started = conditions(["git", "docker"]);
+		const started = conditions(["git"]);
 		// The build measured, read once after the first install, before its uninstall removes it (0576 BEN-22).
 		let build: { version: string | null; sha256: string | null } | undefined;
 		const runs = [];

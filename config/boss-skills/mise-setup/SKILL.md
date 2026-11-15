@@ -28,6 +28,11 @@ On his yes, `thread_start(project, "mise setup", brief)` with this brief, filled
 > project's tests) and `[tasks.verify]` (everything a change must pass: build, lint, tests). Never run `mise trust`,
 > `mise use` or `mise install`; show `mise tasks ls` once the file is written. This task changes no repo file: make no
 > commit (the commit step doesn't apply).
+>
+> Then offer him the scanners that fit, and ask per project; add none without his yes. Trivy (committed secrets and
+> dependencies) and Semgrep (a web service) go in `[tools]` pinned exactly, each as a `verify` step. knip and jscpd (a
+> TypeScript project) are npm packages: name them to him as dev dependencies for the project's own package manager to
+> pin (this task writes no repo file), and on his yes add their commands to `verify`.
 
 He approves its plan in its pane like any thread's. It commits nothing, so it never reports done: when its
 "finished its turn" line arrives, report that line to him as the setup's outcome and offer to close the thread.

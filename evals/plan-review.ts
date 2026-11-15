@@ -1,13 +1,13 @@
 import { jsonLines } from "../src/shared/jsonl.ts";
 
 /**
- * Answering omp's plan review for A6 and its follow-up arms (0567). omp 18.18.6 offers "Approve and execute" and
- * "Approve and keep context" only in its interactive plan review (`modes/interactive-mode.ts:7795`
+ * Answering omp's plan review for A6 and its follow-up arms (0567). omp 18.20.2 offers "Approve and execute" and
+ * "Approve and keep context" only in its interactive plan review (`modes/interactive-mode.ts:7771`
  * `handlePlanApproval`; "execute" clears the session before the plan-approved prompt, `#approvePlan`'s
- * `preserveContext: false`, `:6863`). Print mode has only `--plan-yolo`, which approves inside the planning session,
+ * `preserveContext: false`, `:6872`). Print mode has only `--plan-yolo`, which approves inside the planning session,
  * and ACP's approval keeps the context too, so neither is "execute". The interactive review is answerable without
  * keys: it emits `plan_review_requested` to extensions, and `ctx.resolvePlanReview(reviewId, "execute" | "keep")`
- * answers it "as if the operator picked" (`extensibility/extensions/types.ts:818-830`). So such a trial's first turn
+ * answers it "as if the operator picked" (`extensibility/extensions/types.ts:825-838`). So such a trial's first turn
  * runs omp interactive in a terminal (a bench herdr pane: interactive mode needs a TTY on stdin, `main.ts`), starting
  * in plan mode (`plan.defaultOnStartup`), with a per-trial extension (this file's {@link planReviewExtension}) that
  * answers the review with the arm's choice, logs what it saw, and shuts omp down once the approved plan's execution
@@ -19,10 +19,11 @@ import { jsonLines } from "../src/shared/jsonl.ts";
 export type PlanReviewChoice = "execute" | "keep";
 
 /** The extension's log lines: what happened, with epoch ms. */
-export interface PlanReviewEvent {
+interface PlanReviewEvent {
 	at: number;
 	event: "requested" | "answered" | "resolved" | "shutdown";
 	choice?: string;
+	role?: string;
 	answered?: boolean;
 	reason?: string;
 }
@@ -34,6 +35,8 @@ export interface PlanReviewSummary {
 	/** The choice the extension gave and whether omp took it (`resolvePlanReview` returned true). */
 	choice: PlanReviewChoice;
 	answered: boolean;
+	/** The role the approval asked the work to run on (0608); absent when the review's own tier stays. */
+	role?: string;
 	/** The choice omp reported when the review closed. */
 	resolved: string | null;
 	/** Why the extension shut omp down; null when omp ended otherwise (a crash, the trial's limit). */
@@ -41,13 +44,15 @@ export interface PlanReviewSummary {
 }
 
 /**
- * The extension module's source for one trial: answers with `choice` and appends {@link PlanReviewEvent} lines to
+ * The extension module's source for one trial: answers with `choice` (and `role`, the execution tier of the review's
+ * slider, 0608: `resolvePlanReview(reviewId, choice, { role })`) and appends {@link PlanReviewEvent} lines to
  * `logFile`. Plain JavaScript, so omp loads it with `-e` from the trial root without a build.
  */
-export function planReviewExtension(choice: PlanReviewChoice, logFile: string): string {
+export function planReviewExtension(choice: PlanReviewChoice, logFile: string, role?: string): string {
 	return `// Written by Jocasta's task benchmark (evals/plan-review.ts) for one trial: answers omp's plan review.
 import { appendFileSync } from "node:fs";
 const CHOICE = ${JSON.stringify(choice)};
+const ROLE = ${JSON.stringify(role ?? null)};
 const LOG = ${JSON.stringify(logFile)};
 const log = (line) => appendFileSync(LOG, JSON.stringify({ at: Date.now(), ...line }) + "\\n");
 export default function planReview(pi) {
@@ -65,8 +70,8 @@ export default function planReview(pi) {
 	pi.on("plan_review_requested", (event, ctx) => {
 		requested = true;
 		log({ event: "requested" });
-		const answered = ctx.resolvePlanReview(event.reviewId, CHOICE);
-		log({ event: "answered", choice: CHOICE, answered });
+		const answered = ctx.resolvePlanReview(event.reviewId, CHOICE, ROLE === null ? undefined : { role: ROLE });
+		log({ event: "answered", choice: CHOICE, ...(ROLE === null ? {} : { role: ROLE }), answered });
 	});
 	pi.on("plan_review_resolved", (event) => {
 		log({ event: "resolved", choice: event.choice });
@@ -89,13 +94,14 @@ export default function planReview(pi) {
 `;
 }
 
-/** The extension's log as a summary; `choice` is what the trial asked for. */
-export function readPlanReviewLog(text: string, choice: PlanReviewChoice): PlanReviewSummary {
+/** The extension's log as a summary; `choice` and `role` are what the trial asked for. */
+export function readPlanReviewLog(text: string, choice: PlanReviewChoice, role?: string): PlanReviewSummary {
 	const events = jsonLines<PlanReviewEvent>(text).filter((line) => typeof line.event === "string");
 	return {
 		requested: events.some((e) => e.event === "requested"),
 		choice,
 		answered: events.some((e) => e.event === "answered" && e.answered === true),
+		...(role === undefined ? {} : { role }),
 		resolved: events.find((e) => e.event === "resolved")?.choice ?? null,
 		shutdown: events.find((e) => e.event === "shutdown")?.reason ?? null,
 	};

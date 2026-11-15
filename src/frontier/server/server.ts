@@ -2,15 +2,11 @@ import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Server } from "bun";
-import { dockerEngineRunning, isConnectionError, nativeLinuxDocker } from "../../shared/containers/index.ts";
-import { graphitiPort, jocastaContainers, stopJocastaContainers } from "../../shared/containers/resources.ts";
 import { takeCalendarEnv } from "../../shared/credentials.ts";
 import { herdrSession } from "../../shared/herdr-session.ts";
 import { openInBrowser } from "../../shared/link.ts";
 import { log } from "../../shared/log.ts";
-import { CALLBACK_UNREACHABLE } from "../../shared/memory/graph/callback.ts";
-import { addEpisodes, defaultGraphDeps, searchGraph } from "../../shared/memory/graph/index.ts";
-import { configDir, dataDir } from "../../shared/paths.ts";
+import { configDir } from "../../shared/paths.ts";
 import type { ProcessId } from "../../shared/proctree.ts";
 import { openCatalog } from "../../shared/schema.ts";
 import { removeServiceFile, writeServiceFile } from "../../shared/service-file.ts";
@@ -18,21 +14,19 @@ import { readSettings, serviceSetting } from "../../shared/settings.ts";
 import { type PopupView, type ServerMessage, type ServiceHealth, TOKEN_QUERY } from "../protocol.ts";
 import { CONFIRM_WAIT_MS } from "./allow.ts";
 import { type CloseOutcome, closeFlow } from "./close.ts";
-import { CodeIndex } from "./code-index.ts";
 import { doorRoutes } from "./door-routes.ts";
 import { feedRoute, feedSocket, publish } from "./feed.ts";
 import { healthRoute } from "./health-route.ts";
 import { connectHerdr, type Herdr } from "./herdr.ts";
-import { llmCallback } from "./llm-route.ts";
 import { LaunchCodes, pageResponder, whiteboardReviews } from "./page-routes.ts";
 import { AskPopups, PluginPanes } from "./plugin.ts";
 import { type Ask, actionRoute, asker, popupRoutes } from "./popup-routes.ts";
 import { ALLOW, allowQuestion, type Popup, Popups } from "./popups.ts";
 import { RELAY_PORT, startRelay } from "./relay.ts";
 import { listen, type Route } from "./routes.ts";
-import { type Graph, JocastaService, type ServiceOptions } from "./service.ts";
+import { JocastaService, type ServiceOptions } from "./service.ts";
 import { type StopStep, stopper, stopSteps, undoStart } from "./stop-sequence.ts";
-import { startWhiteboard, type Whiteboard, type WhiteboardOptions } from "./whiteboard.ts";
+import { isStageFile, startWhiteboard, type Whiteboard, type WhiteboardOptions } from "./whiteboard.ts";
 
 export interface JocastaServer {
 	port: number;
@@ -61,7 +55,7 @@ export interface JocastaServer {
 	 */
 	clientClosed(): Promise<CloseOutcome>;
 	/**
-	 * Registers something else Jocasta started that stops with it (0549): run on Stop everything after the containers,
+	 * Registers something else Jocasta started that stops with it (0549): run on Stop everything after herdr's stops,
 	 * bounded by `ms` (default 10 s). Returns the function that unregisters it.
 	 */
 	stopsWith(name: string, stop: () => unknown, ms?: number): () => void;
@@ -94,12 +88,14 @@ export interface ServerOptions
 		| "ghTimeoutMs"
 		| "sessionsDir"
 		| "agentWaitMs"
+		| "paneCheckWaitMs"
 		| "refreshMs"
 		| "findReview"
 		| "openReview"
 		| "submitWaitMs"
 		| "mise"
 		| "weeklyReviewMs"
+		| "scorecardMs"
 		| "weeklyReviews"
 		| "confirm"
 		| "confirmWaitMs"
@@ -119,10 +115,6 @@ export interface ServerOptions
 	herdrSession?: string;
 	/** Told each herdr server process this service starts (0582: a hung service's takeover spares it). */
 	onHerdrServer?: (server: ProcessId) => void;
-	/** The knowledge graph (test seam): Graphiti's by default; null for none, so tests never start Docker. */
-	graph?: Graph | null;
-	/** The code index behind `graph_search` (0562; test seam): codebase-memory-mcp under `<data>/code-index` by default; null for none. */
-	codeIndex?: CodeIndex | null;
 	/** Phase 8's pollers and clock (test seam); tests pass `{ pollers: false }` so nothing calls the real gh or az. */
 	day?: ServiceOptions["day"];
 	/** The port to try first (test seam): `service.port`, else 47400 (0358). */
@@ -145,69 +137,12 @@ export interface ServerOptions
 	 * default (test seam).
 	 */
 	reattach?: () => void;
-	/** Stops Graphiti and FalkorDB, their data kept (test seam); the shared container manager's by default. */
-	stopContainers?: () => Promise<void>;
-	/** Each stop step's bound in ms (test seam): service 30 s, herdr 15 s, containers 20 s, whiteboard 5 s. */
-	stopBoundsMs?: Partial<Record<"service" | "herdr" | "containers" | "whiteboard", number>>;
-}
-
-/** Graphiti behind the shared container manager (0334), with this process's `/llm/v1` callback (0390). */
-function graphiti(): Graph {
-	const deps = defaultGraphDeps();
-	return {
-		search: (projectId, query, limit) => searchGraph(projectId, query, limit, deps),
-		post: (projectId, { name, body, source, at }) =>
-			addEpisodes(projectId, [{ name, body, source, reference_time: at }], deps),
-	};
-}
-
-/** What Graphiti's line on the services row is chosen from (0444); tests inject them. */
-export interface GraphitiChecks {
-	/** `/health` now: "ok"; "refused" when nothing listens; "bad" when it listens but isn't OK or times out. */
-	health(): Promise<"ok" | "refused" | "bad">;
-	/** Whether this process is starting Graphiti's containers. */
-	starting(): boolean;
-	/** Whether Docker's engine runs. */
-	dockerRunning(): boolean;
-	/** Whether this is Linux with its own Docker engine, whose containers can't reach the model callback (SEC-LOC-10). */
-	nativeDocker(): boolean;
-}
-
-const GRAPHITI_CHECKS: GraphitiChecks = {
-	health: async () => {
-		try {
-			const response = await fetch(`http://127.0.0.1:${graphitiPort()}/health`, {
-				signal: AbortSignal.timeout(2_000),
-			});
-			return response.ok ? "ok" : "bad";
-		} catch (error) {
-			return isConnectionError(error) ? "refused" : "bad";
-		}
-	},
-	starting: () => jocastaContainers().isStarting("graphiti"),
-	dockerRunning: () => dockerEngineRunning(),
-	nativeDocker: () => nativeLinuxDocker(),
-};
-
-/**
- * Graphiti on the services row (0444): "up" while it answers; "starting" while Jocasta starts it; "idle · starts when
- * needed" while nothing listens and Docker runs (it starts on first use and stops after 15 min idle, 0073); "down ·
- * Docker isn't running"; "down · not answering" when it listens but `/health` isn't OK. On Linux with its own Docker
- * engine it is down with why, before anything else: its container can't call back for its model calls (SEC-LOC-10).
- */
-export async function graphitiHealth(checks: GraphitiChecks = GRAPHITI_CHECKS): Promise<Omit<ServiceHealth, "name">> {
-	if (checks.nativeDocker()) return { state: "down", note: CALLBACK_UNREACHABLE };
-	const health = await checks.health();
-	if (health === "ok") return { state: "up" };
-	if (checks.starting()) return { state: "starting" };
-	if (health === "bad") return { state: "down", note: "not answering" };
-	return checks.dockerRunning()
-		? { state: "idle", note: "starts when needed" }
-		: { state: "down", note: "Docker isn't running" };
+	/** Each stop step's bound in ms (test seam): service 30 s, herdr 15 s, whiteboard 5 s. */
+	stopBoundsMs?: Partial<Record<"service" | "herdr" | "whiteboard", number>>;
 }
 
 /** `service.port`'s default (0358). */
-export const DEFAULT_PORT = 47_400;
+const DEFAULT_PORT = 47_400;
 
 /**
  * `service.port` in `jocasta.yaml` (0358, 0387; `frontier.port` still read, 0584), checked by the settings schema: a
@@ -229,14 +164,11 @@ function passedOn(options: ServerOptions) {
 		herdr,
 		herdrSession,
 		onHerdrServer,
-		graph,
-		codeIndex,
 		port,
 		whiteboard,
 		onQuestion,
 		plugin,
 		reattach,
-		stopContainers,
 		stopBoundsMs,
 		...passed
 	} = options;
@@ -266,13 +198,10 @@ function allowBox(question: Ask): NonNullable<ServiceOptions["confirm"]> {
 	};
 }
 
-/** The dashboard's services row (0429, 0444): Graphiti and whiteboard, each up or why not. */
-async function servicesRow(graph: Graph | undefined, whiteboard: Whiteboard | undefined): Promise<ServiceHealth[]> {
+/** The dashboard's services row (0429, 0444): whiteboard, up or why not. */
+async function servicesRow(whiteboard: Whiteboard | undefined): Promise<ServiceHealth[]> {
 	const off: Omit<ServiceHealth, "name"> = { state: "down", note: "off in this run" };
-	return [
-		{ name: "Graphiti", ...(graph ? await graphitiHealth() : off) },
-		{ name: "whiteboard", ...(whiteboard ? await whiteboard.check() : off) },
-	];
+	return [{ name: "whiteboard", ...(whiteboard ? await whiteboard.check() : off) }];
 }
 
 /**
@@ -314,13 +243,32 @@ function guarded(response: Response, port: number, whiteboard?: string): Respons
 }
 
 /**
+ * The animation stage's own headers (0615). The canvas plays an animation in a sandboxed frame, an opaque origin that
+ * carries its own meta policy, so the page's policy must not apply to it (its inline boot script and `blob:` runtime
+ * would be blocked, and `frame-ancestors 'none'` forbids the frame itself); under the page's COEP its resource policy
+ * must be cross-origin for the frame to load it. Only the stage file gets this; everything else goes through `guarded`.
+ */
+function guardedStage(response: Response): Response {
+	response.headers.set("cross-origin-opener-policy", "same-origin");
+	response.headers.set("cross-origin-embedder-policy", "require-corp");
+	response.headers.set("cross-origin-resource-policy", "cross-origin");
+	return response;
+}
+
+/** A page response with its headers (0615): the stage file `guardedStage`'s, every other response `guarded`'s. */
+export function pageGuarded(served: Response, pathname: string, port: number, whiteboard?: string): Response {
+	return served.ok && isStageFile(pathname) ? guardedStage(served) : guarded(served, port, whiteboard);
+}
+
+/**
  * The Jocasta service's server (4.1, 0392, 0552): 127.0.0.1 on `service.port` (0358), or a free port for this run
  * when that one is busy; `<data>/jocasta-service.json` with `port`, `token` and `pid`. Every API call carries the
  * token as a bearer (`jocasta mcp`, bare `jocasta`, the plugin's panes); the browser's pages carry a separate page
  * token as a per-port cookie, set from a one-time launch code (`/?t=<code>`, SEC-NET-4, SEC-LOC-11). It serves the MCP
- * tools, the state feed, his questions, whiteboard's canvas page (0393) and Graphiti's `/llm/v1` (0390), and runs the
+ * tools, the state feed, his questions and whiteboard's canvas page (0393), and runs the
  * herdr-backed service. A start that fails stops what it had started, its relay included (SRV-A-2).
  */
+// biome-ignore lint/complexity/noExcessiveLinesPerFunction: one start sequence in which each resource registers its undo step as it starts (SRV-A-2); the order of those steps is the contract, so it reads best in one place (0610).
 export async function startServer(options: ServerOptions = {}): Promise<JocastaServer> {
 	// The calendar's secret leaves this process's environment before anything is spawned (SEC-5, 0430).
 	takeCalendarEnv();
@@ -350,10 +298,6 @@ export async function startServer(options: ServerOptions = {}): Promise<JocastaS
 		const askPopups = plugin ? new AskPopups(herdr) : undefined;
 		/** What shows his questions: the test's, else the plugin's popup once herdr is connected (0553). */
 		const question = asker(popups, options.onQuestion ?? (askPopups ? (popup) => askPopups.show(popup) : undefined));
-		const graph = options.graph === undefined ? graphiti() : (options.graph ?? undefined);
-		// The code index (0562): its stdio servers start on the first relationship question and stop with Jocasta.
-		const codeIndex =
-			options.codeIndex === undefined ? new CodeIndex({ dataDir: dataDir() }) : (options.codeIndex ?? undefined);
 		// whiteboard's server, the service's child (0393): it starts beside the service and stops with Jocasta.
 		const whiteboard = options.whiteboard === null ? undefined : startWhiteboard(options.whiteboard);
 		if (whiteboard) undo.push({ name: "whiteboard", run: () => whiteboard.stop() });
@@ -369,11 +313,9 @@ export async function startServer(options: ServerOptions = {}): Promise<JocastaS
 			herdr,
 			broadcast,
 			plugin,
-			graph,
-			codeIndex,
 			relayPort: relay.port,
 			confirm: passed.confirm ?? allowBox(question),
-			services: () => servicesRow(graph, whiteboard),
+			services: () => servicesRow(whiteboard),
 			// The boss's `show` on this server's canvas page (0552), unless the test's.
 			...(whiteboard ? whiteboardReviews(whiteboard, (query) => openInBrowser(pageUrl(query))) : {}),
 			...(passed.findReview ? { findReview: passed.findReview } : {}),
@@ -381,7 +323,6 @@ export async function startServer(options: ServerOptions = {}): Promise<JocastaS
 		});
 		// Its stop closes what it opened (the catalog, the day's stores) and herdr's connection.
 		undo.push({ name: "the service", run: () => service.stop(), ms: 30_000 });
-		const llm = llmCallback();
 		const stops = stopper((extraStops) =>
 			stopSteps({
 				popups,
@@ -389,16 +330,13 @@ export async function startServer(options: ServerOptions = {}): Promise<JocastaS
 				herdr,
 				session,
 				service,
-				stopContainers: () => (options.stopContainers ?? stopJocastaContainers)(),
 				extraStops,
 				whiteboard,
 				relay,
-				endLlmCallback: llm.end,
 				server: () => server,
 				bounds: options.stopBoundsMs,
 			}),
 		);
-		if (codeIndex) stops.add({ name: "the code index", run: () => codeIndex.stop(), ms: 10_000, when: "all" });
 		const stopping = () => stops.stopping;
 		const close = closeFlow({
 			service,
@@ -421,7 +359,6 @@ export async function startServer(options: ServerOptions = {}): Promise<JocastaS
 				waitMs: passed.confirmWaitMs ?? CONFIRM_WAIT_MS,
 			}),
 			popupRoute.hold,
-			llm.route,
 			feedRoute(token, guarded),
 		];
 		const pages = pageResponder({
@@ -434,14 +371,12 @@ export async function startServer(options: ServerOptions = {}): Promise<JocastaS
 		});
 		server = listen(options.port ?? configuredPort(), {
 			routes,
-			page: async (request, url, at) => guarded(await pages(request, url), at, whiteboard?.origin()),
+			page: async (request, url, at) => pageGuarded(await pages(request, url), url.pathname, at, whiteboard?.origin()),
 			websocket: feedSocket(service),
 		});
 		const listening = server;
 		undo.push({ name: "the server", run: () => listening.stop(true) });
 		port = server.port as number;
-		llm.listening(port);
-		undo.push({ name: "the model callback", run: llm.end });
 		undo.push({ name: "jocasta-service.json", run: () => removeServiceFile(process.pid) });
 		writeServiceFile({ port, token, pid: process.pid });
 		// The service starts once the server listens: its start (git per pane folder, the first read of every session

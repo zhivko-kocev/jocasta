@@ -246,7 +246,7 @@ const QUESTION = [
 ].join("\n");
 
 /**
- * omp 18.18.6's `ask` form as its TUI draws it (pi-tui `html-form/dialog.ts`, 0589), cut so each test screen shows only
+ * omp 18.20.2's `ask` form as its TUI draws it (pi-tui `html-form/dialog.ts`, 0589), cut so each test screen shows only
  * one of the two lines that tell a form: its Other row, or its footer.
  */
 const FORM_OTHER_ROW = [
@@ -371,7 +371,6 @@ test(
 			hunk: HUNK,
 			hunkPort: port,
 			agentWaitMs: 10_000,
-			stopContainers: async () => {},
 			onQuestion: (popup) => {
 				const choice = (answers.shift() ?? false) ? "Stop everything" : "Cancel";
 				// One reader per question (0578): the view first, then the answer with its reader secret.

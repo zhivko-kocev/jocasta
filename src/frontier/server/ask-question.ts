@@ -1,8 +1,8 @@
 /**
  * The question an omp `ask` call puts to him, as one line (0589). Since omp 18.18.3 the call's arguments are one HTML
- * form, `{html}` (`tools/ask.ts:59-61`); before, `{questions: [{question, …}]}`. For a form the question is the first
- * named control's, worded as omp words it for its own blocked status (`modes/controllers/event-controller.ts:2168-2185`,
- * pi-tui `html-form/data.ts:127-146` `fieldQuestions`): the control's own label (a text field, number, select or
+ * form, `{html}` (`tools/ask.ts:62-64`); before, `{questions: [{question, …}]}`. For a form the question is the first
+ * named control's, worded as omp words it for its own blocked status (`modes/controllers/extension-ui-controller.ts:897-898`,
+ * pi-tui `html-form/data.ts:133-157` `fieldQuestions`): the control's own label (a text field, number, select or
  * textarea wrapped in `<label>`, a `<label for>`, its `aria-label` or `title`; a radio or checkbox group has none),
  * else the text block just before it (`<p>`, a heading, …), else its fieldset's `<legend>`, else a lone checkbox's
  * label, else its name. Read with a tag scanner, not a DOM: the form is the model's plain semantic HTML
@@ -52,6 +52,7 @@ function attribute(tag: string, name: string): string | undefined {
 }
 
 /** The form's first named control's question, as omp words it; null when the form has no named control. */
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: one pass of one tag scanner whose caption, legend, pending text and open label are shared mutable state read by every tag case; splitting it would pass that state through helpers (0610).
 export function formQuestion(html: string): string | null {
 	const doc = html.replace(DROPPED, " ");
 	const lower = doc.toLowerCase();

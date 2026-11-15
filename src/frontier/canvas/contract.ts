@@ -1,25 +1,17 @@
-// whiteboard v0.2.4's host contract (0393), the part Jocasta's bridge implements: the canvas module's mount, its
+// whiteboard v0.5.2's host contract (0393, 0615), the part Jocasta's bridge implements: the canvas module's mount, its
 // contents, the `ReviewCanvasBridge` and the editor factories. Mirrored, not imported, from
-// `forks/whiteboard/packages/review-protocol/src/contracts.ts` (lines 98–343, 593–797, 1071–1080, 1230–1359), so the
-// page builds without whiteboard's sources; a whiteboard bump re-checks it (plan §5.5).
+// `forks/whiteboard/packages/review-protocol/src/contracts.ts` (`ReviewCanvasBridge`, `ReviewCanvasContent`, the peek and
+// diff view types, `ReviewVerbRequestSchema`), so the page builds without whiteboard's sources; a whiteboard bump
+// re-checks it (plan §5.5).
 
-export type ReviewTheme = "light" | "dark";
+type ReviewTheme = "light" | "dark";
 export type ReviewDiffSide = "base" | "head";
 export type ReviewDiffLayout = "split" | "unified";
-export type ReviewView = "review" | "commits" | "diff" | "map" | "trace";
+export type ReviewDiffLayoutScope = "diff" | "peek";
+type ReviewView = "review" | "diff" | "map" | "trace";
 
 export interface ReviewDisposable {
 	dispose(): void;
-}
-
-export interface ReviewRuntimeConfig {
-	serverUrl: string;
-	reviewId: string;
-	token: string;
-	wasmUrl: string;
-	appVersion: string;
-	theme: ReviewTheme;
-	host: "desktop";
 }
 
 export interface ReviewInlineEditorRange {
@@ -85,14 +77,14 @@ export interface ReviewInlineEditorHandle extends ReviewDisposable {
 	clearFind(): void;
 }
 
-export interface ReviewDiffLensRange {
+interface ReviewDiffLensRange {
 	side: ReviewDiffSide;
 	file: string;
 	fromLine: number;
 	toLine: number;
 }
 
-export interface ReviewDiffLens {
+interface ReviewDiffLens {
 	wholeFiles?: boolean;
 	id: string;
 	title: string;
@@ -101,7 +93,7 @@ export interface ReviewDiffLens {
 	ranges: readonly ReviewDiffLensRange[];
 }
 
-export interface ReviewCommitScope {
+interface ReviewCommitScope {
 	commit: string;
 }
 
@@ -157,8 +149,10 @@ export type ReviewVerbRequest =
 	| { name: "focusWindow"; args: Record<string, never> }
 	| { name: "captureScreenshot"; args: Record<string, never> }
 	| { name: "openReviewRevision"; args: { revision?: string; sealedAt?: number } }
-	| { name: "openReview"; args: { reviewUuid: string; active: boolean } }
-	| { name: "openApiReview"; args: { reviewId: string; title: string } };
+	| { name: "openReview"; args: { reviewUuid: string; active: boolean; blockId?: string; view?: ReviewView } }
+	| { name: "openApiReview"; args: { reviewId: string; title: string } }
+	| { name: "exportReviewFile"; args: { reviewId: string; version?: number } }
+	| { name: "renderAnimation"; args: { reviewId: string; targetId: string; frame: string } };
 
 export type ReviewVerbResponse = { ok: true; result?: unknown } | { ok: false; error: string; code?: string };
 
@@ -167,8 +161,9 @@ export type ReviewSurfaceEvent =
 	| { event: "showReviewView"; view: ReviewView };
 
 export interface ReviewCanvasBridge {
-	readonly config: ReviewRuntimeConfig;
-	readonly inlineEditors: {
+	readonly wasmUrl: string;
+	readonly appVersion: string;
+	readonly peeks: {
 		create(spec: ReviewInlineEditorSpec): ReviewInlineEditorHandle;
 		find(spec: ReviewInlineFindSpec, query: ReviewFindQuery): Promise<{ matchCount: number }>;
 	};
@@ -176,17 +171,26 @@ export interface ReviewCanvasBridge {
 		create(spec: ReviewDiffViewSpec): ReviewDiffViewHandle;
 		files(scope?: ReviewCommitScope): Promise<readonly ReviewDiffFileWire[]>;
 	};
-	request(url: string, init?: RequestInit): Promise<Response>;
+	/** `path` is `/reviews-api/…`; the host adds its origin and the token. */
+	request?(path: string, init?: RequestInit): Promise<Response>;
 	post(request: ReviewVerbRequest): Promise<ReviewVerbResponse>;
 	subscribe(listener: (event: ReviewSurfaceEvent) => void): ReviewDisposable;
 	currentTheme(): ReviewTheme;
 	onDidChangeTheme(listener: (theme: ReviewTheme) => void): ReviewDisposable;
-	currentDiffLayout(): ReviewDiffLayout;
-	setDiffLayout(layout: ReviewDiffLayout): Promise<void>;
-	onDidChangeDiffLayout(listener: (layout: ReviewDiffLayout) => void): ReviewDisposable;
-	notify?(message: { kind: "success" | "error"; text: string }): void;
+	currentDiffLayout(scope: ReviewDiffLayoutScope): ReviewDiffLayout;
+	setDiffLayout(scope: ReviewDiffLayoutScope, layout: ReviewDiffLayout): Promise<void>;
+	onDidChangeDiffLayout(scope: ReviewDiffLayoutScope, listener: (layout: ReviewDiffLayout) => void): ReviewDisposable;
+	currentInlineLineNumbers(): boolean;
+	setInlineLineNumbers(show: boolean): Promise<void>;
+	onDidChangeInlineLineNumbers(listener: (show: boolean) => void): ReviewDisposable;
 	ready(): void;
 	reportDiagnostic?(diagnostic: { level: "error" | "warning"; source: string; message: string; stack?: string }): void;
+	setTitle?(title: string): void;
+	setSourceView?(selection: unknown, view: ReviewSourceView): void;
+	openSource?(
+		source: { view: ReviewSourceView; file: string; side: ReviewDiffSide },
+		range: ReviewInlineEditorRange,
+	): Promise<void>;
 }
 
 /** A review in the server's catalog (`GET /reviews-api`), as Home lists it; passed through as the server sends it. */
@@ -203,19 +207,12 @@ export type ReviewCanvasContent =
 			kind: "api";
 			reviewId: string;
 			bridge: ReviewCanvasBridge;
-			setTitle?(title: string): void;
-			setSourceView?(selection: unknown, view: ReviewSourceView): void;
-			openSource?(
-				source: { view: ReviewSourceView; file: string; side: ReviewDiffSide },
-				range: ReviewInlineEditorRange,
-			): Promise<void>;
+			settings?: { diagramFullscreenOnClick?: boolean; softwareMapEnabled?: boolean };
 	  }
 	| {
 			kind: "home";
-			reviews: readonly ReviewApiSummary[];
-			openReview(uuid: string): void;
-			deleteReview?(uuid: string): Promise<void>;
-			openTutorial(): void;
+			data: { view?: "active" | "trash"; reviews: readonly ReviewApiSummary[] };
+			host: { openReview(uuid: string): void; trashReview?(uuid: string): Promise<void> };
 	  };
 
 export interface ReviewCanvasHandle extends ReviewDisposable {
@@ -237,7 +234,10 @@ export interface ReviewCanvasModule {
 		container: HTMLElement,
 		content: ReviewCanvasContent,
 		ui?: {
-			confirmDelete?(title: string): Promise<boolean>;
+			confirmDelete?(
+				titles: readonly string[],
+				options?: { reviewIds?: readonly string[]; trash?: boolean },
+			): Promise<boolean>;
 			showMenu(request: ReviewMenuRequest): ReviewDisposable;
 		},
 	): ReviewCanvasHandle;

@@ -77,10 +77,10 @@ const HOST: Target | undefined =
 				? "darwin-arm64"
 				: undefined;
 
-/** whiteboard v0.2.4, the submodule at `forks/whiteboard` (0393, 0417, 0564); never modified. */
+/** whiteboard v0.5.2, the submodule at `forks/whiteboard` (0393, 0417, 0564, 0615); never modified. */
 const WHITEBOARD = join(root, "forks", "whiteboard");
-/** The commit tag v0.2.4 names (0383, 0417): a clone anywhere else is refused (SEC-7). */
-const WHITEBOARD_COMMIT = "5b00f0e66d034e187a29d270b3690a37b57ccf7b";
+/** The commit tag v0.5.2 names (0383, 0417, 0615): a clone anywhere else is refused (SEC-7). */
+const WHITEBOARD_COMMIT = "03d373ab0bf64ae3e3a5e4e1e592cb4fd173871d";
 /**
  * The pnpm whiteboard's `packageManager` names (`pnpm@11.1.2`), with the SHA-512 of its npm tarball (npm's `dist.integrity`
  * as hex), so Corepack verifies what it downloads (0430). It goes into a Corepack home of the build's own before the
@@ -136,7 +136,7 @@ function whiteboardCommit(): string | undefined {
 	}
 	if (!head) return undefined;
 	if (head !== WHITEBOARD_COMMIT) {
-		fail(`${WHITEBOARD} is at ${head}, not whiteboard v0.2.4 (${WHITEBOARD_COMMIT}): check it out at the tag (0417)`);
+		fail(`${WHITEBOARD} is at ${head}, not whiteboard v0.5.2 (${WHITEBOARD_COMMIT}): check it out at the tag (0417)`);
 	}
 	return head;
 }
@@ -160,15 +160,15 @@ function whiteboardContent(): string {
 
 /**
  * Builds the clone with its own toolchain (0393): pnpm 11 through Corepack on Node 24, `install --frozen-lockfile`,
- * the runtime package, its tutorial's assets (`tutorial/pins.json` and the sample repo's git stub, which the tutorial
- * the canvas's empty state opens needs; 0419), then the canvas (that order: the canvas imports the runtime's build).
- * Reused when the clone's commit (or, without git, its content after the last build) and its folder match and every
- * output is there: pnpm's links are absolute, so a moved checkout installs again.
+ * the runtime package, then the canvas (that order: the canvas imports the runtime's build). Whiteboard 0.5.2 has no
+ * tutorial and no tutorial build step (0615). Reused when the clone's commit (or, without git, its content after the
+ * last build) and its folder match and every output is there: pnpm's links are absolute, so a moved checkout installs
+ * again.
  */
 function buildWhiteboard(): void {
 	if (!existsSync(join(WHITEBOARD, "pnpm-workspace.yaml"))) {
 		fail(
-			`${WHITEBOARD} is missing: clone devdotfast/whiteboard at tag v0.2.4 there (0417): git clone --depth 1 --branch v0.2.4 https://github.com/devdotfast/whiteboard.git forks/whiteboard`,
+			`${WHITEBOARD} is missing: clone devdotfast/whiteboard at tag v0.5.2 there (0417): git clone --depth 1 --branch v0.5.2 https://github.com/devdotfast/whiteboard.git forks/whiteboard`,
 		);
 	}
 	const commit = whiteboardCommit();
@@ -176,9 +176,7 @@ function buildWhiteboard(): void {
 		JSON.stringify(commit ? { head: commit, at: WHITEBOARD } : { content: whiteboardContent(), at: WHITEBOARD });
 	const stampFile = join(CACHE, "whiteboard", "built.json");
 	const built =
-		existsSync(join(WHITEBOARD_PACKAGE, "dist", "cli.js")) &&
-		existsSync(join(WHITEBOARD_PACKAGE, "tutorial", "pins.json")) &&
-		existsSync(join(CANVAS_BUILD, ".vite", "manifest.json"));
+		existsSync(join(WHITEBOARD_PACKAGE, "dist", "cli.js")) && existsSync(join(CANVAS_BUILD, ".vite", "manifest.json"));
 	if (built && existsSync(stampFile) && readFileSync(stampFile, "utf8") === key()) {
 		console.log("build: whiteboard is built from this clone; reusing it");
 		return;
@@ -213,7 +211,6 @@ function buildWhiteboard(): void {
 	// Never prompt: with no TTY a modules-purge question would hang the build.
 	run(["pnpm", "install", "--frozen-lockfile", "--config.confirm-modules-purge=false"]);
 	run(["pnpm", "--filter", "@dev.fast/whiteboard", "build"]);
-	run(["pnpm", "--filter", "@dev.fast/whiteboard", "build:tutorial-assets"]);
 	run(["pnpm", "--filter", "@dev.fast/review-canvas", "build"]);
 	mkdirSync(dirname(stampFile), { recursive: true });
 	// Without git the key is taken after the build, so the outputs it wrote outside `dist` are part of it.
@@ -247,6 +244,8 @@ const readPackage = (dir: string): PackageJson => JSON.parse(readFileSync(join(d
  */
 function shipWhiteboardRuntime(dest: string): void {
 	const pkg = readPackage(WHITEBOARD_PACKAGE);
+	// 0.5.2's `files` less `remote`: its `install.sh` installs whiteboard on an SSH host, which the runtime never reads
+	// from disk (it hands the host a `curl` of whiteboard's site), and Jocasta uses no remote hosts.
 	const files = [
 		"package.json",
 		"LICENSE",
@@ -255,14 +254,13 @@ function shipWhiteboardRuntime(dest: string): void {
 		"onboarding.md",
 		"dist",
 		"instructions",
-		"tutorial",
 		"src",
 	];
 	for (const file of files) {
 		cpSync(join(WHITEBOARD_PACKAGE, file), join(dest, file), {
 			recursive: true,
-			// npm's `files`: no tutorial bundle, no tests or test helpers.
-			filter: (path) => !/[\\/]tutorial[\\/]\.bundle([\\/]|$)|\.test\.ts$|test-utils/.test(path),
+			// npm's `files`: no tests or test helpers.
+			filter: (path) => !/\.test\.ts$|test-utils/.test(path),
 		});
 	}
 	const placed = new Map<string, string>();

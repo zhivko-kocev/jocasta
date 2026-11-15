@@ -1,4 +1,4 @@
-// H1's pre-registered live check (0482, design 4a; omp 18.18.6 per 0535 and 0589, recorder per 0585): real omp, told
+// H1's pre-registered live check (0482, design 4a; omp 18.20.2 per 0535 and 0623, recorder per 0585): real omp, told
 // by a cheap model to run 30 random corpus commands once each, against the in-process verdicts of omp-verdicts.ts. For
 // the VM; a few cents.
 //
@@ -12,7 +12,7 @@
 // `session/request_permission`, which it rejects once; a deny ends the call with omp's policy text. The overlay (a second
 // `--config` after the guard) sets `tools.approvalMode: yolo` explicitly (the schema's implicit yolo makes ACP ask for
 // every bash call; explicit yolo keeps a pane's gate: deny refuses, prompt asks, allow runs, `session/session-tools.ts:
-// 1195-1213`) and turns service launch and async jobs off; the recorder extension (`-e`) keeps every bash call on the
+// 1198-1250`) and turns service launch and async jobs off; the recorder extension (`-e`) keeps every bash call on the
 // client terminal. Before any model call the script checks with omp's own code that the settings layer so, that the
 // interceptor is off, that this omp's bash tool has the client-terminal route and its ACP gate a reject-once option;
 // an omp without them is refused. Then a canary (`echo … > canary file`) must reach the client's terminal with no file
@@ -34,7 +34,10 @@ import { findOmpDir, loadOmp, ompJudge } from "./omp-verdicts.ts";
 
 export { LIVE_MARKER };
 
-/** Anthropic's cheapest model in omp 18.18.6's catalog (`pi-catalog/src/models.json`: $0.10/$0.50 per M tokens). */
+/**
+ * Anthropic's cheapest model in omp 18.20.2's catalog (`pi-catalog/src/models.json` via `getBundledModel`):
+ * $0.10/$0.50 per M tokens.
+ */
 export const DEFAULT_MODEL = "anthropic/claude-haiku-5-5";
 const CANARY_FILE = "h1-live-canary.txt";
 const CANARY = `echo h1-live-canary > ${CANARY_FILE}`;

@@ -17,7 +17,9 @@ import {
 	demoProject,
 	GUARD,
 	keyed,
+	PANE_CHECK_FLAGS,
 	Page,
+	projectKeyed,
 	README_THREAD_ENV,
 	review,
 	startTestServer,
@@ -34,20 +36,16 @@ const env = useTempJocasta();
 const HUNK_OPTIONS = useHunkDaemon();
 
 test(
-	"graph_search, today, note and the client's pane.focus and link.open go where they should; speak is no tool (0552, 0581)",
+	"history_search, today, note and the client's pane.focus and link.open go where they should; speak is no tool (0552, 0581, 0603)",
 	async () => {
 		await demoProject(env.root);
 		await withServer(async (server) => {
 			// A pane Jocasta didn't start has no project (nor a pane key, 0578); the boss must name one.
-			expect((await call(server, "graph_search", { query: "why" }, "p_none")).text).toBe(
-				"No project here: graph_search answers in the project and thread panes Jocasta started; a pane Jocasta started before panes had keys gets one when Jocasta starts it again, once it is idle.",
+			expect((await call(server, "history_search", { query: "why" }, "p_none")).text).toBe(
+				"No project here: history_search answers in the project and thread panes Jocasta started; a pane Jocasta started before panes had keys gets one when Jocasta starts it again, once it is idle.",
 			);
-			expect(await call(server, "graph_search", { query: "why" })).toEqual({
-				text: "graph_search: name the project whose graph to search.",
-				isError: true,
-			});
-			expect(await call(server, "graph_search", { query: "why", project: "demo" })).toEqual({
-				text: "the knowledge graph isn't available in this run.",
+			expect(await call(server, "history_search", { query: "why" })).toEqual({
+				text: "history_search: name the project whose history to search.",
 				isError: true,
 			});
 			expect(await call(server, "speak", { text: "Done." })).toEqual({ text: "no tool speak.", isError: true });
@@ -209,7 +207,7 @@ test(
 				.slice(before)
 				.filter((c) => c.method === "respawn")
 				.map((c) => c.args) as [string, { cwd: string; command: string[]; env?: Record<string, string> }][];
-			const overlay = ["omp", "--continue", ...GUARD, "--config", overlayFile(project.id)];
+			const overlay = ["omp", "--continue", ...GUARD, "--config", overlayFile(project.id), ...PANE_CHECK_FLAGS];
 			const thread = threadOmp(project.id);
 			expect(respawned.map(([, o]) => o.command.slice(0, 3))).toEqual([
 				["omp", "--continue", "--config"],
@@ -222,7 +220,7 @@ test(
 			expect(respawned[0]?.[1].env).toEqual(keyed({ JOCASTA_BOSS_KEY: TEST_BOSS_KEY }));
 			expect(respawned.slice(1).map(([, o]) => ({ ...o, cwd: resolve(o.cwd) }))).toEqual([
 				{ cwd: path, command: thread, env: keyed({ ...hunkEnv(HUNK_OPTIONS.hunkPort), ...README_THREAD_ENV }) },
-				{ cwd: project.mainPath, command: overlay, env: keyed(hunkEnv(HUNK_OPTIONS.hunkPort)) },
+				{ cwd: project.mainPath, command: overlay, env: projectKeyed(hunkEnv(HUNK_OPTIONS.hunkPort)) },
 			]);
 			const keys = respawned.map(([, o]) => o.env?.JOCASTA_PANE_KEY);
 			expect(new Set(keys).size).toBe(3);

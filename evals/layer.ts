@@ -2,13 +2,12 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "../bench/lib/args.ts";
 import { UserError } from "../src/shared/errors.ts";
-import type { LayerSwitches } from "./variants.ts";
 
 /**
  * A6's seam (0543): A6 = A3 + the harness-OS layer (0532), built into each trial by Jocasta's own code: the task
  * file's brief and Done-when through `--append-system-prompt` (0540), the `report_result` tool (0539), the cached
- * checks with gate replies and, when switched on, the `check` thread tool (0542, 0546) and the code index behind
- * `graph_search` (0562). The plan review is the bench's, not the layer's (`plan-review.ts`, 0567). The ledger needs
+ * checks with gate replies, the `check` thread tool (0542, 0546, 0571) and the history search tool (0604). The plan
+ * review is the bench's, not the layer's (`plan-review.ts`, 0567). The ledger needs
  * nothing from it: the bench reads every trial's saved sessions itself, with the product's ledger (`src/shared/ledger.ts`).
  *
  * The layer is Jocasta's build, not the bench's: the bench imports {@link LAYER_MODULE}, which exports
@@ -34,7 +33,6 @@ export interface LayerTrial {
 	 * own prompt file starts with it, as a thread's launch prompt does (0540).
 	 */
 	appendSystemPrompt?: string;
-	switches: LayerSwitches;
 	env: Record<string, string | undefined>;
 }
 
@@ -45,16 +43,12 @@ export interface LayerSetup {
 	/** omp settings deep-merged into the trial's `--config` overlay. */
 	settings: Record<string, unknown>;
 	env: Record<string, string>;
-	/** How long the code index took to build during setup, before the trial's clock (0575); unset with the index off. */
-	indexBuildMs?: number;
 	/** Stops what `setUp` started and removes its data; awaited after the last turn, also when the trial fails. */
 	close(): Promise<void>;
 }
 
 export interface BenchLayer {
 	setUp(trial: LayerTrial): Promise<LayerSetup>;
-	/** Why a trial with these switches can't run on this machine (EVL-1: checked before any trial), or undefined. */
-	preflight(switches: LayerSwitches): Promise<string | undefined>;
 }
 
 export class LayerUnavailableError extends UserError {}
@@ -70,9 +64,7 @@ export async function loadBenchLayer(root = REPO_ROOT): Promise<BenchLayer> {
 	if (!layerBuilt(root)) throw new LayerUnavailableError(layerMissingMessage());
 	// Dynamic on purpose: the module is a later build's and may be absent; a static import would break typecheck now.
 	const module = (await import(join(root, LAYER_MODULE))) as { benchLayer?: BenchLayer };
-	if (typeof module.benchLayer?.setUp !== "function" || typeof module.benchLayer.preflight !== "function")
-		throw new LayerUnavailableError(
-			`${LAYER_MODULE} does not export benchLayer with setUp(trial) and preflight(switches)`,
-		);
+	if (typeof module.benchLayer?.setUp !== "function")
+		throw new LayerUnavailableError(`${LAYER_MODULE} does not export benchLayer with setUp(trial)`);
 	return module.benchLayer;
 }

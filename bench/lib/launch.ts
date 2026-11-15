@@ -21,7 +21,7 @@ export type BenchTool = (typeof BENCH_TOOLS)[number];
  * Code 2.1.296's footer, which reads "auto mode on (shift+tab to cycle)" in its default mode, auto, and "? for
  * shortcuts" in the others.
  */
-export const DEFAULT_READY: Record<BenchTool, string> = {
+const DEFAULT_READY: Record<BenchTool, string> = {
 	omp: "to change thinking effort",
 	claude: "\\? for shortcuts|shift\\+tab to cycle",
 	opencode: "ctrl\\+p",

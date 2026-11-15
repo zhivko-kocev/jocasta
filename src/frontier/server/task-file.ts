@@ -28,7 +28,7 @@ export interface CheckExit {
  * One review as the task file lists it, with the outcome a restart gives the thread back (its notes, blocking notes,
  * tests and diff proof; absent in records written before they were kept).
  */
-export interface TaskReview {
+interface TaskReview {
 	at: number;
 	passed: boolean;
 	/** The project's check (when known) and each `done_when` command, in that order. */
@@ -39,6 +39,17 @@ export interface TaskReview {
 	blocking?: number;
 	tests?: TestsResult;
 	proof?: ReviewProof;
+}
+
+/** How a thread closed (0621): squash-merged, opened as a PR, or its worktree removed. */
+type CloseHow = "merged" | "pr" | "removed";
+
+/** When and how a thread closed, and its commit (0621): the squash commit for a merge, the pushed head for a PR. */
+export interface TaskClose {
+	at: number;
+	how: CloseHow;
+	/** The full commit id; null for a removed thread. Nothing is added to the commit's message. */
+	commit: string | null;
 }
 
 /** `thread.json`: what the task file is rendered from. */
@@ -76,10 +87,12 @@ export interface TaskRecord {
 	reviews: TaskReview[];
 	/** The thread was finished or removed: its worktree folder may hold a new thread. */
 	closed: boolean;
+	/** Absent while it is open, and on a record closed before 0621. */
+	close?: TaskClose;
 }
 
 /** `<data>/projects/<pid>/threads`. */
-export function threadsDir(projectId: string): string {
+function threadsDir(projectId: string): string {
 	return join(projectDir(projectId), "threads");
 }
 
@@ -119,16 +132,23 @@ export function newTask(
 	};
 }
 
+/** Every record of the project, open and closed, in no order; an unreadable one is left out. */
+export function projectTasks(projectId: string): TaskRecord[] {
+	const dir = threadsDir(projectId);
+	if (!existsSync(dir)) return [];
+	return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+		if (!entry.isDirectory()) return [];
+		const record = readJsonObject(join(dir, entry.name, "thread.json")) as TaskRecord | undefined;
+		return record ? [record] : [];
+	});
+}
+
 /** The open record of the thread in worktree `path`, the newest when several claim it; undefined when none. */
 export function findTask(projectId: string, path: string): TaskRecord | undefined {
-	const dir = threadsDir(projectId);
-	if (!existsSync(dir)) return undefined;
 	const key = pathKey(path);
 	let found: TaskRecord | undefined;
-	for (const entry of readdirSync(dir, { withFileTypes: true })) {
-		if (!entry.isDirectory()) continue;
-		const record = readJsonObject(join(dir, entry.name, "thread.json")) as TaskRecord | undefined;
-		if (!record || record.closed || !record.path || pathKey(record.path) !== key) continue;
+	for (const record of projectTasks(projectId)) {
+		if (record.closed || !record.path || pathKey(record.path) !== key) continue;
 		if (!found || record.createdAt > found.createdAt) found = record;
 	}
 	return found;
@@ -171,7 +191,7 @@ function planText(file: string | null, session: string | null): string {
 }
 
 /** The task file's text (0540's format). */
-export function taskMarkdown(record: TaskRecord): string {
+function taskMarkdown(record: TaskRecord): string {
 	const session = record.session ? basename(record.session).replace(/\.jsonl$/, "") : "—";
 	const lines = [
 		`# ${record.title} (${record.project})`,
@@ -218,16 +238,28 @@ function writeIfChanged(file: string, text: string): void {
 	writeAtomically(file, text);
 }
 
-/** Marks the thread finished or removed, so its folder may hold a new thread; a failed write goes to `failed`. */
-export function closeTask(record: TaskRecord, state: string, failed: (error: unknown) => void): void {
+/**
+ * Marks the thread closed, with when, how and its commit (0621), so its folder may hold a new thread; its state says
+ * `finished`, or `worktree removed` for a removed one. A record already closed keeps its first close: a merged
+ * thread whose folder is removed later stays merged. A failed write goes to `failed`.
+ */
+export function closeTask(
+	record: TaskRecord,
+	close: Omit<TaskClose, "at">,
+	failed: (error: unknown) => void,
+	now = Date.now(),
+): void {
+	if (record.close) return;
 	record.closed = true;
-	record.state = state;
+	record.state = close.how === "removed" ? "worktree removed" : "finished";
+	record.close = { at: now, ...close };
 	try {
 		saveTask(record);
 	} catch (error) {
 		failed(error);
 	}
 }
+
 /**
  * The text a thread's omp appends to its system prompt (0540, 0577): the panes' shipped prompt when there is one,
  * without its leading `<!-- … -->` comment (its license and file notes, PRM-6), then the Brief, Done-when and When you

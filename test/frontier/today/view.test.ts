@@ -229,11 +229,11 @@ test("today: connecting at first; offline keeps the time and says since when; qu
 		"14:30 · Jocasta isn't answering (since 14:28); trying again…",
 	);
 	const services: Dashboard["services"] = [
-		{ name: "Graphiti", state: "down", note: "Docker isn't running" },
-		{ name: "whiteboard", state: "up" },
+		{ name: "whiteboard", state: "down", note: "not answering" },
+		{ name: "herdr", state: "up" },
 	];
 	const header = lines({ up: true, hud: { ...hud, quiet: true }, dashboard: { ...dashboard, services } }, 200, 5)[0];
-	expect(header).toStartWith("Mon 9 Nov 14:30 · quiet · Graphiti down (Docker isn't running) · ");
+	expect(header).toStartWith("Mon 9 Nov 14:30 · quiet · whiteboard down (not answering) · ");
 	const empty: Today = { ...today, needsYou: [], underway: [], landed: [], calendar: [], next: [] };
 	const shown = lines({ up: true, today: empty, hud }, 60, 14);
 	expect(shown).toContain("  nothing waits on you");

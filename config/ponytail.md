@@ -1,8 +1,11 @@
 <!--
-Ponytail 5.2.0, AGENTS.md form, verbatim from the npm package @dietrichgebert/ponytail@5.2.0
+Ponytail 5.2.0, AGENTS.md form, from the npm package @dietrichgebert/ponytail@5.2.0
 (source https://github.com/DietrichGebert/ponytail), plus Jocasta's "Running tests" section at the end (0469, from
-Omarchy's AGENTS.md). Appended to every project and thread pane's system prompt (0421, 0427) and used by the eval
-variant `ponytail`; delete this file to turn it off.
+Omarchy's AGENTS.md). Jocasta changed three things, per 0612: the "Keep the structure the codebase already has" sentence
+and the "shortest working diff" bullet became one bullet ("Add nothing the task does not need. ..."); the comment bullet
+now asks for a comment on each exported function, class and type; the line about agents working on the ponytail repo
+itself is removed. Everything else is upstream's text verbatim. Appended to every project and thread pane's system
+prompt (0421, 0427) and used by the eval variant `ponytail`; delete this file to turn it off.
 
 MIT License
 
@@ -47,9 +50,9 @@ Take the first option that fully works:
 6. Otherwise: the minimum code that works.
 
 - Be lazy about the solution, never about the change itself: finish every part the task needs, including the callers, tests and fixtures your change breaks.
-- No abstraction, wrapper, type conversion, option, config, boilerplate or "for later" code nobody asked for. Keep values in the form the platform already gives you. Deletion beats addition. Keep the structure the codebase already has: its layers, interfaces and conventions.
-- The shortest working diff wins, once you know everything it must touch. A one-liner that needs decoding is not short.
-- Comment only the why the code cannot show, in one line.
+- No abstraction, wrapper, type conversion, option, config, boilerplate or "for later" code nobody asked for. Keep values in the form the platform already gives you. Deletion beats addition.
+- Add nothing the task does not need. Keep the structure the codebase has; when the task shows that structure is wrong, fix the structure, not a special case around it. A one-liner that needs decoding is not short.
+- Comment each exported function, class and type for its caller: what it does, units, edge cases, errors. Inside a function, comment only the why the code cannot show.
 - Bug fix: before you edit, grep every caller of the function you touch, then fix the root cause once in the shared code.
 - Code you move or merge keeps its error handling and validation.
 - Between options of equal size, take the one that is correct on edge cases.
@@ -57,8 +60,6 @@ Take the first option that fully works:
 - A shortcut with a known limit gets a code comment in this form: `shortcut: <the limit>, <when to upgrade>`.
 
 Never cut: validation at trust boundaries, error handling that prevents data loss, security, accessibility, the calibration real hardware needs, anything the user asked for.
-
-(Yes, this file also applies to agents working on the ponytail repo itself. Especially to them.)
 
 ## Running tests
 

@@ -355,26 +355,6 @@ test("today's spend lists the sessions folder at most every 30 s, reads today's 
 	expect(spendToday(index, clock)).toBeCloseTo(15);
 });
 
-test("today's spend adds Graphiti's model calls of today from graph-usage.jsonl (0582)", () => {
-	const now = Date.now();
-	const index = new SessionIndex(join(env.root, "sessions"), () => now);
-	const usage = join(env.root, "graph-usage.jsonl");
-	expect(spendToday(index, now, usage)).toBe(0);
-	const yesterday = dayStart(localDay(now), -1) + 3_600_000;
-	writeFileSync(
-		usage,
-		`${[
-			{ at: new Date(yesterday).toISOString(), model: "anthropic/claude-x", input: 10, output: 5, cost: 4 },
-			{ at: new Date(now).toISOString(), model: "anthropic/claude-x", input: 10, output: 5, cost: 0.25 },
-		]
-			.map((row) => JSON.stringify(row))
-			.join("\n")}\n{"at": "torn`,
-	);
-	expect(spendToday(index, now, usage)).toBeCloseTo(0.25);
-	appendFileSync(usage, `", "cost": 9}\n${JSON.stringify({ at: new Date(now).toISOString(), cost: 0.5 })}\n`);
-	expect(spendToday(index, now, usage)).toBeCloseTo(0.75);
-});
-
 test("a turn omp discards durably counts once in today's spend: its re-journaled usage is the same call (SRV-B-2)", () => {
 	const now = Date.now();
 	const sessions = join(env.root, "sessions");

@@ -142,7 +142,6 @@ function surface(over: Partial<SurfaceDeps> = {}) {
 			return false;
 		},
 		stopHerdr: async () => void calls.closed.push("stop herdr"),
-		stopContainers: () => void calls.closed.push("stop containers"),
 		exit: () => {},
 		watchServiceStop: () => async () => false,
 		herdrUp: async () => true,
@@ -281,7 +280,7 @@ test("lastLoggedError: the newest ERROR line's message since the start, without 
 	expect(lastLoggedError(join(env.root, "none"), 0)).toBeUndefined();
 });
 
-test("herdr's client exiting closes Jocasta: the service is told when it answers, else the containers and herdr stop here (0434, 0549)", async () => {
+test("herdr's client exiting closes Jocasta: the service is told when it answers, else herdr stops here (0434, 0549)", async () => {
 	const told = surface({
 		tellServiceClosed: async () => {
 			told.calls.closed.push("tell service");
@@ -295,10 +294,9 @@ test("herdr's client exiting closes Jocasta: the service is told when it answers
 
 	const alone = surface();
 	expect(await openSurface(alone.deps)).toBe(0);
-	// The containers' stop goes out first: a closing console leaves seconds (LC-7).
-	expect(alone.calls.closed).toEqual(["tell service", "stop containers", "stop herdr"]);
+	expect(alone.calls.closed).toEqual(["tell service", "stop herdr"]);
 
-	// herdr that won't stop is said; the containers stopped all the same.
+	// herdr that won't stop is said.
 	const stuck = surface({
 		stopHerdr: async () => {
 			throw new Error("didn't stop in 3 s");
@@ -306,9 +304,9 @@ test("herdr's client exiting closes Jocasta: the service is told when it answers
 	});
 	await openSurface(stuck.deps);
 	expect(stuck.printed).toContain("jocasta: herdr session jocasta didn't stop: didn't stop in 3 s");
-	expect(stuck.calls.closed).toEqual(["tell service", "stop containers"]);
+	expect(stuck.calls.closed).toEqual(["tell service"]);
 
-	// herdr that never answers still has the containers stopped first.
+	// herdr that never answers is waited for no longer than its bound.
 	const reached = Promise.withResolvers<void>();
 	const hung = surface({
 		stopHerdr: () => {
@@ -318,7 +316,7 @@ test("herdr's client exiting closes Jocasta: the service is told when it answers
 	});
 	void openSurface(hung.deps);
 	await reached.promise;
-	expect(hung.calls.closed).toEqual(["tell service", "stop containers"]);
+	expect(hung.calls.closed).toEqual(["tell service"]);
 });
 
 test("closing the terminal tells the service once and ends this process (0549)", async () => {
@@ -337,11 +335,11 @@ test("closing the terminal tells the service once and ends this process (0549)",
 	await poll(() => close !== undefined, { intervalMs: 1, what: "the terminal-close handler" });
 	close?.();
 	await exited.promise;
-	expect(calls.closed).toEqual(["tell service", "stop containers", "stop herdr"]);
+	expect(calls.closed).toEqual(["tell service", "stop herdr"]);
 	client.resolve(0);
 	await run;
 	// The client's exit after it closes nothing more.
-	expect(calls.closed).toEqual(["tell service", "stop containers", "stop herdr"]);
+	expect(calls.closed).toEqual(["tell service", "stop herdr"]);
 });
 
 test("bare jocasta exits 0 when the service stopped herdr itself; any other client exit keeps herdr's code (0491)", async () => {
@@ -437,7 +435,7 @@ test("a herdr server that dies under the client is started again by the service 
 	const quit = failing({ serviceHealth: async () => ({ state: "up", herdrRevivals: 0 }) });
 	expect(await openSurface(quit.deps)).toBe(1);
 	expect(quit.calls.attached).toHaveLength(1);
-	expect(quit.calls.closed).toEqual(["tell service", "stop containers", "stop herdr"]);
+	expect(quit.calls.closed).toEqual(["tell service", "stop herdr"]);
 
 	// No service answers, so nothing starts herdr again: a close, without waiting.
 	let alonePings = 0;
@@ -451,7 +449,7 @@ test("a herdr server that dies under the client is started again by the service 
 	});
 	expect(await openSurface(alone.deps)).toBe(1);
 	expect(alone.calls.attached).toHaveLength(1);
-	expect(alone.calls.closed).toEqual(["tell service", "stop containers", "stop herdr"]);
+	expect(alone.calls.closed).toEqual(["tell service", "stop herdr"]);
 	expect(alonePings).toBe(1);
 
 	// herdr not back within 30 s: a close, said.
@@ -465,7 +463,7 @@ test("a herdr server that dies under the client is started again by the service 
 	expect(await openSurface(late.deps)).toBe(1);
 	expect(waited).toBe(30_000);
 	expect(late.calls.attached).toHaveLength(1);
-	expect(late.calls.closed).toEqual(["tell service", "stop containers", "stop herdr"]);
+	expect(late.calls.closed).toEqual(["tell service", "stop herdr"]);
 	expect(late.printed).toContain("jocasta: herdr session jocasta isn't back after 30 s.");
 
 	// A service that starts closing while it waits starts nothing: the wait ends there.
@@ -570,7 +568,7 @@ test("the terminal closing closes Jocasta once, with herdr's client exiting at t
 	client.resolve(0);
 	expect(await opened).toBe(0);
 	await exited.promise;
-	expect(s.calls.closed).toEqual(["tell service", "stop containers", "stop herdr"]);
+	expect(s.calls.closed).toEqual(["tell service", "stop herdr"]);
 });
 
 test("attachedSurface: the last jocasta to leave closes; files of jocasta processes that are gone don't count", () => {

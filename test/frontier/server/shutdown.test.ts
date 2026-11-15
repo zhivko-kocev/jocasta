@@ -19,7 +19,7 @@ const env = useTempJocasta();
 /**
  * A server whose close question is answered with `answers` in turn (Stop everything, typed with its code, for true;
  * Cancel for false) through `GET` then `POST /api/popup/<code>` with the reader secret, as what shows it would; every
- * question, terminal opened and container stop kept.
+ * question, terminal opened and stop that follows herdr's kept.
  */
 async function guarded(answers: boolean[], options: ServerOptions = {}) {
 	const asked: string[] = [];
@@ -43,10 +43,11 @@ async function guarded(answers: boolean[], options: ServerOptions = {}) {
 		reattach: () => {
 			reattached++;
 		},
-		stopContainers: async () => {
-			steps.push(`containers after ${server.herdr.calls.map((c) => c.method).join(",")}`);
-		},
 		...options,
+	});
+	// Runs on Stop everything after herdr's own stops, where the containers' stop ran before 0603.
+	server.stopsWith("the test's stop", () => {
+		steps.push(`stopped after ${server.herdr.calls.map((c) => c.method).join(",")}`);
 	});
 	return { server, asked, steps, reattached: () => reattached };
 }
@@ -151,7 +152,7 @@ test(
 		expect(methods.indexOf("keepDown")).toBeLessThan(methods.indexOf("stopServer"));
 		expect(methods.at(-1)).toBe("stopServer");
 		expect(methods.filter((m) => m === "stopServer")).toHaveLength(1);
-		expect(steps).toEqual([`containers after ${server.herdr.calls.map((c) => c.method).join(",")}`, "relay"]);
+		expect(steps).toEqual([`stopped after ${server.herdr.calls.map((c) => c.method).join(",")}`, "relay"]);
 		// The thread at work comes back with `omp --restore <session>` on the next start (0549).
 		const panes = JSON.parse(readFileSync(join(dataDir(), "panes.json"), "utf8")) as Record<
 			string,
@@ -189,7 +190,6 @@ test(
 		const asked: string[] = [];
 		const second = await startServer({
 			herdr,
-			graph: null,
 			day: { pollers: false },
 			port: 0,
 			sessionsDir: join(dataDir(), "omp-sessions"),
@@ -198,7 +198,6 @@ test(
 			refreshMs: 60_000,
 			whiteboard: null,
 			panePrompt: null,
-			stopContainers: async () => {},
 			mise: null,
 			weeklyReviews: false,
 			...relayTestOptions(),
@@ -233,11 +232,9 @@ test("a stop step that throws or hangs never keeps the close from finishing (LC-
 	expect(existsSync(serviceFilePath())).toBe(false);
 	rmSync(hud, { force: true, recursive: true });
 
-	// Containers that never answer are left after their bound.
-	const hung = await startTestServer({
-		stopContainers: () => new Promise<void>(() => {}),
-		stopBoundsMs: { containers: 200 },
-	});
+	// A stop that never answers is left after its bound.
+	const hung = await startTestServer();
+	hung.stopsWith("never answers", () => new Promise<void>(() => {}), 200);
 	expect(await hung.shutdown({ ask: true })).toBe("stopped");
 	await hung.stopped;
 	expect(existsSync(serviceFilePath())).toBe(false);
@@ -246,7 +243,6 @@ test("a stop step that throws or hangs never keeps the close from finishing (LC-
 test("the stop runner: `all` steps only on Stop everything, `finally` steps last even after a throw or a step past its bound; a failed start's undo runs newest first (SRV-A-2, SRV-A-3)", async () => {
 	const ran: string[] = [];
 	const failed: string[] = [];
-	const timedOut: string[] = [];
 	const step = (name: string, more: Partial<StopStep> = {}): StopStep => ({ name, run: () => ran.push(name), ...more });
 	const steps: StopStep[] = [
 		step("last", { when: "finally" }),
@@ -258,13 +254,12 @@ test("the stop runner: `all` steps only on Stop everything, `finally` steps last
 				throw new Error("no");
 			},
 		}),
-		step("hangs", { run: () => new Promise(() => {}), ms: 20, onTimeout: () => timedOut.push("hangs") }),
+		step("hangs", { run: () => new Promise(() => {}), ms: 20 }),
 		step("after"),
 	];
 	await runStopSteps(steps, false, (name) => failed.push(name));
 	expect(ran).toEqual(["first", "throws", "after", "last"]);
 	expect(failed).toEqual(["throws", "hangs"]);
-	expect(timedOut).toEqual(["hangs"]);
 	ran.length = 0;
 	await runStopSteps(steps.slice(0, 3), true, () => {});
 	expect(ran).toEqual(["first", "only all", "last"]);

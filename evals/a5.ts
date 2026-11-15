@@ -23,7 +23,7 @@ import { byService as typedByService } from "../src/frontier/server/wording.ts";
 /** A message the service typed into a pane (SVC-1): one list, `wording.ts`'s, beside the texts themselves. */
 const byService = (message: UserMessage) => typedByService(message.text);
 
-export interface ThreadInput {
+interface ThreadInput {
 	name: string;
 	session: string;
 }

@@ -1,11 +1,8 @@
 /// <reference lib="dom" />
-// What every Monaco part of the canvas host shares (0411): Monaco loaded once on first use, whole-line ranges, the
-// line height the views use, and unique model names. Light on purpose: this module never loads Monaco's chunk itself.
+// What every Monaco part of the canvas host shares (0411): Monaco loaded once on first use, whole-line ranges and
+// unique model names. Light on purpose: this module never loads Monaco's chunk itself.
 import type * as MonacoApi from "./monaco.ts";
 import type { monaco } from "./monaco.ts";
-
-/** Every view's line height in px (`VIEW_OPTIONS.lineHeight`); a not-yet-mounted diff's placeholder is sized with it. */
-export const LINE_HEIGHT = 19;
 
 let monacoLoad: Promise<typeof MonacoApi> | undefined;
 

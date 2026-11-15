@@ -5,6 +5,7 @@
 // range is read on its own side, as the Desktop does (`side: range.side ?? spec.side`).
 import type {
 	ReviewDiffSide,
+	ReviewDisposable,
 	ReviewFindQuery,
 	ReviewInlineEditorHandle,
 	ReviewInlineEditorRange,
@@ -20,8 +21,30 @@ const WORD_SEPARATORS = "`~!@#$%^&*()-=+[{]}\\|;:'\",.<>/?";
 /** A capped code peek's most height, in px. */
 const CAPPED_HEIGHT = 420;
 
+/** Where the choice to number a peek's lines is kept (0615: `bridge.setInlineLineNumbers`); numbered until turned off. */
+const NUMBERS_KEY = "jocasta.whiteboard.inlineLineNumbers";
+
+/** Whether code peeks show their line numbers, kept in the page's storage. */
+export const inlineLineNumbers = {
+	changed: new Emitter<boolean>(),
+	get: (): boolean => localStorage.getItem(NUMBERS_KEY) !== "off",
+	set(show: boolean): void {
+		localStorage.setItem(NUMBERS_KEY, show ? "on" : "off");
+		inlineLineNumbers.changed.fire(show);
+	},
+};
+
+/** Monaco's line number option for a peek: each line's number in its file, `⋯` between blocks, or none. */
+function numberOption(sliced: Sliced, show: boolean): monaco.editor.LineNumbersType {
+	if (!show) return "off";
+	return (n) => {
+		const line = sliced.lines[n - 1];
+		return line ? String(line.line) : "⋯";
+	};
+}
+
 /** A shown line's place in its file; null for the `⋯` line between blocks. */
-export type SliceLine = { side: ReviewDiffSide; line: number } | null;
+type SliceLine = { side: ReviewDiffSide; line: number } | null;
 
 /** A peek's model text and where each of its lines comes from. */
 export interface Sliced {
@@ -109,7 +132,7 @@ function findMatches(model: monaco.editor.ITextModel, query: ReviewFindQuery): m
 	}
 }
 
-/** `inlineEditors.find`: the match count of a peek that isn't mounted, over the same model a mounted one shows. */
+/** `peeks.find`: the match count of a peek that isn't mounted, over the same model a mounted one shows. */
 export async function findInPeek(
 	source: ReviewSource,
 	spec: ReviewInlineFindSpec,
@@ -124,7 +147,7 @@ export async function findInPeek(
 	}
 }
 
-/** A code peek (`inlineEditors.create`): the authored ranges of one file, read-only, numbered as in the file. */
+/** A code peek (`peeks.create`): the authored ranges of one file, read-only, numbered as in the file. */
 export function inlineEditor(source: ReviewSource, spec: ReviewInlineEditorSpec): ReviewInlineEditorHandle {
 	const heights = new Emitter<number>();
 	const errors = new Emitter<string>();
@@ -137,6 +160,7 @@ export function inlineEditor(source: ReviewSource, spec: ReviewInlineEditorSpec)
 	let matches: monaco.editor.FindMatch[] = [];
 	let disposed = false;
 	let found: monaco.editor.IEditorDecorationsCollection | undefined;
+	let numbersChanged: ReviewDisposable | undefined;
 
 	const measure = () => {
 		if (!editor) return;
@@ -158,11 +182,11 @@ export function inlineEditor(source: ReviewSource, spec: ReviewInlineEditorSpec)
 			model,
 			folding: false,
 			lineNumbersMinChars: 4,
-			lineNumbers: (n) => {
-				const line = sliced.lines[n - 1];
-				return line ? String(line.line) : "⋯";
-			},
+			lineNumbers: numberOption(sliced, inlineLineNumbers.get()),
 		});
+		numbersChanged = inlineLineNumbers.changed.add((show) =>
+			editor?.updateOptions({ lineNumbers: numberOption(sliced, show) }),
+		);
 		// The authored selections stand out when the shown ranges are wider, each found on its own side.
 		const at = (range: ReviewInlineEditorRange, line: number) =>
 			sliced.lines.findIndex((l) => l?.side === sideOf(range, spec.side) && l.line === line) + 1;
@@ -217,6 +241,7 @@ export function inlineEditor(source: ReviewSource, spec: ReviewInlineEditorSpec)
 		},
 		dispose() {
 			disposed = true;
+			numbersChanged?.dispose();
 			editor?.dispose();
 			model?.dispose();
 			el.remove();

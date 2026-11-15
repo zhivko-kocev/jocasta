@@ -1,7 +1,7 @@
 /**
  * The boss pane (0392, 0404, 0424): workspace "Jocasta", first in herdr's list (Alt+1), with one omp pane in
  * `<data>/home`. Its manual is `<data>/home/.omp/APPEND_SYSTEM.md`, which omp loads for every session in that folder
- * when no `--append-system-prompt` is given (omp 18.18.6 `pi-coding-agent/src/main.ts:1401-1425`, `:1470`), so a pane
+ * when no `--append-system-prompt` is given (omp 18.20.2 `pi-coding-agent/src/main.ts:1404-1427`, `:1473`), so a pane
  * herdr restores or he starts by hand still has it; the procedures it rarely needs are skills in
  * `<data>/home/.omp/skills/` (0465). Both the service and bare `jocasta` ensure it.
  */
@@ -19,7 +19,7 @@ import type { Herdr, HerdrSnapshot, PaneInfo } from "./herdr.ts";
 export const BOSS_WORKSPACE = "Jocasta";
 
 /** The `today` pane's label: the plugin pane's title in `config/herdr-plugin/herdr-plugin.toml` (0553). */
-export const TODAY_LABEL = "today";
+const TODAY_LABEL = "today";
 
 /**
  * The herdr plugin's `today` pane (0553): plugin-owned, no agent in it, never the boss or a thread, and never adopted

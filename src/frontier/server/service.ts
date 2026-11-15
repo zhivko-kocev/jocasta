@@ -3,8 +3,8 @@
  * finishes threads (0388, 0412, 0426), serves the `jocasta` MCP tools (`/api/mcp/<tool>`), turns threads' changes and
  * his day's events into `[event]` lines and Windows notifications through herdr (0405, 0407, 0413, 0554), reports the
  * sidebar's tokens and the HUD (0402, 0403), opens hunk beside a thread that finished a task and has it test and
- * review its work (0394, 0406, 0425), then sends `/handoff` (0400), and feeds omp's compaction summaries to Graphiti
- * (0389). No Jocasta code runs inside omp (0386).
+ * review its work (0394, 0406, 0425), then sends `/handoff` (0400), and indexes omp's compaction summaries for
+ * `history_search` (0389, 0603). No Jocasta code runs inside omp (0386).
  *
  * This file wires the parts (SVC-15) and holds the start, the stop and the API server.ts, plugin.ts and run.ts use:
  * `thread.ts` (a thread and the registry), `places.ts` (git places, projects, trunks), `worktrees.ts` (worktrees on
@@ -21,15 +21,14 @@ import { UserError } from "../../shared/errors.ts";
 import { hostsOn, layerOn } from "../../shared/layer.ts";
 import { openInBrowser, webLink } from "../../shared/link.ts";
 import { log } from "../../shared/log.ts";
-import type { GraphFact } from "../../shared/memory/graph/index.ts";
 import { dataDir } from "../../shared/paths.ts";
 import type { Project } from "../../shared/projects.ts";
+import type { PushAnswer, PushRequest } from "../../shared/push-hook.ts";
 import { settingsProblems } from "../../shared/settings.ts";
 import type { ClientMessage, Hud, Leftover, ServerMessage, ServiceHealth, Today } from "../protocol.ts";
 import { AllowGate, type Confirm } from "./allow.ts";
 import { freshSession, LaunchedPanes } from "./boss.ts";
 import { CheckRunner, checksDir } from "./checks.ts";
-import type { CodeIndex } from "./code-index.ts";
 import type { ServiceContext } from "./context.ts";
 import { Day, type DayOptions } from "./day.ts";
 import { clean, Events } from "./events.ts";
@@ -40,6 +39,7 @@ import { OmpTracker } from "./omp-processes.ts";
 import { PaneLauncher } from "./pane-launch.ts";
 import { Places } from "./places.ts";
 import { STT_TOGGLE_KEY } from "./ptt-hold.ts";
+import { PushGate } from "./push-gate.ts";
 import { Refresher } from "./refresh.ts";
 import { ReviewFlow } from "./review-flow.ts";
 import { SessionIndex } from "./sessions.ts";
@@ -48,7 +48,7 @@ import { ThreadRegistry } from "./thread.ts";
 import { ThreadLifecycle } from "./thread-lifecycle.ts";
 import { ThreadStarts } from "./thread-start.ts";
 import { type Caller, type ToolReply, Tools } from "./tools.ts";
-import { type Episode, startWatcher, type Watcher } from "./watcher.ts";
+import { startWatcher, type Watcher } from "./watcher.ts";
 import { WeeklyReviews } from "./weekly-review.ts";
 import type { WorklogSession } from "./worklog.ts";
 import { ReviewedCommits, ThreadNumbers } from "./worktrees.ts";
@@ -60,16 +60,10 @@ const HOST_POLL_MS = 1_000;
 /** How long `stop` waits for tool calls in flight before closing the catalog under them (SVC-13). */
 const CALLS_WAIT_MS = 25_000;
 
-/** The knowledge graph as the service uses it (test seam). */
-export interface Graph {
-	search(projectId: string, query: string, limit: number): Promise<GraphFact[]>;
-	post(projectId: string, episode: Episode): Promise<void>;
-}
-
 export interface ServiceOptions {
 	herdr: Herdr;
 	broadcast(message: ServerMessage): void;
-	/** Whether Graphiti and whiteboard answer (0429), for the dashboard; herdr's the service checks itself. */
+	/** Whether whiteboard answers (0429), for the dashboard; herdr's the service checks itself. */
 	services?(): Promise<ServiceHealth[]>;
 	/**
 	 * The herdr plugin's panes (0553): healed on every refresh with herdr's panes as read and the boss pane's id, so
@@ -104,10 +98,10 @@ export interface ServiceOptions {
 	ghTimeoutMs?: number;
 	/** omp's sessions dir; `~/.omp/agent/sessions` by default. */
 	sessionsDir?: string;
-	/** The knowledge graph; none in tests. */
-	graph?: Graph;
 	/** How long `thread_start` waits for omp to come up in the new pane before sending the brief; `AGENT_WAIT_MS`, 20 s. */
 	agentWaitMs?: number;
+	/** How long a project pane's check request waits for its check (0617); `PANE_CHECK_WAIT_MS`, 20 s. */
+	paneCheckWaitMs?: number;
 	/**
 	 * How long `thread_start` waits for the pane to start working on the brief before sending one Enter;
 	 * `SUBMIT_WAIT_MS`, 5 s.
@@ -125,6 +119,8 @@ export interface ServiceOptions {
 	mise?: string[] | null;
 	/** How long the weekly big-picture review may run (0470); 30 minutes. */
 	weeklyReviewMs?: number;
+	/** How long the project's `scorecard` task may run before the weekly review goes on without it (0616); 10 minutes. */
+	scorecardMs?: number;
 	/** `false` (test seam): the minute tick never starts a weekly review (0470), so no test spawns omp; the boss's tool still can. */
 	weeklyReviews?: false;
 	/**
@@ -156,8 +152,6 @@ export interface ServiceOptions {
 	askReport?: false;
 	/** The check runner (0542, 0559): `<data>/checks` by default (test seam). */
 	checks?: CheckRunner;
-	/** The code index behind `graph_search` (0562); none answers with facts only. */
-	codeIndex?: CodeIndex;
 	/** How long a plan-mode turn's end waits for the session to show its proposal; `PLAN_SETTLE_MS` (test seam). */
 	planSettleMs?: number;
 }
@@ -169,6 +163,7 @@ export class JocastaService {
 	private readonly refresher: Refresher;
 	private readonly tools: Tools;
 	private readonly keys: Keys;
+	private readonly pushes: PushGate;
 	private watcher: Watcher | undefined;
 	private unwatch: (() => void) | undefined;
 	private timer: Timer | undefined;
@@ -212,7 +207,6 @@ export class JocastaService {
 		c.allow = new AllowGate(options.confirm, options.confirmWaitMs);
 		c.places = new Places(catalog, {
 			problem: (text) => c.events.warning(text),
-			gone: (id) => void options.codeIndex?.forget(id).catch((e) => c.warn(e)),
 			synced: () => this.refresher.rediscover(),
 		});
 		c.numbers = new ThreadNumbers();
@@ -228,6 +222,7 @@ export class JocastaService {
 		this.refresher = new Refresher(c);
 		this.tools = new Tools(c);
 		this.keys = new Keys(c, (run) => this.track(run));
+		this.pushes = new PushGate(c);
 		this.day = new Day(
 			catalog,
 			{
@@ -308,7 +303,6 @@ export class JocastaService {
 				c.status.setupNotice = text;
 			})
 			.catch((error) => c.warn(error));
-		const graph = this.options.graph;
 		this.watcher = startWatcher({
 			sessionsDir: c.sessions.dir,
 			stateFile: join(dataDir(), "watcher.json"),
@@ -316,10 +310,6 @@ export class JocastaService {
 			projectFor: (cwd) => {
 				const project = c.places.projectAt(cwd);
 				return project ? { projectId: project.id } : undefined;
-			},
-			post: async (projectId, episode) => {
-				if (!graph) throw new Error("no knowledge graph in this run");
-				await graph.post(projectId, episode);
 			},
 			...(this.options.watcherIntervalMs ? { intervalMs: this.options.watcherIntervalMs } : {}),
 			onError: (e) => c.warn(e),
@@ -356,6 +346,7 @@ export class JocastaService {
 		c.stopping = true;
 		this.found.resolve();
 		c.allow.withdrawAll();
+		c.review.endPaneWaits();
 		try {
 			// A start still running stops at its next step; what it set up is torn down below.
 			await this.starting?.catch(() => {});
@@ -486,6 +477,32 @@ export class JocastaService {
 		}
 	}
 
+	/**
+	 * The pre-push hook's question (`POST /api/push`, 0613): whether the push may go ahead, which may wait for his Allow.
+	 * Counted like a tool call (SVC-13); a refusal is the answer `{allow: false, reason}`.
+	 */
+	async pushVerdict(request: PushRequest): Promise<PushAnswer> {
+		try {
+			return await this.track(() => this.pushes.verdict(request));
+		} catch (error) {
+			return { allow: false, reason: (error as Error).message };
+		}
+	}
+
+	/**
+	 * A project pane's check at its turn's end (`POST /api/pane-check`, 0617): the text for its agent, or "" for nothing.
+	 * `signal` ends when the pane stops asking. Counted like a tool call (SVC-13); a failure of its own answers nothing,
+	 * as the extension would.
+	 */
+	async paneCheck(paneKey: string, signal?: AbortSignal): Promise<string> {
+		try {
+			return await this.track(() => this.c.review.paneCheck(paneKey, signal));
+		} catch (error) {
+			this.c.warn(error);
+			return "";
+		}
+	}
+
 	// ---- his keys (0544, 0554), `keys.ts` ----
 
 	keyStop(paneId: string | undefined): Promise<string> {
@@ -560,6 +577,9 @@ export class JocastaService {
 					openInBrowser(url);
 					break;
 				}
+				default:
+					// Any other type is ignored (SEC-NET-5).
+					break;
 			}
 		} catch (error) {
 			reply({ type: "error", message: (error as Error).message });

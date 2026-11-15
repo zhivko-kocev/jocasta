@@ -81,7 +81,7 @@ export function refusedPage(request: Request): Response {
  * canvas build's files; 503 with the reason when either is missing, or when the server stopped answering since (its
  * process died, B-3): the page then shows its own failed state, not whiteboard's.
  */
-export async function whiteboardConnection(whiteboard: Whiteboard | undefined): Promise<Response> {
+async function whiteboardConnection(whiteboard: Whiteboard | undefined): Promise<Response> {
 	const dir = canvasDir();
 	if (!whiteboard || !dir) {
 		return Response.json(

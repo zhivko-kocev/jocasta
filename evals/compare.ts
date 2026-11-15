@@ -20,7 +20,7 @@ import { MEASUREMENT_NOTES, type ResultRow } from "./runner.ts";
  */
 
 /** A metric improves when the mean over cases of (mean B ÷ mean A) is at most this (0375). */
-export const IMPROVES_AT = 0.9;
+const IMPROVES_AT = 0.9;
 /** Float slack, so a ratio of exactly 0.90 or a rate exactly at the tolerance counts as met. */
 const EPSILON = 1e-9;
 
@@ -35,7 +35,7 @@ const metricOf: Record<Metric, (row: ResultRow) => number> = {
 	lines: (row) => row.linesAdded + row.linesRemoved,
 };
 
-export interface CaseComparison {
+interface CaseComparison {
 	case: string;
 	passedA: number;
 	trialsA: number;
@@ -218,7 +218,7 @@ const METRIC_NAMES: Record<(typeof RULE_METRICS)[number], string> = {
 };
 
 /** The comparison as markdown: one row per case, the summary, the verdict, the paired statistics and the notes. */
-export function renderComparison(comparison: Comparison, labelA: string, labelB: string, paired?: PairedStats): string {
+function renderComparison(comparison: Comparison, labelA: string, labelB: string, paired?: PairedStats): string {
 	const rows = comparison.cases.map(
 		(c) =>
 			`| ${c.case} | ${c.passedA}/${c.trialsA} | ${c.passedB}/${c.trialsB} | ${ratioText(c.ratios.tokens)} | ${ratioText(c.ratios.wallMs)} | ${ratioText(c.ratios.toolCalls)} | ${ratioText(c.ratios.lines)} |`,

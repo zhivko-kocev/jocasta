@@ -49,7 +49,7 @@ export function readAccounts(json: string, provider = PACER_PROVIDER): Account[]
 }
 
 /** Whether an account has a window at or past {@link PAUSE_AT}. */
-export const isFull = (account: Account): boolean => account.windows.some((window) => window.used >= PAUSE_AT);
+const isFull = (account: Account): boolean => account.windows.some((window) => window.used >= PAUSE_AT);
 
 /**
  * The pause the accounts call for at `now`: none while any account isn't full (or omp lists none); otherwise until the

@@ -27,19 +27,18 @@ runs, how often and what is measured is fixed there, as amended for the harness-
   call repeated, results of 50,000 bytes or more, repeated failures of one tool; cache misses: a cache write of 10,000
   tokens or more after more than 5 minutes without a request on the same provider and model; compactions: omp's own,
   `soft`, `shake`, `remote` and legacy, not Jocasta's `/handoff`, `method: "handoff"`, 0582) and the peak context
-  (tokens and percent of the model's window from the table). The service's own model calls (Graphiti's extraction
-  through its model endpoint, logged in `<data>/graph-usage.jsonl`) aren't in the ledger.
+  (tokens and percent of the model's window from the table).
 
 ## Where they run
 
 | Script | Model calls | Where |
 |---|---|---|
-| `h1-guard/omp-verdicts.ts`, `h1-guard/evaluate.ts` | none | anywhere with omp 18.18.6 installed (no command runs) |
+| `h1-guard/omp-verdicts.ts`, `h1-guard/evaluate.ts` | none | anywhere with omp 18.20.2 installed (no command runs) |
 | `h1-guard/live-check.ts` | 31 cheap-model turns (30 picks and a canary; a few cents) | 0481's VM (an ACP client records omp's calls, 0585) |
 | `h1-guard/git-guard-check.ts` | none, but it runs the corpus's git lines (`--run`) | the VM `JOCASTA-CLEAN` only |
 | `h7-longpath.ts` | none | anywhere (git only, temp folders) |
 | `h2-toast.ts`, `h3-recovery.ts`, `h5-startup.ts` | none, except `h2 --start` | a sandbox Jocasta |
-| `h4-isolation.ts` | the `h4 plant` thread's turn and Graphiti's extraction of the planted facts | his PC, in a sandbox Jocasta with Docker (0502) |
+| `h4-isolation.ts` | the `h4 plant` thread's turn | his PC, in a sandbox Jocasta (0502) |
 | `h6-memory.ts`, `h8-parallel.ts` | the threads' turns | 0481's VM |
 | `h9-footprint.ts` | none | 0481's VM `JOCASTA-CLEAN` only (refused elsewhere) |
 | `tokscale-parity.ts` | none | the VM, with tokscale 4.21.0 on PATH |
@@ -47,15 +46,14 @@ runs, how often and what is measured is fixed there, as amended for the harness-
 The scripts that act on a running Jocasta (H2–H6, H8) refuse to start without a sandbox (0502, 0576): its own data
 folder in `JOCASTA_DATA_DIR` (not the OS default), a herdr session in `JOCASTA_HERDR_SESSION` that isn't `jocasta` (or
 `jarvis`), and its own config folder in `JOCASTA_CODING_AGENT_DIR` (not `~/.jocasta/agent`: the config folder picks the
-projects, herdr's config and the Graphiti compose project, so a sandbox on his would recreate his Graphiti container
-with its own token). Start the sandbox's `jocasta` with the same three. H2, H4 (its `h4 plant` thread), H6 and H8
+projects and herdr's config, so a sandbox on his would act on his). Start the sandbox's `jocasta` with the same three. H2, H4 (its `h4 plant` thread), H6 and H8
 start their threads as `jocasta thread new` does (`POST /api/cli`: no Allow, no boss key, 0544) and read them as
 `jocasta thread list` does;
 threads still open in plan mode and wait for the operator's approval of their plan in their pane. The bench never
 closes threads or removes worktrees: those ask him first (0484), so H6 and H8 wait for Enter between runs.
 
-First of all, the VM's omp moves to 18.18.6 (0589), the way 0497 installed it:
-`bun install -g @oh-my-pi/pi-coding-agent@18.18.6`; then `omp --version` must print 18.18.6. The release rebuilt for
+First of all, the VM's omp moves to 18.20.2 (0623), the way 0497 installed it:
+`bun install -g @oh-my-pi/pi-coding-agent@18.20.2`; then `omp --version` must print 18.20.2. The release rebuilt for
 this commit goes there too, so every row runs on that omp and that build.
 
 Before the full runs (0588), each script runs once in the VM's sandbox, each into its own throwaway `--out` (checks,
@@ -66,12 +64,12 @@ runs need setup's files in tester's omp folder (`restore-setup-files.ps1`); the 
 
 ## The scripts
 
-- **H1 (0482, 0500, 0501, 0535, 0589).** Four scripts; the corpus is a separate file and this folder holds no command list.
-  H1 runs on the build's omp, 18.18.6 (0535, 0589); `--any-version` is the exploration override.
+- **H1 (0482, 0500, 0501, 0535, 0600, 0623).** Four scripts; the corpus is a separate file and this folder holds no command list.
+  H1 runs on the build's omp, 18.20.2 (0535, 0623); `--any-version` is the exploration override.
   - `bun bench/h1-guard/omp-verdicts.ts --corpus <corpus.jsonl> --guard <guard.yml> --out <dir>
     [--git-guard <git-guard-check.jsonl>] [--omp <package dir>] [--any-version]` imports omp's own
     `config/settings.ts`, `tools/bash.ts` and `tools/approval.ts` from the install (found from `omp` on PATH or Bun's
-    global install; anything but 18.18.6 is refused), loads the guard as `--config` over omp's defaults, builds the
+    global install; anything but 18.20.2 is refused), loads the guard as `--config` over omp's defaults, builds the
     real `BashTool` on a session stub that throws if execution is reached, and asks omp's `resolveApproval` for each
     line, as a pane's tool wrapper does. Nothing runs. omp's git guard refuses only when the embedded shell runs `git`:
     with `--git-guard` the refusals `git-guard-check.ts` measured decide for the lines it ran, and the
@@ -101,10 +99,11 @@ runs need setup's files in tester's omp folder (`restore-setup-files.ps1`); the 
     corpus's SHA-256, the matcher and the as-written note) and one verdict per line in `h1-guard.jsonl`. The
     reimplementation's results of 2026-10-24 are in
     `D:/thesis/data/bench/h1/{pre-0485,0485,campaign}/`, omp 18.13.1's in `D:/thesis/data/bench/h1/omp-18.13.1/`;
-    the build's runs on omp 18.18.6 go in a folder of their own (`D:/thesis/data/bench/h1/omp-18.18.6/`). omp
+    the build's runs on omp 18.20.2 go in a folder of their own (`D:/thesis/data/bench/h1/omp-18.20.2/`). omp
     18.18.1 changed how its pattern rules combine (a deny matching any part of a compound line beats any prompt;
-    critical patterns come before prompt rules), so `omp-verdicts.ts` is run again on the build's omp, 18.18.6 (on the
-    0580 corpus its verdicts matched 18.18.2's line for line before the move, 0589); and 18.14.0 rewrote
+    critical patterns come before prompt rules), so `omp-verdicts.ts` is run again on the build's omp, 18.20.2 (on the
+    0580 corpus 18.18.6's verdicts matched 18.18.2's line for line before 0589's move, and 18.20.2's matched 18.20.0's
+    before 0623's, though 18.20.1 also matches a segment without its leading `NAME=value` words); and 18.14.0 rewrote
     the git guard (whose checkout git is in first; refusals for a failed save of uncommitted changes and for
     submodule recursion), so `git-guard-check.ts --run` is run again in the VM before H1 reports measured refusals.
   - **The 0580 lines.** The guard's 0580 rules (combined force flags, trunk pushes, restore, update-ref and git's
@@ -134,8 +133,8 @@ runs need setup's files in tester's omp folder (`restore-setup-files.ps1`); the 
     line, the turn's stop reason and any failure) and `live-check.json`. Run it on the frozen corpus (1,285 lines),
     as 0501 sampled it: the 0580 corpus has more lines, so seed 482 picks other lines there. In the VM: `--dry-run`
     first, then the run (a few cents), e.g. `--corpus D:/thesis/data/bench/h1-corpus.jsonl --out
-    D:/thesis/data/bench/h1/omp-18.18.6/live`; check that the canary reached the recorder's terminal ("canary reached
-    the recorder's terminal … nothing written"), that `live-check.json` names omp 18.18.6 and the recorder `ACP client
+    D:/thesis/data/bench/h1/omp-18.20.2/live`; check that the canary reached the recorder's terminal ("canary reached
+    the recorder's terminal … nothing written"), that `live-check.json` names omp 18.20.2 and the recorder `ACP client
     terminal (0585)`, that the outcomes agree with the in-process verdicts, and that no `h1-live-canary.txt` is left.
     The 18.13.1 run (24/24) used omp's bash interceptor as the recorder, which 18.15.0 moved into the bash tool's
     approval.
@@ -182,13 +181,12 @@ runs need setup's files in tester's omp folder (`restore-setup-files.ps1`); the 
   again under a new id. Logging off and on is done by hand with the same checks. Writes `h3-recovery.jsonl` and
   `h3-recovery.json`.
 - **H4, `bun bench/h4-isolation.ts --out <dir> --project-a <p-…> --pane-a <pane> --pane-b <pane> [--canaries 50]
-  [--runs 100] [--wait 10] [--plant-timeout 30] [--skip-plant]`.** Runs on his PC in a sandbox Jocasta with Docker
-  (0502). Plants the canaries through the service (0576): it starts a thread `h4 plant` in A as `jocasta thread new`
+  [--runs 100] [--plant-timeout 30] [--skip-plant]`.** Runs on his PC in a sandbox Jocasta (0502). Plants the
+  canaries through the service (0576): it starts a thread `h4 plant` in A as `jocasta thread new`
   does, whose brief tells it to call `report_result` once with exactly the canaries as decisions (`<topic> codename` =
-  the token, why `H4 canary`); the service posts them to A's graph as one "Decisions settled by the thread "h4 plant"
-  …" episode with its own Graphiti token and model endpoint (0539). The operator approves the thread's plan in its
-  pane; once `jocasta thread list` shows its report (within `--plant-timeout` minutes), H4 waits `--wait` minutes for
-  Graphiti's extraction. Then it queries `graph_search` from B's pane through the service's MCP endpoint (as that pane:
+  the token, why `H4 canary`); the service adds them to A's history index (0539, 0603). The operator approves the
+  thread's plan in its pane; once `jocasta thread list` shows its report (within `--plant-timeout` minutes), H4 has
+  nothing to wait for. Then it queries `history_search` from B's pane through the service's MCP endpoint (as that pane:
   its key from the sandbox's `<data>/panes.json`; a pane without one is refused: `pane <id> has no key in
   <data>/panes.json: pass a pane Jocasta started`) and checks every answered reply for every canary; errored replies
   are counted apart and aren't checks. The same queries from A's pane are the required positive control: the
@@ -240,7 +238,7 @@ runs need setup's files in tester's omp folder (`restore-setup-files.ps1`); the 
   before "Approve and execute" included, with its subagents' transcripts, a moved session's copies counted once,
   priced by the ledger), the peak working set and private bytes of Jocasta's processes (the service's, herdr's
   server's with the threads, and the attached surfaces' trees; sampled every 10 s) and, layer on, the run's shared
-  check hits and index reuse from the service's logs (`readLayerCounters`). Writes `h8-parallel.jsonl` and
+  check hits from the service's log (`readLayerCounters`). Writes `h8-parallel.jsonl` and
   `h8-parallel.json`.
 - **tokscale parity (0538), `bun bench/tokscale-parity.ts --out <task-benchmark runDir>`.** The ledger's parser check,
   bench-only: per saved session of the run, the ledger's uncached input, cache read, cache write and output against
@@ -273,8 +271,8 @@ counts, findings and clean-clone hidden grading as `bun run evals`). The main ru
 = 630 trials: A0 omp alone, A1 + the pane config, A2 + plan first, A3 + the review, A4 Claude Code, **A6** = A3 + the
 harness-OS layer, **A7** = opencode bare. Results go to `D:/thesis/data/bench/tasks/runs/<run>/`: `results.jsonl`
 (the runner's row plus `task`, `arm`, `language`, `attempt`, `trialIndex`, `leak` and `ledger`, the trial's ledger
-totals: tokens, priced cost, cache read share, waste counts, peak context; a layered trial's row also has
-`layer.indexBuildMs`, and a row in whose output or exports A7's key showed has `keyExposed: true`, the key replaced
+totals: tokens, priced cost, cache read share, waste counts, peak context; a row in whose output or exports A7's key
+showed has `keyExposed: true`, the key replaced
 there by `<A7 key>`), `ledger.jsonl` (every counted trial's
 request and tool-call rows), `spend.jsonl` (each attempt's priced cost, infra errors included), `sessions/<task>-<arm>-<rep>/`
 (the harness's own records: omp's session files, written with `--session-dir` in the trial root; Claude Code's
@@ -294,22 +292,19 @@ a lock whose process is gone is taken over (0574). Real trials need `JOCASTA_EVA
 2 on a bad flag or a refusal (one line, `bench: …`), 3 after three sign-in failures in a row, 4 when A7's spend limit
 stopped its trials. The fixed choices:
 
-- **A6 (0543, 0567):** `a6.yaml` extends A3 with `layer` (the code index switch; the `check` thread tool is always on, 0571), and plans
+- **A6 (0543, 0567):** `a6.yaml` extends A3 with `layer: true` (the `check` thread tool is always on, 0571), and plans
   first as Jocasta's threads do: not A3's `--plan-yolo`, but omp's interactive plan review answered "Approve and
   execute" (`plan_review: execute`); `modelRoles.default` and `.plan` are pinned to `anthropic/claude-opus-5-5:high`, so
   the review's planning role and execution tier stay on the arms' model. The layer is Jocasta's build, not the
   bench's: each A6 trial imports `src/frontier/layer/bench.ts` (`LAYER_MODULE` in `evals/layer.ts`), whose
   `benchLayer.setUp(trial)` returns the omp flags, overlay settings and environment that bring in the task file's brief,
-  `report_result`, the cached checks and the index, and a `close()`. The layer's data (its checks, code index and
-  endpoint file) goes in a folder of its own per trial, `%TEMP%\jl…`, inside the user's profile, removed at the
-  trial's end: codebase-memory-mcp refuses a folder other users may write to, such as the VM's short `--work` root,
-  so the trial roots stay in `--work` and only the layer's data moves (EVL-1). Before any trial a real run checks
-  each layered arm's code index (`preflight`) and refuses the run when it can't run (`<arm>: A6's code index can't
-  run: …`, exit 2); the dry run marks such an arm `NOT RUNNABLE`. A checkout without the layer build is refused the
-  same way ("A6 needs Jocasta's layer build"). **The index before the clock (0575):** with the index on, each
-  trial's layer builds the code index of the trial's checkout during setup, before the trial's clock; the row records
-  the build time apart (`"layer": {"indexBuildMs": 21840}`), and `wallMs` doesn't include it.
-- **The plan review (0567, `evals/plan-review.ts`):** omp 18.18.6 offers "Approve and execute" (the session is cleared
+  `report_result`, the cached checks and `history_search` (0604; a trial has no past sessions, so it answers "Nothing
+  in <project>'s history for that."), and a `close()`. The layer's data (its checks and endpoint file) goes in a
+  folder of its own per trial, `%TEMP%\jl…`, removed at the trial's end; the trial roots stay in `--work` (EVL-1). A
+  checkout without the layer build is refused before any trial ("A6 needs Jocasta's layer build", exit 2); the dry run
+  marks such an arm `NOT RUNNABLE`. A6 has no code index (0605): relationship questions go to omp's `lsp`, and nothing
+  is built before the trial's clock.
+- **The plan review (0567, `evals/plan-review.ts`):** omp 18.20.2 offers "Approve and execute" (the session is cleared
   before the plan-approved prompt) and "Approve and keep context" only in its interactive plan review; print mode has
   only `--plan-yolo` and ACP's approval, both keeping the planning context. The interactive review emits
   `plan_review_requested` to extensions, and `ctx.resolvePlanReview(reviewId, "execute" | "keep")` answers it as if he
@@ -398,8 +393,8 @@ stopped its trials. The fixed choices:
 - **Validation (`--validate`):** per task, no model: the fixture with its setup graded unchanged on a clean clone
   (must fail), then `gold.patch` applied and graded on a fresh clean clone 3 times (must pass each time). Tasks that
   fail are listed for a spare of the same language.
-- **Dry run:** the trial count and limit, the first 15 trials of the order, each arm's harness command line, A6's
-  layer switches and whether its layer can run here, A7's key, machine and limit, the pacer's rule, the ledger's
+- **Dry run:** the trial count and limit, the first 15 trials of the order, each arm's harness command line, whether
+  A6's layer can run here, A7's key, machine and limit, the pacer's rule, the ledger's
   files, and the cache, trial-root and results paths; the main run's dry run also names the follow-up study's size.
 - **omp's own MCP servers (0587):** before any trial and in the dry run (not `--validate`), a run with an omp arm
   reads `mcp.json` and `.mcp.json` in the omp folder it uses (the `--profile`'s, else `PI_CODING_AGENT_DIR` or
@@ -410,16 +405,26 @@ stopped its trials. The fixed choices:
 - **Smoke run in the VM (EVL-15; about 12 paid trials):** a dry run with `--only` one Python, one TypeScript/JavaScript
   and one Go task, `--arms a4,a6,a7,f-keep-context --reps 1 --work C:\t --timeout 90`, then the same for real
   (`JOCASTA_EVALS_REAL=1`, A7's key set). Check: `errors.jsonl` is empty; A6's and `f-keep-context`'s rows have
-  `planReview` requested, answered and shut down, and `layer.indexBuildMs`; A7's rows have `ledger.sessions` of 1 or
+  `planReview` requested, answered and shut down; A7's rows have `ledger.sessions` of 1 or
   more and a spend; the harness versions didn't change and no `stopped <arm>:` line was logged; no `t…` folder is
   left in `C:\t` and no `jl…` folder in `%TEMP%`.
 
-**The follow-up study (0543, 0545, 0571, 0575), `--study followup`,** runs after the main run, in its own `--out`: 10
-main tasks (seeded, Python, TypeScript/JavaScript and Go in the main set's proportions) × 2 reps × A6 and four arms,
-100 trials, each arm paired with A6 by task and rep (A6 runs again in the same order, so the pairs share the hours and
-the build): `f-index-off` (the code index off), `f-prewalk` (`omp --prewalk`, present in 18.18.6), `f-keep-context`
-(the review answered "Approve and keep context") and `f-ponytail-if` (Ponytail with its "Running tests" rules inside
-`<important if="you are running or writing tests">`, `evals/variants/ponytail-important-if.md`). pitchfork is no
+**The follow-up study (0543, 0545, 0571, 0575, 0605, 0608, 0620), `--study followup`,** runs after the main run, in its own `--out`: 10
+main tasks (seeded, Python, TypeScript/JavaScript and Go in the main set's proportions) × 2 reps × A6, A1 and six arms,
+160 trials, each arm paired by task and rep with its own baseline (A6 and A1 run again in the same order, so the pairs
+share the hours and the build): `f-keep-context` (the review answered "Approve and keep context"), `f-keep-smol` (the
+same, the work that follows done on the `smol` role: `plan_review_role: smol`, passed as `resolvePlanReview`'s
+`{ role }`), `f-ponytail-if` and `f-advisor` (omp's advisor on, its role at Fable 5.2 medium, every third update; A0
+pins it off for every other arm, 0619) against A6, and `f-prewalk-clean` (A1 with `omp --prewalk`, present in 18.20.2;
+not A6, which starts in plan mode, where omp turns prewalk's automatic switch off) and `f-think-auto` (A1 with
+`--thinking auto`, the last `--thinking` winning over A0's `high`) against A1. Before `f-advisor` runs, one pilot trial
+(0588's single run) must show an advisor note landing inside A6's turn; if none can, the arm stops and he is asked
+(0620, 0020). A `--prewalk` trial's results
+row has `prewalkSwitched`: whether omp's session file has a `model_change` entry with the role `prewalk`, which omp
+writes only when the switch fires (`session/prewalk.ts` `advanceAtTurnEnd` → `setModelTemporary` with
+`{ prewalk: true }`, `session/model-controls.ts`). `bun evals/keep.ts` pairs each comparison with its baseline (`baseline`
+in `evals/followup.ts`). `f-ponytail-if` is Ponytail with its "Running tests" rules inside
+`<important if="you are running or writing tests">` (`evals/variants/ponytail-important-if.md`). pitchfork is no
 comparison (0560), and neither are keep-alive pings (0575): a trial has no idle gap for a ping (the review is answered
 inside the event and omp stops at the execution's end), so the task run reports them as not measured. The dry run
 says `not compared: pitchfork (0560), keep-alive pings (no idle gap in a trial)`. The
@@ -428,8 +433,8 @@ checks are measured in H8 (0571). `--arms`,
 `--reps`, `--set`, `--only` and `--pilot` are refused with it. **The keep rule** (0543, written before any run),
 `bun evals/keep.ts --out <follow-up runDir>`: a tried feature stays when its paired cost per passing task (the ledger's
 priced cost summed over the pairs ÷ hidden-test passes) is lower and its pass rate isn't significantly lower (McNemar's
-exact test on the paired trials, Holm's correction over the four comparisons, α = 0.05); for `f-index-off` the feature
-is A6's side.
+exact test on the paired trials, Holm's correction over the three comparisons, α = 0.05), the feature being each arm's
+side.
 Writes `keep.json`.
 
 The single cases of `evals/cases/`:

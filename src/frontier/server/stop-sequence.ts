@@ -1,5 +1,4 @@
 import type { Server } from "bun";
-import { stopJocastaContainersDetached } from "../../shared/containers/resources.ts";
 import { log } from "../../shared/log.ts";
 import { removeServiceFile } from "../../shared/service-file.ts";
 import type { ServerMessage } from "../protocol.ts";
@@ -9,7 +8,7 @@ import type { JocastaService } from "./service.ts";
 import type { Whiteboard } from "./whiteboard.ts";
 
 /** A stop step that outlived its bound. */
-export class StepTimeout extends Error {}
+class StepTimeout extends Error {}
 
 /** `promise`, or a `StepTimeout` after `ms` (the timer never outlives the promise). */
 export async function within<T>(promise: Promise<T>, ms: number): Promise<T> {
@@ -32,8 +31,6 @@ export interface StopStep {
 	 * `finally`: last, after every other step.
 	 */
 	when?: "always" | "all" | "finally";
-	/** Run once the step outlived `ms`, after the log line. */
-	onTimeout?: () => void;
 }
 
 /** Runs one step; a throw or a step outliving its bound goes to `failed`, and the stop goes on. */
@@ -43,7 +40,6 @@ async function runStep(step: StopStep, failed: (name: string, error: unknown) =>
 		await (step.ms === undefined ? done : within(done, step.ms));
 	} catch (error) {
 		failed(step.name, error);
-		if (error instanceof StepTimeout) step.onTimeout?.();
 	}
 }
 
@@ -73,8 +69,8 @@ export async function undoStart(undo: readonly StopStep[]): Promise<void> {
 	);
 }
 
-/** Each stop step's bound in ms: service 30 s, herdr 15 s, containers 20 s, whiteboard 5 s. */
-export type StopBounds = Record<"service" | "herdr" | "containers" | "whiteboard", number>;
+/** Each stop step's bound in ms: service 30 s, herdr 15 s, whiteboard 5 s. */
+type StopBounds = Record<"service" | "herdr" | "whiteboard", number>;
 
 /** What the stop sequence stops. */
 export interface StopParts {
@@ -87,14 +83,10 @@ export interface StopParts {
 		JocastaService,
 		"pauseWorking" | "stop" | "cutPausedTurns" | "endThreadLeftovers" | "removeEndedHosts" | "endHunkDaemon"
 	>;
-	/** Stops Graphiti and FalkorDB, their data kept. */
-	stopContainers: () => Promise<void>;
 	/** What else Jocasta started that stops with it (0549), in the order registered; read when the stop runs. */
 	extraStops: Iterable<StopStep>;
 	whiteboard: Pick<Whiteboard, "stop"> | undefined;
 	relay: { stop(): unknown };
-	/** Clears the model callback (0390). */
-	endLlmCallback: () => void;
 	server: () => Server<undefined> | undefined;
 	bounds?: Partial<StopBounds> | undefined;
 }
@@ -102,14 +94,13 @@ export interface StopParts {
 /**
  * The stop sequence: a failed start stops the service only; Jocasta closing as one (`all`, 0434, 0549) stops
  * everything, in this order. Each step that waits on herdr or another process is bounded (LC-5, LC-8, SRV-A-3): the
- * threads noted and herdr's stop by `herdr`, the service, the containers, whiteboard and the extra stops by their own.
+ * threads noted and herdr's stop by `herdr`, the service, whiteboard and the extra stops by their own.
  */
 export function stopSteps(parts: StopParts): StopStep[] {
 	const { popups, broadcast, herdr, service, whiteboard } = parts;
 	const bounds: Partial<StopBounds> = {
 		service: 30_000,
 		herdr: 15_000,
-		containers: 20_000,
 		whiteboard: 5_000,
 		...parts.bounds,
 	};
@@ -131,19 +122,10 @@ export function stopSteps(parts: StopParts): StopStep[] {
 		{ name: "omp's host entries", run: () => service.removeEndedHosts(), when: "all" },
 		// Once herdr's hunk panes are gone, the hunk session daemon the service started (0434, 0486).
 		{ name: "hunk's daemon", run: () => service.endHunkDaemon(), when: "all" },
-		{
-			name: "Graphiti's containers",
-			run: () => parts.stopContainers(),
-			ms: bounds.containers,
-			when: "all",
-			// Containers that don't stop in time stop after this process has gone.
-			onTimeout: stopJocastaContainersDetached,
-		},
 		...parts.extraStops,
 		...(whiteboard ? [{ name: "whiteboard", run: () => whiteboard.stop(), ms: bounds.whiteboard }] : []),
 		// Also after a failed start: nothing else would close its port.
 		{ name: "the collab relay", run: () => parts.relay.stop() },
-		{ name: "the model callback", run: () => parts.endLlmCallback(), when: "finally" },
 		{ name: "the server", run: () => parts.server()?.stop(true), when: "finally" },
 		{ name: "jocasta-service.json", run: () => removeServiceFile(process.pid), when: "finally" },
 	];

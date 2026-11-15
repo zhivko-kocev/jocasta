@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { FOLLOWUP_BASELINE, FOLLOWUP_COMPARISONS } from "../../evals/followup.ts";
+import { FOLLOWUP_COMPARISONS } from "../../evals/followup.ts";
 import { costPerPass, followupInputs, type KeepTrial, keepRule, keepTrial } from "../../evals/keep.ts";
 import type { BenchRow } from "../../evals/tasks.ts";
 
@@ -57,20 +57,29 @@ test("only pairs on both sides count", () => {
 	expect(verdict?.pairs).toBe(2);
 });
 
-test("the follow-up study's rows become comparisons against A6, the feature on the side the comparison says", () => {
+test("each follow-up comparison pairs with its own baseline: A6's arms with A6, the prewalk and thinking arms with A1 (0608, 0620)", () => {
 	const row = (arm: string, task: string, rep: number, passed: boolean, cost: number) =>
 		({ arm, task, rep, hiddenPassed: passed, ledger: { cost } }) as unknown as BenchRow;
 	const rows = [
-		row(FOLLOWUP_BASELINE, "a", 0, true, 1),
-		row("f-index-off", "a", 0, false, 2),
-		row("f-prewalk", "a", 0, true, 0.5),
+		row("a6", "a", 0, false, 2),
+		row("a1", "a", 0, true, 3),
+		row("f-prewalk-clean", "a", 0, true, 0.5),
+		row("f-keep-smol", "a", 0, true, 1),
 	];
 	const inputs = followupInputs(rows);
 	expect(inputs.map((i) => i.name)).toEqual(FOLLOWUP_COMPARISONS.map((c) => c.arm));
-	const indexOff = inputs.find((i) => i.name === "f-index-off");
-	expect(indexOff?.withFeature).toEqual([{ pair: "a/0", passed: true, cost: 1 }]);
-	expect(indexOff?.withoutFeature).toEqual([{ pair: "a/0", passed: false, cost: 2 }]);
-	const prewalk = inputs.find((i) => i.name === "f-prewalk");
+	expect(Object.fromEntries(FOLLOWUP_COMPARISONS.map((c) => [c.arm, c.baseline]))).toEqual({
+		"f-keep-context": "a6",
+		"f-keep-smol": "a6",
+		"f-ponytail-if": "a6",
+		"f-prewalk-clean": "a1",
+		"f-advisor": "a6",
+		"f-think-auto": "a1",
+	});
+	const prewalk = inputs.find((i) => i.name === "f-prewalk-clean");
 	expect(prewalk?.withFeature).toEqual([{ pair: "a/0", passed: true, cost: 0.5 }]);
+	expect(prewalk?.withoutFeature).toEqual([{ pair: "a/0", passed: true, cost: 3 }]);
+	const smol = inputs.find((i) => i.name === "f-keep-smol");
+	expect(smol?.withoutFeature).toEqual([{ pair: "a/0", passed: false, cost: 2 }]);
 	expect(() => keepTrial({ task: "a", rep: 0, hiddenPassed: true, ledger: undefined })).toThrow(/no ledger/);
 });

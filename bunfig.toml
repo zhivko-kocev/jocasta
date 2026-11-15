@@ -3,3 +3,7 @@
 root = "test"
 # Every test process gets its own Jocasta and omp dirs before any test file loads (test/preload.ts).
 preload = ["./test/preload.ts"]
+
+# A package version must be 7 days old to install (0614): a name an agent made up and someone registered, or a hijacked release, is caught by waiting.
+[install]
+minimumReleaseAge = 604800

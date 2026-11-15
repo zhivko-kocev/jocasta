@@ -1,11 +1,11 @@
 # omp settings Jocasta relies on (0396, 0398, 0399, 0400, 0451, 0592–0594): deltas from omp's defaults (principle 3),
 # and pins where a later default would send data out. His `/settings` pass (0420, 0593) took every value here into his
-# own config. Keys checked against omp 18.18.6's source.
+# own config. Keys checked against omp 18.20.2's source.
 # Per-pane values are not here: every project and thread pane gets `--config <config>/guard.yml` (the guard, 0450) and
-# `--config <data>/projects/<pid>/omp.yml` (memory file, compaction, plan mode, AGENTS.local.md, lessons, and the
-# privacy settings `dev.autoqa`, `disabledProviders`, `modelRoles.web`; 0447–0449, 0459, 0478; no reviewer model, so
-# omp's reviewer runs on his `slow` role, 0488); the boss pane
-# gets `config/boss.yml` (the same privacy settings) and the guard.
+# `--config <data>/projects/<pid>/omp.yml` (memory off, no completion probe, no job widgets, compaction, plan mode,
+# AGENTS.local.md, lessons, and the privacy settings `dev.autoqa`, `disabledProviders`, `modelRoles.web`; 0447–0449,
+# 0459, 0478, 0601, 0602, 0606; no reviewer model, so omp's reviewer runs on his `slow` role, 0488); the boss pane
+# gets `config/boss.yml` (memory off and the same privacy settings; it keeps the job widgets) and the guard.
 #
 # Outside config.yml, written by `jocasta setup` as a diff after his `y` (0451, 0479, 0594; his other keys kept):
 # - ~/.omp/agent/keybindings.yml: `app.live.toggle: []` (Ctrl+L no longer starts omp's live voice, which sends mic
@@ -19,7 +19,8 @@
 theme:
   dark: dark-tokyo-night
 
-# Memory (0389, 0400); every Jocasta pane also sets it, with its own file (0447).
+# Memory (0389, 0400): his own omp's Mnemopi, as he set it. Every Jocasta pane sets `memory.backend: "off"` itself
+# (0606), so this applies only to omp started outside Jocasta.
 memory:
   backend: mnemopi
 
@@ -34,6 +35,10 @@ compaction:
 # A warning once a session, its subagents included, has spent $50; threads start with the same (0541, 0593).
 session:
   warnCost: 50
+
+# The advisor reviews every third update instead of every one; the updates it skipped go with its next review (0616).
+advisor:
+  reviewInterval: 3
 
 # Every read, write, edit, search or command in these folders asks him first, whatever the mode (0593). On Windows
 # setup adds Windows' own folders, %SystemRoot% and %ProgramFiles% (0594): keep the list on one line.

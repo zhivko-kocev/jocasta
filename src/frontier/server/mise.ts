@@ -177,33 +177,77 @@ export function skippedSaid(why: string): string {
 }
 
 /**
- * The project's own check as a mise task (0453, 0473, 0477): `verify`, else `test`, when the folder's config may be
- * loaded and defines it (Jocasta's own per-project config counts through `MISE_ENV`); why it can't run when the folder
- * has a repo config mise may not load for Jocasta (0559); undefined otherwise.
+ * The first of `names` the folder's mise config defines as a task, when mise may load that config (0473): the task, or
+ * why it can't be run when the folder has a repo config mise may not load for Jocasta (0559); undefined when mise is
+ * absent or none is defined. Jocasta's own per-project config counts through `MISE_ENV`.
  */
-export async function miseCheck(
+async function taskAmong<T extends string>(
 	projectId: string,
 	cwd: string,
-	base: Env = process.env,
-	mise = findMise(),
-): Promise<MiseCheck | undefined> {
+	names: readonly T[],
+	base: Env,
+	mise: string[] | null,
+): Promise<{ task: T } | { skipped: string } | undefined> {
 	if (!mise) return undefined;
 	const env = { ...base, MISE_ENV: withJocastaEnv(projectId, base) };
 	const why = await distrust(mise, cwd, env);
 	if (why !== undefined) return why ? { skipped: why } : undefined;
 	const out = await runMise(mise, ["tasks", "ls", "--json"], cwd, env);
-	const names: string[] = [];
+	const defined = new Set<string>();
 	try {
 		const tasks: unknown = out === undefined ? [] : JSON.parse(out);
 		if (Array.isArray(tasks)) {
 			for (const task of tasks) {
 				const name = asObject(task)?.name;
-				if (typeof name === "string") names.push(name);
+				if (typeof name === "string") defined.add(name);
 			}
 		}
 	} catch {
 		log("warn", "mise", `mise tasks ls --json in ${cwd} printed no JSON`);
 	}
-	const task = names.includes("verify") ? "verify" : names.includes("test") ? "test" : undefined;
+	const task = names.find((name) => defined.has(name));
 	return task ? { task } : undefined;
+}
+
+/**
+ * The project's own check as a mise task (0453, 0473, 0477): `verify`, else `test`, when the folder's config may be
+ * loaded and defines it (Jocasta's own per-project config counts through `MISE_ENV`); why it can't run when the folder
+ * has a repo config mise may not load for Jocasta (0559); undefined otherwise.
+ */
+export function miseCheck(
+	projectId: string,
+	cwd: string,
+	base: Env = process.env,
+	mise = findMise(),
+): Promise<MiseCheck | undefined> {
+	return taskAmong(projectId, cwd, ["verify", "test"] as const, base, mise);
+}
+
+/** What `miseRunTask` made of a task: its stdout, or why there is none. */
+export type MiseTaskRun = { output: string } | { failed: string } | { skipped: string };
+
+/**
+ * Runs the folder's mise task `name` to its end (0616) under the same trust rules as `miseCheck`: a trusted config's
+ * task only, with `env` (the checks' env) and the project's `MISE_ENV`, ended after `timeoutMs`. `failed` says how it
+ * failed (exit code or time limit); undefined when mise is absent or the folder has no such task.
+ */
+export async function miseRunTask(
+	projectId: string,
+	cwd: string,
+	name: string,
+	options: { timeoutMs: number; env?: Env; mise?: string[] | null },
+): Promise<MiseTaskRun | undefined> {
+	const { timeoutMs, env: base = process.env, mise = findMise() } = options;
+	const found = await taskAmong(projectId, cwd, [name], base, mise);
+	if (!found || !mise) return undefined;
+	if ("skipped" in found) return found;
+	const env = { ...base, MISE_ENV: withJocastaEnv(projectId, base) };
+	try {
+		const run = await runProgram([...mise, "run", name], { cwd, env, timeoutMs });
+		if (run.code === 0) return { output: run.stdout };
+		if (run.timedOut || run.signal) return { failed: `ran past its ${timeoutMs / 1000} s limit` };
+		return { failed: `exited ${run.code}: ${run.stderr.trim().split("\n").at(-1) ?? ""}` };
+	} catch (error) {
+		return { failed: `did not start: ${String(error)}` };
+	}
 }

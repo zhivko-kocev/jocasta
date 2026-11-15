@@ -1,30 +1,32 @@
-// H1 (0482, 0500, 0501, 0535, 0589): omp 18.18.6's own verdict on every corpus line, computed in-process from omp's
+// H1 (0482, 0500, 0501, 0535, 0600, 0623): omp 18.20.2's own verdict on every corpus line, computed in-process from omp's
 // installed sources, with nothing executed.
 //
 //   bun bench/h1-guard/omp-verdicts.ts --corpus <corpus.jsonl> --guard <guard.yml> --out <dir> [--omp <package dir>]
 //     [--any-version] [--dry-run]
 //
-// How omp decides before a pane's bash tool runs a command (omp 18.18.6, `@oh-my-pi/pi-coding-agent/src`):
-// - `extensibility/extensions/wrapper.ts:269-291,355-374` wraps every tool: `resolveApprovalFromContext`
+// How omp decides before a pane's bash tool runs a command (omp 18.20.2, `@oh-my-pi/pi-coding-agent/src`):
+// - `extensibility/extensions/wrapper.ts:270-291,357-374` wraps every tool: `resolveApprovalFromContext`
 //   (`tools/approval.ts:97-113`) takes the mode from `tools.approvalMode` (default `yolo`, `tools/settings.ts:314-318`;
 //   Jocasta's guard and overlay set none) and `resolveApproval` decides, once on the call as made and again on the
 //   input an extension may have revised; deny throws before the tool runs, prompt asks (`:375-506`; with no UI, as in
-//   `omp -p`, it throws instead, `:448-471`); then the tool executes (`:508-521`).
+//   `omp -p`, it throws instead, `:448-471`); then the tool executes (`:508-522`).
 // - `tools/approval.ts:366-514`: the tool's own decision first; a tool `deny` wins; under `yolo` a tool `policy` holds
 //   and everything else is allowed (so a decision with only `override`, omp's critical patterns, asks nothing);
 //   under other modes an override asks and the mode's tier decides the rest; a `tools.restrictedFolders` match then
 //   turns anything but a deny into a prompt.
-// - `tools/bash.ts:621-681` (`BashTool.approval`): the bash interceptor first (`bashInterceptor`, off by default and in
+// - `tools/bash.ts:652-709` (`BashTool.approval`): the bash interceptor first (`bashInterceptor`, off by default and in
 //   Jocasta's guard; it acts only for tools in the call's `toolNames`) refuses a call it intercepts; then
-//   `bash.patterns` (`:257-397`: a line without shell control takes the first rule in list order that matches the
+//   `bash.patterns` (`:241-439`: a line without shell control takes the first rule in list order that matches the
 //   whole normalized command; on a line with shell control allow rules never apply, and a deny or prompt rule matches
 //   the whole line or any segment from `tools/shell-tokenize.ts:14` `tokenizeShellSegments`, which honours and
-//   removes quotes and splits at `; && || | & ( )` and newlines, any deny winning over any prompt); a deny from the
-//   operator's layers holds whatever a project layer says (`grantAuthority`); then `CRITICAL_BASH_PATTERNS`
-//   (`:197-244`) as an override without a policy, checked before prompt rules; then prompt rules.
-//   `bash.allowCompoundCommands` (default off) switches, under a POSIX shell, to per-`&&` segments.
+//   removes quotes and splits at `; && || | & ( )` and newlines, any deny winning over any prompt; since 18.20.1 a
+//   segment is also matched with its leading `NAME=value` words removed); a deny from the operator's layers holds
+//   whatever a project layer says (`grantAuthority`); then `CRITICAL_BASH_PATTERNS` (`:186-239`) as an override
+//   without a policy, checked before prompt rules; then prompt rules. `bash.allowCompoundCommands` (default off)
+//   switches, under a POSIX shell, to per-`&&` segments. Since 18.20.1 `bash.patterns` from several layers and
+//   `--config` files are joined, the higher one's first, where before the last one replaced the rest.
 // - `bash.gitGuard` isn't an approval: the embedded shell's `git` builtin refuses at run time
-//   (`exec/bash-executor.ts:737-739`).
+//   (`exec/bash-executor.ts:833-835`).
 //
 // The mechanism here: it imports omp's `config/settings.ts`, `tools/bash.ts` and `tools/approval.ts` from the
 // install, loads the guard as `--config` over omp's defaults (an empty agent dir and cwd, so no user or project
@@ -51,7 +53,7 @@ import { appendRow, conditions, printPlan, writeJson } from "../lib/output.ts";
 import { type CorpusEntry, parseGuard, readCorpus, VARIANTS, type Verdict } from "./evaluate.ts";
 import { gitGuardRefusalOf, type MeasuredGitGuardLine, parseMeasuredGitGuard } from "./git-guard.ts";
 
-export const PINNED_OMP = "18.18.6";
+export const PINNED_OMP = "18.20.2";
 const PACKAGE = "@oh-my-pi/pi-coding-agent";
 
 type Decision = string | { tier: string; reason?: string; override?: boolean; policy?: Verdict };

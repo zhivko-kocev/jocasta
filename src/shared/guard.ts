@@ -3,8 +3,9 @@
  * itself (a thread's `done_when`, 0580) with it, and H1 and the guard's tests score it (0501). It approximates omp's
  * own `bash.patterns` matching: whitespace runs collapse, `*` is the only wildcard, anchored and case-sensitive; a rule
  * fires on the whole command or on any one segment of its raw text split at `&&`, `||`, `;` and `|`. omp splits with
- * its quote-aware tokenizer instead (quotes removed; also `&`, subshells and newlines) and adds its git guard and
- * critical patterns (0501); H1's `omp-verdicts.ts` asks omp itself.
+ * its quote-aware tokenizer instead (quotes removed; also `&`, subshells and newlines), since 18.20.1 also tries each
+ * segment without its leading `NAME=value` words (only `config/guard.yml`'s four `ri` rules don't start with `*`, so
+ * only they differ), and adds its git guard and critical patterns (0501); H1's `omp-verdicts.ts` asks omp itself.
  */
 
 export type Verdict = "deny" | "prompt" | "allow";

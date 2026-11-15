@@ -11,9 +11,9 @@ import { REPO_ROOT } from "./args.ts";
  * higher rates past 200k prompt tokens.
  */
 
-export const PRICES_DIR = join(REPO_ROOT, "bench", "prices");
-export const PRICE_TABLE_FILE = join(PRICES_DIR, "model_prices_and_context_window.json");
-export const PRICE_SOURCE_FILE = join(PRICES_DIR, "source.json");
+const PRICES_DIR = join(REPO_ROOT, "bench", "prices");
+const PRICE_TABLE_FILE = join(PRICES_DIR, "model_prices_and_context_window.json");
+const PRICE_SOURCE_FILE = join(PRICES_DIR, "source.json");
 
 /** Where the committed table came from. */
 export interface PriceSource {
@@ -48,7 +48,7 @@ export interface RequestTokens {
 	output: number;
 }
 
-export const TIER_TOKENS = 200_000;
+const TIER_TOKENS = 200_000;
 
 export interface PriceTable {
 	source: PriceSource;

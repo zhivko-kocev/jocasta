@@ -1,16 +1,16 @@
 /**
- * whiteboard's runtime in Jocasta (0393, 0411, 0417, 0419, 0552): its Desktop server (`dist/server/desktop-host.js`,
+ * whiteboard's runtime in Jocasta (0393, 0411, 0417, 0419, 0552, 0615): its Desktop server (`dist/server/desktop-host.js`,
  * the server whiteboard's own Desktop runs, under plain Node) runs as the service's child with telemetry off and its
  * state in `<data>/whiteboard`; the service's canvas page (`src/frontier/canvas/`, opened in his browser) mounts its
  * canvas (`@dev.fast/review-canvas`) and talks to that server directly on loopback with the server's token. The
  * Desktop server serves no page of its own, only its API. The Desktop server rather than `whiteboard server start`,
- * because only it serves the tutorial (`/tutorial/*`) the canvas's empty state opens. Agents author through
+ * because only it relays the canvas's verbs (`/control`) that let an agent open a review here. Agents author through
  * `whiteboard mcp` (set up by `jocasta setup` with `DEV_REVIEW_HOME` only), which finds the same server as whiteboard's
  * Desktop instance `stable` (`<home>/review-desktop/instances/stable.json`).
  *
  * Installed, everything sits beside `jocasta.exe`: `node/node.exe` (Node 24, pinned in scripts/build.ts),
  * `whiteboard/` (whiteboard's runtime package as npm installs it, CLI at `dist/cli.js`, the Desktop server at
- * `dist/server/desktop-host.js`, the tutorial's built assets in `tutorial/`), `whiteboard-canvas/` (the canvas build)
+ * `dist/server/desktop-host.js`), `whiteboard-canvas/` (the canvas build)
  * and `editor.worker.js` (Monaco's worker, 0411). A source run uses `node` on PATH, the clone in `forks/whiteboard`
  * after its build (`bun run build` runs it) and Monaco's worker bundled in memory.
  */
@@ -27,9 +27,9 @@ import type { ServiceHealth } from "../protocol.ts";
 export const WHITEBOARD_ENV = { DO_NOT_TRACK: "1", DEV_FAST_REVIEW_TELEMETRY_DISABLED: "1" } as const;
 
 /** The pinned whiteboard release (0393, 0417; plan appendix B): the canvas's `appVersion`. */
-export const WHITEBOARD_VERSION = "0.2.4";
+export const WHITEBOARD_VERSION = "0.5.2";
 
-/** The repo's clone of whiteboard v0.2.4 (0417), relative to the repo root. */
+/** The repo's clone of whiteboard v0.5.2 (0417, 0615), relative to the repo root. */
 const WHITEBOARD_FORK = join("forks", "whiteboard");
 
 /** Where the page loads the canvas and Monaco's worker from (served by `server.ts`). */
@@ -65,7 +65,7 @@ export function whiteboardRuntime(): WhiteboardRuntime | undefined {
 }
 
 /** What the page needs: the server's loopback origin and token, and the canvas's built files. */
-export interface WhiteboardConnection {
+interface WhiteboardConnection {
 	url: string;
 	token: string;
 	/** The server's pid (the acceptance check lists its sockets). */
@@ -263,14 +263,19 @@ export interface CanvasFiles {
 	wasm: string;
 }
 
+/**
+ * The entry, its stylesheets and the router's wasm. In 0.5.2 the wasm belongs to a lazily loaded chunk, not to the
+ * entry (0.2.4's entry listed it): it is the build's one `.wasm` file, wherever the manifest lists it (0615).
+ */
 export function canvasFiles(dir: string): CanvasFiles {
 	const manifest = JSON.parse(readFileSync(join(dir, ".vite", "manifest.json"), "utf8")) as Record<
 		string,
 		{ file: string; isEntry?: boolean; name?: string; css?: string[]; assets?: string[] }
 	>;
-	const entry = Object.values(manifest).find((chunk) => chunk.isEntry && chunk.name === "canvas");
-	const wasm = entry?.assets?.find((file) => file.endsWith(".wasm"));
-	if (!entry || !wasm) throw new Error(`${dir}: the canvas manifest has no canvas entry with its wasm`);
+	const chunks = Object.values(manifest);
+	const entry = chunks.find((chunk) => chunk.isEntry && chunk.name === "canvas");
+	const wasm = chunks.find((chunk) => chunk.file.endsWith(".wasm"))?.file;
+	if (!entry || !wasm) throw new Error(`${dir}: the canvas manifest has no canvas entry or no wasm`);
 	return {
 		script: CANVAS_PATH + entry.file,
 		styles: (entry.css ?? []).map((file) => CANVAS_PATH + file),
@@ -280,12 +285,21 @@ export function canvasFiles(dir: string): CanvasFiles {
 
 const TYPES: Record<string, string> = {
 	".js": "text/javascript; charset=utf-8",
+	".html": "text/html; charset=utf-8",
 	".css": "text/css; charset=utf-8",
 	".wasm": "application/wasm",
 	".woff2": "font/woff2",
 	".svg": "image/svg+xml",
 	".png": "image/png",
 };
+
+/**
+ * The animation stage (0615): `assets/stage-<hash>.html` in the canvas build, the document the canvas loads into a
+ * sandboxed frame to play an animation. The only `.html` the build has under `assets/`.
+ */
+export function isStageFile(pathname: string): boolean {
+	return pathname.startsWith(`${CANVAS_PATH}assets/`) && pathname.endsWith(".html");
+}
 
 /**
  * A file of the canvas build under `CANVAS_PATH`; undefined for anything outside `assets/`. vite names every file

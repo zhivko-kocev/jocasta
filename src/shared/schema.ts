@@ -27,9 +27,11 @@ const threadsTable = (kinds: string) => `CREATE TABLE threads (
  * the lines it replaces (0281); v5 the event queue (0298): one row per source id; `raised_at` is set when it was
  * delivered, `reminded_at` after the one reminder (0303), `resolved_at` when its cause went away; v6 the session
  * watcher's compaction and handoff summaries from omp sessions (0389, 0400): one row per session file and compaction
- * entry id; `at` is the entry's time in epoch ms; `sent` is 1 once the summary went to Graphiti as an episode; v7 the
- * summary's watched project, stored when first resolved so it still posts after its cwd folder is gone (0440 (4)); v8
- * drops v3's `thread_runtime`, which nothing read or wrote: a thread's state comes from omp and herdr (0547).
+ * entry id; `at` is the entry's time in epoch ms; `sent` is 1 once the summary was handled (v9 calls it `indexed`); v7
+ * the summary's watched project, stored when first resolved so its lines are indexed after its cwd folder is gone
+ * (0440 (4)); v8 drops v3's `thread_runtime`, which nothing read or wrote: a thread's state comes from omp and herdr
+ * (0547); v9 the `history` index of 0603 (`src/frontier/server/history.ts`): `indexed` is 1 once the summary's lines
+ * are in it, and every summary of a known project is marked 0 so the next scan builds the index from them.
  */
 export const CATALOG_MIGRATIONS: readonly string[] = [
 	`CREATE TABLE projects (
@@ -104,6 +106,12 @@ CREATE INDEX summaries_unsent ON summaries(sent) WHERE sent = 0;`,
 	"ALTER TABLE summaries ADD COLUMN project_id TEXT;",
 	// v8 (0547): v3's thread_runtime goes; nothing read or wrote it.
 	"DROP TABLE thread_runtime;",
+	// v9 (0603): the history's full-text index; a summary is `indexed` once its lines are in it.
+	`CREATE VIRTUAL TABLE history USING fts5(text, project_id UNINDEXED, source UNINDEXED, at UNINDEXED);
+DROP INDEX summaries_unsent;
+ALTER TABLE summaries RENAME COLUMN sent TO indexed;
+CREATE INDEX summaries_unindexed ON summaries(indexed) WHERE indexed = 0;
+UPDATE summaries SET indexed = 0 WHERE project_id IS NOT NULL;`,
 ];
 
 /** `me.db` migrations (appendix I ledger): v1 the inbox (0302): notes for a project's next work and timed reminders. */

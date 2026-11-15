@@ -23,7 +23,7 @@ export function killAll(pids: number[]): void {
  * `killAll`, then waits until none of `pids` runs, so a cleanup can delete the folder they worked in (Windows refuses
  * while a process has it as its working folder).
  */
-export async function endAll(pids: number[]): Promise<void> {
+async function endAll(pids: number[]): Promise<void> {
 	killAll(pids);
 	await settles(() => !pids.some(pidAlive));
 }

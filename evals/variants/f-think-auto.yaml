@@ -1,0 +1,4 @@
+# Follow-up study (0620): A1 with omp's `--thinking auto`, which picks each turn's effort for the model, in place of the
+# `high` every omp arm pins (`cli/flag-tables.ts`: the last `--thinking` wins, so this one replaces A0's). Its baseline is A1.
+extends: [a1]
+args: [--thinking, auto]

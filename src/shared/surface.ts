@@ -49,8 +49,6 @@ export interface SurfaceDeps {
 	tellServiceClosed(): Promise<boolean>;
 	/** No service: stops herdr session `jocasta`'s server (only that session), never starting it. */
 	stopHerdr(): Promise<void>;
-	/** No service: stops Graphiti and FalkorDB without waiting (data kept). */
-	stopContainers(): void;
 	/** Ends this process once Jocasta was told to close after its terminal closed. */
 	exit(): void;
 	/**
@@ -153,7 +151,7 @@ export async function serviceStopped(
  * server crashed (it stopped and the service started it again, or starts it within 30 s: 0518, 0534), the client is
  * attached again. Otherwise, when the client exits (quit or detach) or the terminal closes, and no other `jocasta` is
  * attached, the service is told: it stops everything, or with threads at work opens a terminal on the session again
- * and asks first (0549). With no service, the containers and herdr session `jocasta` stop here. Resolves herdr's exit
+ * and asks first (0549). With no service, herdr session `jocasta` stops here. Resolves herdr's exit
  * code, or 0 when the client exited because the service stopped herdr itself (Stop everything; 0491).
  */
 export async function openSurface(deps: SurfaceDeps): Promise<number> {
@@ -211,8 +209,6 @@ export async function openSurface(deps: SurfaceDeps): Promise<number> {
 				}
 				return;
 			}
-			// The containers' stop goes out first: a closing console leaves seconds (LC-7).
-			deps.stopContainers();
 			try {
 				await deps.stopHerdr();
 			} catch (error) {
@@ -257,7 +253,7 @@ export async function openSurface(deps: SurfaceDeps): Promise<number> {
 			const revivals = (await deps.serviceHealth()).herdrRevivals;
 			const code = await deps.attach([deps.herdr, "--session", session], env);
 			// Checked before closing: the service's close is still under way, or has just removed its file. Its own
-			// stop (Stop everything) already ended herdr and the containers: nothing to close or say (0491).
+			// stop (Stop everything) already ended herdr: nothing to close or say (0491).
 			if (code !== 0 && (await serviceStop())) return 0;
 			// A crashed server isn't a close: once the service has started herdr again, its client is attached again
 			// in this terminal, as the first time (0518, 0534).

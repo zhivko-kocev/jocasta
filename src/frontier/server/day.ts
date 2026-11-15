@@ -1,3 +1,4 @@
+// biome-ignore-all lint/style/noExcessiveLinesPerFile: `Day` is one class whose scheduler, alert, reminder and worklog methods share its database, clock, hooks and timers; splitting would pass that state around for no gain (0610).
 import type { Database } from "bun:sqlite";
 import { existsSync, statfsSync } from "node:fs";
 import { calendarSecret } from "../../shared/credentials.ts";
@@ -39,7 +40,6 @@ import {
 	waitLabel,
 } from "../protocol.ts";
 import { ompUsage, quotaWarning, readQuota } from "./quota.ts";
-import { graphSpentOn } from "./spend.ts";
 import {
 	commitsAsync,
 	GitPlaces,
@@ -137,7 +137,7 @@ interface DayHooks {
 	 * for that day then only parses what was appended.
 	 */
 	prepareSessions(day: string): Promise<void>;
-	/** Whether Graphiti, whiteboard and herdr answer (0429), for the dashboard's services row. */
+	/** Whether whiteboard and herdr answer (0429), for the dashboard's services row. */
 	services(): Promise<ServiceHealth[]>;
 	/** The watched project a folder (a main checkout or a thread's worktree) belongs to, by name; null outside. */
 	projectName(cwd: string): string | null;
@@ -224,7 +224,7 @@ export class Day {
 	/** The worklog being written (yesterday's at start, today's at day's end): its sessions are read in steps first. */
 	worklogWriting: Promise<void> = Promise.resolve();
 	private stopped = false;
-	// The dashboard's third column (0429): kept in memory, never ingested, spoken or sent to the boss or the graph.
+	// The dashboard's third column (0429): kept in memory, never indexed, spoken or sent to the boss.
 	private news: NewsList[] = [];
 	private newsError: string | null = null;
 	private weather: Weather | null = null;
@@ -245,8 +245,6 @@ export class Day {
 	private worklogSoFar: Promise<void> | undefined;
 	/** Each project's git email and origin for the worklogs, kept for one local day (CO-12). */
 	private readonly gitPlaces = new GitPlaces();
-	/** What Graphiti's model calls cost today (0582), for today's activity; 0 hides its line. */
-	private graphToday = 0;
 	private dashboardSent = "";
 	/** The subscription windows (0456), as `omp usage` last reported them. */
 	private quotaWindows: QuotaWindow[] = [];
@@ -812,8 +810,8 @@ export class Day {
 	// ---- the dashboard's third column (0429) ----
 
 	/**
-	 * Today's activity (0429): the latest delivered `[event]` lines, the worklog so far, what Graphiti's model calls
-	 * cost today (0582) and the compaction and handoff summaries saved today, each with its project. The worklog so far
+	 * Today's activity (0429): the latest delivered `[event]` lines, the worklog so far and the compaction and handoff
+	 * summaries saved today, each with its project. The worklog so far
 	 * is recomputed every 10 minutes off the event loop (it reads every project's sessions and git log, CO-12), and only
 	 * once today's sessions were read in steps: `worklog: true` allows it from now on, `false` holds it (CO-11).
 	 */
@@ -822,7 +820,6 @@ export class Day {
 		this.guard("activity", () => {
 			const now = this.now();
 			const midnight = new Date(midnightOf(now.getTime()));
-			this.graphToday = graphSpentOn(localDay(now.getTime()));
 			const stored = this.catalog
 				.query<{ text: string; raised_at: string }, [string, number]>(
 					"SELECT text, raised_at FROM events WHERE raised_at >= ? ORDER BY raised_at DESC, id DESC LIMIT ?",
@@ -886,8 +883,6 @@ export class Day {
 	}
 
 	dashboard(): Dashboard {
-		// The graph's share of "$ today" (0582) is named under the worklog so far, once it spent anything.
-		const graph = this.graphToday > 0 ? [`graph memory · $${this.graphToday.toFixed(2)}`] : [];
 		return {
 			news: this.news,
 			newsError: this.newsError,
@@ -895,7 +890,7 @@ export class Day {
 			weatherError: this.weatherError,
 			machine: this.machine,
 			services: this.services,
-			activity: { ...this.activity, worklog: [...this.activity.worklog, ...graph] },
+			activity: this.activity,
 			leftovers: this.leftoverList,
 		};
 	}

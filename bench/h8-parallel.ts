@@ -22,15 +22,14 @@
 // refuses a mismatch. Each run also measures the cost per finished thread (every omp session of each thread since the
 // run started, its planning session included, with their subagents, priced by the benchmark's ledger at the pinned
 // table), the peak working set and private bytes of Jocasta's processes (the service's, herdr's server's with the
-// threads, and the attached surfaces' trees; sampled every 10 s), and, layer on, the run's shared check hits and index
-// reuse, as the sandbox service counts them in its data dir.
+// threads, and the attached surfaces' trees; sampled every 10 s), and, layer on, the run's shared check hits, as the
+// sandbox service counts them in its data dir.
 // Writes h8-parallel.jsonl (one row per thread count and run) and h8-parallel.json.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { checksDir, readCheckHits } from "../src/frontier/server/checks.ts";
-import { readIndexReuse } from "../src/frontier/server/code-index.ts";
 import type { PaneInfo } from "../src/frontier/server/herdr.ts";
 import { SessionIndex } from "../src/frontier/server/sessions.ts";
 import { removeTree } from "../src/shared/fsx.ts";
@@ -54,16 +53,14 @@ const MEMORY_SAMPLE_MS = 10_000;
 /** The layer's shared-service counters (K11), as the service counts them. */
 export interface LayerCounters {
 	checkHits: number;
-	indexReuse: number;
 }
 
 /**
- * K11's shared check hits and index reuse so far in a Jocasta data dir: the check runner logs one line per result
- * reused or run joined (`<data>/checks/hits.log`, 0542, 0559), the code index one per query its existing index served
- * (`<data>/code-index/reuse.log`, 0562). A run's own counts are the difference across it.
+ * K11's shared check hits so far in a Jocasta data dir: the check runner logs one line per result reused or run joined
+ * (`<data>/checks/hits.log`, 0542, 0559). A run's own count is the difference across it.
  */
 export function readLayerCounters(dataDir: string): LayerCounters {
-	return { checkHits: readCheckHits(checksDir(dataDir)), indexReuse: readIndexReuse(dataDir) };
+	return { checkHits: readCheckHits(checksDir(dataDir)) };
 }
 
 /**
@@ -207,7 +204,6 @@ export interface K11Measures {
 	peakWorkingSetMb: number | null;
 	peakPrivateMb: number | null;
 	checkHits: number | null;
-	indexReuse: number | null;
 }
 
 export function score(
@@ -317,8 +313,8 @@ if (import.meta.main) {
 						? [
 								`K11 (0543): the layer ${layer} in the sandbox (the service started ${layer === "off" ? "with" : "without"} JOCASTA_LAYER=off; /health checked); cost per finished thread from every omp session of each thread since the run started at the pinned price table; peak memory of the service's, herdr's and the surfaces' trees every ${MEMORY_SAMPLE_MS / 1000} s`,
 								layer === "on"
-									? "shared check hits and index reuse from the service's logs in its data dir"
-									: "no shared check hits or index reuse with the layer off",
+									? "shared check hits from the service's log in its data dir"
+									: "no shared check hits with the layer off",
 							]
 						: []),
 				],
@@ -452,7 +448,6 @@ if (import.meta.main) {
 						peakWorkingSetMb: peakWorkingSet === null ? null : peakWorkingSet / 2 ** 20,
 						peakPrivateMb: peakPrivate === null ? null : peakPrivate / 2 ** 20,
 						checkHits: countedBefore && countedAfter ? countedAfter.checkHits - countedBefore.checkHits : null,
-						indexReuse: countedBefore && countedAfter ? countedAfter.indexReuse - countedBefore.indexReuse : null,
 					} satisfies K11Measures);
 				}
 				scores.push(result);
@@ -499,7 +494,6 @@ if (import.meta.main) {
 								costPerFinishedThread: totalFinished === 0 ? null : totalCost / totalFinished,
 								peakWorkingSetMb: Math.max(...measured.map((s) => s.peakWorkingSetMb ?? 0)),
 								checkHits: layer === "on" ? measured.reduce((total, s) => total + (s.checkHits ?? 0), 0) : null,
-								indexReuse: layer === "on" ? measured.reduce((total, s) => total + (s.indexReuse ?? 0), 0) : null,
 							}
 						: {}),
 				};

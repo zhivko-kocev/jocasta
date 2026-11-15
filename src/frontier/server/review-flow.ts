@@ -7,6 +7,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { UserError } from "../../shared/errors.ts";
 import { log } from "../../shared/log.ts";
+import { PANE_CHECK_WAIT_MS } from "../../shared/pane-check.ts";
 import { type CheckRun, type CheckSpec, gateReply, shortTree } from "./checks.ts";
 import type { ServiceContext } from "./context.ts";
 import { hunkDiffArgs, listComments, proofSaid, type ReviewProof, reviewPrompt, reviewProof } from "./hunk.ts";
@@ -28,9 +29,26 @@ interface ReviewFound {
 	doneWhen: string[];
 }
 
+/** Where checks run: a thread's worktree, or a project pane's folder (0617). */
+type Place = Pick<Thread, "project" | "path" | "title">;
+
+/** What a project pane's checks remember (0617). */
+interface PaneCheckState {
+	/** The tree last checked for the pane: the same tree is never checked or answered twice. */
+	tree?: string;
+	/** A failure that came after the wait, owed to the pane's next request on that tree. */
+	owed?: { tree: string; text: string };
+	/** The pane's last check: the next one runs after it, as runs in one folder must not overlap (`checks.ts`). */
+	running?: Promise<string>;
+}
+
 export class ReviewFlow {
 	/** Checks on idle under way: the stop waits for them once their checks are ended. */
 	private readonly idleChecks = new Set<Promise<void>>();
+	/** Each project pane's check state, by pane id (0617). */
+	private readonly paneChecks = new Map<string, PaneCheckState>();
+	/** Ends each pane check's wait still under way (`endPaneWaits`, when the service stops). */
+	private readonly paneWaits = new Set<() => void>();
 
 	constructor(private readonly c: ServiceContext) {}
 
@@ -133,7 +151,7 @@ export class ReviewFlow {
 				existsSync(f),
 			);
 			// Jocasta's runner checks the task's tree first (0542, 0546): the turn gets the failing gates, nothing on a pass.
-			const { specs, skipped } = await this.checksFor(thread);
+			const { specs, skipped } = await this.checksFor(thread, thread.task?.doneWhen ?? []);
 			const run = await this.runChecks(thread, specs);
 			if (run) running.checks = specs;
 			if (skipped) running.skipped = skipped;
@@ -296,8 +314,10 @@ export class ReviewFlow {
 	}
 
 	/**
-	 * Why the thread's last review wasn't a pass (0453): its tests didn't pass by their run, or the reviewer marked
-	 * notes blocking (P0/P1); undefined when it passed or no review result is known here.
+	 * Why the thread's last review wasn't a pass (0453, 0610): its tests didn't pass by their run, the reviewer marked
+	 * notes blocking (P0/P1), the diff weakens the tests (a removed test, fewer assertions in a test file, an added
+	 * skip/only; proofs stored before 0610 lack the first two), or a done_when command failed; undefined when it passed or
+	 * no review result is known here.
 	 */
 	failed(thread: Thread): string | undefined {
 		const result = thread.review?.result;
@@ -305,10 +325,15 @@ export class ReviewFlow {
 		// A done_when command that didn't exit 0 in the review turn (0540): the task's own definition of done.
 		const doneWhen = new Set(thread.task?.doneWhen ?? []);
 		const unmet = result.checks.filter((c) => doneWhen.has(c.command) && c.exit !== 0);
+		const weakened = (label: string, files: string[] | undefined) =>
+			files?.length ? [`${label} in ${files.join(", ")}`] : [];
 		const why = [
 			...(result.tests === "pass" || result.tests === "none" ? [] : [TESTS_SAID[result.tests]]),
 			...(result.notes === undefined ? ["notes not counted"] : []),
 			...(result.blocking ? [`${result.blocking} blocking note${result.blocking === 1 ? "" : "s"}`] : []),
+			...weakened("removed tests", result.proof?.removedTests),
+			...weakened("fewer assertions", result.proof?.fewerAssertions),
+			...weakened("added skip/only", result.proof?.skipped),
 			...unmet.map((c) => `done-when \`${c.command}\` ${c.exit === null ? "not run" : `exit ${c.exit}`}`),
 		];
 		return why.length > 0 ? why.join(", ") : undefined;
@@ -321,19 +346,19 @@ export class ReviewFlow {
 	}
 
 	/**
-	 * The task's checks (0453, 0473, 0540, 0542): the project's own (its trusted mise `verify`/`test` task, run as
-	 * `mise run -c <task>` so a failing task doesn't stop the others, 0559) and the task's `done_when` commands, with why
-	 * the project's own can't run when mise may not load its config (0559). The one place checks are decided: the
-	 * review, the check on idle and the `check` tool all run these through the runner. The worktree's unchanged copies
-	 * of trusted mise configs are trusted first (0596), so a copy a merge brought in from trunk is trusted again here.
+	 * The checks of `place`, a thread's worktree or a project pane's folder (0453, 0473, 0540, 0542, 0617): the project's
+	 * own (its trusted mise `verify`/`test` task, run as `mise run -c <task>` so a failing task doesn't stop the others,
+	 * 0559) and the `doneWhen` commands, with why the project's own can't run when mise may not load its config (0559).
+	 * The one place checks are decided: the review, the check on idle, the project pane's check and the `check` tool all
+	 * run these through the runner. The folder's unchanged copies of trusted mise configs are trusted first (0596), so a
+	 * copy a merge brought in from trunk is trusted again here.
 	 */
-	private async checksFor(thread: Thread): Promise<{ specs: CheckSpec[]; skipped?: string }> {
+	private async checksFor(place: Place, doneWhen: string[]): Promise<{ specs: CheckSpec[]; skipped?: string }> {
 		const mise = this.c.options.mise;
 		const env = this.c.panes.checkEnv();
-		if (mise !== null) await trustCopies(thread.project.id, thread.project.mainPath, thread.path, env, mise);
-		const project = mise === null ? undefined : await miseCheck(thread.project.id, thread.path, env, mise);
+		if (mise !== null) await trustCopies(place.project.id, place.project.mainPath, place.path, env, mise);
+		const project = mise === null ? undefined : await miseCheck(place.project.id, place.path, env, mise);
 		const argv = (mise ?? ["mise"]).map((word) => (/^[\w./:=-]+$/.test(word) ? word : `"${word}"`));
-		const doneWhen = thread.task?.doneWhen ?? [];
 		const task = project && "task" in project ? project.task : undefined;
 		return {
 			specs: [
@@ -345,19 +370,19 @@ export class ReviewFlow {
 	}
 
 	/**
-	 * Runs `specs` on the thread's worktree through the runner (0542, 0559), with the env its panes get (mise's
-	 * included, Jocasta's own keys left out), on `tree` when the caller already keyed it (SRV-B-17); undefined without
-	 * specs, outside git, or when the runner fails (logged).
+	 * Runs `specs` on `place`'s folder through the runner (0542, 0559), with the env its panes get (mise's included,
+	 * Jocasta's own keys left out), on `tree` when the caller already keyed it (SRV-B-17); undefined without specs,
+	 * outside git, or when the runner fails (logged).
 	 */
-	private async runChecks(thread: Thread, specs: CheckSpec[], tree?: string): Promise<CheckRun | undefined> {
+	private async runChecks(place: Place, specs: CheckSpec[], tree?: string): Promise<CheckRun | undefined> {
 		if (specs.length === 0) return undefined;
 		const env = this.c.panes.checkEnv();
 		const mise = this.c.options.mise;
 		try {
-			const own = mise === null ? {} : await miseEnv(thread.project.id, thread.path, env, mise);
-			return await this.c.checks.run(thread.path, specs, { ...env, ...own }, tree);
+			const own = mise === null ? {} : await miseEnv(place.project.id, place.path, env, mise);
+			return await this.c.checks.run(place.path, specs, { ...env, ...own }, tree);
 		} catch (error) {
-			this.c.warn(new Error(`${thread.title}'s checks didn't run: ${(error as Error).message}`));
+			this.c.warn(new Error(`${place.title}'s checks didn't run: ${(error as Error).message}`));
 			return undefined;
 		}
 	}
@@ -379,6 +404,11 @@ export class ReviewFlow {
 		await Promise.allSettled([...this.idleChecks]);
 	}
 
+	/** Ends the pane checks' waits, so their requests answer nothing at once (`stop`); their checks end with the runner. */
+	endPaneWaits(): void {
+		for (const end of this.paneWaits) end();
+	}
+
 	/**
 	 * The check on idle (0513, v1 by 0542): a thread whose turn ended with edits not yet checked has its checks run on
 	 * its tree; failing gates go into its pane under 0583's frame, a pass says nothing. A tree already checked, or one
@@ -387,10 +417,8 @@ export class ReviewFlow {
 	private async idleCheck(thread: Thread): Promise<void> {
 		if (thread.phase !== "task" || thread.plan?.awaiting) return;
 		const tree = await this.c.checks.treeKey(thread.path);
-		if (!tree || tree === thread.idleTree) return;
-		// No edits since its last commit: nothing new to check.
-		if (tree === (await gitOut(thread.path, ["rev-parse", "HEAD^{tree}"]))) return;
-		const { specs } = await this.checksFor(thread);
+		if (!tree || !(await this.unchecked(thread.path, tree, thread.idleTree))) return;
+		const { specs } = await this.checksFor(thread, thread.task?.doneWhen ?? []);
 		if (specs.length === 0) return;
 		thread.idleTree = tree;
 		const run = await this.runChecks(thread, specs, tree);
@@ -403,6 +431,97 @@ export class ReviewFlow {
 	}
 
 	/**
+	 * Whether `tree`, the tree of the folder `path` as it is now, has edits not yet checked (0513, 0617): it differs from
+	 * `last`, the tree last checked there, and from the tree of HEAD (no edits since the last commit). A tree already
+	 * checked, or one with no edits, costs the tree key only.
+	 */
+	private async unchecked(path: string, tree: string, last: string | undefined): Promise<boolean> {
+		return tree !== last && tree !== (await gitOut(path, ["rev-parse", "HEAD^{tree}"]));
+	}
+
+	/**
+	 * A project pane's check when its turn ends (0617), asked by its extension through `POST /api/pane-check`: the
+	 * threads' rule on the pane's own folder. A tree with edits not yet checked has the project's check run (no
+	 * `done_when`), after the pane's previous check; a failure within the wait, counted from the request, is the answer,
+	 * in the threads' frame text, once per tree. A check still running when the wait ends, or when `signal` says the
+	 * pane stopped asking, goes on: if it then fails, `today` says so and the failure is owed to the pane's next request
+	 * on the same tree, once; a tree that changed meanwhile drops it. A pass says nothing; so does a pane that isn't a
+	 * project pane's (a thread's, the boss's, an unknown key) and the layer off (0576). The tree is noted before mise is
+	 * asked, so a project with no check costs the tree key alone until it changes. Empty: nothing to say.
+	 */
+	async paneCheck(paneKey: string, signal?: AbortSignal): Promise<string> {
+		const { c } = this;
+		const ends = Date.now() + (c.options.paneCheckWaitMs ?? PANE_CHECK_WAIT_MS);
+		const paneId = c.launched.paneOfKey(paneKey);
+		const path = paneId ? c.launched.cwdOf(paneId) : undefined;
+		const project = c.layer && path ? c.places.projectPaneAt(path) : undefined;
+		if (!paneId || !path || !project) return "";
+		const tree = await c.checks.treeKey(path);
+		if (!tree) return "";
+		const state = this.paneChecks.get(paneId) ?? {};
+		this.paneChecks.set(paneId, state);
+		const owed = state.owed;
+		state.owed = undefined;
+		if (owed?.tree === tree) return owed.text;
+		const last = state.tree;
+		state.tree = tree;
+		if (!(await this.unchecked(path, tree, last))) return "";
+		// A tree replaced while it waited for the previous check is not run.
+		const checking = (state.running ?? Promise.resolve("")).then(() =>
+			state.tree === tree ? this.checkTree({ project, path, title: project.name }, tree) : "",
+		);
+		state.running = checking;
+		const done = await this.within(checking, ends, signal);
+		if (done && !signal?.aborted) return done.text;
+		const late: Promise<void> = (done ? Promise.resolve(done.text) : checking)
+			.then((text) => {
+				if (!text || c.stopping) return;
+				log("info", "checks", `${project.name}: checks failed on tree ${shortTree(tree)} after the wait`);
+				c.day.recordEvent(
+					`${project.name} — checks failed on tree ${shortTree(tree)} after its turn ended; its agent gets them at its next turn end`,
+				);
+				if (state.tree === tree) state.owed = { tree, text };
+			})
+			.catch((error: unknown) => c.warn(error))
+			.finally(() => this.idleChecks.delete(late));
+		this.idleChecks.add(late);
+		return "";
+	}
+
+	/** `checking`'s text if it ends before `ends` (a time), `signal` aborts or the service stops; else undefined. */
+	private async within(
+		checking: Promise<string>,
+		ends: number,
+		signal: AbortSignal | undefined,
+	): Promise<{ text: string } | undefined> {
+		const wait = Promise.withResolvers<undefined>();
+		const end = () => wait.resolve(undefined);
+		const timer = setTimeout(end, Math.max(0, ends - Date.now()));
+		signal?.addEventListener("abort", end, { once: true });
+		if (signal?.aborted) end();
+		this.paneWaits.add(end);
+		try {
+			return await Promise.race([checking.then((text) => ({ text })), wait.promise]);
+		} finally {
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", end);
+			this.paneWaits.delete(end);
+		}
+	}
+
+	/** `place`'s project check on `tree` through the runner: the frame text of its failing gates, "" on a pass or no check. */
+	private async checkTree(place: Place, tree: string): Promise<string> {
+		try {
+			const { specs } = await this.checksFor(place, []);
+			const run = await this.runChecks(place, specs, tree);
+			return run && !run.passed ? idleCheckText(gateReply(run)) : "";
+		} catch (error) {
+			this.c.warn(error);
+			return "";
+		}
+	}
+
+	/**
 	 * The `check` thread tool (0542, 0546): the task's checks on the thread's tree, as gates; one line on a pass. A
 	 * project check that couldn't run is said (0559).
 	 */
@@ -410,7 +529,7 @@ export class ReviewFlow {
 		const thread = paneId ? this.c.threads.get(paneId) : undefined;
 		if (!thread)
 			throw new UserError(`check: only a thread's pane runs its checks, and this pane isn't a thread's${unkeyed}.`);
-		const { specs, skipped } = await this.checksFor(thread);
+		const { specs, skipped } = await this.checksFor(thread, thread.task?.doneWhen ?? []);
 		if (specs.length === 0) {
 			return skipped
 				? `No checks: ${skippedSaid(skipped)}, and the task has no done_when.`

@@ -1,6 +1,8 @@
 // The `jocasta` command (0387): open the work surface, `setup [--refresh <file>]`, `uninstall`, `diagnose`,
-// `mcp [--boss]`, `project …`, `--version`, and `service`, the Jocasta service bare `jocasta` starts (0552). No Jocasta
-// code runs inside omp (0386); omp starts `jocasta mcp` as a stdio MCP server.
+// `mcp [--boss]`, `project …`, `--version`, `service`, the Jocasta service bare `jocasta` starts (0552), `push-hook`,
+// git's pre-push hook in every pane (0613), and `pane-check`, the check a project pane's omp extension asks for when a
+// turn ends (0617). No Jocasta code runs inside omp (0386) but that one extension; omp starts `jocasta mcp` as a stdio
+// MCP server.
 // Only the router and the error types load up front: every omp pane starts a `jocasta mcp`, so each route imports
 // what it runs when it runs (PM-11); the specifiers are known, the dynamic imports only defer the work.
 import { spawn } from "node:child_process";
@@ -126,11 +128,11 @@ try {
 			});
 			break;
 		}
+		// biome-ignore lint/suspicious/noFallthroughSwitchClause: process.exit never returns, and tsc refuses a `break` after it as unreachable (0610).
 		case "service": {
 			const { runService } = await import("./frontier/server/run.ts");
 			// Ends here: no stray handle keeps a stopped or failed service holding the relay port.
 			process.exit(await runService());
-			break;
 		}
 		case "plugin": {
 			// What the `jocasta` herdr plugin runs (0553): its panes, its startup hook and its actions. A pane's process ends
@@ -179,6 +181,37 @@ try {
 			}
 			break;
 		}
+		case "pane-check": {
+			// What a project pane's omp extension runs when a turn ends (0617): the service's text for the agent, or nothing.
+			const { askPaneCheck } = await import("./frontier/client.ts");
+			const text = await askPaneCheck(process.env.JOCASTA_PANE_KEY);
+			if (text) process.stdout.write(text);
+			break;
+		}
+		case "push-hook": {
+			// What git runs before a push (0613): the exit code is its verdict, the reason goes to stderr.
+			const [{ runPushHook }, { askPush }, { git }] = await Promise.all([
+				import("./shared/push-hook.ts"),
+				import("./frontier/client.ts"),
+				import("./shared/git.ts"),
+			]);
+			const cwd = process.cwd();
+			process.exitCode = await runPushHook(target.args, await Bun.stdin.text(), {
+				cwd,
+				...(process.env.JOCASTA_PANE_KEY ? { paneKey: process.env.JOCASTA_PANE_KEY } : {}),
+				trunk: (remote) => {
+					try {
+						const head = git(cwd, ["symbolic-ref", "--short", `refs/remotes/${remote}/HEAD`]);
+						return head?.startsWith(`${remote}/`) ? head.slice(remote.length + 1) : undefined;
+					} catch {
+						return undefined;
+					}
+				},
+				ask: askPush,
+				say: (line) => console.error(line),
+			});
+			break;
+		}
 		case "setup": {
 			const [setup, { findHerdr }, { selfCommand, shippedConfigDir }, { herdrSession }, runValue, { onPath }] =
 				await Promise.all([
@@ -195,6 +228,14 @@ try {
 				herdr,
 				mise: onPath("mise") ?? undefined,
 				run,
+				gitVersion: async () => {
+					try {
+						const { code, output } = await run(["git", "--version"]);
+						return code === 0 ? output : undefined;
+					} catch {
+						return undefined;
+					}
+				},
 				calendar: setup.defaultCalendarStore(calendarEnv),
 				...(herdr ? { reloadHerdr: () => run([herdr, "--session", herdrSession(), "server", "reload-config"]) } : {}),
 				...(process.platform === "win32"
@@ -221,7 +262,6 @@ try {
 				{ serviceState },
 				{ herdrSession },
 				{ installDir, selfCommand, shippedConfigDir },
-				{ composeFile, composeProject },
 				{ CALENDAR_CREDENTIAL, deleteCredential, readCredential },
 				{ configDir, dataDir },
 			] = await Promise.all([
@@ -232,7 +272,6 @@ try {
 				import("./frontier/server/launch.ts"),
 				import("./shared/herdr-session.ts"),
 				import("./shared/install.ts"),
-				import("./shared/containers/index.ts"),
 				import("./shared/credentials.ts"),
 				import("./shared/paths.ts"),
 			]);
@@ -246,7 +285,6 @@ try {
 						jocastaConfigDir: configDir(),
 						dataDir: dataDir(),
 						miseConfigDir: miseConfigDir(),
-						composeFile: composeFile(),
 						install,
 						// Windows holds the running jocasta.exe: its files go after this exits. POSIX removes them at once.
 						runningFromInstall: install !== undefined && process.platform === "win32",
@@ -260,19 +298,6 @@ try {
 							defaultSetupPaths(shippedConfigDir(), selfCommand()),
 							readCredential(CALENDAR_CREDENTIAL) !== undefined,
 						),
-						composeDown: () =>
-							run([
-								"docker",
-								"compose",
-								"-f",
-								composeFile(),
-								"-p",
-								composeProject(),
-								"down",
-								"--rmi",
-								"all",
-								"--volumes",
-							]),
 						removePathEntry: uninstall.removeUserPathEntry,
 						removeRunValue: uninstall.removeRunValueFor,
 						deleteCredential,
@@ -345,7 +370,6 @@ try {
 				{ askShutdown, serviceHealth, serviceState },
 				{ herdrSession },
 				{ attachedSurface, lastLoggedError, openSurface, serviceStopped },
-				{ stopJocastaContainersDetached },
 				{ selfCommand },
 				{ configDir, dataDir },
 				{ logsDir },
@@ -355,7 +379,6 @@ try {
 				import("./frontier/server/launch.ts"),
 				import("./shared/herdr-session.ts"),
 				import("./shared/surface.ts"),
-				import("./shared/containers/resources.ts"),
 				import("./shared/install.ts"),
 				import("./shared/paths.ts"),
 				import("./shared/log.ts"),
@@ -398,7 +421,6 @@ try {
 				stopHerdr: async () => {
 					await stopHerdrSession({ session: herdrSession(), timeoutMs: 3_000 });
 				},
-				stopContainers: stopJocastaContainersDetached,
 				exit: () => process.exit(0),
 				watchServiceStop: () => {
 					const before = readServiceFile();
@@ -408,6 +430,10 @@ try {
 				herdrUp: () => herdrSessionAnswers({ session: herdrSession(), timeoutMs: 1_000 }),
 			});
 			break;
+		}
+		default: {
+			const unknown: never = target;
+			throw new Error(`no role ${JSON.stringify(unknown)}.`);
 		}
 	}
 } catch (error) {

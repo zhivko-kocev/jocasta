@@ -9,19 +9,25 @@
 		"lint": "biome check .",
 		"format": "biome check --write .",
 		"build": "bun scripts/build.ts",
-		"test": "bun test --parallel --timeout 30000",
+		"test": "bun test --parallel=4 --timeout 30000",
 		"evals": "bun evals/run.ts"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.5.15",
 		"@types/bun": "1.4.3",
-		"typescript": "7.0.2"
+		"jscpd": "5.4.2",
+		"knip": "6.44.2",
+		"typescript": "7.0.2",
+		"typescript5": "npm:typescript@5.9.3"
 	},
 	"dependencies": {
 		"@opentui/core": "0.8.3",
 		"monaco-editor": "0.57.0",
 		"node-ical": "0.27.3",
 		"typebox": "1.3.37"
+	},
+	"overrides": {
+		"dompurify": "3.4.17"
 	},
 	"optionalDependencies": {
 		"hunkdiff-darwin-arm64": "0.23.0",

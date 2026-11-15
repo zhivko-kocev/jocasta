@@ -2,7 +2,6 @@ import { expect, setSystemTime, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { Confirmation } from "../../../src/frontier/server/allow.ts";
-import type { CodeIndex } from "../../../src/frontier/server/code-index.ts";
 import {
 	COMMIT_LINE,
 	fallbackSlug,
@@ -605,10 +604,9 @@ test(
 );
 
 test(
-	"C6: with the layer off, a thread pane gets JOCASTA_LAYER=off, its prompt no Done when or When you finish, its brief the commit line, no report steer, and graph_search no code index (0576)",
+	"C6: with the layer off, a thread pane gets JOCASTA_LAYER=off, its prompt no Done when or When you finish, its brief the commit line and no report steer (0576)",
 	async () => {
 		const project = await demoProject(env.root);
-		const located: unknown[] = [];
 		const saved = process.env[LAYER_ENV];
 		process.env[LAYER_ENV] = "off";
 		try {
@@ -638,21 +636,8 @@ test(
 						server.herdr.of("prompt").some(([p, t]) => p === paneId && String(t).startsWith(reviewStart)),
 					);
 					expect(server.herdr.of("prompt").some(([, t]) => t === REPORT_STEER)).toBe(false);
-					const searched = await call(server, "graph_search", { query: "who calls addNumbers?", project: "demo" });
-					expect(searched.isError).toBeUndefined();
-					expect(located).toEqual([]);
 				},
-				{
-					...HUNK_OPTIONS,
-					askReport: undefined,
-					graph: { post: async () => {}, search: async () => [] },
-					codeIndex: {
-						locations: async (...args: unknown[]) => {
-							located.push(args);
-							return [];
-						},
-					} as unknown as CodeIndex,
-				},
+				{ ...HUNK_OPTIONS, askReport: undefined },
 			);
 		} finally {
 			if (saved === undefined) delete process.env[LAYER_ENV];

@@ -1,7 +1,7 @@
 import { jsonLines } from "../../src/shared/jsonl.ts";
 
 /**
- * omp session files (`~/.omp/agent/sessions/<cwd>/<time>_<id>.jsonl`, omp 18.18.6): one entry per line with an ISO
+ * omp session files (`~/.omp/agent/sessions/<cwd>/<time>_<id>.jsonl`, omp 18.20.2): one entry per line with an ISO
  * `timestamp`; `message` entries carry `{role, content, timestamp?, completedAt?}`. Times follow `sessions.ts`
  * `entryTime`: the message's own epoch-ms `timestamp` when non-zero, else the entry's ISO time.
  */
@@ -75,8 +75,8 @@ export function planReadyTimes(text: string): number[] {
 
 /**
  * When he left plan mode after a plan was ready (his approval): a `mode_change` away from `plan`, counted only when it
- * leaves `plan` (the mode before it was `plan`, or no mode was recorded before it). omp 18.18.6 writes a second
- * `mode_change` to `none` with `data.approvedPlanFilePath` once an approval is through (`interactive-mode.ts:6957`), so
+ * leaves `plan` (the mode before it was `plan`, or no mode was recorded before it). omp 18.20.2 writes a second
+ * `mode_change` to `none` with `data.approvedPlanFilePath` once an approval is through (`interactive-mode.ts:6932`), so
  * "Approve and keep context" leaves two in one file (0589).
  */
 export function planApprovalTimes(text: string): number[] {

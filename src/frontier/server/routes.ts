@@ -1,7 +1,6 @@
 import type { Server, WebSocketHandler } from "bun";
 import { sameToken } from "../../shared/fsx.ts";
 import { log } from "../../shared/log.ts";
-import { isLlmPath } from "./llm-route.ts";
 
 /** One route of the service's server: the paths it answers, and its answer. */
 export interface Route {
@@ -16,13 +15,9 @@ export interface PageRoute {
 	handle(request: Request, url: URL): Response | Promise<Response>;
 }
 
-/** The Hosts this server answers as (DNS rebinding, SE-3); Graphiti's container may also use its docker name. */
-export function hostAllowed(host: string | null, port: number, path: string): boolean {
-	return (
-		host === `127.0.0.1:${port}` ||
-		host === `localhost:${port}` ||
-		(host === `host.docker.internal:${port}` && isLlmPath(path))
-	);
+/** The Hosts this server answers as (DNS rebinding, SE-3). */
+export function hostAllowed(host: string | null, port: number): boolean {
+	return host === `127.0.0.1:${port}` || host === `localhost:${port}`;
 }
 
 /** The bearer of `request`'s Authorization header; empty when none. */
@@ -89,7 +84,7 @@ export function listen(wanted: number, { routes, page, websocket }: Served): Ser
 			async fetch(request, server) {
 				const url = new URL(request.url);
 				const at = server.port ?? port;
-				if (!hostAllowed(request.headers.get("host"), at, url.pathname)) {
+				if (!hostAllowed(request.headers.get("host"), at)) {
 					return new Response("Forbidden", { status: 403 });
 				}
 				const route = routes.find((r) => r.matches(url.pathname));

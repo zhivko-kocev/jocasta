@@ -4,7 +4,8 @@
 // answers with two findings, `[P1]` and `[P3]`. Each run appends its argv, its `--config` overlay's contents, its cwd,
 // git branch and `--append-system-prompt` file's text to `JOCASTA_TEST_OMP_LOG` when set. With `--session-dir <dir>` it
 // also writes a session file there
-// (one priced request on `claude-opus-5-5`, one `read` call and its result), as omp keeps one per session.
+// (one priced request on `claude-opus-5-5`, one `read` call and its result), as omp keeps one per session; with
+// `--prewalk` it adds the `model_change` entry (role `prewalk`) omp writes when the prewalk switch fires.
 import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -100,6 +101,14 @@ if (sessionDir !== undefined) {
 			message: { role: "toolResult", toolCallId: "c1", toolName: "read", content: [{ type: "text", text: "hello" }] },
 		},
 	];
+	if (argv.includes("--prewalk"))
+		entries.push({
+			type: "model_change",
+			id: "mc1",
+			timestamp: at,
+			model: "anthropic/stub-smol",
+			role: "prewalk",
+		} as never);
 	appendFileSync(join(sessionDir, "stub-session.jsonl"), `${entries.map((e) => JSON.stringify(e)).join("\n")}\n`);
 }
 if (prompt.startsWith("Fail")) process.exit(1);

@@ -17,7 +17,7 @@ export function seededRandom(seed: number): () => number {
 }
 
 export const DEFAULT_SEED = 482;
-export const DEFAULT_RESAMPLES = 10_000;
+const DEFAULT_RESAMPLES = 10_000;
 
 export function mean(values: readonly number[]): number {
 	if (values.length === 0) return Number.NaN;

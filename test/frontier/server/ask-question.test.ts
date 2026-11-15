@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
 import { askQuestion, formQuestion } from "../../../src/frontier/server/ask-question.ts";
 
-// Each expectation is what omp 18.18.6's own `fieldQuestions` (pi-tui `html-form/data.ts:127-146`) gives for the
+// Each expectation is what omp 18.20.2's own `fieldQuestions` (pi-tui `html-form/data.ts:133-157`) gives for the
 // form's first named field, checked against omp's parser when these cases were written (0589).
 
 test("omp's own example form: the radio group's fieldset legend, not the context before it", () => {
-	// omp 18.18.6 `tools/ask.ts:335-344`, `EXAMPLE_FORM`.
+	// omp 18.20.2 `prompts/tools/ask.md:29-37`, the example form.
 	const html = `<form>
   <p>Sessions live in memory and are lost on restart.</p>
   <fieldset>
@@ -92,7 +92,7 @@ test("a form without a named control has no question", () => {
 	expect(formQuestion(`<form><p>Just text</p><input type="submit" name="go"></form>`)).toBeNull();
 });
 
-test("an ask call's arguments: omp 18.18.6's form, or an older session's questions[]", () => {
+test("an ask call's arguments: omp 18.20.2's form, or an older session's questions[]", () => {
 	expect(
 		askQuestion({
 			html: `<form><p>CSV or JSON?</p><label><input type="radio" name="f" value="csv" checked> CSV</label><label><input type="radio" name="f" value="json"> JSON</label></form>`,

@@ -1,6 +1,7 @@
 # The guard (0450): every project, thread and boss pane starts with an extra `--config <config>/guard.yml`, so it acts
 # whatever his ~/.omp/agent/config.yml says and outranks a repo's own .omp/config.yml. Keys checked against omp
-# 18.18.6 (`exec/settings.ts`, `tools/bash.ts`; 0589).
+# 18.20.2 (`exec/settings.ts`, `tools/bash.ts`; 0623). Since 18.20.1 omp joins `bash.patterns` across layers, this
+# file's first, so its rules still decide before any in his or a repo's config.
 #
 # How omp matches: anchored, case-sensitive, `*` is the only wildcard; quotes are stripped; deny and prompt rules also
 # match each segment of a compound command; the first rule in list order wins, so every deny comes before every prompt.
@@ -10,12 +11,13 @@
 #
 # Known limits (accepted, 0485): commands run through omp's `eval` tool aren't covered; a commit message quoting a
 # denied command is denied; scripts and interpreter one-liners beyond the shapes below, the `ri`/`del`/`erase`
-# aliases, and mise's `u`/`up` short forms beyond the ones below aren't covered; prompts are rejected in subagents.
+# aliases, and mise's `u`/`up` short forms beyond the ones below aren't covered; prompts are rejected in subagents; the
+# push hook's keys are matched by their text, so a mixed-case `hOoK.jocasta.` or a name built from pieces isn't covered.
 # Everything runs as him: an OS boundary for thread panes is after v1 (0485).
 bash:
-  # off until omp's git builtin runs git on Windows: with it on, omp 18.18.6's shell fails every git command it lets
-  # through with exit 127 (can1357/oh-my-pi#18722, 0598); the bump to a fixed omp turns it back on
-  gitGuard: false
+  # on: omp#18722 (its git builtin failed every git command with exit 127 on Windows) is fixed since omp 18.18.8, and
+  # on 18.20.0 `git --version` with the guard on exits 0 (0600, which amends 0598)
+  gitGuard: true
   patterns:
     # deny: git and gh (the leading `*git *` also catches `git -C x`, `cd x &&`, `pwsh -c "…"`, `cmd /c`; `*git*push*`
     # also catches git.exe and a full path to git, 0485); force flags combined with -u, -v or -q, and pushes onto the
@@ -38,6 +40,7 @@ bash:
     - { match: "*git*push* -d *", approval: deny }
     - { match: "*git*push* --mirror*", approval: deny }
     - { match: "*git*push* --prune*", approval: deny }
+    - { match: "*git*push*--no-veri*", approval: deny }
     - { match: "*git*reset* --hard*", approval: deny }
     - { match: "*git*clean -*", approval: deny }
     - { match: "*git*branch* -D*", approval: deny }
@@ -96,10 +99,6 @@ bash:
     - { match: "*.ssh\\id_*", approval: deny }
     - { match: "*git*credential*fill*", approval: deny }
     - { match: "*git*credential-manager*get*", approval: deny }
-    # deny: the graph's containers, whose env and database hold every project's graph (0580)
-    - { match: "*docker*inspect*jocasta*", approval: deny }
-    - { match: "*docker*exec*jocasta-*", approval: deny }
-    - { match: "*docker*exec*falkordb*", approval: deny }
     # deny: the git rules above with the program written GIT or Git, which Windows runs as git (0580)
     - { match: "*GIT*push* --force", approval: deny }
     - { match: "*GIT*push* --force *", approval: deny }
@@ -119,6 +118,7 @@ bash:
     - { match: "*GIT*push* -d *", approval: deny }
     - { match: "*GIT*push* --mirror*", approval: deny }
     - { match: "*GIT*push* --prune*", approval: deny }
+    - { match: "*GIT*push*--no-veri*", approval: deny }
     - { match: "*GIT*reset* --hard*", approval: deny }
     - { match: "*GIT*clean -*", approval: deny }
     - { match: "*GIT*branch* -D*", approval: deny }
@@ -171,6 +171,7 @@ bash:
     - { match: "*Git*push* -d *", approval: deny }
     - { match: "*Git*push* --mirror*", approval: deny }
     - { match: "*Git*push* --prune*", approval: deny }
+    - { match: "*Git*push*--no-veri*", approval: deny }
     - { match: "*Git*reset* --hard*", approval: deny }
     - { match: "*Git*clean -*", approval: deny }
     - { match: "*Git*branch* -D*", approval: deny }
@@ -205,6 +206,13 @@ bash:
     - { match: "*Git*--config-env*alias.*", approval: deny }
     - { match: "*Git*credential*fill*", approval: deny }
     - { match: "*Git*credential-manager*get*", approval: deny }
+    # deny: turning off the pre-push hook every pane has (0613): `--no-verify` (and its abbreviations, `--no-veri` and
+    # longer; git rejects shorter ones as ambiguous) is denied on a push above; any command naming the hook's keys is
+    # denied here, which covers `-c hook.jocasta.enabled=false` with every spelling of false, `--config-env`, `git
+    # config` and a replaced command. The section name is case-blind to git, so its capitalised spellings are listed.
+    - { match: "*hook.jocasta.*", approval: deny }
+    - { match: "*Hook.jocasta.*", approval: deny }
+    - { match: "*HOOK.jocasta.*", approval: deny }
     # deny: shapes omp's critical list also matches (a prompt would be silently allowed under yolo, 0450, 0580)
     - { match: "*rm -*r* /*", approval: deny }
     - { match: "*rm -*R* /*", approval: deny }

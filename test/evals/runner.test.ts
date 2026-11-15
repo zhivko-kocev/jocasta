@@ -193,6 +193,17 @@ describe("runEvals on omp", () => {
 		});
 	}, 60_000);
 
+	test("a --prewalk trial's row records whether prewalk's switch happened, read from the session files (0608)", async () => {
+		const cases = tempDir();
+		writeFiles(cases, { "p/case.yaml": "prompt: Say done\nchecks:\n  - git_clean: true\n" });
+		const run = (variant: Variant) =>
+			runEvals({ casesDir: cases, outDir: join(tempDir(), "run"), reps: 1, launcher: omp, variant });
+		const [switched] = await run({ ...DEFAULT_VARIANT, label: "f-prewalk-clean", args: ["--prewalk"] });
+		expect(switched?.prewalkSwitched).toBe(true);
+		const [plain] = await run(DEFAULT_VARIANT);
+		expect(plain).not.toHaveProperty("prewalkSwitched");
+	}, 60_000);
+
 	test("a failing omp fails the trial", async () => {
 		const cases = tempDir();
 		writeFiles(cases, { "fail/case.yaml": "prompt: Fail now\nchecks:\n  - git_clean: true\n" });

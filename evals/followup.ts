@@ -2,51 +2,61 @@ import { BenchUsageError } from "../bench/lib/args.ts";
 import { type BenchTask, shuffle, type TaskLanguage } from "./tasks.ts";
 
 /**
- * The follow-up study (0543, amended by 0545 and 0575), run after the main run: each comparison is one arm paired
- * against A6 on the same 10 main tasks × 2 reps, A6 itself run again in the same seeded order so the pairs share the
- * hours and the build. Reported as exploratory (20 trials per comparison show only large differences); each part is
- * kept by the keep rule (`keep.ts`). pitchfork is no comparison (0560), and neither are keep-alive pings (0575): a
- * trial has no idle gap for them to fill.
+ * The follow-up study (0543, amended by 0545, 0575, 0605, 0608 and 0620), run after the main run: each comparison is
+ * one arm paired against its own baseline (A6, or A1 for the prewalk and thinking arms) on the same 10 main tasks × 2
+ * reps, each baseline itself run again in the same seeded order so the pairs share the hours and the build. Reported
+ * as exploratory (20 trials per comparison show only large differences); each part is kept by the keep rule
+ * (`keep.ts`). pitchfork is no comparison (0560), and neither are keep-alive pings (0575): a trial has no idle gap for
+ * them to fill.
  */
 
-export const FOLLOWUP_BASELINE = "a6";
 export const FOLLOWUP_TASKS = 10;
 export const FOLLOWUP_REPS = 2;
 
 export interface FollowupComparison {
 	/** The arm's variant in `evals/variants/`. */
 	arm: string;
-	/** What differs from A6. */
+	/** The arm it is paired against, run again in the study: `a6`, or `a1` for the prewalk and thinking arms (0608, 0620). */
+	baseline: string;
+	/** What differs from the baseline. */
 	change: string;
 	records: string;
-	/** Which side carries the feature the keep rule decides on: A6 (a part switched off) or the arm (a part tried on). */
-	feature: "baseline" | "arm";
 }
 
 export const FOLLOWUP_COMPARISONS: readonly FollowupComparison[] = [
 	{
-		arm: "f-index-off",
-		change: "the code index off: graph_search answers with facts only",
-		records: "0542, 0562",
-		feature: "baseline",
-	},
-	{ arm: "f-prewalk", change: "prewalk on (`omp --prewalk`)", records: "0541", feature: "arm" },
-	{
 		arm: "f-keep-context",
+		baseline: "a6",
 		change: 'omp\'s "Approve and keep context" in place of "Approve and execute"',
 		records: "0545",
-		feature: "arm",
+	},
+	{
+		arm: "f-keep-smol",
+		baseline: "a6",
+		change: 'omp\'s "Approve and keep context", the work that follows done on the `smol` role',
+		records: "0608",
 	},
 	{
 		arm: "f-ponytail-if",
+		baseline: "a6",
 		change: 'Ponytail with its "Running tests" rules inside `<important if="you are running or writing tests">`',
 		records: "0545",
-		feature: "arm",
 	},
+	{ arm: "f-prewalk-clean", baseline: "a1", change: "prewalk on (`omp --prewalk`) on A1", records: "0608" },
+	{
+		arm: "f-advisor",
+		baseline: "a6",
+		change: "omp's advisor on, on the `advisor` role's model and level, every third update",
+		records: "0620",
+	},
+	{ arm: "f-think-auto", baseline: "a1", change: "`--thinking auto` in place of `high` on A1", records: "0620" },
 ];
 
-/** The study's arms: A6 and each comparison's arm. */
-export const FOLLOWUP_ARMS: readonly string[] = [FOLLOWUP_BASELINE, ...FOLLOWUP_COMPARISONS.map((c) => c.arm)];
+/** The study's baselines, in the order they run first: A6 and A1. */
+export const FOLLOWUP_BASELINES: readonly string[] = ["a6", "a1"];
+
+/** The study's arms: the baselines, then each comparison's arm. */
+export const FOLLOWUP_ARMS: readonly string[] = [...FOLLOWUP_BASELINES, ...FOLLOWUP_COMPARISONS.map((c) => c.arm)];
 
 /** The language strata the follow-up's tasks keep in proportion to the main set. */
 const STRATA: readonly (readonly TaskLanguage[])[] = [["Python"], ["TypeScript", "JavaScript"], ["Go"]];

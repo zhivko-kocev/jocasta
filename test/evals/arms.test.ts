@@ -9,6 +9,7 @@ import {
 	claudeSessions,
 	opencodeSessions,
 	readOpencodeResponse,
+	readPrewalkSwitch,
 	saveSessions,
 } from "../../evals/harness.ts";
 import { LAYER_MODULE, type LayerTrial, LayerUnavailableError, layerBuilt, loadBenchLayer } from "../../evals/layer.ts";
@@ -54,7 +55,7 @@ test("the main run is 30 tasks × 3 reps × 7 arms = 630 trials (0543)", () => {
 test("A6 is A3 plus the layer, plan first through omp's plan review answered 'execute'; every omp arm warms only while streaming (0567)", () => {
 	const a3 = loadVariants(VARIANTS, ["a3"]);
 	const a6 = loadVariants(VARIANTS, ["a6"]);
-	expect(a6.layer).toEqual({ index: true });
+	expect(a6.layer).toBe(true);
 	expect(a6.followups).toEqual(a3.followups);
 	expect(a6.planFirst).toBe(false);
 	expect(a6.planReview).toBe("execute");
@@ -63,8 +64,23 @@ test("A6 is A3 plus the layer, plan first through omp's plan review answered 'ex
 	expect(a6.settings).toMatchObject({
 		modelRoles: { default: "anthropic/claude-opus-5-5:high", plan: "anthropic/claude-opus-5-5:high" },
 	});
-	for (const arm of ["a0", "a1", "a2", "a3", "a6", "f-index-off", "f-prewalk", "f-keep-context", "f-ponytail-if"])
+	for (const arm of [
+		"a0",
+		"a1",
+		"a2",
+		"a3",
+		"a6",
+		"f-prewalk-clean",
+		"f-keep-context",
+		"f-keep-smol",
+		"f-ponytail-if",
+		"f-advisor",
+		"f-think-auto",
+	])
 		expect(loadVariants(VARIANTS, [arm]).settings).toMatchObject({ providers: { cacheWarming: "streaming" } });
+	// 0619: every omp arm but the advisor's has the advisor off, whatever the machine's settings say.
+	expect(loadVariants(VARIANTS, ["a1"]).settings).toMatchObject({ advisor: { enabled: false } });
+	expect(loadVariants(VARIANTS, ["a6"]).settings).toMatchObject({ advisor: { enabled: false } });
 	// 0574: the two arms whose harness updates itself have it off.
 	expect(loadVariants(VARIANTS, ["a4"]).env).toEqual({ DISABLE_AUTOUPDATER: "1" });
 	expect(loadVariants(VARIANTS, ["a7"]).env).toEqual({ OPENCODE_DISABLE_AUTOUPDATE: "1" });
@@ -94,7 +110,7 @@ test("A6 is A3 plus the layer, plan first through omp's plan review answered 'ex
 		model: "anthropic/claude-opus-5-5",
 		args: ["--variant", "high", "--auto"],
 	});
-	expect(a7.layer).toBeUndefined();
+	expect(a7.layer).toBe(false);
 	expect(trialArgs(a7, { prompt: "Fix it", followUp: false, overlay: "x.yml" })).toEqual([
 		"run",
 		"--model",
@@ -114,32 +130,86 @@ test("A6 is A3 plus the layer, plan first through omp's plan review answered 'ex
 	expect(() => trialArgs(a7, { prompt: "again", followUp: true, overlay: "x.yml" })).toThrow(/first turn's session/);
 });
 
+test("the prewalk detector reads a model_change entry with the role prewalk from the trial's own session files (0608)", () => {
+	const dir = tempDir();
+	const entry = (line: object) => `${JSON.stringify(line)}\n`;
+	const header = entry({ type: "session", id: "s1" });
+	const message = entry({ type: "message", message: { role: "assistant", model: "m" } });
+	// No switch: the session's model changes are the user's (`default`, `temporary`) or a retry's, never `prewalk`.
+	writeFileSync(
+		join(dir, "a.jsonl"),
+		header + entry({ type: "model_change", model: "anthropic/x", role: "default" }) + message,
+	);
+	expect(readPrewalkSwitch(dir)).toBe(false);
+	// A subagent's file in a subfolder is not the trial's own: a prewalk entry there does not count.
+	mkdirSync(join(dir, "sub"));
+	writeFileSync(join(dir, "sub", "b.jsonl"), entry({ type: "model_change", model: "anthropic/y", role: "prewalk" }));
+	expect(readPrewalkSwitch(dir)).toBe(false);
+	writeFileSync(
+		join(dir, "c.jsonl"),
+		header + message + entry({ type: "model_change", model: "anthropic/y", role: "prewalk" }) + message,
+	);
+	expect(readPrewalkSwitch(dir)).toBe(true);
+	expect(readPrewalkSwitch(join(dir, "missing"))).toBe(false);
+});
+
+test("plan_review_role needs plan_review and is omp's only", () => {
+	const dir = tempDir();
+	writeFileSync(join(dir, "role.yaml"), "model: m\nplan_review_role: smol\n");
+	expect(() => loadVariants(dir, ["role"])).toThrow(/plan_review_role answers omp's plan review/);
+	writeFileSync(join(dir, "oc.yaml"), "harness: opencode\nplan_review: keep\nplan_review_role: smol\n");
+	expect(() => loadVariants(dir, ["oc"])).toThrow(/plan_review, plan_review_role apply to omp only/);
+});
+
 test("omp-only keys are refused on opencode", () => {
 	const dir = tempDir();
-	writeFileSync(join(dir, "oc.yaml"), "harness: opencode\nlayer: {}\nsettings: { a: 1 }\n");
+	writeFileSync(join(dir, "oc.yaml"), "harness: opencode\nlayer: true\nsettings: { a: 1 }\n");
 	expect(() => loadVariants(dir, ["oc"])).toThrow(/settings, layer apply to omp only, not opencode/);
 });
 
-test("the follow-up study: 10 main tasks in the main set's language proportions × 2 reps × A6 and its four arms (0571, 0575)", () => {
-	expect(FOLLOWUP_ARMS).toEqual(["a6", "f-index-off", "f-prewalk", "f-keep-context", "f-ponytail-if"]);
+test("the follow-up study: 10 main tasks in the main set's language proportions × 2 reps × A6, A1 and six comparison arms (0571, 0575, 0605, 0608, 0620)", () => {
+	expect(FOLLOWUP_ARMS).toEqual([
+		"a6",
+		"a1",
+		"f-keep-context",
+		"f-keep-smol",
+		"f-ponytail-if",
+		"f-prewalk-clean",
+		"f-advisor",
+		"f-think-auto",
+	]);
 	const picked = pickFollowupTasks(mainSet, 482);
 	expect(picked).toHaveLength(FOLLOWUP_TASKS);
 	const count = (languages: TaskLanguage[]) => picked.filter((t) => languages.includes(t.language)).length;
 	expect([count(["Python"]), count(["TypeScript", "JavaScript"]), count(["Go"])]).toEqual([4, 4, 2]);
 	expect(picked.some((t) => t.set === "spare")).toBe(false);
 	expect(pickFollowupTasks(mainSet, 482)).toEqual(picked);
-	expect(planTrials(picked, FOLLOWUP_ARMS, FOLLOWUP_REPS, 482)).toHaveLength(100);
+	expect(planTrials(picked, FOLLOWUP_ARMS, FOLLOWUP_REPS, 482)).toHaveLength(160);
 });
 
 test("each follow-up arm differs from A6 in its one part only", () => {
 	const a6 = loadVariants(VARIANTS, ["a6"]);
-	const layer = a6.layer;
-	if (layer === undefined) throw new Error("a6 has no layer");
 	const arm = (name: string) => loadVariants(VARIANTS, [name]);
-	expect(arm("f-index-off").layer).toEqual({ ...layer, index: false });
-	expect(arm("f-keep-context").layer).toEqual(layer);
+	expect(arm("f-keep-context").layer).toBe(true);
 	expect(arm("f-keep-context").planReview).toBe("keep");
-	expect(arm("f-prewalk").args).toEqual([...a6.args, "--prewalk"]);
+	expect(arm("f-keep-smol").layer).toBe(true);
+	expect(arm("f-keep-smol").planReview).toBe("keep");
+	expect(arm("f-keep-smol").planReviewRole).toBe("smol");
+	expect(a6.planReviewRole).toBeUndefined();
+	// Prewalk is on A1, not A6: A6 starts in plan mode, where omp turns the automatic switch off.
+	const a1 = loadVariants(VARIANTS, ["a1"]);
+	expect(arm("f-prewalk-clean").args).toEqual([...a1.args, "--prewalk"]);
+	expect(arm("f-prewalk-clean").planReview).toBeUndefined();
+	expect(arm("f-prewalk-clean").planFirst).toBe(a1.planFirst);
+	// 0620: the advisor on A6, as panes run it; `--thinking auto` last on A1, so it replaces A0's `high`.
+	expect(arm("f-advisor").settings).toEqual({
+		...a6.settings,
+		advisor: { enabled: true, reviewInterval: 3 },
+		modelRoles: { ...(a6.settings?.modelRoles as object), advisor: "anthropic/claude-fable-5-2:medium" },
+	});
+	expect(arm("f-advisor").planReview).toBe("execute");
+	expect(arm("f-think-auto").args).toEqual([...a1.args, "--thinking", "auto"]);
+	expect(arm("f-think-auto").settings).toEqual(a1.settings);
 	const ponytail = arm("f-ponytail-if").appendSystemPrompt as string;
 	expect(ponytail).toEndWith("ponytail-important-if.md");
 	const plain = readFileSync(a6.appendSystemPrompt as string, "utf8");
@@ -161,7 +231,7 @@ test("A6 fails loud without Jocasta's layer build, before any model call", async
 	mkdirSync(join(root, LAYER_MODULE, ".."), { recursive: true });
 	writeFileSync(
 		join(root, LAYER_MODULE),
-		"export const benchLayer = { setUp: async () => ({ args: [], settings: {}, env: {}, close: async () => {} }), preflight: async () => undefined };\n",
+		"export const benchLayer = { setUp: async () => ({ args: [], settings: {}, env: {}, close: async () => {} }) };\n",
 	);
 	expect(typeof (await loadBenchLayer(root)).setUp).toBe("function");
 });
@@ -180,7 +250,6 @@ test("A6's layer keeps its data under the OS temp folder, not in a trial root ou
 		baseCommit: "0".repeat(40),
 		prompt,
 		appendSystemPrompt: ponytail,
-		switches: { index: false },
 		env: {},
 	};
 	const layer = await benchLayer.setUp(trial);
@@ -200,22 +269,21 @@ test("A6's layer keeps its data under the OS temp folder, not in a trial root ou
 		expect(text).toStartWith("# Ponytail, lazy senior dev mode\n");
 		expect(text).toContain(`# Your task: ${briefTitle(prompt)} (repo)`);
 		expect(text).not.toContain("benchmark");
-		expect(layer.indexBuildMs).toBeUndefined();
+		// A trial has no past sessions: the search tool answers as for an empty history (0604).
+		const service = JSON.parse(readFileSync(join(data, "jocasta-service.json"), "utf8")) as {
+			port: number;
+			token: string;
+		};
+		const reply = await fetch(`http://127.0.0.1:${service.port}/api/mcp/history_search`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${service.token}` },
+			body: JSON.stringify({ args: { query: "retry decision" } }),
+		});
+		expect(await reply.json()).toEqual({ text: "Nothing in repo's history for that." });
 	} finally {
 		await layer.close();
 	}
 	expect(existsSync(data)).toBe(false);
-	// With the index on, the root never decides whether it runs; codebase-memory-mcp may be missing here.
-	const indexed = await benchLayer.setUp({ ...trial, switches: { index: true } }).then(
-		async (setup) => {
-			await setup.close();
-			return "set up";
-		},
-		(error: Error) => error.message,
-	);
-	expect(indexed).not.toMatch(/can't keep its data/);
-	expect((await benchLayer.preflight({ index: true })) ?? "").not.toMatch(/can't keep its data/);
-	expect(await benchLayer.preflight({ index: false })).toBeUndefined();
 }, 120_000);
 
 test("A7's key reaches opencode only: every trial's environment drops it and any ANTHROPIC_API_KEY", () => {

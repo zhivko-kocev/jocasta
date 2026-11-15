@@ -208,12 +208,9 @@ function pickOf(paneId: string | undefined, url: string | undefined): Pick | und
 	return url ? { key: url, url } : undefined;
 }
 
-/** The sections above NEXT and NEWS, each row with what Enter does on it (for the picked row and scrolling). */
-function body(state: TodayState, now: Date, width: number): Row[] {
-	const today = state.today;
-	const out: Row[] = [];
-	if (!today) return out;
-	out.push({ line: heading("NEEDS YOU", width) });
+/** NEEDS YOU: one row per item, coloured by kind, with its wait and the mark of a link. */
+function needsYouRows(state: TodayState, today: Today, now: Date, width: number): Row[] {
+	const out: Row[] = [{ line: heading("NEEDS YOU", width) }];
 	if (today.needsYou.length === 0) out.push({ line: quiet(["nothing waits on you"], width) });
 	for (const n of today.needsYou) {
 		const colour = n.kind === "blocked" ? P.red : n.kind === "reviewed" ? P.orange : P.yellow;
@@ -226,7 +223,12 @@ function body(state: TodayState, now: Date, width: number): Row[] {
 		const tail = pick?.url && n.kind !== "review" ? LINK : undefined;
 		out.push(row(spread([{ text, fg: colour }], wait, width - 2, tail), pick, state, width));
 	}
-	out.push({ line: heading("UNDERWAY", width) });
+	return out;
+}
+
+/** UNDERWAY: one row per thread at work, with its state, age, cost and context. */
+function underwayRows(state: TodayState, today: Today, now: Date, width: number): Row[] {
+	const out: Row[] = [{ line: heading("UNDERWAY", width) }];
 	if (today.underway.length === 0) out.push({ line: quiet(["no thread at work", "n starts one"], width) });
 	for (const u of today.underway) {
 		// Kept in this order as the row narrows: the state last of all (0581, UX-4).
@@ -239,19 +241,27 @@ function body(state: TodayState, now: Date, width: number): Row[] {
 		const name = `${u.project ? `${u.project}/` : ""}${u.title}`;
 		out.push(row(spread([{ text: name, fg: P.fg }], facts, width - 2), pickOf(u.paneId, undefined), state, width));
 	}
-	if (today.landed.length > 0) {
-		out.push({ line: heading("LANDED TODAY", width) });
-		for (const l of today.landed) {
-			const text = `${l.project ? `${l.project}/` : ""}${l.title}${l.paneId ? "" : ` (${l.line})`}`;
-			out.push(row([{ text, fg: l.paneId ? P.fg : P.fg2 }], pickOf(l.paneId, undefined), state, width));
-		}
+	return out;
+}
+
+/** LANDED TODAY: its rows, none at all when nothing landed. */
+function landedRows(state: TodayState, today: Today, width: number): Row[] {
+	if (today.landed.length === 0) return [];
+	const out: Row[] = [{ line: heading("LANDED TODAY", width) }];
+	for (const l of today.landed) {
+		const text = `${l.project ? `${l.project}/` : ""}${l.title}${l.paneId ? "" : ` (${l.line})`}`;
+		out.push(row([{ text, fg: l.paneId ? P.fg : P.fg2 }], pickOf(l.paneId, undefined), state, width));
 	}
-	// Meetings still ahead, and a started one until its end, as "now" (0581, UX-14).
+	return out;
+}
+
+/** CALENDAR: meetings still ahead, and a started one until its end, as "now" (0581, UX-14). */
+function calendarRows(state: TodayState, today: Today, now: Date, width: number): Row[] {
 	const clock = hhmm(now);
 	const meetings = today.calendar.filter(
 		(c) => c.time === "all day" || c.time >= clock || (c.end !== undefined && c.end > clock),
 	);
-	out.push({ line: heading("CALENDAR", width) });
+	const out: Row[] = [{ line: heading("CALENDAR", width) }];
 	if (meetings.length === 0) out.push({ line: quiet(["nothing more on the calendar today"], width) });
 	for (const c of meetings) {
 		const when = c.time === "all day" ? c.time : c.time < clock ? "now".padEnd(5) : c.time;
@@ -263,6 +273,18 @@ function body(state: TodayState, now: Date, width: number): Row[] {
 		out.push(row(spread(line, [], width - 2, pick ? LINK : undefined), pick, state, width));
 	}
 	return out;
+}
+
+/** The sections above NEXT and NEWS, each row with what Enter does on it (for the picked row and scrolling). */
+function body(state: TodayState, now: Date, width: number): Row[] {
+	const today = state.today;
+	if (!today) return [];
+	return [
+		...needsYouRows(state, today, now, width),
+		...underwayRows(state, today, now, width),
+		...landedRows(state, today, width),
+		...calendarRows(state, today, now, width),
+	];
 }
 
 /** His last key's outcome over up to two rows (0581, UX-5), gone a minute after it came. */

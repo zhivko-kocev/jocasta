@@ -41,7 +41,7 @@ export function lineColumns(line: Line): number {
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 /** `text` split into pieces of at most `width` columns, every character kept (a wide one never split). */
-export function chop(text: string, width: number): string[] {
+function chop(text: string, width: number): string[] {
 	const out: string[] = [];
 	let piece = "";
 	let used = 0;
@@ -105,7 +105,7 @@ export function wrap(text: string, width: number): string[] {
 }
 
 /** The lines as OpenTUI styled text. */
-export function styled(lines: Line[]): StyledText {
+function styled(lines: Line[]): StyledText {
 	const chunks: TextChunk[] = [];
 	lines.forEach((line, index) => {
 		if (index > 0) chunks.push(fg(TOKYO_NIGHT.fg)("\n"));

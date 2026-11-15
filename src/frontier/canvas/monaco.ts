@@ -9,8 +9,7 @@ import "monaco-editor/editor/contrib/folding/browser/folding.js";
 import "monaco-editor/languages/definitions/register.all.js";
 import "../../../node_modules/monaco-editor/esm/vs/base/browser/ui/codicons/codicon/codicon.css";
 import "../../../node_modules/monaco-editor/esm/vs/base/browser/ui/codicons/codicon/codicon-modifiers.css";
-import { LINE_HEIGHT } from "./editor.ts";
-import { CODE, LINE_OPACITY, MONO_FONT, TOKYO_NIGHT, withAlpha, withOpacity } from "./palette.ts";
+import { CODE, LINE_HEIGHT, LINE_OPACITY, MONO_FONT, TOKYO_NIGHT, withAlpha, withOpacity } from "./palette.ts";
 
 export { monaco };
 

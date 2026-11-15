@@ -31,6 +31,56 @@ async function me(run: RunCli): Promise<string> {
 	return (await run("az", ["account", "show", "--query", "user.name", "--output", "tsv"])).trim().toLowerCase();
 }
 
+/** One review event for each active PR where he is a reviewer and hasn't voted (normal, 0298). */
+function unvotedReviews(prs: readonly AzPr[], base: string, user: string): NewEvent[] {
+	const events: NewEvent[] = [];
+	for (const pr of prs) {
+		const mine = pr.reviewers?.find((r) => r.uniqueName?.toLowerCase() === user);
+		if (mine && (mine.vote ?? 0) !== 0) continue;
+		const project = pr.repository?.project?.name ?? "";
+		const repo = pr.repository?.name ?? "";
+		events.push({
+			sourceId: `azure:review:${base}/${project}/${repo}#${pr.pullRequestId}`,
+			source: "azure",
+			kind: "review",
+			priority: "normal",
+			text: `Review requested — ${pr.title} (${project}/${repo} !${pr.pullRequestId})`,
+			url: `${base}/${encodeURIComponent(project)}/_git/${encodeURIComponent(repo)}/pullrequest/${pr.pullRequestId}`,
+		});
+	}
+	return events;
+}
+
+/**
+ * One urgent event for each pipeline and branch of a project whose newest finished run failed on main or master,
+ * or on a branch he pushed (0303).
+ */
+function redPipelines(runs: readonly AzRun[], base: string, name: string, user: string): NewEvent[] {
+	const events: NewEvent[] = [];
+	// The newest finished run of each pipeline and branch decides whether it is red.
+	const latest = new Map<string, AzRun>();
+	for (const r of runs) {
+		if (r.status !== "completed" || !r.sourceBranch) continue;
+		const key = `${r.definition?.id ?? "?"}:${r.sourceBranch}`;
+		if (!latest.has(key)) latest.set(key, r);
+	}
+	for (const [key, r] of latest) {
+		const branch = r.sourceBranch as string;
+		const his = r.requestedFor?.uniqueName?.toLowerCase() === user;
+		if (r.result !== "failed" || !(TRUNKS.includes(branch) || his)) continue;
+		const short = branch.replace(/^refs\/heads\//, "");
+		events.push({
+			sourceId: `azure:pipeline:${base}/${name}/${key}`,
+			source: "azure",
+			kind: "pipeline",
+			priority: "urgent",
+			text: `Pipeline red — ${name}/${r.definition?.name ?? "pipeline"} on ${short}`,
+			url: `${base}/${encodeURIComponent(name)}/_build/results?buildId=${r.id}`,
+		});
+	}
+	return events;
+}
+
 /**
  * One Azure DevOps round for each org in config (0301): active PRs where he is a reviewer and hasn't voted (normal,
  * 0298), and the latest run of each pipeline and branch that failed on main or master, or on a branch he pushed
@@ -60,20 +110,7 @@ export async function pollAzure(run: RunCli, orgs: readonly string[]): Promise<P
 				["repos", "pr", "list", "--organization", base, "--reviewer", user, "--status", "active", "--output", "json"],
 				[],
 			);
-			for (const pr of prs) {
-				const mine = pr.reviewers?.find((r) => r.uniqueName?.toLowerCase() === user);
-				if (mine && (mine.vote ?? 0) !== 0) continue;
-				const project = pr.repository?.project?.name ?? "";
-				const repo = pr.repository?.name ?? "";
-				events.push({
-					sourceId: `azure:review:${base}/${project}/${repo}#${pr.pullRequestId}`,
-					source: "azure",
-					kind: "review",
-					priority: "normal",
-					text: `Review requested — ${pr.title} (${project}/${repo} !${pr.pullRequestId})`,
-					url: `${base}/${encodeURIComponent(project)}/_git/${encodeURIComponent(repo)}/pullrequest/${pr.pullRequestId}`,
-				});
-			}
+			events.push(...unvotedReviews(prs, base, user));
 		} catch (error) {
 			failed(`azure:review:${base}/`, error);
 		}
@@ -117,27 +154,7 @@ export async function pollAzure(run: RunCli, orgs: readonly string[]): Promise<P
 				failed(`azure:pipeline:${base}/${name}/`, error);
 				continue;
 			}
-			// The newest finished run of each pipeline and branch decides whether it is red.
-			const latest = new Map<string, AzRun>();
-			for (const r of runs) {
-				if (r.status !== "completed" || !r.sourceBranch) continue;
-				const key = `${r.definition?.id ?? "?"}:${r.sourceBranch}`;
-				if (!latest.has(key)) latest.set(key, r);
-			}
-			for (const [key, r] of latest) {
-				const branch = r.sourceBranch as string;
-				const his = r.requestedFor?.uniqueName?.toLowerCase() === user;
-				if (r.result !== "failed" || !(TRUNKS.includes(branch) || his)) continue;
-				const short = branch.replace(/^refs\/heads\//, "");
-				events.push({
-					sourceId: `azure:pipeline:${base}/${name}/${key}`,
-					source: "azure",
-					kind: "pipeline",
-					priority: "urgent",
-					text: `Pipeline red — ${name}/${r.definition?.name ?? "pipeline"} on ${short}`,
-					url: `${base}/${encodeURIComponent(name)}/_build/results?buildId=${r.id}`,
-				});
-			}
+			events.push(...redPipelines(runs, base, name, user));
 		}
 	}
 	return { events, observed, failures };

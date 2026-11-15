@@ -2,6 +2,8 @@
 // `<data>/jocasta-service.json` (herdr starts them with the service's environment, so the same data dir) when its process is
 // alive, the state feed over the WebSocket, his thread keys and his questions over HTTP with the token as a bearer.
 
+import { PANE_CHECK_ASK_MS, PANE_CHECK_PATH, type PaneCheckAnswer } from "../shared/pane-check.ts";
+import { PUSH_PATH, type PushAnswer, type PushRequest } from "../shared/push-hook.ts";
 import { connectionRefused, NOT_RUNNING, runningService } from "../shared/service-file.ts";
 import {
 	type ClientMessage,
@@ -39,6 +41,48 @@ export async function postAction(action: PluginAction, paneId: string | undefine
 			signal: AbortSignal.timeout(10_000),
 		});
 		return response.ok ? undefined : `Jocasta answered ${response.status}: ${await response.text()}`;
+	} catch (error) {
+		return failed(error);
+	}
+}
+
+/**
+ * The check for the project pane started with `paneKey` (0617): what the service gives its agent at a turn's end. Empty
+ * when there is nothing to say, and when Jocasta isn't running, didn't answer in time or answered an error: the
+ * extension then lets the turn end.
+ */
+export async function askPaneCheck(paneKey: string | undefined): Promise<string> {
+	const at = serviceAt();
+	if (!at || !paneKey) return "";
+	try {
+		const response = await fetch(`${at.base}${PANE_CHECK_PATH}`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${at.token}`, "content-type": "application/json" },
+			body: JSON.stringify({ paneKey }),
+			signal: AbortSignal.timeout(PANE_CHECK_ASK_MS),
+		});
+		return response.ok ? ((await response.json()) as PaneCheckAnswer).text : "";
+	} catch {
+		return "";
+	}
+}
+
+/**
+ * Asks the service whether a push may go ahead (0613), which may wait for his Allow up to 2 minutes; a string is why
+ * no answer came (Jocasta isn't running, or didn't answer).
+ */
+export async function askPush(request: PushRequest): Promise<PushAnswer | string> {
+	const at = serviceAt();
+	if (!at) return NOT_RUNNING;
+	try {
+		const response = await fetch(`${at.base}${PUSH_PATH}`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${at.token}`, "content-type": "application/json" },
+			body: JSON.stringify(request),
+			signal: AbortSignal.timeout(150_000),
+		});
+		if (!response.ok) return `Jocasta answered ${response.status}: ${await response.text()}`;
+		return (await response.json()) as PushAnswer;
 	} catch (error) {
 		return failed(error);
 	}

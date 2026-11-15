@@ -8,28 +8,40 @@ import type {
 	ReviewDiffViewSpec,
 	ReviewDisposable,
 } from "./contract.ts";
-import { LINE_HEIGHT, loadMonaco, modelName } from "./editor.ts";
+import { loadMonaco, modelName } from "./editor.ts";
 import type { monaco } from "./monaco.ts";
+import { LINE_HEIGHT } from "./palette.ts";
 import { Emitter, type ReviewSource } from "./source.ts";
 
-/** The diff layout outlives the window, as the Desktop's `diffEditor.renderSideBySide` setting does. */
+/** The diff layouts outlive the window, as the Desktop's `diffEditor.renderSideBySide` setting does. */
 const LAYOUT_KEY = "jocasta.whiteboard.diffLayout";
+const PEEK_LAYOUT_KEY = "jocasta.whiteboard.peekLayout";
 /** The most lines a not-yet-built diff's placeholder stands for. */
 const PLACEHOLDER_LINES = 40;
 /** How far from the screen a file's diff starts building, so it is usually ready when scrolled to. */
 const NEAR = "600px 0px";
 
-/** The diff layout, kept in the page's storage. */
-export const layout = {
-	changed: new Emitter<ReviewDiffLayout>(),
-	get(): ReviewDiffLayout {
-		return localStorage.getItem(LAYOUT_KEY) === "unified" ? "unified" : "split";
-	},
-	set(value: ReviewDiffLayout): void {
-		localStorage.setItem(LAYOUT_KEY, value);
-		layout.changed.fire(value);
-	},
-};
+/** One layout kept in the page's storage; an unset or unreadable choice is `fallback`. */
+function storedLayout(key: string, fallback: ReviewDiffLayout) {
+	const stored = {
+		changed: new Emitter<ReviewDiffLayout>(),
+		get(): ReviewDiffLayout {
+			const value = localStorage.getItem(key);
+			return value === "split" || value === "unified" ? value : fallback;
+		},
+		set(value: ReviewDiffLayout): void {
+			localStorage.setItem(key, value);
+			stored.changed.fire(value);
+		},
+	};
+	return stored;
+}
+
+/** The Diff tab's layout (0.5.2's `diff` scope): split until chosen otherwise. */
+export const layout = storedLayout(LAYOUT_KEY, "split");
+
+/** The layout of whiteboard's peeks (its `peek` scope); Jocasta's code peeks show no diff, so only the control reads it. */
+export const peekLayout = storedLayout(PEEK_LAYOUT_KEY, "unified");
 
 /** One file's diff in a list: its section, and `mount` to build its editor (once). */
 export interface FileDiff extends ReviewDisposable {

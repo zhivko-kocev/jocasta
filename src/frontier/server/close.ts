@@ -23,7 +23,7 @@ export function terminalArgv(command: string[], wt: string | null): string[] {
  * A new Windows Terminal window running `jocasta`, which attaches to herdr's session as it always does (0549); a new
  * console window where Windows Terminal isn't installed. Off Windows there is none: the question waits for a client.
  */
-export function openJocastaTerminal(): void {
+function openJocastaTerminal(): void {
 	if (process.platform !== "win32") {
 		log("warn", "shutdown", "no terminal opens here; the close question waits for `jocasta`");
 		return;

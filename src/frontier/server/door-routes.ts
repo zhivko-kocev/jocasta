@@ -1,11 +1,14 @@
 import type { Server } from "bun";
+import { PANE_CHECK_PATH, type PaneCheckAnswer } from "../../shared/pane-check.ts";
+import { PUSH_PATH } from "../../shared/push-hook.ts";
 import { CLI_PATH } from "../../shared/thread-cli.ts";
 import { SHUTDOWN_PATH } from "./launch.ts";
+import { parsePushRequest } from "./push-gate.ts";
 import { objectArgs, type Route, refusedPost } from "./routes.ts";
 import type { JocastaService } from "./service.ts";
 
 /** Where `jocasta mcp` calls its tools (`src/mcp/server.ts`). */
-export const MCP_PATH = "/api/mcp/";
+const MCP_PATH = "/api/mcp/";
 
 /**
  * A door's call (`jocasta mcp`, `jocasta thread|worktree`): the API token as the bearer, POST, a JSON body; answered
@@ -14,7 +17,7 @@ export const MCP_PATH = "/api/mcp/";
  */
 function doorCall(
 	token: string,
-	answer: (body: Record<string, unknown>, url: URL) => Promise<Response>,
+	answer: (body: Record<string, unknown>, url: URL, request: Request) => Promise<Response>,
 ): Route["handle"] {
 	return async (request, url, server: Server<undefined>) => {
 		const refused = refusedPost(request, token, true);
@@ -26,14 +29,14 @@ function doorCall(
 		} catch {
 			return Response.json({ text: "body is not JSON", isError: true }, { status: 400 });
 		}
-		return answer(body, url);
+		return answer(body, url, request);
 	};
 }
 
 /** What the doors need. */
 export interface DoorParts {
 	token: string;
-	service: Pick<JocastaService, "callTool" | "cliCall">;
+	service: Pick<JocastaService, "callTool" | "cliCall" | "pushVerdict" | "paneCheck">;
 	/** His client closed (`POST /api/shutdown`): the close, asking first. */
 	clientClosed: () => void;
 }
@@ -62,6 +65,26 @@ export function doorRoutes({ token, service, clientClosed }: DoorParts): Route[]
 					return Response.json({ text: "command is required", isError: true }, { status: 400 });
 				}
 				return Response.json(await service.cliCall(body.command, objectArgs(body.args)));
+			}),
+		},
+		{
+			// `POST /api/push` from git's pre-push hook (0613): body `{dir, remote, refs, paneKey?}`; answered `{allow, reason?}`.
+			matches: (path) => path === PUSH_PATH,
+			handle: doorCall(token, async (body) => {
+				const request = parsePushRequest(body);
+				if (!request) return Response.json({ text: "not a push request", isError: true }, { status: 400 });
+				return Response.json(await service.pushVerdict(request));
+			}),
+		},
+		{
+			// `POST /api/pane-check` from a project pane's `jocasta pane-check` (0617): body `{paneKey}`; answered `{text}`.
+			matches: (path) => path === PANE_CHECK_PATH,
+			handle: doorCall(token, async (body, _url, request) => {
+				if (typeof body.paneKey !== "string") {
+					return Response.json({ text: "paneKey is required", isError: true }, { status: 400 });
+				}
+				const answer: PaneCheckAnswer = { text: await service.paneCheck(body.paneKey, request.signal) };
+				return Response.json(answer);
 			}),
 		},
 		{

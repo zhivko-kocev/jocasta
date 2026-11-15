@@ -1,30 +1,29 @@
 import type { Database } from "bun:sqlite";
-import { statSync } from "node:fs";
+import { type Stats, statSync } from "node:fs";
 import { basename } from "node:path";
 import { asObject, readJsonObject, writeAtomically } from "../../shared/fsx.ts";
 import { log } from "../../shared/log.ts";
 import { readHeader, replaced, rewritten, SessionTail, SessionWalker } from "../../shared/omp-session.ts";
+import { addHistory } from "./history.ts";
 
 /**
  * The session watcher (0389, 0400): saves the compaction and handoff summaries of his omp sessions to `catalog.db`
- * `summaries` and sends those from sessions under a watched project to Graphiti as episodes in the project's group.
+ * `summaries` and puts the lines of those from sessions under a watched project into the project's history (0603).
  *
  * Each session file is read from where the last scan stopped (CR-03): `<data>/watcher.json` keeps `lastScan` and, per
  * file, the byte offset after its last complete line, its cwd and its identity (`ino`, `birthtimeMs`): omp ≥ 18.10.4
  * rewrites a session whole through a temp file and a rename (discards, retry marks, shake), possibly no shorter than
  * the offset, so a file whose identity changed is read again from its start, and the summaries' key absorbs the
- * re-read (SRV-B-3). Graphiti gets the summaries of `handoff` and `soft` compactions (and legacy ones without a
- * method), as 0400 decided; `remote` and `snapcompact` ones stay in `catalog.db` only (stored as already sent). A
- * snapcompact transcript archive (`isTranscriptArchive`) never goes to Graphiti whatever its method, and one already
- * waiting in `catalog.db` is marked sent without a post. When a post fails (Graphiti or Docker down) the scan stops
- * posting and the next attempt waits, doubling from 30 s up to 30 min (CR-13): at most one container start per
- * attempt. At most `POSTS_PER_SCAN` episodes go per scan, so a first start's backlog is paced. A summary keeps the
- * watched project its cwd resolved to (`project_id`, 0440 (4)), so it still posts when that folder is gone. A scan
- * lets the service's other work run every few milliseconds (PERF-3). The state stays in memory after the first read
- * and is written when the set of files changed, else at most every 5 minutes while offsets move, and at stop: a lost
- * offset only re-reads a tail, which INSERT OR IGNORE absorbs.
+ * re-read (SRV-B-3). The history gets the summaries of `handoff` and `soft` compactions (and legacy ones without a
+ * method), as 0400 decided; `remote` and `snapcompact` ones stay in `summaries` only (stored as already indexed). A
+ * snapcompact transcript archive (`isTranscriptArchive`) never goes into the history whatever its method, and one
+ * already waiting in `summaries` is marked indexed without lines. A summary keeps the watched project its cwd
+ * resolved to (`project_id`, 0440 (4)), so it is indexed even when that folder is gone; one whose project is still
+ * unknown waits. A scan lets the service's other work run every few milliseconds (PERF-3). The state stays in memory
+ * after the first read and is written when the set of files changed, else at most every 5 minutes while offsets move,
+ * and at stop: a lost offset only re-reads a tail, which INSERT OR IGNORE absorbs.
  *
- * The omp shapes this relies on (checked against omp 18.18.6's `pi-coding-agent/src/session/`, 0589):
+ * The omp shapes this relies on (checked against omp 18.20.2's `pi-coding-agent/src/session/`, 0623):
  * - layout: a session is `<sessions>/<cwd dir>/<stem>.jsonl` (`session-paths.ts:222` `sessionDirForCwd`); its subagents
  *   live in `<sessions>/<cwd dir>/<stem>/<AgentId>.jsonl` beside `__advisor*.jsonl` (`sub-sessions.ts:4-7`), so only
  *   files directly in a cwd dir are sessions.
@@ -33,10 +32,10 @@ import { readHeader, replaced, rewritten, SessionTail, SessionWalker } from "../
  * - compaction: `{type: "compaction", id, parentId, timestamp, summary, shortSummary?, firstKeptEntryId, tokensBefore,
  *   method?, …}` (`session-entries.ts:163-187`); the text is `summary`. `method` is one of `remote`, `snapcompact`,
  *   `handoff`, `soft`, `shake` (`compaction-methods.ts:11-39`), absent on legacy and extension compactions; `/handoff`
- *   writes one with `method: "handoff"` into the same session (`session-maintenance.ts:2268-2279`).
+ *   writes one with `method: "handoff"` into the same session (`session-maintenance.ts:2269-2280`).
  * - message: `{type: "message", id, parentId, timestamp, message}` (`session-entries.ts:113-116`); an assistant message
  *   has `role: "assistant"`, `content` parts (`text` / `thinking` / `toolCall`) and `stopReason` `stop | length |
- *   toolUse | error | aborted` (pi-ai `types.ts:1083`), and is written once, at `message_end` (`agent-session.ts:4430`
+ *   toolUse | error | aborted` (pi-ai `types.ts:1085`), and is written once, at `message_end` (`agent-session.ts:4469`
  *   `#persistMessageEnd`).
  * - moved session (18.12.6, 0464): when another process wrote a session first, omp goes on in a sibling file whose
  *   header names the old session as `parentSession` and publishes the whole transcript there once
@@ -45,31 +44,19 @@ import { readHeader, replaced, rewritten, SessionTail, SessionWalker } from "../
  *   no summary and are passed over.
  */
 
-/** One Graphiti episode for a summary. */
-export interface Episode {
-	name: string;
-	body: string;
-	source: string;
-	at: string;
-}
-
 export interface WatcherOptions {
 	/** omp's sessions dir, `~/.omp/agent/sessions`. */
 	sessionsDir: string;
 	/** `<data>/watcher.json`: `{lastScan, files: {<session file>: {offset, cwd, ino, birthtimeMs}}}`. */
 	stateFile: string;
-	/** `catalog.db` at v7 or later. */
+	/** `catalog.db` at v9 or later. */
 	db: Database;
 	/** The watched project holding `cwd`, if any. */
 	projectFor(cwd: string): { projectId: string } | undefined;
-	/** Sends one episode to the project's Graphiti group; throws when it didn't land. */
-	post(projectId: string, episode: Episode): Promise<void>;
 	/** Scan interval, default 30 s. */
 	intervalMs?: number;
 	now?: () => number;
 	onError?(e: unknown): void;
-	/** Episodes posted per scan at most, default `POSTS_PER_SCAN`. */
-	postsPerScan?: number;
 }
 
 export interface Watcher {
@@ -107,25 +94,14 @@ const SLICE_MS = 8;
 /** watcher.json is rewritten at most this often while only offsets move. */
 const STATE_WRITE_MS = 5 * 60_000;
 
-const SOURCE = "omp-session";
-
-/** Episodes posted per scan: each runs Graphiti's LLM extraction on his logins. */
-const POSTS_PER_SCAN = 5;
-
-/** The wait after a failed post: doubles from the first to the last. */
-const RETRY_FIRST_MS = 30_000;
-const RETRY_MAX_MS = 30 * 60_000;
-
-/** Compaction methods whose summaries go to Graphiti (0400); legacy entries carry none. */
-const GRAPH_METHODS = new Set([undefined, "handoff", "soft"]);
+/** Compaction methods whose summaries are indexed (0400); legacy entries carry none. */
+const HISTORY_METHODS = new Set([undefined, "handoff", "soft"]);
 
 /**
  * Whether a compaction's text is a snapcompact transcript archive (omp's `snapcompact/src/prompts/snapcompact-summary.md`:
  * "Resume prior conversation. Earlier turns archived under HISTORY …", a scope legend, a file list and a `HISTORY`
- * section whose turns are mostly images) rather than a written summary. It holds no knowledge for the graph, and its
- * legend naming an archived "assistant reasoning" scope makes Anthropic's `reasoning_extraction` classifier refuse the
- * extraction prompt it is quoted in, which then held back every later episode. Rows of this shape were stored as unsent
- * before 0400's method filter (CR-23).
+ * section whose turns are mostly images) rather than a written summary: it holds no lines worth searching. Rows of
+ * this shape were stored before 0400's method filter (CR-23).
  */
 function isTranscriptArchive(summary: string): boolean {
 	return (
@@ -134,38 +110,82 @@ function isTranscriptArchive(summary: string): boolean {
 	);
 }
 
+/** The statements the watcher runs on `summaries`, prepared once. */
+function prepareStatements(db: Database) {
+	return {
+		insert: db.query<void, [string, string, SummaryRow["kind"], string, number, string, number, string | null]>(
+			"INSERT OR IGNORE INTO summaries (session_file, entry_id, kind, cwd, at, summary, indexed, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		),
+		// Without `summary`: a backlog outside any watched project is listed every scan, its text is loaded only to index.
+		unindexed: db.query<Omit<SummaryRow, "summary">, []>(
+			"SELECT session_file, entry_id, kind, cwd, at, project_id FROM summaries WHERE indexed = 0 ORDER BY at, session_file, entry_id",
+		),
+		summaryOf: db.query<{ summary: string }, [string, string]>(
+			"SELECT summary FROM summaries WHERE session_file = ? AND entry_id = ?",
+		),
+		// The project is kept with the mark, so a summary is indexed under it after its cwd folder is gone (0440 (4)).
+		markIndexed: db.query<void, [string, string, string]>(
+			"UPDATE summaries SET indexed = 1, project_id = ? WHERE session_file = ? AND entry_id = ?",
+		),
+		// A moved session's copy of a compaction the old file gave already (same entry id, same cwd).
+		storedElsewhere: db.query<{ one: number }, [string, string, string]>(
+			"SELECT 1 AS one FROM summaries WHERE entry_id = ? AND cwd = ? AND session_file <> ? LIMIT 1",
+		),
+	};
+}
+
+/**
+ * The state a scan records for `file` when it need not read it, or undefined when it must (read from `known`'s
+ * offset, or from the start). A file untouched since the last scan keeps its offset, with its identity refreshed; one
+ * unknown to a state that predates offsets was read whole then, so it is followed from its end.
+ */
+function unreadState(
+	file: string,
+	stat: Stats,
+	previous: WatcherState,
+	known: FileState | undefined,
+): FileState | undefined {
+	// Another file took its name (a rewrite through a rename); a state from before identities were kept can't say.
+	if (stat.mtimeMs >= previous.lastScan || (known && replaced(stat, known))) return undefined;
+	const identity = { ino: stat.ino, birthtimeMs: stat.birthtimeMs };
+	if (known && !rewritten(stat, known)) return { ...known, ...identity };
+	if (!known && previous.lastScan > 0) {
+		// Read whole by a scan before offsets were kept: it is in `summaries`; follow it from its end.
+		const cwd = readHeader(file)?.cwd;
+		return { offset: stat.size, ...(cwd ? { cwd } : {}), ...identity };
+	}
+	return undefined;
+}
+
+/** Puts the lines of each stored summary whose project is known into the history, once (0603). */
+function indexPending(
+	db: Database,
+	statements: ReturnType<typeof prepareStatements>,
+	projectOf: (cwd: string) => string | null,
+): void {
+	const { unindexed, summaryOf, markIndexed } = statements;
+	for (const row of unindexed.all()) {
+		const projectId = row.project_id ?? projectOf(row.cwd);
+		if (!projectId) continue;
+		const summary = summaryOf.get(row.session_file, row.entry_id)?.summary;
+		if (summary === undefined) continue;
+		db.transaction(() => {
+			if (!isTranscriptArchive(summary)) {
+				const source = `${row.kind} ${basename(row.session_file, ".jsonl")}`;
+				addHistory(db, projectId, { source, at: row.at, text: summary });
+			}
+			markIndexed.run(projectId, row.session_file, row.entry_id);
+		})();
+	}
+}
+
 export function startWatcher(opts: WatcherOptions): Watcher {
 	const now = opts.now ?? Date.now;
 	const onError = opts.onError ?? ((e: unknown) => log("warn", "watcher", e instanceof Error ? e.message : String(e)));
-	const insert = opts.db.query<
-		void,
-		[string, string, SummaryRow["kind"], string, number, string, number, string | null]
-	>(
-		"INSERT OR IGNORE INTO summaries (session_file, entry_id, kind, cwd, at, summary, sent, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-	);
-	// Without `summary`: a backlog outside any watched project is listed every scan, its text is loaded only to post.
-	const unsent = opts.db.query<Omit<SummaryRow, "summary">, []>(
-		"SELECT session_file, entry_id, kind, cwd, at, project_id FROM summaries WHERE sent = 0 ORDER BY at, session_file, entry_id",
-	);
-	const summaryOf = opts.db.query<{ summary: string }, [string, string]>(
-		"SELECT summary FROM summaries WHERE session_file = ? AND entry_id = ?",
-	);
-	const setProject = opts.db.query<void, [string, string, string]>(
-		"UPDATE summaries SET project_id = ? WHERE session_file = ? AND entry_id = ?",
-	);
-	const markSent = opts.db.query<void, [string, string]>(
-		"UPDATE summaries SET sent = 1 WHERE session_file = ? AND entry_id = ?",
-	);
-	// A moved session's copy of a compaction the old file gave already (same entry id, same cwd).
-	const storedElsewhere = opts.db.query<{ one: number }, [string, string, string]>(
-		"SELECT 1 AS one FROM summaries WHERE entry_id = ? AND cwd = ? AND session_file <> ? LIMIT 1",
-	);
-	const postsPerScan = opts.postsPerScan ?? POSTS_PER_SCAN;
+	const statements = prepareStatements(opts.db);
+	const { insert, storedElsewhere } = statements;
 	let stopped = false;
 	let running: Promise<void> | undefined;
-	/** Posting waits until then after a failure; `failures` in a row set the wait. */
-	let retryAt = 0;
-	let failures = 0;
 	/** `watcher.json` as last read or written; read once, at the first scan. */
 	let state: WatcherState | undefined;
 	/** Whether `state` holds offsets watcher.json doesn't yet, and when it was last written (`now()`). */
@@ -179,6 +199,46 @@ export function startWatcher(opts: WatcherOptions): Watcher {
 		unsaved = false;
 		savedAt = now();
 	};
+
+	/**
+	 * Reads `file` from where `known` left off (from its start when it was rewritten), stores the summaries found, and
+	 * returns the file's new state. A moved session's copies of compactions the old file gave are dropped.
+	 */
+	function readAndStore(
+		file: string,
+		stat: Stats,
+		known: FileState | undefined,
+		projectOf: (cwd: string) => string | null,
+	): FileState {
+		// A file that was rewritten (replaced, or shorter than the offset) is read again from its start.
+		const from: FileState = known && !rewritten(stat, known) ? known : { offset: 0 };
+		const read = summariesIn(file, from.offset, stat.size, from.cwd, stat.mtimeMs);
+		const rows = read.moved
+			? read.rows.filter(({ row }) => !storedElsewhere.get(row.entry_id, row.cwd, file))
+			: read.rows;
+		if (rows.length > 0) {
+			opts.db.transaction(() => {
+				for (const { row, indexable } of rows) {
+					insert.run(
+						row.session_file,
+						row.entry_id,
+						row.kind,
+						row.cwd,
+						row.at,
+						row.summary,
+						indexable ? 0 : 1,
+						projectOf(row.cwd),
+					);
+				}
+			})();
+		}
+		return {
+			offset: read.offset,
+			...(read.cwd ? { cwd: read.cwd } : {}),
+			ino: stat.ino,
+			birthtimeMs: stat.birthtimeMs,
+		};
+	}
 
 	async function runScan(): Promise<void> {
 		const started = now();
@@ -211,86 +271,18 @@ export function startWatcher(opts: WatcherOptions): Watcher {
 			try {
 				const stat = statSync(file, { throwIfNoEntry: false });
 				if (!stat) continue;
-				const identity = { ino: stat.ino, birthtimeMs: stat.birthtimeMs };
-				// Another file took its name (a rewrite through a rename); a state from before identities were kept can't say.
-				if (stat.mtimeMs < previous.lastScan && !(known && replaced(stat, known))) {
-					if (known && !rewritten(stat, known)) {
-						files[file] = { ...known, ...identity };
-						continue;
-					}
-					if (!known && previous.lastScan > 0) {
-						// Read whole by a scan before offsets were kept: it is in `summaries`; follow it from its end.
-						const cwd = readHeader(file)?.cwd;
-						files[file] = { offset: stat.size, ...(cwd ? { cwd } : {}), ...identity };
-						continue;
-					}
+				const unread = unreadState(file, stat, previous, known);
+				if (unread) {
+					files[file] = unread;
+					continue;
 				}
-				// A file that was rewritten (replaced, or shorter than the offset) is read again from its start.
-				const from: FileState = known && !rewritten(stat, known) ? known : { offset: 0 };
-				const read = summariesIn(file, from.offset, stat.size, from.cwd, stat.mtimeMs);
-				files[file] = { offset: read.offset, ...(read.cwd ? { cwd: read.cwd } : {}), ...identity };
-				if (read.moved) {
-					read.rows = read.rows.filter(({ row }) => !storedElsewhere.get(row.entry_id, row.cwd, file));
-				}
-				if (read.rows.length > 0) {
-					opts.db.transaction(() => {
-						for (const { row, graph } of read.rows) {
-							insert.run(
-								row.session_file,
-								row.entry_id,
-								row.kind,
-								row.cwd,
-								row.at,
-								row.summary,
-								graph ? 0 : 1,
-								projectOf(row.cwd),
-							);
-						}
-					})();
-				}
+				files[file] = readAndStore(file, stat, known, projectOf);
 			} catch (error) {
 				if (known) files[file] = known;
 				onError(error);
 			}
 		}
-		if (now() >= retryAt) {
-			let posted = 0;
-			for (const row of unsent.all()) {
-				if (stopped) return;
-				if (posted >= postsPerScan) break;
-				const projectId = row.project_id ?? projectOf(row.cwd);
-				if (!projectId) continue;
-				if (row.project_id === null) setProject.run(projectId, row.session_file, row.entry_id);
-				const summary = summaryOf.get(row.session_file, row.entry_id)?.summary;
-				if (summary === undefined) continue;
-				if (isTranscriptArchive(summary)) {
-					markSent.run(row.session_file, row.entry_id);
-					continue;
-				}
-				try {
-					await opts.post(projectId, {
-						name: `${row.kind} ${basename(row.session_file, ".jsonl")}`,
-						body: summary,
-						source: SOURCE,
-						at: new Date(row.at).toISOString(),
-					});
-				} catch (error) {
-					// The row keeps sent = 0; nothing more is posted until the wait is over (Graphiti or Docker down).
-					failures++;
-					const wait = Math.min(RETRY_FIRST_MS * 2 ** (failures - 1), RETRY_MAX_MS);
-					retryAt = now() + wait;
-					onError(
-						new Error(
-							`graph episodes wait ${Math.round(wait / 1000)} s: ${error instanceof Error ? error.message : String(error)}`,
-						),
-					);
-					break;
-				}
-				failures = 0;
-				markSent.run(row.session_file, row.entry_id);
-				posted++;
-			}
-		}
+		indexPending(opts.db, statements, projectOf);
 		state = { lastScan: started, files };
 		if (!sameFiles(previous.files, files)) unsaved = true;
 		// A new or gone file is written at once; moved offsets at most every 5 minutes (and at stop).
@@ -330,23 +322,25 @@ export function startWatcher(opts: WatcherOptions): Watcher {
 }
 
 /**
- * The compaction entries with summary text in `file` between byte `from` and `to`, each with whether it goes to
- * Graphiti; the offset after the last complete line; the session's cwd (from its header, or `cwd` when the header was
- * read before); whether its header (read in this range) names a `parentSession`. None without a session header.
+ * The compaction entries with summary text in `file` between byte `from` and `to`, each with whether its lines go into
+ * the history; the offset after the last complete line; the session's cwd (from its header, or `knownCwd` when the
+ * header was read before); whether its header (read in this range) names a `parentSession`. None without a session
+ * header.
  */
 function summariesIn(
 	file: string,
 	from: number,
 	to: number,
-	cwd: string | undefined,
+	knownCwd: string | undefined,
 	mtimeMs: number,
 ): {
-	rows: { row: Omit<SummaryRow, "project_id">; graph: boolean }[];
+	rows: { row: Omit<SummaryRow, "project_id">; indexable: boolean }[];
 	offset: number;
 	cwd: string | undefined;
 	moved: boolean;
 } {
-	const rows: { row: Omit<SummaryRow, "project_id">; graph: boolean }[] = [];
+	let cwd = knownCwd;
+	const rows: { row: Omit<SummaryRow, "project_id">; indexable: boolean }[] = [];
 	let moved = false;
 	const tail = new SessionTail(file, {
 		// Read once from `from`, which the scan judged against a rewrite already.
@@ -372,8 +366,8 @@ function summariesIn(
 					at: Number.isFinite(at) ? at : mtimeMs,
 					summary,
 				},
-				graph:
-					GRAPH_METHODS.has(typeof entry.method === "string" ? entry.method : undefined) &&
+				indexable:
+					HISTORY_METHODS.has(typeof entry.method === "string" ? entry.method : undefined) &&
 					!isTranscriptArchive(summary),
 			});
 		},

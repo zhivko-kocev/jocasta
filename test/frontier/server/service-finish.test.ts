@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { startServer } from "../../../src/frontier/server/server.ts";
 import { HANDOFF_PROMPT, quoted } from "../../../src/frontier/server/wording.ts";
@@ -16,6 +16,7 @@ import {
 	review,
 	startTestServer,
 	startThread,
+	taskDirOf,
 	until,
 	useHunkDaemon,
 	withServer,
@@ -74,6 +75,7 @@ test(
 				expect(server.herdr.of("closeWorkspace")).toEqual([]);
 				sh(main, "reset", "-q", "--hard", "HEAD~1");
 
+				const record = join(taskDirOf(project.id), "thread.json");
 				const reply = await finish();
 				expect(reply.isError).toBeUndefined();
 				expect(reply.text).toMatch(
@@ -89,6 +91,12 @@ test(
 				expect(existsSync(path)).toBe(false);
 				expect(sh(main, "branch", "--list", "feature/readme-line")).toBe("");
 				expect(server.herdr.of("closeWorkspace")).toHaveLength(1);
+				// 0621: when and how it closed, and the squash commit's full id.
+				expect(JSON.parse(readFileSync(record, "utf8")).close).toMatchObject({
+					how: "merged",
+					commit: sh(main, "rev-parse", "HEAD"),
+					at: expect.any(Number),
+				});
 				expect((await call(server, "thread_status", {})).text).toBe("No threads.");
 			},
 			{ agentWaitMs: 10_000 },
@@ -169,6 +177,9 @@ test(
 		await withServer(
 			async (server) => {
 				const { paneId, path } = await startThread(server);
+				// The remote added above gives the project its id; the data folder holds this one project.
+				const projectId = readdirSync(join(env.data, "projects"))[0] as string;
+				const record = join(taskDirOf(projectId), "thread.json");
 				const boss = server.herdr.paneList[0]?.paneId as string;
 				server.herdr.setState(boss, "idle");
 				commitIn(path, "demo\nA line.\n", "Add a README line");
@@ -199,7 +210,8 @@ test(
 
 				// Asked again; this time the PR has it: the worktree and workspace go, the branch stays.
 				await finish();
-				ghIs({ head: sh(path, "rev-parse", "HEAD") });
+				const head = sh(path, "rev-parse", "HEAD");
+				ghIs({ head });
 				server.herdr.setState(paneId, "working");
 				server.herdr.setState(paneId, "idle");
 				const opened =
@@ -207,6 +219,8 @@ test(
 				await until(() => server.herdr.of("prompt").some(([p, t]) => p === boss && t === opened));
 				expect(existsSync(path)).toBe(false);
 				expect(sh(project.mainPath, "branch", "--list", "feature/readme-line")).toContain("feature/readme-line");
+				// 0621: closed as a PR, its commit the pushed head.
+				expect(JSON.parse(readFileSync(record, "utf8")).close).toMatchObject({ how: "pr", commit: head });
 			},
 			{ agentWaitMs: 10_000, gh },
 		);
@@ -468,7 +482,6 @@ test(
 		};
 		const server = await startServer({
 			herdr,
-			graph: null,
 			day: { pollers: false },
 			port: 0,
 			sessionsDir: join(env.data, "omp-sessions"),

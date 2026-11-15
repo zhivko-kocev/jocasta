@@ -105,9 +105,10 @@ describe("settingsProblems (0584)", () => {
 			].join("\n"),
 		);
 		const settings = readSettings();
-		const thrown = (work: () => unknown) => {
+		const thrown = (work: () => unknown): SettingsError | undefined => {
 			try {
 				work();
+				return undefined;
 			} catch (error) {
 				return error as SettingsError;
 			}
@@ -138,7 +139,6 @@ describe("settingsProblems (0584)", () => {
 				"  quietHours: 22:00-07:00",
 				"  autostart: false",
 				"  dashboard: { display: primary }",
-				"graph: { main: anthropic/example-main }",
 				"pollers:",
 				"  news: { feeds: [{ source: hn }, { topic: gaming, limit: 5 }] }",
 			].join("\n"),

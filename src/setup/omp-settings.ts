@@ -6,7 +6,7 @@
 import { asObject } from "../shared/fsx.ts";
 
 /** A key he set to another value than Jocasta ships, kept. */
-export interface KeptSetting {
+interface KeptSetting {
 	key: string;
 	yours: unknown;
 	ships: unknown;

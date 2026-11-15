@@ -2,19 +2,34 @@
  * The weekly big-picture review of a project (0470, 0583): everything merged into trunk in the past 7 days, read by
  * Jocasta's drift agent in a headless omp, one at a time per project (SVC-12).
  */
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { writeAtomically } from "../../shared/fsx.ts";
 import { shippedConfigDir } from "../../shared/install.ts";
 import { projectDir } from "../../shared/paths.ts";
 import { runProgram } from "../../shared/process.ts";
 import { endProcesses, processesIn, processIdOf } from "../../shared/proctree.ts";
 import type { Project } from "../../shared/projects.ts";
 import type { ServiceContext } from "./context.ts";
+import { miseRunTask } from "./mise.ts";
 import { ensureOverlay } from "./overlay.ts";
+import { productionLines } from "./production.ts";
+import { projectTasks } from "./task-file.ts";
 import { gitOut } from "./worktrees.ts";
 
 /** How long the weekly big-picture review may run before it is stopped (0470). */
-export const WEEKLY_REVIEW_MS = 30 * 60_000;
+const WEEKLY_REVIEW_MS = 30 * 60_000;
+/**
+ * The most one big-picture review may spend, in US dollars (0608): omp's `--max-cost` stops sending model requests at
+ * it and exits with `COST_CAP_EXIT_CODE` (omp 18.20.2 `print-mode.ts`).
+ */
+const WEEKLY_REVIEW_MAX_COST_USD = 25;
+/** How long the project's `scorecard` task may run before the review goes on without it (0616). */
+const SCORECARD_MS = 10 * 60_000;
+/** The most characters of one scorecard run's output that are kept and shown (0616); the rest is cut. */
+export const SCORECARD_MAX_CHARS = 6000;
+/** The exit code omp's print mode ends with when `--max-cost` was reached (omp 18.20.2 `PRINT_MODE_COST_CAP_EXIT_CODE`). */
+const COST_CAP_EXIT_CODE = 3;
 /** git's empty tree: the start of a repo younger than the review's week. */
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
@@ -75,10 +90,10 @@ export class WeeklyReviews {
 	/**
 	 * The big-picture review itself: everything merged into trunk in the past 7 days, by Jocasta's drift agent (0583,
 	 * written beside the project's lessons skill, found from the run's folder) against the project's rules and lessons,
-	 * looking for design drift across the changes. omp runs headless (`-p`) in `<data>/projects/<pid>/weekly` with the
-	 * project's overlay, read-only tools and the main checkout added, so no session lands where the project pane
-	 * resumes; `config/headless.yml` turns omp's async jobs off, so the subagent's result comes back before print mode
-	 * exits.
+	 * looking for design drift across the changes, with the week's production numbers (0621) and scorecard (0616) in
+	 * its prompt. omp runs headless (`-p`) in `<data>/projects/<pid>/weekly` with the project's overlay, read-only
+	 * tools and the main checkout added, so no session lands where the project pane resumes; `config/headless.yml`
+	 * turns omp's async jobs and its advisor off, so the subagent's result comes back before print mode exits.
 	 */
 	private async run(project: Project): Promise<string | null> {
 		const week = await this.range(project);
@@ -88,6 +103,8 @@ export class WeeklyReviews {
 		const main = project.mainPath;
 		const dir = join(projectDir(project.id), "weekly");
 		mkdirSync(dir, { recursive: true });
+		const production = this.production(project);
+		const scorecard = await this.scorecard(project);
 		const overlay = await ensureOverlay(project.id, panes.relayPort);
 		const rules = [join(main, "AGENTS.md"), join(main, "AGENTS.local.md")].filter((f) => existsSync(f));
 		const slash = (path: string) => path.replace(/\\/g, "/");
@@ -95,11 +112,15 @@ export class WeeklyReviews {
 			`Big-picture review of ${project.name}: everything merged into ${trunk} in the past 7 days,`,
 			`\`git -C "${slash(main)}" diff ${range}\` (its commits: \`git -C "${slash(main)}" log --oneline ${from === EMPTY_TREE ? now : range}\`).`,
 			"This review is read-only: change no file, commit nothing. Run the drift subagent on that range. In its task",
-			`give it ${rules.length > 0 ? `the project's rules (${rules.map(slash).join(", ")}) and ` : ""}its lessons in skill://lessons,`,
+			`give it ${rules.length > 0 ? `the project's rules (${rules.map(slash).join(", ")}) and ` : ""}its lessons in skill://lessons`,
+			`and the design rubric (${slash(join(shippedConfigDir(), "design-rubric.md"))}),`,
 			"and ask it for design drift across these changes: each may be reasonable alone while together they pull the design",
 			"apart (a second way of doing what already has one, patterns that disagree, broken layering, a rule or lesson",
 			"contradicted). Not line-level bugs. Tell it: report only material findings; prefer one strong finding over",
-			"several weak ones. End your reply with one line on its own: `DRIFT: <one sentence: no drift found, or the",
+			"several weak ones.",
+			...production,
+			...scorecard.prompt,
+			"End your reply with one line on its own: `DRIFT: <one sentence: no drift found, or the",
 			"strongest finding and where>`.",
 		].join(" ");
 		const argv = [
@@ -108,6 +129,8 @@ export class WeeklyReviews {
 			overlay,
 			"--config",
 			join(shippedConfigDir(), "headless.yml"),
+			"--max-cost",
+			String(WEEKLY_REVIEW_MAX_COST_USD),
 			"-p",
 			"--tools",
 			// No `find`: its fuzzy search is off (0451, `find.enabled`), and omp refuses to start when asked for it.
@@ -131,9 +154,117 @@ export class WeeklyReviews {
 			const why =
 				run.timedOut || run.signal
 					? "it ran out of time"
-					: `omp exited ${code}: ${(err || out).trim().split("\n").at(-1) ?? ""}`;
+					: code === COST_CAP_EXIT_CODE
+						? `it reached its $${WEEKLY_REVIEW_MAX_COST_USD} cost cap`
+						: `omp exited ${code}: ${(err || out).trim().split("\n").at(-1) ?? ""}`;
 			throw new Error(`the big-picture review of ${range} gave no result (${why})`);
 		}
-		return `${range} (${merged} commit${merged === 1 ? "" : "s"}): ${drift}`;
+		return `${range} (${merged} commit${merged === 1 ? "" : "s"}): ${drift}${scorecard.report}`;
 	}
+
+	/**
+	 * The week's production numbers (0621), from the project's `thread.json` records with no model call, kept for the
+	 * week (`<data>/projects/<pid>/production/<ISO week>.txt`). The prompt sentences for the agent, with this week's
+	 * lines and the last kept week's.
+	 */
+	private production(project: Project): string[] {
+		const text = productionLines(projectTasks(project.id), Date.now());
+		const { before, last } = keepForWeek(join(projectDir(project.id), "production"), text);
+		return [
+			"The project's production numbers for the past 7 days, from Jocasta's thread records (lines joined with ` | `);",
+			`give them to the drift subagent in its task as context, not as targets. This week: ${oneLine(text)}`,
+			last === undefined ? "There is no earlier week of them." : `Last week (${before}): ${oneLine(last)}`,
+		];
+	}
+
+	/**
+	 * The project's scorecard for this review (0616): its trusted mise task `scorecard`, run in the main checkout with
+	 * the checks' env before the agent starts, its output cut to `SCORECARD_MAX_CHARS` and kept for the week
+	 * (`<data>/projects/<pid>/scorecard/<ISO week>.txt`, the output as is). The prompt sentences for the agent, with this
+	 * week's and the last kept week's output, and the text that ends the report: the lines that changed, or one line
+	 * on why there is no scorecard. Both are empty for a project without the task; a failing, overlong or untrusted
+	 * task costs the review nothing but the scorecard.
+	 */
+	private async scorecard(project: Project): Promise<{ prompt: string[]; report: string }> {
+		const options = this.c.options;
+		const run = await miseRunTask(project.id, project.mainPath, "scorecard", {
+			timeoutMs: options.scorecardMs ?? SCORECARD_MS,
+			env: this.c.panes.checkEnv(),
+			mise: options.mise,
+		});
+		if (!run) return { prompt: [], report: "" };
+		const without = (why: string) => ({ prompt: [], report: ` · no scorecard: ${why}` });
+		if ("skipped" in run) return without(run.skipped);
+		if ("failed" in run) return without(`the scorecard task ${run.failed}`);
+		const text = capped(run.output.trim());
+		if (!text) return without("the scorecard task printed nothing");
+		const { before, last } = keepForWeek(join(projectDir(project.id), "scorecard"), text);
+		return {
+			prompt: [
+				"The project's scorecard is its mise task `scorecard`, run just now (lines joined with ` | `); give it to the",
+				"drift subagent in its task. These are measurements to read as questions, not targets: a number that moved is",
+				`worth a look at the code behind it. This week: ${oneLine(text)}`,
+				last === undefined ? "There is no earlier week to compare." : `Last week (${before}): ${oneLine(last)}`,
+			],
+			report: last === undefined ? " · scorecard: no earlier week to compare" : ` · scorecard: ${changes(last, text)}`,
+		};
+	}
+}
+
+/**
+ * Keeps `text` as this ISO week's `<week>.txt` in `dir`, replacing an earlier run of the same week, and gives back the
+ * last earlier week's name and text, when there is one.
+ */
+function keepForWeek(dir: string, text: string): { before?: string; last?: string } {
+	const week = isoWeek(new Date());
+	mkdirSync(dir, { recursive: true });
+	const before = readdirSync(dir)
+		.map((name) => name.replace(/\.txt$/, ""))
+		.filter((name) => name < week)
+		.sort()
+		.at(-1);
+	const last = before === undefined ? undefined : readFileSync(join(dir, `${before}.txt`), "utf8");
+	writeAtomically(join(dir, `${week}.txt`), text);
+	return before === undefined ? {} : { before, last };
+}
+
+/** Lines as one line for the prompt (` | ` between them): omp's argv carries no newline. */
+function oneLine(text: string): string {
+	return text
+		.split("\n")
+		.map((line) => line.trim())
+		.filter(Boolean)
+		.join(" | ");
+}
+
+/** `text` cut to `SCORECARD_MAX_CHARS`, with a last line that says it was cut. */
+function capped(text: string): string {
+	if (text.length <= SCORECARD_MAX_CHARS) return text;
+	return `${text.slice(0, SCORECARD_MAX_CHARS)}\n[cut at ${SCORECARD_MAX_CHARS} characters]`;
+}
+
+/** The ISO 8601 week of `date` in local time, as `2026-W46`: the key of a week's kept scorecard and production numbers. */
+function isoWeek(date: Date): string {
+	const day = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+	// The week belongs to the year of its Thursday.
+	day.setUTCDate(day.getUTCDate() + 4 - (day.getUTCDay() || 7));
+	const year = day.getUTCFullYear();
+	const week = Math.ceil(((day.getTime() - Date.UTC(year, 0, 1)) / 86_400_000 + 1) / 7);
+	return `${year}-W${String(week).padStart(2, "0")}`;
+}
+
+/**
+ * The lines of `now` that differ from `before`, matched by their label (the text before the first `: `): `label: was →
+ * is` for a line both weeks have, the line itself for a new one; "no line changed" when none did.
+ */
+function changes(before: string, now: string): string {
+	const label = (line: string) => line.split(": ")[0] ?? line;
+	const was = new Map(before.split("\n").map((line) => [label(line), line] as const));
+	const moved: string[] = [];
+	for (const line of now.split("\n")) {
+		const earlier = was.get(label(line));
+		if (earlier === line) continue;
+		moved.push(earlier === undefined ? line : `${earlier} → ${line.slice(label(line).length + 2)}`);
+	}
+	return moved.length > 0 ? `changed since last week: ${moved.join("; ")}` : "no line changed since last week";
 }

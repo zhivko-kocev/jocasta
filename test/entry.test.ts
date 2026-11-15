@@ -86,7 +86,7 @@ test("jocasta mcp answers initialize on stdio, and its tools say Jocasta isn't r
 	);
 	stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
 	stdin.write(
-		`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "graph_search", arguments: { project: "demo", query: "x" } } })}\n`,
+		`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "history_search", arguments: { project: "demo", query: "x" } } })}\n`,
 	);
 	stdin.end();
 	const out = await new Response(child.stdout).text();

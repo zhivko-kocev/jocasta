@@ -5,9 +5,10 @@ import { hunkDiffArgs, hunkEnv, reviewPrompt } from "../../../src/frontier/serve
 import { overlayFile, overlayText } from "../../../src/frontier/server/overlay.ts";
 import { HANDOFF_PROMPT, shortModel, WHEN_YOU_FINISH } from "../../../src/frontier/server/wording.ts";
 import { reviewedFile } from "../../../src/frontier/server/worktrees.ts";
-import { shippedConfigDir } from "../../../src/shared/install.ts";
+import { selfCommand, shippedConfigDir } from "../../../src/shared/install.ts";
 import { lessonsDir, projectDir } from "../../../src/shared/paths.ts";
 import { withoutLeadingComment } from "../../../src/shared/prompt.ts";
+import { pushHookEnv } from "../../../src/shared/push-hook.ts";
 import { GIT_TEST_TIMEOUT, sh, useTempJocasta } from "../../shared/fixture.ts";
 import { FakeHerdr } from "./fake-herdr.ts";
 import {
@@ -19,7 +20,9 @@ import {
 	GUARD,
 	HUNK,
 	keyed,
+	PANE_CHECK_FLAGS,
 	Page,
+	projectKeyed,
 	proposedPlanFile,
 	review,
 	sessionFile,
@@ -46,13 +49,9 @@ test(
 				);
 				const overlay = overlayFile(project.id);
 				expect(Bun.YAML.parse(readFileSync(overlay, "utf8"))).toEqual({
-					memory: { backend: "mnemopi" },
-					mnemopi: {
-						scoping: "global",
-						bank: project.id,
-						llmMode: "smol",
-						dbPath: join(projectDir(project.id), "mnemopi.db"),
-					},
+					memory: { backend: "off" },
+					task: { completionProbe: false, maxRecursionDepth: 1 },
+					async: { widgets: false },
 					plan: { defaultOnStartup: true },
 					compaction: {
 						methodOrder: ["handoff", "remote", "soft", "shake", "snapcompact"],
@@ -74,9 +73,15 @@ test(
 				expect(readFileSync(join(lessonsDir(project.id), "SKILL.md"), "utf8")).toBe(
 					readFileSync(join(shippedConfigDir(), "lessons", "SKILL.md"), "utf8"),
 				);
-				const command = ["omp", "--continue", ...GUARD, "--config", overlay];
-				// The project workspace: label = project name, cwd = main checkout, the project pane running omp.
-				expect(server.herdr.of("ensureWorkspace")[1]).toEqual(["demo", project.mainPath, command, keyed(hunkEnv())]);
+				const command = ["omp", "--continue", ...GUARD, "--config", overlay, ...PANE_CHECK_FLAGS];
+				// The project workspace: label = project name, cwd = main checkout, the project pane running omp with
+				// Jocasta's turn-end extension (0617).
+				expect(server.herdr.of("ensureWorkspace")[1]).toEqual([
+					"demo",
+					project.mainPath,
+					command,
+					projectKeyed(hunkEnv()),
+				]);
 				const projectWs = server.herdr.workspaceList.find((w) => w.label === "demo")?.id;
 				// Thread panes get Jocasta's hunk daemon port, as the review's hunk commands run in them (F-02, F-03), and
 				// their own variables (0457); a new thread starts a fresh session, never `--continue` (0455).
@@ -135,7 +140,7 @@ test(
 				});
 				// Boss tools take the boss key (SEC-1, 0484): a thread's pane, no pane, or the boss pane's id without the key
 				// or with a wrong one is refused plainly, revealing nothing about the boss pane, whose omp has this run's
-				// key; graph_search isn't refused, and searches the thread's own project.
+				// key; history_search isn't refused, and searches the thread's own project.
 				for (const [from, key] of [
 					[paneId, null],
 					[null, null],
@@ -148,9 +153,8 @@ test(
 						isError: true,
 					});
 				}
-				expect(await call(server, "graph_search", { query: "x" }, paneId)).toEqual({
-					text: "the knowledge graph isn't available in this run.",
-					isError: true,
+				expect(await call(server, "history_search", { query: "zebra stripes" }, paneId)).toEqual({
+					text: "Nothing in demo's history for that.",
 				});
 				// A second thread reuses the project workspace and takes the next free number (0457).
 				await startThread(server, { title: "Second", brief: "More." });
@@ -280,8 +284,14 @@ test(
 					...GUARD,
 					"--config",
 					overlayFile(project.id),
+					...PANE_CHECK_FLAGS,
 				];
-				expect(server.herdr.of("ensureWorkspace")[1]).toEqual(["demo", project.mainPath, command, keyed(hunkEnv())]);
+				expect(server.herdr.of("ensureWorkspace")[1]).toEqual([
+					"demo",
+					project.mainPath,
+					command,
+					projectKeyed(hunkEnv()),
+				]);
 				// omp 18.18 takes one --append-system-prompt (the last), so Ponytail and the task share `prompt.md`.
 				const prompt = join(taskDirOf(project.id), "prompt.md");
 				expect(server.herdr.of("createWorktree")[0]?.[1]).toMatchObject({
@@ -447,7 +457,7 @@ test(
 						{
 							command: hunkDiffArgs(HUNK, range),
 							cwd: path,
-							env: hunkEnv(HUNK_OPTIONS.hunkPort),
+							env: { ...hunkEnv(HUNK_OPTIONS.hunkPort), ...pushHookEnv(selfCommand()) },
 							label: "review",
 							direction: "right",
 							ratio: 0.5,

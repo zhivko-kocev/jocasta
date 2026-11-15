@@ -1,11 +1,15 @@
 // The `jocasta` command's words, kept apart from what each runs so `entry.ts` loads only the one it routes to (PM-11).
 import { PLUGIN_ACTIONS, type PluginAction } from "../frontier/protocol.ts";
+import { PANE_CHECK_ROLE } from "./pane-check.ts";
+import { PUSH_HOOK_ROLE } from "./push-hook.ts";
 
 /**
  * The `jocasta` command's words (0387, 0467, 0468, 0472, 0544): open the work surface, `setup [--refresh <file>]`,
  * `uninstall`, `diagnose`, `mcp [--boss]`, `project …`, `thread …`, `worktree …`, `--version`; and, not listed in the
  * usage, `service`, the Jocasta service bare `jocasta` starts as its own process (0552), and `plugin
- * today|ask|startup|action <id>`, what the `jocasta` herdr plugin runs (0553).
+ * today|ask|startup|action <id>`, what the `jocasta` herdr plugin runs (0553), and `push-hook <remote> <address>`, the
+ * `pre-push` hook git runs in every Jocasta pane (0613), and `pane-check`, what a project pane's omp extension runs
+ * when a turn ends (0617).
  */
 export type Route =
 	| { role: "surface" }
@@ -19,6 +23,8 @@ export type Route =
 	| { role: "worktree"; args: string[] }
 	| { role: "plugin"; part: "today" | "ask" | "startup" }
 	| { role: "plugin"; part: "action"; action: PluginAction }
+	| { role: "push-hook"; args: string[] }
+	| { role: "pane-check" }
 	| { role: "version" }
 	| { role: "help" }
 	/** An invocation error; `unknown` is the word when it names no command (0581). */
@@ -31,7 +37,7 @@ export const USAGE = [
 	"                               reset one Jocasta-owned file to the shipped version, keeping a backup",
 	"       jocasta uninstall        remove what install and setup added, after `y`",
 	"       jocasta diagnose         a read-only pane that explains what went wrong from Jocasta's log",
-	"       jocasta mcp [--boss]     the MCP server omp starts (graph_search, report_result and check; the boss's tools with --boss)",
+	"       jocasta mcp [--boss]     the MCP server omp starts (history_search, report_result and check; the boss's tools with --boss)",
 	"       jocasta project list | add <path> | remove <name|id>",
 	'       jocasta thread new <project> "<brief>" [--title <t>] [--done-when "<cmd>"]... [--heavy]',
 	'       jocasta thread list [<project>] | status <thread> | send <thread> "<text>" | stop <thread>',
@@ -59,6 +65,8 @@ export function route(args: string[]): Route {
 	if (word === "project") return { role: "project", args: rest };
 	if (word === "thread") return { role: "thread", args: rest };
 	if (word === "worktree") return { role: "worktree", args: rest };
+	if (word === PUSH_HOOK_ROLE) return { role: "push-hook", args: rest };
+	if (word === PANE_CHECK_ROLE && rest.length === 0) return { role: "pane-check" };
 	if (word === "plugin") {
 		const [part, action, ...more] = rest;
 		if ((part === "today" || part === "ask" || part === "startup") && action === undefined)
@@ -84,4 +92,6 @@ const COMMANDS = [
 	"thread",
 	"worktree",
 	"plugin",
+	PUSH_HOOK_ROLE,
+	PANE_CHECK_ROLE,
 ];

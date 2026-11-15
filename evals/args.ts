@@ -12,7 +12,7 @@ export interface RunSettings {
 }
 
 /** Defaults (0318): 3 reps, 10 minutes per trial. */
-export const RUN_DEFAULTS: RunSettings = { reps: 3, timeoutMinutes: 10 };
+const RUN_DEFAULTS: RunSettings = { reps: 3, timeoutMinutes: 10 };
 
 /**
  * `value` as omp's `--profile` name (pi-utils `dirs.ts`'s rule), for `bun run evals` and the task benchmark alike; any

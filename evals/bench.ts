@@ -1,8 +1,8 @@
 // The task benchmark of 0482, as 0543 amends it: `bun evals/bench.ts --tasks <tasks.jsonl> --cache <dir>
 // --out <runDir> [--study main|followup] [--arms a0,a1,a2,a3,a4,a6,a7] [--reps 3] [--set main] [--only id,id]
 // [--pilot] [--workers 2] [--seed 482] [--timeout 90] [--profile <omp profile>] [--work <dir>] [--validate]
-// [--dry-run]`. Trials (tasks × arms × reps; `--study followup` is the follow-up study's 10 tasks × 2 reps × A6 and
-// its four arms) run in a seeded random order through the eval runner's `runTrial`, each in its own worker thread
+// [--dry-run]`. Trials (tasks × arms × reps; `--study followup` is the follow-up study's 10 tasks × 2 reps × A6, A1 and
+// six comparison arms) run in a seeded random order through the eval runner's `runTrial`, each in its own worker thread
 // (`--workers` at once, never two of one task), the quota pacer awaited before each, their roots in `--work` (default
 // the OS temp folder). Results go to `<runDir>/results.jsonl` (with each trial's ledger totals), the ledger's rows to
 // `ledger.jsonl`, each attempt's priced spend to `spend.jsonl`, the harnesses' own records to `sessions/`, infra errors
@@ -34,9 +34,16 @@ import { ompAgentDir } from "../src/shared/paths.ts";
 import { onPath } from "../src/shared/process.ts";
 import { pidAlive, processStartedAt } from "../src/shared/proctree.ts";
 import { profileName } from "./args.ts";
-import { FOLLOWUP_ARMS, FOLLOWUP_COMPARISONS, FOLLOWUP_REPS, FOLLOWUP_TASKS, pickFollowupTasks } from "./followup.ts";
+import {
+	FOLLOWUP_ARMS,
+	FOLLOWUP_BASELINES,
+	FOLLOWUP_COMPARISONS,
+	FOLLOWUP_REPS,
+	FOLLOWUP_TASKS,
+	pickFollowupTasks,
+} from "./followup.ts";
 import { A7_API_KEY_ENV } from "./harness.ts";
-import { LAYER_MODULE, layerBuilt, layerMissingMessage, loadBenchLayer } from "./layer.ts";
+import { LAYER_MODULE, layerBuilt, layerMissingMessage } from "./layer.ts";
 import { createPacer, PACER_PROVIDER, PAUSE_AT, type Pause, realPacerDeps } from "./pacer.ts";
 import {
 	type EvalCase,
@@ -134,18 +141,18 @@ export interface BenchOptions {
 }
 
 /** The tools whose versions `conditions.json` records (0482, 0537). */
-export const VERSION_TOOLS = ["omp", "claude", "opencode", "git", "bun", "node", "python", "go"] as const;
+const VERSION_TOOLS = ["omp", "claude", "opencode", "git", "bun", "node", "python", "go"] as const;
 
 /**
  * A7's spend limit (0537): once the priced spend of A7's attempts (`spend.jsonl`, the pinned price table) reaches it,
  * no further A7 trial starts. The key's own limit at Anthropic is the backstop for a trial already running.
  */
-export const A7_SPEND_LIMIT_USD = 150;
+const A7_SPEND_LIMIT_USD = 150;
 /** A7 runs in 0481's VM only (0537), the machine H1's git-guard check also requires. */
-export const VM_MACHINE = "JOCASTA-CLEAN";
+const VM_MACHINE = "JOCASTA-CLEAN";
 
 /** One `spend.jsonl` row: an attempt's priced cost, whether it counted or was an infra error. */
-export interface SpendRow {
+interface SpendRow {
 	task: string;
 	arm: string;
 	rep: number;
@@ -156,14 +163,14 @@ export interface SpendRow {
 }
 
 /** Long-path support as the trials see it: git's effective `core.longpaths` and, on Windows, `LongPathsEnabled`. */
-export interface LongPaths {
+interface LongPaths {
 	gitCoreLongpaths: string | null;
 	/** `HKLM\SYSTEM\CurrentControlSet\Control\FileSystem` `LongPathsEnabled`; null off Windows or when unset. */
 	windowsLongPathsEnabled: number | null;
 }
 
 /** Reads {@link LongPaths} without changing anything. */
-export function readLongPaths(): LongPaths {
+function readLongPaths(): LongPaths {
 	const gitCoreLongpaths = gitRead(tmpdir(), ["config", "--get", "core.longpaths"]) ?? null;
 	let windowsLongPathsEnabled: number | null = null;
 	if (process.platform === "win32") {
@@ -179,7 +186,7 @@ export function readLongPaths(): LongPaths {
 }
 
 /** The host, the tools' versions (Go's from `go version`, not `--version`) and long-path support. */
-export function hostConditions(): Conditions & { longPaths: LongPaths } {
+function hostConditions(): Conditions & { longPaths: LongPaths } {
 	const host = conditions(VERSION_TOOLS.filter((tool) => tool !== "go"));
 	const go = onPath("go");
 	const version =
@@ -189,7 +196,7 @@ export function hostConditions(): Conditions & { longPaths: LongPaths } {
 }
 
 /** Runs one trial in a worker thread, so a setup's or a check's blocking spawn never stalls another trial's harness. */
-export function executeInWorker(job: TrialJob): Promise<TrialOutcome> {
+function executeInWorker(job: TrialJob): Promise<TrialOutcome> {
 	const { promise, resolve } = Promise.withResolvers<TrialOutcome>();
 	const worker = new Worker(import.meta.path);
 	let settled = false;
@@ -626,7 +633,7 @@ async function runLocked(options: BenchOptions): Promise<number> {
 }
 
 /** One `validation.jsonl` row: the task's hidden tests without a model, on the base commit and with the gold patch. */
-export interface ValidationRow {
+interface ValidationRow {
 	task: string;
 	language: string;
 	/** The hidden tests failed on the base commit (as they must); null when validation stopped before. */
@@ -637,7 +644,7 @@ export interface ValidationRow {
 	error: string | null;
 }
 
-export const GOLD_GRADES = 3;
+const GOLD_GRADES = 3;
 
 const since = (start: number) => Math.round((performance.now() - start) / 100) / 10;
 
@@ -648,7 +655,7 @@ const since = (start: number) => Math.round((performance.now() - start) / 100) /
  * `logDir`, each phase's commands and output go to `setup.log`, `null.log` and `gold-<n>.log` there; the trial root
  * goes in `workDir`.
  */
-export async function validateTask(
+async function validateTask(
 	task: BenchTask,
 	cacheDir: string,
 	options: { logDir?: string; workDir?: string } = {},
@@ -705,7 +712,7 @@ export async function validateTask(
 	return row;
 }
 
-export const validationPassed = (row: ValidationRow): boolean =>
+const validationPassed = (row: ValidationRow): boolean =>
 	row.error === null && row.null_failed === true && row.gold_passes === GOLD_GRADES;
 
 /**
@@ -884,17 +891,13 @@ async function main(): Promise<void> {
 	if (study === "followup") tasks = pickFollowupTasks(all, seed);
 	if (pilot) tasks = pickPilot(tasks, seed);
 	if (tasks.length === 0) throw new BenchUsageError("no tasks selected");
-	// EVL-1: each layered arm's layer is checked before any trial (its code index's data folder, codebase-memory-mcp).
-	const layerProblems = new Map<string, string | undefined>();
-	for (const name of armNames) {
-		const switches = variants.get(name)?.layer;
-		if (switches === undefined) continue;
-		layerProblems.set(name, layerBuilt() ? await (await loadBenchLayer()).preflight(switches) : layerMissingMessage());
-	}
+	// Each layered arm needs Jocasta's layer build in this checkout; checked before any trial.
+	const layeredArms = armNames.filter((name) => variants.get(name)?.layer);
+	const layerProblem = layeredArms.length > 0 && !layerBuilt() ? layerMissingMessage() : undefined;
 	// 0587: omp's folder gives the omp arms no MCP server of its own and doesn't hide a layered arm's (dry run too).
 	const ompArms = armNames.filter((name) => variants.get(name)?.harness === "omp");
 	if (!validate && ompArms.length > 0) {
-		const layered = ompArms.filter((name) => variants.get(name)?.layer !== undefined);
+		const layered = ompArms.filter((name) => layeredArms.includes(name));
 		const problem = mcpProblem(ompAgentDir(profile), layered);
 		if (problem !== undefined) throw new BenchUsageError(problem);
 	}
@@ -903,7 +906,7 @@ async function main(): Promise<void> {
 			tasks,
 			armNames,
 			variants,
-			layerProblems,
+			layerProblem,
 			reps,
 			seed,
 			workers,
@@ -927,8 +930,7 @@ async function main(): Promise<void> {
 	if (!process.env.JOCASTA_EVALS_REAL)
 		throw new BenchUsageError("the benchmark runs real models and bills usage; set JOCASTA_EVALS_REAL=1 to run it");
 	if (process.env.CI) throw new BenchUsageError("real-model runs never run in CI (0169)");
-	for (const [name, problem] of layerProblems)
-		if (problem !== undefined) throw new BenchUsageError(`${name}: ${problem}`);
+	if (layerProblem !== undefined) throw new BenchUsageError(`${layeredArms.join(", ")}: ${layerProblem}`);
 	const a7 = armNames.filter((name) => variants.get(name)?.harness === "opencode");
 	if (a7.length > 0) {
 		if (hostname().toUpperCase() !== VM_MACHINE)
@@ -982,8 +984,8 @@ function printDryRun(plan: {
 	tasks: BenchTask[];
 	armNames: string[];
 	variants: Map<string, Variant>;
-	/** Each layered arm's preflight: why it can't run here, or undefined. */
-	layerProblems: Map<string, string | undefined>;
+	/** Why the layered arms can't run here, or undefined. */
+	layerProblem: string | undefined;
 	reps: number;
 	seed: number;
 	workers: number;
@@ -1015,11 +1017,10 @@ function printDryRun(plan: {
 			`  trials: ${order.length} = ${plan.tasks.length} tasks × ${plan.armNames.length} arms × ${plan.reps} rep${plan.reps === 1 ? "" : "s"}, seed ${plan.seed}, ${plan.workers} at once, ${plan.timeoutMinutes} min limit each`,
 		);
 		if (plan.study === "followup") {
-			console.log("  comparisons, each paired with a6 by task and rep, kept by 0543's rule (`bun evals/keep.ts`):");
-			for (const c of FOLLOWUP_COMPARISONS)
-				console.log(
-					`    ${c.arm}: ${c.change} (${c.records}; the feature is ${c.feature === "arm" ? "the arm's" : "a6's"})`,
-				);
+			console.log(
+				`  comparisons, each paired with its baseline (${FOLLOWUP_BASELINES.join(" or ")}) by task and rep, kept by 0543's rule (\`bun evals/keep.ts\`):`,
+			);
+			for (const c of FOLLOWUP_COMPARISONS) console.log(`    ${c.arm} vs ${c.baseline}: ${c.change} (${c.records})`);
 			console.log("    not compared: pitchfork (0560), keep-alive pings (no idle gap in a trial)");
 		}
 		console.log(`  order (first ${Math.min(15, order.length)}):`);
@@ -1042,12 +1043,11 @@ function printDryRun(plan: {
 			});
 			if (variant.planReview !== undefined)
 				console.log(
-					`  arm ${name} plan review (0567): turn 1 runs omp interactive in a pane of the herdr session ${plan.ptySession}, plan mode at startup; the extension answers "${variant.planReview === "execute" ? "Approve and execute" : "Approve and keep context"}" and shuts omp down after the execution`,
+					`  arm ${name} plan review (0567): turn 1 runs omp interactive in a pane of the herdr session ${plan.ptySession}, plan mode at startup; the extension answers "${variant.planReview === "execute" ? "Approve and execute" : "Approve and keep context"}"${variant.planReviewRole === undefined ? "" : ` with the work on the ${variant.planReviewRole} role`} and shuts omp down after the execution`,
 				);
-			if (variant.layer !== undefined) {
-				const problem = plan.layerProblems.get(name);
+			if (variant.layer) {
 				console.log(
-					`  arm ${name} layer: index ${variant.layer.index ? "on" : "off"}; ${problem === undefined ? `${LAYER_MODULE} adds its flags, settings and env` : `NOT RUNNABLE: ${problem}`}`,
+					`  arm ${name} layer: ${plan.layerProblem === undefined ? `${LAYER_MODULE} adds its flags, settings and env` : `NOT RUNNABLE: ${plan.layerProblem}`}`,
 				);
 			}
 			if (variant.harness === "opencode")

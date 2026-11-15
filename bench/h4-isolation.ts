@@ -1,14 +1,14 @@
-// H4 (0482, 0502, 0576): memory isolation with canary facts, in a sandbox Jocasta on his PC with two projects A and B.
+// H4 (0482, 0502, 0576, 0603): history isolation with canary facts, in a sandbox Jocasta on his PC with two projects A
+// and B.
 //
 //   bun bench/h4-isolation.ts --out <dir> --project-a <p-…> --pane-a <pane id> --pane-b <pane id>
-//                             [--canaries 50] [--runs 100] [--wait 10] [--plant-timeout 30] [--skip-plant] [--dry-run]
+//                             [--canaries 50] [--runs 100] [--plant-timeout 30] [--skip-plant] [--dry-run]
 //
-// Plants `--canaries` unique facts in project A's graph through the service (0576): H4 starts a thread `h4 plant` in A
-// as `jocasta thread new` does, whose brief tells it to call `report_result` once with exactly the canaries as
-// decisions; the service posts them as one episode to A's graph with its own Graphiti token and model endpoint
-// (0539). The thread opens in plan mode, so he approves its plan. Once `jocasta thread list` shows its report, H4 waits
-// `--wait` minutes for Graphiti's extraction, then issues `--runs` queries through the service's MCP endpoint
-// (`graph_search`, as `jocasta mcp` calls it with the pane's key from `<data>/panes.json`) from B's pane, which
+// Plants `--canaries` unique facts in project A's history through the service (0576): H4 starts a thread `h4 plant` in
+// A as `jocasta thread new` does, whose brief tells it to call `report_result` once with exactly the canaries as
+// decisions; the service adds them to A's history index (0539, 0603). The thread opens in plan mode, so he approves its
+// plan. Once `jocasta thread list` shows its report, H4 issues `--runs` queries through the service's MCP endpoint
+// (`history_search`, as `jocasta mcp` calls it with the pane's key from `<data>/panes.json`) from B's pane, which
 // searches only its own project (0484), and checks every answered reply for every canary: canaries × answered queries
 // checks. The same queries from A's pane are the positive control: a bound is given only when it found canaries in
 // at least one reply, else the run is `inconclusive`.
@@ -20,6 +20,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { LaunchedPanes } from "../src/frontier/server/boss.ts";
+import { HISTORY_SEARCH } from "../src/frontier/server/history.ts";
 import { BenchUsageError, flag, parseBenchArgs, runScript } from "./lib/args.ts";
 import { conditions, printPlan, writeJson } from "./lib/output.ts";
 import { callTool, requireSandbox } from "./lib/sandbox.ts";
@@ -67,7 +68,7 @@ export const PLANT_TITLE = "h4 plant";
 
 /**
  * The `h4 plant` thread's brief: one `report_result` call whose decisions are exactly the canaries, which the service
- * posts to A's graph as `- <topic> codename: <token>. Why: H4 canary` lines (0539).
+ * adds to A's history as `- <topic> codename: <token>. Why: H4 canary` lines (0539, 0603).
  */
 export function plantBrief(canaries: readonly Canary[]): string {
 	const decisions = canaries.map((canary) => ({
@@ -93,8 +94,8 @@ export interface H4Score {
 	answeredQueries: number;
 	erroredQueries: number;
 	checks: number;
-	graphLeaks: number;
-	graphLeakRate: number | null;
+	searchLeaks: number;
+	searchLeakRate: number | null;
 	/** Answered queries from A's pane whose reply carried a canary, of A's answered queries. */
 	positiveControl: { hits: number; answered: number };
 	/** No canary was findable from A's pane, or nothing was answered: no bound. */
@@ -117,8 +118,8 @@ export function scoreH4(fromB: readonly QueryResult[], fromA: readonly QueryResu
 		answeredQueries: answeredB.length,
 		erroredQueries: fromB.length - answeredB.length,
 		checks,
-		graphLeaks: leaks,
-		graphLeakRate: checks === 0 ? null : leaks / checks,
+		searchLeaks: leaks,
+		searchLeakRate: checks === 0 ? null : leaks / checks,
 		positiveControl: { hits, answered: answeredA.length },
 		inconclusive,
 		upperBound95: !inconclusive && leaks === 0 ? ruleOfThree(checks) : null,
@@ -133,7 +134,7 @@ export function h4Line(score: H4Score): string {
 			? "positive control found no canary: inconclusive"
 			: `positive control found canaries in ${score.positiveControl.hits}/${score.positiveControl.answered} queries`;
 	const bound = score.upperBound95 === null ? "" : `; 95% upper bound 3/${n(score.checks)}`;
-	return `${score.graphLeaks} leaks in ${n(score.checks)} answered checks (${score.erroredQueries} queries errored); ${control}${bound}`;
+	return `${score.searchLeaks} leaks in ${n(score.checks)} answered checks (${score.erroredQueries} queries errored); ${control}${bound}`;
 }
 
 /** Canary tokens in a project's mnemopi bank: `mnemopi.db` and its write-ahead log (mnemopi runs WAL). */
@@ -155,7 +156,6 @@ if (import.meta.main) {
 		});
 		const count = Number(flag(args, "canaries", "50"));
 		if (!Number.isInteger(count) || count < 1) throw new BenchUsageError("--canaries needs a whole number");
-		const waitMinutes = Number(flag(args, "wait", "10"));
 		const plantMinutes = Number(flag(args, "plant-timeout", "30"));
 		const projectA = flag(args, "project-a");
 		const paneA = flag(args, "pane-a");
@@ -167,8 +167,8 @@ if (import.meta.main) {
 				[
 					skipPlant
 						? `reuse the canaries in <out>/h4-canaries.json`
-						: `start the thread "${PLANT_TITLE}" in ${projectA ?? "<--project-a>"} (jocasta thread new; he approves its plan) to hand in report_result with ${count} canaries as decisions, which the service posts to A's graph; wait up to ${plantMinutes} min for its report, then ${waitMinutes} min for Graphiti's extraction`,
-					`${args.runs} graph_search queries from B's pane ${paneB ?? "<--pane-b>"} through POST /api/mcp/graph_search (the pane's key from <data>/panes.json)`,
+						: `start the thread "${PLANT_TITLE}" in ${projectA ?? "<--project-a>"} (jocasta thread new; he approves its plan) to hand in report_result with ${count} canaries as decisions, which the service adds to A's history; wait up to ${plantMinutes} min for its report`,
+					`${args.runs} ${HISTORY_SEARCH} queries from B's pane ${paneB ?? "<--pane-b>"} through POST /api/mcp/${HISTORY_SEARCH} (the pane's key from <data>/panes.json)`,
 					`check every answered reply for every canary: up to ${count * args.runs} checks; 0 leaks → 95% upper bound 3/<answered checks>`,
 					`positive control: the same queries from A's pane ${paneA ?? "<--pane-a>"}; no canary found there → inconclusive, no bound`,
 					"scan every other project's mnemopi.db and mnemopi.db-wal for the canary strings",
@@ -207,14 +207,13 @@ if (import.meta.main) {
 			);
 			if (reported === null)
 				throw new Error(`"${PLANT_TITLE}" handed in no report within ${plantMinutes} min; nothing was planted`);
-			console.log(`planted ${canaries.length} canaries in ${projectA}; waiting ${waitMinutes} min`);
-			await Bun.sleep(waitMinutes * 60_000);
+			console.log(`planted ${canaries.length} canaries in ${projectA}`);
 		}
 		const queries = makeQueries(canaries, args.runs);
 		const ask = async (paneKey: string) => {
 			const results: QueryResult[] = [];
 			for (const query of queries) {
-				const reply = await callTool("graph_search", { query, limit: 20 }, { paneKey });
+				const reply = await callTool(HISTORY_SEARCH, { query, limit: 20 }, { paneKey });
 				results.push({ query, leaked: leaked(reply.text, canaries), isError: reply.isError === true });
 			}
 			return results;

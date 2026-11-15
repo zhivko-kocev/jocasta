@@ -12,10 +12,10 @@ import { BenchUsageError, flag, parseBenchArgs, runScript } from "../bench/lib/a
 import { writeJson } from "../bench/lib/output.ts";
 import { holm, mcnemarExact } from "../bench/lib/stats.ts";
 import { readJsonlFile } from "../src/shared/jsonl.ts";
-import { FOLLOWUP_BASELINE, FOLLOWUP_COMPARISONS } from "./followup.ts";
+import { FOLLOWUP_COMPARISONS } from "./followup.ts";
 import type { BenchRow } from "./tasks.ts";
 
-export const KEEP_ALPHA = 0.05;
+const KEEP_ALPHA = 0.05;
 
 /** One trial as the rule reads it: its pair key (task and rep), whether it passed, and its cost. */
 export interface KeepTrial {
@@ -104,16 +104,14 @@ export function keepTrial(row: Pick<BenchRow, "task" | "rep" | "hiddenPassed" | 
 	return { pair: `${row.task}/${row.rep}`, passed: row.hiddenPassed === true, cost: row.ledger.cost };
 }
 
-/** The follow-up study's comparisons from its results rows: each arm against A6, the feature's side per comparison. */
+/** The follow-up study's comparisons from its results rows: each arm, the feature, against its own baseline, without it. */
 export function followupInputs(rows: readonly BenchRow[]): KeepInput[] {
 	const of = (arm: string) => rows.filter((row) => row.arm === arm).map(keepTrial);
-	const baseline = of(FOLLOWUP_BASELINE);
-	return FOLLOWUP_COMPARISONS.map((comparison) => {
-		const arm = of(comparison.arm);
-		return comparison.feature === "arm"
-			? { name: comparison.arm, withFeature: arm, withoutFeature: baseline }
-			: { name: comparison.arm, withFeature: baseline, withoutFeature: arm };
-	});
+	return FOLLOWUP_COMPARISONS.map((comparison) => ({
+		name: comparison.arm,
+		withFeature: of(comparison.arm),
+		withoutFeature: of(comparison.baseline),
+	}));
 }
 
 if (import.meta.main)

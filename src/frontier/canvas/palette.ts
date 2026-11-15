@@ -76,6 +76,9 @@ export const LINE_OPACITY = { line1: 22, line2: 40 } as const;
 /** page.css's `--mono`, for Monaco, which takes its font as an option rather than from the page's CSS. */
 export const MONO_FONT = '"Geist Mono", "Cascadia Mono", Consolas, ui-monospace, monospace';
 
+/** Every Monaco view's line height in px (`VIEW_OPTIONS.lineHeight`); a not-yet-mounted diff's placeholder is sized with it. */
+export const LINE_HEIGHT = 19;
+
 /** The colours of code drawn outside CSS: the canvas's Monaco theme. */
 export const CODE = {
 	ink: TOKYO_NIGHT.fg,

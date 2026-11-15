@@ -1,0 +1,11 @@
+# Follow-up study (0620): A6 with omp's advisor on, as his panes and threads run it: on the `advisor` role's model and
+# level of 0590 (Fable 5.2 at medium), reviewing every third update (0616). A0 pins the advisor off (0619), so this is
+# the arm's one change. Before it runs, one pilot trial in the VM must show a note landing inside A6's turn (0588);
+# if none can, the arm stops and he is asked (0020). Its baseline is A6.
+extends: [a6]
+settings:
+  advisor:
+    enabled: true
+    reviewInterval: 3
+  modelRoles:
+    advisor: anthropic/claude-fable-5-2:medium

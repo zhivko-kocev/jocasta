@@ -23,6 +23,4 @@ upgrade.auto_prune = false
 herdr = "0.9.5"
 hunk = "0.23.0"
 gh = "2.92.0"
-# The code index behind graph_search (0542, 0562); Jocasta starts only its stdio server.
-"github:DeusData/codebase-memory-mcp" = "0.12.1"
 `;

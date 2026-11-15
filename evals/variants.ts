@@ -26,7 +26,7 @@ export function deepMerge(base: Settings, delta: Settings): Settings {
 	return merged;
 }
 
-export const VariantSchema = Type.Object(
+const VariantSchema = Type.Object(
 	{
 		/** Variants in this folder layered first, in order (the arms A1–A3 build on each other, 0482). */
 		extends: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
@@ -45,6 +45,11 @@ export const VariantSchema = Type.Object(
 		 * "Approve and keep context" (`keep`) (`evals/plan-review.ts`). Not with `plan_first`. The last one wins.
 		 */
 		plan_review: Type.Optional(Type.Union([Type.Literal("execute"), Type.Literal("keep")])),
+		/**
+		 * The role the work after an approved plan review runs on (0608): passed as `resolvePlanReview`'s `{ role }`, an
+		 * execution tier of omp's review slider (`smol`). Needs `plan_review`. The last one wins.
+		 */
+		plan_review_role: Type.Optional(Type.String({ minLength: 1 })),
 		/**
 		 * Follow-up turns (0482 E2), each run after the first as `omp -c -p <prompt>` (`claude -c -p`) in the same repo;
 		 * `{base}` in a prompt becomes the fixture commit. Lists concatenate.
@@ -66,10 +71,9 @@ export const VariantSchema = Type.Object(
 		env: Type.Optional(Type.Record(Type.String(), Type.String())),
 		/**
 		 * The harness-OS layer (0532, 0543 A6): report_result, the task file's brief, the cached checks with the `check`
-		 * thread tool, the code index and the ledger line, built into each trial by Jocasta's layer (`evals/layer.ts`).
-		 * `index` (the code index behind graph_search, default on) switches for the follow-up study; the last value wins.
+		 * thread tool and the history search tool (0604), built into each trial by Jocasta's layer (`evals/layer.ts`).
 		 */
-		layer: Type.Optional(Type.Object({ index: Type.Optional(Type.Boolean()) }, { additionalProperties: false })),
+		layer: Type.Optional(Type.Boolean()),
 	},
 	{ additionalProperties: false },
 );
@@ -77,11 +81,6 @@ export const VariantSchema = Type.Object(
 type VariantFile = Static<typeof VariantSchema>;
 
 export type Harness = "omp" | "claude" | "opencode";
-
-/** The layer's switches as a trial gets them (see the schema's `layer`). */
-export interface LayerSwitches {
-	index: boolean;
-}
 
 /** The variants of one run, layered in flag order. */
 export interface Variant {
@@ -92,6 +91,8 @@ export interface Variant {
 	planFirst: boolean;
 	/** Answer omp's interactive plan review with this choice (0567); unset: no interactive plan review. */
 	planReview?: "execute" | "keep";
+	/** The role of omp's plan review slider the approved work runs on (0608); needs `planReview`. */
+	planReviewRole?: string;
 	followups: string[];
 	configs: string[];
 	appendSystemPrompt?: string;
@@ -100,14 +101,15 @@ export interface Variant {
 	args: string[];
 	settings?: Record<string, unknown>;
 	env: Record<string, string>;
-	/** Set when any layered variant has `layer`: the trial runs with the harness-OS layer. */
-	layer?: LayerSwitches;
+	/** Whether the trial runs with the harness-OS layer. */
+	layer: boolean;
 }
 
 export const DEFAULT_VARIANT: Variant = {
 	label: "default",
 	harness: "omp",
 	planFirst: false,
+	layer: false,
 	followups: [],
 	configs: [],
 	extensions: [],
@@ -150,6 +152,7 @@ export function loadVariants(dir: string, names: readonly string[]): Variant {
 		if (doc.model !== undefined) variant.model = doc.model;
 		if (doc.plan_first !== undefined) variant.planFirst = doc.plan_first;
 		if (doc.plan_review !== undefined) variant.planReview = doc.plan_review;
+		if (doc.plan_review_role !== undefined) variant.planReviewRole = doc.plan_review_role;
 		variant.followups.push(...(doc.followups ?? []));
 		variant.configs.push(...(doc.configs ?? []).map(path));
 		if (doc.append_system_prompt !== undefined) variant.appendSystemPrompt = path(doc.append_system_prompt);
@@ -158,12 +161,7 @@ export function loadVariants(dir: string, names: readonly string[]): Variant {
 		variant.args.push(...(doc.args ?? []));
 		if (doc.settings !== undefined) variant.settings = deepMerge(variant.settings ?? {}, doc.settings);
 		Object.assign(variant.env, doc.env);
-		if (doc.layer !== undefined) {
-			const before = variant.layer ?? { index: true };
-			variant.layer = {
-				index: doc.layer.index ?? before.index,
-			};
-		}
+		if (doc.layer !== undefined) variant.layer = doc.layer;
 	};
 	for (const name of names) layer(name, []);
 	if (variant.planFirst && variant.model === undefined)
@@ -172,14 +170,17 @@ export function loadVariants(dir: string, names: readonly string[]): Variant {
 		throw new UserError(
 			`${variant.label}: plan_first (--plan-yolo) and plan_review are two ways to plan first; set plan_first: false`,
 		);
+	if (variant.planReviewRole !== undefined && variant.planReview === undefined)
+		throw new UserError(`${variant.label}: plan_review_role answers omp's plan review; set plan_review too`);
 	const set: Record<OmpKey, boolean> = {
 		plan_first: variant.planFirst,
 		plan_review: variant.planReview !== undefined,
+		plan_review_role: variant.planReviewRole !== undefined,
 		configs: variant.configs.length > 0,
 		extensions: variant.extensions.length > 0,
 		tools: variant.tools !== undefined,
 		settings: variant.settings !== undefined,
-		layer: variant.layer !== undefined,
+		layer: variant.layer,
 		append_system_prompt: variant.appendSystemPrompt !== undefined,
 	};
 	const { accepts } = HARNESSES[variant.harness];

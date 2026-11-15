@@ -68,7 +68,7 @@ export function prRequest(remote: string, branch: string, trunk: string): string
  * prompt, `/handoff`, the report steer, a failed check on idle, `/plan-review` and the PR request. A thread's brief and
  * a boss's `thread_send` relay aren't among them: the brief is the session's first message, a relay is his word.
  */
-export const SERVICE_LINE_STARTS: readonly string[] = [
+const SERVICE_LINE_STARTS: readonly string[] = [
 	"[event]",
 	REVIEW_LEAD,
 	"/handoff",

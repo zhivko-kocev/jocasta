@@ -9,7 +9,7 @@ import type { ToolReply } from "./sandbox.ts";
  */
 
 /** One `jocasta thread|worktree` command against the running service (`<data>/jocasta-service.json`). */
-export async function cliCall(command: string, args: Record<string, unknown>): Promise<ToolReply> {
+async function cliCall(command: string, args: Record<string, unknown>): Promise<ToolReply> {
 	const running = readServiceFile();
 	if (!running) throw new Error("no running service: <data>/jocasta-service.json is missing");
 	const response = await fetch(`http://127.0.0.1:${running.port}${CLI_PATH}`, {

@@ -8,7 +8,7 @@ import { existsSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { UserError } from "../../shared/errors.ts";
 import { git } from "../../shared/git.ts";
-import { pathKey, realPath } from "../../shared/pathkey.ts";
+import { pathKey, realPath, sameDir } from "../../shared/pathkey.ts";
 import { listProjects, type Project, syncCatalog } from "../../shared/projects.ts";
 import { gitOut } from "./worktrees.ts";
 
@@ -42,8 +42,6 @@ export class Places {
 		private readonly hooks: {
 			/** A problem with `projects.yaml`, said once until it changes. */
 			problem(text: string): void;
-			/** A project gone from the catalog at a sync. */
-			gone(projectId: string): void;
 			/** A sync ran: the panes are looked at again for threads (CR-12). */
 			synced(): void;
 		},
@@ -80,7 +78,7 @@ export class Places {
 	 * The watched project holding `dir` (cached until `forget`): the project whose catalog path is its git top-level
 	 * or, for a herdr worktree, its main checkout; outside git, the nearest registered non-git ancestor (0105). Only
 	 * `checkout`'s one git call. A folder gone with a thread `thread_finish` removed still names that thread's project
-	 * (CO-2), so its summary reaches the graph.
+	 * (CO-2), so its summary is still indexed under it.
 	 */
 	projectAt(dir: string): Project | undefined {
 		const key = pathKey(dir);
@@ -114,6 +112,15 @@ export class Places {
 			this.projectsByDir.set(key, project);
 		}
 		return project ?? undefined;
+	}
+
+	/**
+	 * The watched project whose main checkout is `dir` itself, the folder of its project pane (0617); undefined for any
+	 * other folder, a thread's worktree included.
+	 */
+	projectPaneAt(dir: string): Project | undefined {
+		const project = this.projectAt(dir);
+		return project && sameDir(project.mainPath, dir) ? project : undefined;
 	}
 
 	/** Records a removed thread's worktree, by both spellings of its folder, as its project's (CO-2). */
@@ -166,11 +173,9 @@ export class Places {
 
 	/**
 	 * Projects from the watched roots into the catalog (0105), and the cached places with them. A sync that fails (a
-	 * malformed `projects.yaml`, C8) is logged and said once; the catalog goes on as it was. A project gone from the
-	 * catalog is told to `hooks.gone` (its code index server closes, SRV-B-20).
+	 * malformed `projects.yaml`, C8) is logged and said once; the catalog goes on as it was.
 	 */
 	async sync(): Promise<void> {
-		const before = this.listed().map((p) => p.id);
 		try {
 			await syncCatalog(this.catalog);
 		} catch (error) {
@@ -178,8 +183,6 @@ export class Places {
 		}
 		this.forget();
 		this.hooks.synced();
-		const now = new Set(this.listed().map((p) => p.id));
-		for (const id of before) if (!now.has(id)) this.hooks.gone(id);
 	}
 
 	/**

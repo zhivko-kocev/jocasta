@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { editConfig } from "../../src/setup/config-file.ts";
 import { lineDiff } from "../../src/setup/diff.ts";
-import { fingerprint, markersDir, readMarker } from "../../src/setup/markers.ts";
+import { fingerprint, markersDir, readMarker, writeMarker } from "../../src/setup/markers.ts";
 import { MISE_FRAGMENT } from "../../src/setup/mise.ts";
 import { mergeOmpSettings, ompSettingsText, ompYaml } from "../../src/setup/omp-settings.ts";
 import {
@@ -54,7 +54,8 @@ beforeEach(() => {
 		whiteboard: { node: "C:\\Jocasta\\node\\node.exe", cli: "C:\\Jocasta\\whiteboard\\cli.js" },
 	};
 	ran = [];
-	extra = {};
+	// herdr's own check isn't run against a stand-in `herdr.exe`.
+	extra = { checkHerdrConfig: async () => ({ code: 0, output: "config: ok\n" }) };
 	// Stands in for herdr: writes the extension file the real install writes.
 	run = async (argv) => {
 		ran.push(argv);
@@ -140,8 +141,8 @@ test("a fresh machine: the diff names every file, and `n` writes nothing", async
 	const { code, text, asked } = await setup("n");
 	expect(code).toBe(0);
 	expect(asked).toEqual(["Write these changes? [y/N] "]);
-	expect(text).toContain(`omp MCP servers "jocasta", "whiteboard": ${globalMcp()}`);
-	expect(text).toContain(`the boss's MCP server "jocasta" (--boss): ${bossMcp()}`);
+	expect(text).toContain(`omp MCP server "jocasta": ${globalMcp()}`);
+	expect(text).toContain(`omp MCP servers "jocasta", "whiteboard": ${bossMcp()}`);
 	expect(text).toContain(`omp settings: ${ompConfig()}`);
 	expect(text).toContain(`+ ${join(paths.ompAgentDir, "extensions", HERDR_OMP_EXTENSION)} (written by herdr)`);
 	expect(text).toContain(`herdr config for session \`jocasta\`: ${herdrToml()}`);
@@ -181,7 +182,6 @@ test("`y` writes every file, marks each migration, runs herdr's omp integration,
 	expect(JSON.parse(readFileSync(globalMcp(), "utf8"))).toEqual({
 		mcpServers: {
 			jocasta: { type: "stdio", command: "C:\\Jocasta\\jocasta.exe", args: ["mcp"], timeout: 1_860_000 },
-			whiteboard: whiteboardServer(),
 		},
 	});
 	// omp's 30 s request timeout is raised past the tools' own bounds (0577): a thread's 30-minute `check` plus a minute,
@@ -189,6 +189,7 @@ test("`y` writes every file, marks each migration, runs herdr's omp integration,
 	expect(JSON.parse(readFileSync(bossMcp(), "utf8"))).toEqual({
 		mcpServers: {
 			jocasta: { type: "stdio", command: "C:\\Jocasta\\jocasta.exe", args: ["mcp", "--boss"], timeout: 2_100_000 },
+			whiteboard: whiteboardServer(),
 		},
 	});
 	expect(readFileSync(ompConfig(), "utf8")).toBe(readFileSync(join(ASSETS, "omp-config.yml"), "utf8"));
@@ -243,6 +244,7 @@ test("`y` writes every file, marks each migration, runs herdr's omp integration,
 		"0012-omp-lsp.json",
 		"0014-herdr-plugin.json",
 		"0015-omp-secrets.json",
+		"0017-whiteboard-boss-only.json",
 	]);
 
 	const again = await setup("y");
@@ -264,7 +266,7 @@ test("with mise installed setup writes Jocasta's mise file: exact pins and the p
 			paranoid: ["config"],
 			upgrade: { auto_prune: false },
 		},
-		tools: { herdr: "0.9.5", hunk: "0.23.0", gh: "2.92.0", "github:DeusData/codebase-memory-mcp": "0.12.1" },
+		tools: { herdr: "0.9.5", hunk: "0.23.0", gh: "2.92.0" },
 	});
 	// His own config.toml in the same folder is never touched.
 	expect(existsSync(join(paths.miseConfigDir, "config.toml"))).toBe(false);
@@ -287,7 +289,6 @@ test("an existing mcp.json keeps his other servers and keys; only Jocasta's entr
 		mcpServers: {
 			github: { type: "stdio", command: "gh-mcp", args: [] },
 			jocasta: { type: "stdio", command: "C:\\Jocasta\\jocasta.exe", args: ["mcp"], timeout: 1_860_000 },
-			whiteboard: whiteboardServer(),
 		},
 		disabledServers: ["github"],
 	});
@@ -298,7 +299,8 @@ test("without whiteboard's build setup says so and adds only the jocasta server 
 	const { text } = await setup("y");
 	expect(text).toStartWith("whiteboard isn't built: run `bun run build`");
 	expect(text).toContain(`omp MCP server "jocasta": ${globalMcp()}`);
-	expect(JSON.parse(readFileSync(globalMcp(), "utf8")).mcpServers.whiteboard).toBeUndefined();
+	expect(text).toContain(`omp MCP server "jocasta": ${bossMcp()}`);
+	expect(JSON.parse(readFileSync(bossMcp(), "utf8")).mcpServers.whiteboard).toBeUndefined();
 });
 
 test("his config.yml gets the keys Jocasta ships merged in, his other keys untouched and his own values kept and shown (0466)", async () => {
@@ -504,7 +506,6 @@ test("--refresh says to restart herdr when it can't reload, resets Jocasta's MCP
 	expect(reset.text).toContain(`kept ${globalMcp()}.bak.20261023-090507`);
 	expect(JSON.parse(readFileSync(globalMcp(), "utf8")).mcpServers).toEqual({
 		jocasta: { type: "stdio", command: "C:\\Jocasta\\jocasta.exe", args: ["mcp"], timeout: 1_860_000 },
-		whiteboard: whiteboardServer(),
 		github: { type: "stdio", command: "gh-mcp" },
 	});
 
@@ -560,14 +561,16 @@ test("setupUndo names what setup added from its markers only: a step without its
 	expect(global).toEqual({
 		kind: "mcp",
 		path: globalMcp(),
-		servers: ["jocasta", "whiteboard"],
+		servers: ["jocasta"],
 		writes: {
 			jocasta: { type: "stdio", command: "C:\\Jocasta\\jocasta.exe", args: ["mcp"], timeout: 1_860_000 },
 			whiteboard: whiteboardServer(),
 		},
 		wrote: readMarker(paths.jocastaConfigDir, "0001-mcp")?.fingerprint as string,
 	});
-	expect(undo.some((u) => u.kind === "mcp" && u.path === bossMcp() && u.servers.join() === "jocasta")).toBe(true);
+	expect(undo.some((u) => u.kind === "mcp" && u.path === bossMcp() && u.servers.join() === "jocasta,whiteboard")).toBe(
+		true,
+	);
 	expect(undo).toContainEqual({
 		kind: "herdr-integration",
 		path: join(paths.ompAgentDir, "extensions", HERDR_OMP_EXTENSION),
@@ -1008,4 +1011,197 @@ test("with no calendar secret anywhere, setup asks once; Enter skips, an address
 	await setupWith(given, ["webcal://calendar.example/secret.ics"]);
 	expect(given.saved).toEqual(["webcal://calendar.example/secret.ics"]);
 	expect(readMarker(paths.jocastaConfigDir, "calendar")).toBeDefined();
+});
+
+/** Runs setup on a machine with the old graph's compose file; `docker` answers as `engine` says. */
+async function setupWithGraph(engine: "running" | "stopped", answers: string[]) {
+	const compose = join(paths.jocastaConfigDir, "compose.yaml");
+	put(compose, "name: jocasta-demo\nservices: {}\n");
+	put(join(paths.jocastaConfigDir, "containers", "graphiti", "Dockerfile"), "FROM scratch\n");
+	const docker: string[][] = [];
+	const herdr = run;
+	run = async (argv) => {
+		if (argv[0] !== "docker") return herdr(argv);
+		docker.push(argv);
+		return { code: argv[1] === "info" && engine === "stopped" ? 1 : 0, output: "" };
+	};
+	const { out, asked, io: setupIo } = io(answers);
+	const code = await runSetup(paths, { herdr: "herdr.exe", run, ...extra }, setupIo);
+	return { code, text: out.join("\n"), asked, docker, compose };
+}
+
+const graphGone = (compose: string) => !existsSync(compose) && !existsSync(join(paths.jocastaConfigDir, "containers"));
+
+test("an install with the old graph: its containers come down, the images and volume go only on his yes (0603)", async () => {
+	const kept = await setupWithGraph("running", ["y", "n"]);
+	expect(kept.code).toBe(0);
+	expect(kept.docker).toEqual([
+		["docker", "info"],
+		["docker", "compose", "-f", kept.compose, "down"],
+	]);
+	expect(kept.asked.at(-1)).toBe("Also remove the old graph's images and volume (Graphiti and FalkorDB)? [y/N] ");
+	expect(graphGone(kept.compose)).toBe(true);
+	expect(kept.text).toContain("docker compose -p jocasta-demo down --rmi all --volumes");
+});
+
+test("an install with the old graph: yes removes its images and volume too, with nothing left to say (0603)", async () => {
+	const gone = await setupWithGraph("running", ["y", "y"]);
+	expect(gone.docker).toEqual([
+		["docker", "info"],
+		["docker", "compose", "-f", gone.compose, "down"],
+		["docker", "compose", "-f", gone.compose, "down", "--rmi", "all", "--volumes"],
+	]);
+	expect(graphGone(gone.compose)).toBe(true);
+	expect(gone.text).not.toContain("docker compose -p");
+});
+
+test("an install with the old graph while Docker isn't running: no question, the files go, the later command is named (0603)", async () => {
+	const stopped = await setupWithGraph("stopped", ["y"]);
+	expect(stopped.asked).toEqual(["Write these changes? [y/N] "]);
+	expect(stopped.docker).toEqual([["docker", "info"]]);
+	expect(graphGone(stopped.compose)).toBe(true);
+	expect(stopped.text).toContain("docker compose -p jocasta-demo down --rmi all --volumes");
+});
+
+test("a machine that never had the old graph is not asked about it and runs no docker (0603)", async () => {
+	const docker: string[][] = [];
+	const herdr = run;
+	run = async (argv) => {
+		if (argv[0] === "docker") docker.push(argv);
+		return herdr(argv);
+	};
+	const { asked } = await setup("y");
+	expect(asked).toEqual(["Write these changes? [y/N] "]);
+	expect(docker).toEqual([]);
+});
+
+const jocastaServer = () => ({
+	type: "stdio",
+	command: "C:\\Jocasta\\jocasta.exe",
+	args: ["mcp"],
+	timeout: 1_860_000,
+});
+
+/** The user-level mcp.json and migration 1's marker as an install from before 0607 left them. */
+function installBefore0607(whiteboard: unknown = whiteboardServer()) {
+	const servers = { jocasta: jocastaServer(), whiteboard };
+	const github = { type: "stdio", command: "gh-mcp" };
+	put(globalMcp(), `${JSON.stringify({ mcpServers: { github, ...servers } }, null, 2)}\n`);
+	writeMarker(paths.jocastaConfigDir, "0001-mcp", {
+		fingerprint: fingerprint(JSON.stringify({ jocasta: jocastaServer(), whiteboard: whiteboardServer() })),
+		appliedAt: "2026-11-01T00:00:00.000Z",
+		undo: [{ kind: "mcp", path: globalMcp(), servers: ["jocasta", "whiteboard"] }],
+	});
+}
+
+test("a fresh install writes whiteboard into the boss's mcp.json only (0607)", async () => {
+	await setup("y");
+	expect(JSON.parse(readFileSync(globalMcp(), "utf8")).mcpServers.whiteboard).toBeUndefined();
+	expect(JSON.parse(readFileSync(bossMcp(), "utf8")).mcpServers.whiteboard).toEqual(whiteboardServer());
+	expect(readMarker(paths.jocastaConfigDir, "0017-whiteboard-boss-only")).toBeDefined();
+	expect((await setup("y")).text).toContain("Nothing to set up");
+});
+
+test("migration 17 moves whiteboard from the user-level file to the boss's on an old install (0607)", async () => {
+	installBefore0607();
+	const { code, text } = await setup("y");
+	expect(code).toBe(0);
+	expect(text).toContain(`"whiteboard" leaves your MCP config: ${globalMcp()}`);
+	// His other servers stay; whiteboard is in the boss's file now.
+	expect(JSON.parse(readFileSync(globalMcp(), "utf8")).mcpServers).toEqual({
+		github: { type: "stdio", command: "gh-mcp" },
+		jocasta: jocastaServer(),
+	});
+	expect(JSON.parse(readFileSync(bossMcp(), "utf8")).mcpServers.whiteboard).toEqual(whiteboardServer());
+	expect(readMarker(paths.jocastaConfigDir, "0001-mcp")?.undo).toEqual([
+		{ kind: "mcp", path: globalMcp(), servers: ["jocasta"] },
+	]);
+	expect((await setup("y")).text).toContain("Nothing to set up");
+});
+
+test("migration 17 leaves a whiteboard entry he changed and names it (0607)", async () => {
+	const his = { type: "stdio", command: "C:\\Programs\\other\\node.exe", args: ["cli.js", "mcp"] };
+	installBefore0607(his);
+	const { text } = await setup("y");
+	expect(text).toContain(`"whiteboard" in ${globalMcp()} is yours`);
+	expect(JSON.parse(readFileSync(globalMcp(), "utf8")).mcpServers.whiteboard).toEqual(his);
+	expect(JSON.parse(readFileSync(bossMcp(), "utf8")).mcpServers.whiteboard).toEqual(whiteboardServer());
+	// Said once: the next run has nothing to say.
+	expect((await setup("y")).text).toContain("Nothing to set up");
+});
+
+test("setupUndo on an install where migration 17 never ran still owns the whiteboard entry it wrote (0607)", async () => {
+	installBefore0607();
+	const global = setupUndo(paths, false).find((u) => u.kind === "mcp" && u.path === globalMcp());
+	expect(global).toMatchObject({ servers: ["jocasta", "whiteboard"], writes: { whiteboard: whiteboardServer() } });
+});
+
+test("after writing herdr.toml setup runs `herdr config check` on it and prints each line it reports (0608)", async () => {
+	const checked: string[][] = [];
+	extra = {
+		checkHerdrConfig: async (herdr, path) => {
+			checked.push([herdr, path]);
+			return { code: 1, output: "config: issues found\nunknown config key made_up_key; ignoring key\n" };
+		},
+	};
+	const { code, text } = await setup("y");
+	expect(code).toBe(0);
+	expect(checked).toEqual([["herdr.exe", herdrToml()]]);
+	expect(text).toContain(`herdr config check (${herdrToml()}):`);
+	expect(text).toContain("  unknown config key made_up_key; ignoring key");
+	// The file was written before the check ran, and nothing else is stopped by what it reports.
+	expect(existsSync(herdrToml())).toBe(true);
+	expect(text).toContain("Done: run `jocasta` to open Jocasta.");
+	// Up to date: nothing written, no check.
+	checked.length = 0;
+	await setup("y");
+	expect(checked).toEqual([]);
+});
+
+test("a herdr config check that can't run is said and doesn't stop setup (0608)", async () => {
+	extra = {
+		checkHerdrConfig: async () => {
+			throw new Error("spawn failed");
+		},
+	};
+	const { code, text } = await setup("y");
+	expect(code).toBe(0);
+	expect(text).toContain("herdr config check didn't run: spawn failed");
+});
+
+test("with herdr missing setup runs no herdr config check and says herdr is missing (0608)", async () => {
+	let checks = 0;
+	extra = {
+		checkHerdrConfig: async () => {
+			checks++;
+			return { code: 0, output: "" };
+		},
+	};
+	const { text } = await setup("y", null);
+	expect(checks).toBe(0);
+	expect(text).toContain("herdr isn't installed");
+});
+
+test("setup prints one note when git is older than 2.54 or missing, none for 2.54 or newer, and goes on either way (0613)", async () => {
+	const noteFor = async (version: string | undefined) => {
+		extra = { ...extra, gitVersion: async () => version };
+		const { code, text } = await setup("n");
+		const notes = text.split("\n").filter((l) => l.includes("needs git 2.54 or newer"));
+		return { code, notes, listed: text.includes("jocasta setup will make these changes") };
+	};
+	for (const old of ["git version 2.53.0.windows.1", "git version 2.39.5", "git version 1.9.1"]) {
+		const said = await noteFor(old);
+		expect(said.notes).toEqual([
+			`git ${old.replace(/^git version (\d+\.\d+).*/, "$1")} is older than 2.54: Jocasta's check of pushes to main, master and develop needs git 2.54 or newer, so a pane's pushes there go unasked until you update git.`,
+		]);
+		expect(said).toMatchObject({ code: 0, listed: true });
+	}
+	const missing = await noteFor(undefined);
+	expect(missing.notes).toEqual([
+		"git isn't installed: Jocasta's check of pushes to main, master and develop needs git 2.54 or newer, so a pane's pushes there go unasked until you update git.",
+	]);
+	expect(missing.listed).toBe(true);
+	for (const current of ["git version 2.54.0.windows.1", "git version 2.60.1", "git version 3.0.0"]) {
+		expect((await noteFor(current)).notes).toEqual([]);
+	}
 });

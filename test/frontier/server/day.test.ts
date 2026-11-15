@@ -2,9 +2,8 @@ import { expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ServerMessage } from "../../../src/frontier/protocol.ts";
-import { graphUsagePath } from "../../../src/frontier/server/spend.ts";
 import { mergeWorklog, worklogPath, writeWorklog } from "../../../src/frontier/server/worklog.ts";
-import { appendJsonl } from "../../../src/shared/jsonl.ts";
+import { localDay } from "../../../src/shared/day.ts";
 import { projectsFile } from "../../../src/shared/paths.ts";
 import { GIT_TEST_TIMEOUT, readJsonl, sh, useTempJocasta } from "../../shared/fixture.ts";
 import { demoProject, Page, TEST_BOSS_KEY, type TestServer, until, withServer, writeSettings } from "./helpers.ts";
@@ -454,14 +453,6 @@ test("the dashboard (0429, 0442): news and weather feed the page only; a news fa
 				"demo/Docs — done and reviewed: 1 new commit, 0 notes, tests pass",
 			]);
 			expect(activity.summaries).toEqual([{ at: time.now().toISOString(), project: "demo", text: "Ship the parser" }]);
-			expect(activity.worklog.some((line) => line.startsWith("graph memory"))).toBe(false);
-
-			// Graphiti's model calls today (0582): their share of "$ today" is named; yesterday's isn't counted.
-			appendJsonl(graphUsagePath(), { at: new Date(2026, 9, 7, 12).toISOString(), model: "m", cost: 5 });
-			appendJsonl(graphUsagePath(), { at: time.now().toISOString(), model: "m", cost: 0.5 });
-			appendJsonl(graphUsagePath(), { at: time.now().toISOString(), model: "m", cost: 0.35 });
-			day.tick();
-			expect(day.dashboard().activity.worklog).toContain("graph memory · $0.85");
 		},
 		{ day: { pollers: false, now: time.now, fetchUrl: dashboardFetch(state), diskFree: () => 0.5 } },
 	);
@@ -473,8 +464,10 @@ test(
 		const project = await demoProject(env.root);
 		sh(project.mainPath, "config", "user.email", "test@example.com");
 		sh(project.mainPath, "remote", "add", "origin", "git@github.com:acme/demo.git");
-		// The day of the project's commit, as git dates it: a run across midnight can't split the two (SH-20).
-		const today = sh(project.mainPath, "log", "-1", "--date=format-local:%Y-%m-%d", "--format=%cd");
+		// The day of the project's commit in this process's time zone, the one the worklog's window uses: `bun test` runs
+		// in UTC while git's own "local" is the machine's, so git's local date was a day ahead in the hour after the
+		// machine's midnight. A run across either midnight can't split the two (SH-20).
+		const today = localDay(Number(sh(project.mainPath, "log", "-1", "--format=%ct")) * 1000);
 		const [y, m, d] = today.split("-").map(Number) as [number, number, number];
 		const start = new Date(y, m - 1, d, 1).getTime();
 		const at = (minutes: number) => start + minutes * 60_000;

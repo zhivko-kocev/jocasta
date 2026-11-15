@@ -216,7 +216,39 @@ test.skipIf(!existsSync(EDGE))(
 );
 
 test.skipIf(!existsSync(EDGE))(
-	"before the first review the page shows Jocasta's empty state with the tutorial, and none of the page's element rules reach whiteboard's canvas (0419)",
+	"the bridge adds whiteboard's token to a path request, answers the verbs 0.5.2's server relays, keeps the diff and peek layouts apart, and says a render can't return a picture (0615)",
+	async () => {
+		const server = startPageServer({ whiteboard: { reviews: [] } });
+		open.server = server;
+		const browser = await newTab();
+		await browser.send("Page.navigate", { url: `${server.url}?review=verbs` });
+		await browser.waitFor(`window.__settings !== undefined`, "the bridge's answers");
+		// The server answers 401 without its token: 200 means the host added it to the path request.
+		expect(await browser.eval<number>(`window.__ping`)).toBe(200);
+		const verbs = await browser.eval<{
+			caps: { ok: boolean; result: Record<string, boolean> };
+			open: { ok: boolean; result: Record<string, boolean> };
+			render: { ok: boolean; error: string };
+		}>(`window.__verbs`);
+		// What the server's tool list and `open` read from the canvas: animations on, and the open's answer.
+		expect(verbs.caps).toEqual({ ok: true, result: { softwareMapEnabled: true, animationsEnabled: true } });
+		expect(verbs.open).toEqual({ ok: true, result: { softwareMapEnabled: true } });
+		expect(verbs.render.ok).toBe(false);
+		expect(verbs.render.error).toContain("cannot return pictures");
+		// Setting the diff layout leaves the peek layout alone; the line numbers follow their own setting.
+		expect(await browser.eval<unknown>(`window.__settings`)).toEqual({
+			before: ["split", "unified", true],
+			after: ["unified", "unified", false],
+			settings: { softwareMapEnabled: true },
+		});
+		expect(browser.errors).toEqual([]);
+		expect(await browser.cspViolations()).toEqual([]);
+	},
+	{ timeout: 60_000 },
+);
+
+test.skipIf(!existsSync(EDGE))(
+	"before the first review the page shows Jocasta's empty state, and none of the page's element rules reach whiteboard's canvas (0419)",
 	async () => {
 		const server = startPageServer({
 			whiteboard: { reviews: [{ reviewId: "s", title: "Scratchpad", kind: "scratchpad" }] },
@@ -231,7 +263,7 @@ test.skipIf(!existsSync(EDGE))(
 			"Nothing on the canvas yet.",
 		);
 		expect(await browser.eval<string>(`document.querySelector('.wb-empty p').textContent`)).toBe(
-			"Ask Jocasta or a thread to draw a diagram or a review; it appears here.",
+			"Ask Jocasta or a thread to draw a diagram, a review or an animation; it appears here.",
 		);
 		expect(await browser.eval<number>(`document.querySelectorAll('.review-canvas-root').length`)).toBe(0);
 		expect(await browser.eval<boolean>(`document.querySelector('.wb-mount').hidden`)).toBe(true);
@@ -240,16 +272,13 @@ test.skipIf(!existsSync(EDGE))(
 		// No bar until a review is open (0432).
 		expect(await browser.eval<number>(`document.querySelectorAll('.wb-bar').length`)).toBe(0);
 
-		// "Take the whiteboard tour" opens whiteboard's tutorial review on the canvas (0432).
-		expect(await browser.eval<string>(`document.querySelector('.wb-empty .btn').textContent`)).toBe(
-			"Take the whiteboard tour",
-		);
-		await browser.eval(`document.querySelector('.wb-empty .btn').click()`);
+		// With a review in the catalog, Home polls it in and whiteboard's Home replaces the empty state.
+		server.whiteboard.reviews.push({ reviewId: "r-1", title: "How retry works" });
 		await browser.waitFor(
-			`document.querySelector('.review-canvas-root button')?.textContent === 'review:tutorial'`,
-			"the tutorial",
+			`document.querySelector('.review-canvas-root button')?.textContent === 'home:2'`,
+			"whiteboard's Home",
+			15_000,
 		);
-		expect(server.whiteboard.tutorialOpens).toBe(1);
 		expect(await browser.eval<number>(`document.querySelectorAll('.wb-empty').length`)).toBe(0);
 		expect(await browser.eval<boolean>(`document.querySelector('.wb-mount').hidden`)).toBe(false);
 
@@ -258,19 +287,22 @@ test.skipIf(!existsSync(EDGE))(
 			`(() => { const s = getComputedStyle(document.querySelector('.review-canvas-root button')); const r = getComputedStyle(document.querySelector('.review-canvas-root')); return { transition: s.transitionDuration, border: s.borderTopStyle, scrollbar: r.scrollbarWidth, rendering: r.textRendering }; })()`,
 		);
 		expect(inCanvas).toEqual({ transition: "0s", border: "outset", scrollbar: "auto", rendering: "auto" });
+
+		// A click on Home's review opens it, with the bar; the bar's button goes back to Home.
+		await browser.eval(`document.querySelector('.review-canvas-root button').click()`);
+		await browser.waitFor(
+			`document.querySelector('.review-canvas-root button')?.textContent === 'review:r-1'`,
+			"the review",
+		);
 		expect(
 			await browser.eval<string>(`getComputedStyle(document.querySelector('.wb-bar button')).transitionDuration`),
 		).toBe("0.18s, 0.18s, 0.18s");
-
-		// Back on Home with a review in the catalog: whiteboard's Home lists it.
-		server.whiteboard.reviews.push({ reviewId: "r-1", title: "How retry works" });
 		await browser.eval(`document.querySelector('.wb-bar button').click()`);
 		await browser.waitFor(
 			`document.querySelector('.review-canvas-root button')?.textContent === 'home:2'`,
-			"whiteboard's Home",
+			"whiteboard's Home again",
 		);
-		expect(await browser.eval<number>(`document.querySelectorAll('.wb-empty').length`)).toBe(0);
-		// Home and the tutorial's diagram never load Monaco: it loads with the first code peek or diff (PM-2).
+		// Home never loads Monaco: it loads with the first code peek or diff (PM-2).
 		expect(
 			await browser.eval<string[]>(
 				`performance.getEntriesByType('resource').map((e) => e.name).filter((n) => /monaco/i.test(n))`,

@@ -5,7 +5,7 @@ import { Value } from "typebox/value";
 import { configDir } from "./paths.ts";
 import { parseYamlFile, YamlFileError, type YamlPath } from "./yaml.ts";
 
-/** `jocasta.yaml` in the config dir: Jocasta-only settings (`service.*`, `dashboard.*`, `pollers.*`, `graph.*`; 0387). */
+/** `jocasta.yaml` in the config dir: Jocasta-only settings (`service.*`, `dashboard.*`, `pollers.*`; 0387). */
 export function settingsFile(): string {
 	return join(configDir(), "jocasta.yaml");
 }
@@ -20,7 +20,6 @@ const strict = { additionalProperties: false } as const;
 const Minutes = Type.Optional(Type.Number({ minimum: 1 }));
 const FeedName = Type.String({ pattern: "^[a-z]+$" });
 const FeedLimit = Type.Optional(Type.Integer({ minimum: 1, maximum: 200 }));
-const GraphModelName = Type.Optional(Type.String({ pattern: "^[^/\\s]+/\\S+$" }));
 
 /** `service.quietHours` (0298): `HH:MM-HH:MM`, hours 0–23; empty or null is none. */
 const QuietHoursSchema = Type.Union([
@@ -30,12 +29,12 @@ const QuietHoursSchema = Type.Union([
 ]);
 
 /**
- * Every key `jocasta.yaml` knows (0298, 0301, 0358, 0387, 0390, 0429, 0442, 0557), validated once per read (0584).
+ * Every key `jocasta.yaml` knows (0298, 0301, 0358, 0387, 0429, 0442, 0557), validated once per read (0584).
  * `service` was `frontier` before 0584: that group is still read, and `service` wins where both set a key
  * (`serviceSetting`). `frontier.autostart` and `frontier.dashboard` are known keys that are gone (`goneSettings`);
  * `pollers.news.topics` and `pollers.news.limit` are gone too and refused (0442).
  */
-export const SettingsSchema = Type.Object(
+const SettingsSchema = Type.Object(
 	{
 		service: Type.Optional(
 			Type.Object(
@@ -96,7 +95,6 @@ export const SettingsSchema = Type.Object(
 				strict,
 			),
 		),
-		graph: Type.Optional(Type.Object({ main: GraphModelName, small: GraphModelName }, strict)),
 	},
 	strict,
 );
@@ -132,10 +130,6 @@ const NEWS_GONE: KeyRule = {
 	reason: "pollers.news.topics and pollers.news.limit are gone; use pollers.news.feeds (0442)",
 	instead: POLLER_OFF.news as string,
 };
-const graphModelRule = (name: string): KeyRule => ({
-	reason: `graph.${name} must be an omp model as provider/id`,
-	instead: "Graphiti's model calls are off",
-});
 
 /** Each key of `SettingsSchema` by its dotted path; a problem belongs to the deepest key on its path. */
 const RULES: Record<string, KeyRule> = {
@@ -170,9 +164,6 @@ const RULES: Record<string, KeyRule> = {
 	"pollers.news.everyMinutes": minutesRule("news"),
 	"pollers.news.topics": NEWS_GONE,
 	"pollers.news.limit": NEWS_GONE,
-	graph: { reason: "graph must be a mapping", instead: "using omp's default and smol roles", map: true },
-	"graph.main": graphModelRule("main"),
-	"graph.small": graphModelRule("small"),
 };
 
 /** One thing wrong in `jocasta.yaml`: an unknown key (ignored) or a bad value at `key` (its feature falls back). */

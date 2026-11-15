@@ -120,10 +120,8 @@ export class Events {
 	 */
 	async tell(line: string, priority: "urgent" | "normal", holds?: () => boolean): Promise<void> {
 		const boss = this.c.boss;
-		if (priority === "urgent" && boss) {
-			if (await this.promptBoss(boss, line)) return;
-			// Not ready, or blocked on his answer: it waits with the rest.
-		}
+		// Not ready, or blocked on his answer: it waits with the rest.
+		if (priority === "urgent" && boss && (await this.promptBoss(boss, line))) return;
 		this.bossQueue.push({ line, ...(holds ? { holds } : {}) });
 		await this.flush();
 	}
@@ -159,9 +157,9 @@ export class Events {
 	/** A message to every client, cleaned (N-3); a toast is also a notification. */
 	send(message: ServerMessage): void {
 		// Control characters from outside (titles, questions, reminders) stop here for every surface (N-3).
-		message = clean(message);
-		this.broadcast(message);
-		if (message.type === "toast") this.track(this.notify(message));
+		const cleaned = clean(message);
+		this.broadcast(cleaned);
+		if (cleaned.type === "toast") this.track(this.notify(cleaned));
 	}
 
 	/** Keeps `work` until it settled, so the service's stop can wait for it (`settled`). */

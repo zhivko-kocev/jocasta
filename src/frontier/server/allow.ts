@@ -17,6 +17,19 @@ export interface Confirmation {
 /** How a question asked through the service's question API ended (0578), with his answer. */
 export type Confirm = (ask: Confirmation, signal: AbortSignal) => Promise<{ allow: boolean; how: PopupEnd }>;
 
+/**
+ * A refusal by the Allow box itself (0613). `chose` is true when he pressed Deny, false for every other end (no answer
+ * in time, wrong codes, a closed popup, a stopping service), which says nothing about what he wants.
+ */
+export class AllowDenied extends UserError {
+	constructor(
+		message: string,
+		readonly chose: boolean,
+	) {
+		super(message);
+	}
+}
+
 export class AllowGate {
 	/** The confirmations waiting for his answer, so a stopping service withdraws them. */
 	private readonly asking = new Set<AbortController>();
@@ -73,7 +86,7 @@ export class AllowGate {
 			"second-reader": "Another program read the question, which counts as Deny",
 			withdrawn: "The question was withdrawn, which counts as Deny",
 		};
-		throw new UserError(`${why[answer.how]}; ${nothing}.`);
+		throw new AllowDenied(`${why[answer.how]}; ${nothing}.`, answer.how === "answered");
 	}
 
 	/** Withdraws every question still open: the service is stopping, which counts as Deny. */

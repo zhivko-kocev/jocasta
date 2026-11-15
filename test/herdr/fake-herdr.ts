@@ -35,12 +35,12 @@ export class FakeHerdr {
 	/** Listens on `path` when given (a server started again on the same socket), else on a fresh one. */
 	static async start(path?: string): Promise<FakeHerdr> {
 		const name = `jocasta-herdr-test-${process.pid}-${Math.random().toString(36).slice(2)}`;
-		path ??= process.platform === "win32" ? `\\\\.\\pipe\\${name}` : join(tmpdir(), `${name}.sock`);
+		const at = path ?? (process.platform === "win32" ? `\\\\.\\pipe\\${name}` : join(tmpdir(), `${name}.sock`));
 		const server = createServer();
-		const fake = new FakeHerdr(path, server);
+		const fake = new FakeHerdr(at, server);
 		server.on("connection", (socket) => fake.accept(socket));
 		const listening = Promise.withResolvers<void>();
-		server.listen(path, () => listening.resolve());
+		server.listen(at, () => listening.resolve());
 		await listening.promise;
 		return fake;
 	}

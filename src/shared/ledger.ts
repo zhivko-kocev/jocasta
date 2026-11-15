@@ -41,7 +41,7 @@ export interface RequestRow {
 /** A request's fields as a reader has them, before it is priced. */
 export type RequestFields = Omit<RequestRow, "kind" | "session" | "agent" | "cost">;
 
-export interface ToolRow {
+interface ToolRow {
 	kind: "tool";
 	session: string;
 	agent: string;
@@ -56,7 +56,7 @@ export interface ToolRow {
 	error: boolean;
 }
 
-export type LedgerRow = RequestRow | ToolRow;
+type LedgerRow = RequestRow | ToolRow;
 
 /** A session as read: its rows and the times of its compactions. */
 export interface SessionRecord {
@@ -103,7 +103,7 @@ export interface Waste {
 	compactions: number;
 }
 
-export interface PeakContext {
+interface PeakContext {
 	/** The largest uncached input + cache read + cache write of the agent's own requests. */
 	tokens: number;
 	/** The model's window from the pricing; null when unknown. */
@@ -111,7 +111,7 @@ export interface PeakContext {
 	percent: number | null;
 }
 
-export interface Totals {
+interface Totals {
 	requests: number;
 	toolCalls: number;
 	input: number;
@@ -280,6 +280,41 @@ export function requestRow(
 	};
 }
 
+/** Each tool result's size and failure by `toolCallId`, so a call can be joined with its result. */
+function toolResultsOf(entries: Record<string, unknown>[]): Map<string, { bytes: number; error: boolean }> {
+	const results = new Map<string, { bytes: number; error: boolean }>();
+	for (const entry of entries) {
+		const message = entry.message as Record<string, unknown> | undefined;
+		if (entry.type === "message" && message?.role === "toolResult" && typeof message.toolCallId === "string")
+			results.set(message.toolCallId, {
+				bytes: utf8Bytes(resultText(message.content)),
+				error: message.isError === true,
+			});
+	}
+	return results;
+}
+
+/** Each `toolCall` block of an assistant message's content as a call, joined with its result by id. */
+function pushToolCalls(
+	record: SessionRecord,
+	content: unknown,
+	at: number,
+	results: Map<string, { bytes: number; error: boolean }>,
+): void {
+	for (const block of Array.isArray(content) ? content : []) {
+		const b = block as { type?: unknown; id?: unknown; name?: unknown; arguments?: unknown };
+		if (b?.type !== "toolCall") continue;
+		const result = typeof b.id === "string" ? results.get(b.id) : undefined;
+		pushTool(record, {
+			at,
+			tool: String(b.name ?? "unknown"),
+			args: b.arguments,
+			resultBytes: result?.bytes ?? null,
+			error: result?.error ?? false,
+		});
+	}
+}
+
 /**
  * One omp session file: assistant messages and `model_usage` entries are requests; `toolCall` blocks are calls;
  * compactions other than `method: "handoff"` count (0582). The header's `parentSession` and time are kept for
@@ -292,15 +327,7 @@ export function readOmpSession(text: string, pricing: LedgerPricing, agent = "ma
 	if (typeof header?.parentSession === "string") record.parentSession = header.parentSession;
 	const startedAt = timeOf(header?.timestamp);
 	if (Number.isFinite(startedAt)) record.startedAt = startedAt;
-	const results = new Map<string, { bytes: number; error: boolean }>();
-	for (const entry of entries) {
-		const message = entry.message as Record<string, unknown> | undefined;
-		if (entry.type === "message" && message?.role === "toolResult" && typeof message.toolCallId === "string")
-			results.set(message.toolCallId, {
-				bytes: utf8Bytes(resultText(message.content)),
-				error: message.isError === true,
-			});
-	}
+	const results = toolResultsOf(entries);
 	for (const entry of entries) {
 		const at = timeOf(entry.timestamp);
 		if (entry.type === "compaction") {
@@ -351,18 +378,7 @@ export function readOmpSession(text: string, pricing: LedgerPricing, agent = "ma
 					usage,
 				),
 			);
-		for (const block of Array.isArray(message.content) ? message.content : []) {
-			const b = block as { type?: unknown; id?: unknown; name?: unknown; arguments?: unknown };
-			if (b?.type !== "toolCall") continue;
-			const result = typeof b.id === "string" ? results.get(b.id) : undefined;
-			pushTool(record, {
-				at: when,
-				tool: String(b.name ?? "unknown"),
-				args: b.arguments,
-				resultBytes: result?.bytes ?? null,
-				error: result?.error ?? false,
-			});
-		}
+		pushToolCalls(record, message.content, when, results);
 	}
 	return record;
 }
@@ -506,7 +522,7 @@ function sumWaste(wastes: readonly Waste[]): Waste {
  * the header" isn't a rule, since a move publishes the entry that triggered it only to the new file. A record left
  * whole is returned as is, so running this twice changes nothing.
  */
-export function withoutCopies(records: readonly SessionRecord[]): SessionRecord[] {
+function withoutCopies(records: readonly SessionRecord[]): SessionRecord[] {
 	const order = records
 		.map((record, i) => ({ record, i }))
 		.sort((a, b) => {
