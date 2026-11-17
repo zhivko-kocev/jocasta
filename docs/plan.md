@@ -110,7 +110,7 @@ The image's statements are numbered V1–V14 so decisions can cite them.
 | 0036 | Toolchain | product | Bun for runtime, build and tests; Biome for lint and format (slice 0.1) |
 | 0037 | TypeScript settings | product | Strict, ESM, `tsc --noEmit` (slice 0.1) |
 | 0038 | Repo layout | product | The slice 0.1 preview plus `docs/plan.md` (slice 0.1) |
-| 0039 | Repo docs | product | README, AGENTS.md, CONTRIBUTING.md, MIT LICENSE, CHANGELOG (slice 0.1) |
+| 0039 | Repo docs | product | README, AGENTS.md, CONTRIBUTING.md, MIT LICENSE, CHANGELOG (slice 0.1); `docs/manual.md` the user's reference (0646) |
 | 0040 | Harness entry | product | Pi's `main(args, { extensionFactories })` (slice 0.2) |
 | 0041 | Pi version pin | product | Exact `1.0.1` for every `@earendil-works/pi-*` package (slice 0.2) |
 | 0042 | Bun pin | product | Bun 1.4.2 in CI and `package.json` (slice 0.2) |
@@ -711,6 +711,7 @@ The image's statements are numbered V1–V14 so decisions can cite them.
 | 0638 | icalendar reads the calendar feeds | product | icalendar 0.17 with `recurrence`; tests cover a daylight-saving change (program) |
 | 0639 | The port's remaining crates and tools | product, process | rusqlite 0.42 with `bundled`, serde and serde_json, windows-sys 0.61 with process identity hand-written, process-wrap 10, notify 8; Bun bundles the canvas page and Monaco worker for the binary to embed; cargo-deny 0.20 through mise in `mise run check` (program; amends 0476, 0614) |
 | 0640 | The port's helper crates; the first lock takes the newest versions | product, process | regex, chrono, sha2, getrandom, uuid, tokio-tungstenite, futures-util, url and thiserror used directly (already in the tree), and globset; the first `Cargo.lock` takes the newest version of every crate, and the 7-day rule holds for every addition and bump after it (program; amends 0627, 0639) |
+| 0646 | A README for newcomers, the reference in the manual | product | The README is a newcomer's guide in the second person, without record numbers, linking by GitHub address to `docs/manual.md`, which holds the full reference with its record numbers (program; amends 0039) |
 
 Notes:
 - **0001–0008** fold v4's nine planning-era process records into their current form. 0001's wording now points to 0020.

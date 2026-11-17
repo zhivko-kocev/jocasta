@@ -45,7 +45,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0036](0036-toolchain.md) | Toolchain | product | decided | 0/0.1 | 2026-10-04 | 0610, 0614, 0625 |
 | [0037](0037-typescript-settings.md) | TypeScript settings | product | decided | 0/0.1 | 2026-10-04 | 0610, 0625 |
 | [0038](0038-repo-layout.md) | Repo layout | product | decided | 0/0.1 | 2026-10-04 | 0629 |
-| [0039](0039-repo-docs.md) | Repo docs | product | decided | 0/0.1 | 2026-10-04 |  |
+| [0039](0039-repo-docs.md) | Repo docs | product | decided | 0/0.1 | 2026-10-04 | 0646 |
 | [0040](0040-harness-entry.md) | Harness entry | product | decided | 0/0.2 | 2026-10-04 |  |
 | [0041](0041-pi-version-pin.md) | Pi version pin | product | decided | 0/0.2 | 2026-10-04 |  |
 | [0042](0042-bun-pin.md) | Bun pin | product | decided | 0/0.2 | 2026-10-04 | 0435 |
@@ -646,3 +646,4 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0638](0638-icalendar-for-calendars.md) | icalendar reads the calendar feeds | product | v1 | program | 2026-11-15 |  |
 | [0639](0639-the-ports-remaining-crates.md) | The port's remaining crates and tools | product, process | v1 | program | 2026-11-15 | 0640 |
 | [0640](0640-port-helper-crates-and-the-first-lock.md) | The port's helper crates; the first lock takes the newest versions | product, process | v1 | program | 2026-11-15 |  |
+| [0646](0646-readme-for-newcomers.md) | A README for newcomers, the reference in the manual | product | v1 | program | 2026-11-17 |  |
