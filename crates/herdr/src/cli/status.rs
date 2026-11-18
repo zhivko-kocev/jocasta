@@ -180,9 +180,6 @@ fn read_server_runtime_status() -> std::io::Result<ServerRuntimeStatus> {
             protocol: status.protocol,
             capabilities: status.capabilities,
         }),
-        Err(err) if super::target::is_remote() => Err(super::target::remote_error(
-            super::api_client_error_to_io(err),
-        )),
         Err(ApiClientError::Io(err)) if super::server_not_running_error(&err) => {
             Ok(ServerRuntimeStatus::NotRunning)
         }
@@ -300,15 +297,15 @@ fn client_status_json() -> ClientStatusJson {
             crate::protocol::endpoint::PRESENTATION_EFFECTS_FENCE_CAPABILITY,
             crate::protocol::endpoint::HEALTH_CHECK_CAPABILITY,
         ],
-        remote_host_bridge: true,
-        remote_bridge_idle_timeout: crate::platform::REMOTE_BRIDGE_IDLE_TIMEOUT_SUPPORTED,
+        remote_host_bridge: false,
+        remote_bridge_idle_timeout: false,
         binary: current_exe_label(),
         session: crate::session::active_name(),
     }
 }
 
 fn server_status_json(server: &ServerRuntimeStatus) -> ServerStatusJson {
-    let mut status = match server {
+    match server {
         ServerRuntimeStatus::Running {
             version,
             protocol,
@@ -352,13 +349,7 @@ fn server_status_json(server: &ServerRuntimeStatus) -> ServerStatusJson {
             restart_needed: Some(false),
             server_binary_stale: Some(false),
         },
-    };
-    if let Some((_, session)) = super::target::remote_identity() {
-        status.socket = super::target::socket_label();
-        status.session = Some(session);
-        status.server_binary_stale = None;
     }
-    status
 }
 
 fn update_status_json(server: &ServerRuntimeStatus) -> UpdateStatusJson {

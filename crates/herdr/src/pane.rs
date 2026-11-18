@@ -182,8 +182,6 @@ impl PaneLaunchEnv {
 }
 
 fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
-    #[cfg(unix)]
-    crate::platform::ssh_agent::apply_pane_env(cmd);
     // A new pane is not a child agent of the process that started the server.
     // Explicit launch env below can opt back into an intentional child session.
     for key in [
@@ -6684,9 +6682,9 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(1);
         let pane_id = PaneId::from_raw(42);
 
-        tx.try_send(AppEvent::UpdateReady {
-            version: "9.9.9".into(),
-            install_command: "herdr update".into(),
+        tx.try_send(AppEvent::WorktreeRuntimeRestoreFailed {
+            pane_id: PaneId::from_raw(1),
+            operation_id: 1,
         })
         .unwrap();
 
@@ -6715,7 +6713,10 @@ mod tests {
             .await
             .expect("queue should yield first event")
             .expect("sender still alive");
-        assert!(matches!(first, AppEvent::UpdateReady { .. }));
+        assert!(matches!(
+            first,
+            AppEvent::WorktreeRuntimeRestoreFailed { .. }
+        ));
 
         tokio::time::timeout(std::time::Duration::from_millis(50), async {
             (&mut publish).await;

@@ -14,7 +14,6 @@ use std::{
 };
 
 mod clipboard_image;
-mod config_backup;
 mod notifications;
 pub(crate) use notifications::{
     foreground_desktop_notification_host, maybe_activate_desktop_notification,
@@ -176,25 +175,6 @@ pub(crate) fn host_shutdown_in_progress() -> bool {
     unsafe { GetSystemMetrics(SM_SHUTTINGDOWN) != 0 }
 }
 
-pub(crate) struct RemoteBridgeWake;
-
-impl RemoteBridgeWake {
-    pub(crate) fn new() -> std::io::Result<Self> {
-        Ok(Self)
-    }
-
-    pub(crate) fn cancel(&self) -> std::io::Result<()> {
-        // The named-pipe reader checks its cancellation flag between peeks.
-        Ok(())
-    }
-
-    pub(crate) fn wait(&self, _stream: &crate::ipc::LocalStream) -> std::io::Result<()> {
-        // Synchronous named pipes still use peek-before-read polling on Windows.
-        std::thread::sleep(Duration::from_millis(1));
-        Ok(())
-    }
-}
-
 pub(crate) fn wait_client_stream_readable(
     _stream: &crate::ipc::LocalStream,
 ) -> std::io::Result<()> {
@@ -202,57 +182,6 @@ pub(crate) fn wait_client_stream_readable(
     // cancellation flag between polls, including when a frame arrives in several fragments.
     std::thread::sleep(Duration::from_millis(2));
     Ok(())
-}
-
-pub(crate) fn forward_remote_bridge_stdio(
-    stream: crate::ipc::LocalStream,
-    _idle_timeout: bool,
-) -> std::io::Result<()> {
-    use interprocess::TryClone as _;
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    let mut stdout = std::io::stdout().lock();
-    let mut socket_to_stdout = stream.try_clone()?;
-    let mut stdin_to_socket = stream;
-    let upload_done = Arc::new(AtomicBool::new(false));
-    let upload_done_worker = Arc::clone(&upload_done);
-    let _upload = std::thread::spawn(move || {
-        let mut stdin = std::io::stdin();
-        let _ = copy_flush(&mut stdin, &mut stdin_to_socket);
-        upload_done_worker.store(true, Ordering::Release);
-    });
-
-    let mut buffer = [0_u8; 16 * 1024];
-    while !upload_done.load(Ordering::Acquire) {
-        match crate::ipc::poll_local_stream_read_count(&mut socket_to_stdout, &mut buffer)? {
-            crate::ipc::LocalStreamReadCount::Data(read) => {
-                std::io::Write::write_all(&mut stdout, &buffer[..read])?;
-                std::io::Write::flush(&mut stdout)?;
-            }
-            crate::ipc::LocalStreamReadCount::Pending => {
-                std::thread::sleep(Duration::from_millis(1));
-            }
-            crate::ipc::LocalStreamReadCount::Closed => break,
-        }
-    }
-    Ok(())
-}
-
-fn copy_flush<R: std::io::Read, W: std::io::Write>(
-    reader: &mut R,
-    writer: &mut W,
-) -> std::io::Result<()> {
-    let mut buffer = [0_u8; 16 * 1024];
-    loop {
-        let read = match reader.read(&mut buffer) {
-            Ok(0) => return Ok(()),
-            Ok(read) => read,
-            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(err) => return Err(err),
-        };
-        writer.write_all(&buffer[..read])?;
-        writer.flush()?;
-    }
 }
 
 pub(super) fn read_terminal_grid_size() -> std::io::Result<(u16, u16)> {
@@ -290,18 +219,6 @@ pub(crate) fn replace_file(
     } else {
         Ok(())
     }
-}
-
-pub(crate) fn config_file_link_count(path: &std::path::Path) -> std::io::Result<u64> {
-    use windows_sys::Win32::Storage::FileSystem::{
-        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
-    };
-    let file = std::fs::File::open(path)?;
-    let mut info = BY_HANDLE_FILE_INFORMATION::default();
-    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(u64::from(info.nNumberOfLinks))
 }
 
 pub(crate) fn create_config_temporary(
@@ -348,98 +265,6 @@ pub(crate) fn create_config_temporary(
     Ok(unsafe { std::fs::File::from_raw_handle(handle) })
 }
 
-pub(crate) fn write_config_temporary(
-    source: Option<&std::path::Path>,
-    temporary: &std::path::Path,
-    contents: &[u8],
-) -> std::io::Result<()> {
-    use std::io::Write;
-    if source.is_some() {
-        // If preparation finds an existing file, leave it to the recovery-backed
-        // path instead of applying replacement-file permissions.
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::AlreadyExists,
-            "config appeared while preparing a new file; retry the update",
-        ));
-    }
-    let mut output = std::fs::OpenOptions::new()
-        .write(true)
-        .truncate(true)
-        .open(temporary)?;
-    output.write_all(contents)?;
-    output.sync_all()
-}
-
-pub(crate) fn check_config_write_target(target: &std::path::Path) -> std::io::Result<()> {
-    config_backup::check_recovery(target)
-}
-
-pub(crate) fn write_existing_config(
-    target: &std::path::Path,
-    contents: &[u8],
-) -> std::io::Result<bool> {
-    config_backup::write_existing(target, contents)
-}
-
-#[cfg(test)]
-fn config_security_descriptor(
-    path: &std::path::Path,
-    information: windows_sys::Win32::Security::OBJECT_SECURITY_INFORMATION,
-) -> std::io::Result<Vec<u8>> {
-    use windows_sys::Win32::Security::GetFileSecurityW;
-    let path = extended_length_path(path)?;
-    let mut needed = 0;
-    unsafe { GetFileSecurityW(path.as_ptr(), information, null_mut(), 0, &mut needed) };
-    if needed == 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    let mut descriptor = vec![0_u8; needed as usize];
-    if unsafe {
-        GetFileSecurityW(
-            path.as_ptr(),
-            information,
-            descriptor.as_mut_ptr().cast(),
-            needed,
-            &mut needed,
-        )
-    } == 0
-    {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(descriptor)
-}
-
-#[cfg(test)]
-fn config_security_sddl(
-    descriptor: &mut [u8],
-    information: windows_sys::Win32::Security::OBJECT_SECURITY_INFORMATION,
-) -> std::io::Result<Vec<u16>> {
-    use windows_sys::Win32::Security::{
-        Authorization::{ConvertSecurityDescriptorToStringSecurityDescriptorW, SDDL_REVISION_1},
-        SACL_SECURITY_INFORMATION,
-    };
-    let mut text = null_mut();
-    if unsafe {
-        ConvertSecurityDescriptorToStringSecurityDescriptorW(
-            descriptor.as_mut_ptr().cast(),
-            SDDL_REVISION_1,
-            // Only labels were queried from the SACL. Serialize that returned
-            // SACL too; this does not request audit access to either file.
-            information | SACL_SECURITY_INFORMATION,
-            &mut text,
-            null_mut(),
-        )
-    } == 0
-    {
-        return Err(std::io::Error::last_os_error());
-    }
-    let result = unsafe { widestring::U16CStr::from_ptr_str(text) }
-        .as_slice()
-        .to_vec();
-    unsafe { LocalFree(text.cast()) };
-    Ok(result)
-}
-
 pub(crate) fn set_default_plugin_pane_pwd(
     _env: &mut Vec<(String, String)>,
     _cwd: &std::path::Path,
@@ -462,7 +287,6 @@ use windows_sys::{
         },
         Globalization::{CompareStringOrdinal, CSTR_EQUAL, CSTR_GREATER_THAN, CSTR_LESS_THAN},
         Security::SECURITY_ATTRIBUTES,
-        Storage::FileSystem::CreateDirectoryW,
         System::{
             Console::GetConsoleWindow,
             DataExchange::{
@@ -704,35 +528,6 @@ static PROCESS_RUNTIME_MARKER_CACHE: LazyLock<Mutex<HashMap<u32, CachedProcessRu
 static GIT_BASH_PROCESS_CACHE: LazyLock<Mutex<HashMap<u32, CachedGitBashProcess>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-pub(crate) fn remote_ssh_config_paths() -> super::RemoteSshConfigPaths {
-    super::RemoteSshConfigPaths {
-        user_config: std::env::var_os("USERPROFILE")
-            .map(PathBuf::from)
-            .map(|home| home.join(".ssh").join("config")),
-        system_config: std::env::var_os("PROGRAMDATA")
-            .map(PathBuf::from)
-            .map(|dir| dir.join("ssh").join("ssh_config")),
-        multiplexing: false,
-    }
-}
-
-pub(crate) fn create_remote_ssh_config_dir(_control_socket_name: &str) -> std::io::Result<PathBuf> {
-    let base = remote_private_temp_base();
-    std::fs::create_dir_all(&base)?;
-    for attempt in 0..100 {
-        let dir = base.join(format!("ssh-{}-{attempt}", std::process::id()));
-        match create_remote_private_dir(&dir) {
-            Ok(()) => return Ok(dir),
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(err) => return Err(err),
-        }
-    }
-    Err(std::io::Error::new(
-        std::io::ErrorKind::AlreadyExists,
-        "failed to create private herdr ssh config directory",
-    ))
-}
-
 pub(crate) fn create_remote_ssh_config_file(
     path: &std::path::Path,
 ) -> std::io::Result<std::fs::File> {
@@ -740,29 +535,6 @@ pub(crate) fn create_remote_ssh_config_file(
         .write(true)
         .create_new(true)
         .open(path)
-}
-
-pub(crate) fn create_remote_private_dir(path: &std::path::Path) -> std::io::Result<()> {
-    use interprocess::os::windows::security_descriptor::{
-        AsSecurityDescriptorExt as _, SecurityDescriptor,
-    };
-    use widestring::U16CString;
-
-    let sddl = U16CString::from_str("D:P(A;OICI;GA;;;SY)(A;OICI;GA;;;OW)")
-        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?;
-    let security_descriptor = SecurityDescriptor::deserialize(&sddl)?;
-    let mut security_attributes = SECURITY_ATTRIBUTES {
-        nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>()).unwrap_or(u32::MAX),
-        lpSecurityDescriptor: null_mut(),
-        bInheritHandle: 0,
-    };
-    security_descriptor.write_to_security_attributes(&mut security_attributes);
-    let path = extended_length_path(path)?;
-    if unsafe { CreateDirectoryW(path.as_ptr(), &security_attributes) } != 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
 }
 
 fn extended_length_path(path: &std::path::Path) -> std::io::Result<Vec<u16>> {
@@ -784,29 +556,6 @@ fn extended_length_path(path: &std::path::Path) -> std::io::Result<Vec<u16>> {
     };
     extended.push(0);
     Ok(extended)
-}
-
-pub(crate) fn remote_private_temp_base() -> PathBuf {
-    crate::config::state_dir().join("remote")
-}
-
-pub(crate) fn remote_bridge_endpoint_path(_readable_name: &str, short_name: &str) -> PathBuf {
-    remote_private_temp_base().join(short_name)
-}
-
-pub(crate) fn remote_reattach_program(program: &str) -> String {
-    let path = std::env::current_exe()
-        .ok()
-        .filter(|path| path.is_absolute())
-        .unwrap_or_else(|| PathBuf::from(program));
-    format!(
-        "& {}",
-        remote_reattach_argument(&path.display().to_string())
-    )
-}
-
-pub(crate) fn remote_reattach_argument(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
 }
 
 /// Encode native or targeted semantic Win32 input for a compatible ConPTY destination.
@@ -3587,21 +3336,6 @@ mod tests {
             super::prepare_paste_text_for_pty_platform("one\ntwo\r\nthree\rfour".to_owned()),
             "one\r\ntwo\r\nthree\rfour"
         );
-    }
-
-    #[test]
-    fn private_remote_directory_supports_long_paths() {
-        let base = std::env::temp_dir().join(format!(
-            "herdr-private-remote-dir-test-{}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&base).expect("create test base");
-        let private = base.join("x".repeat(240));
-
-        super::create_remote_private_dir(&private).expect("create private long-path directory");
-        fs::write(private.join("probe"), b"ok").expect("write inherited private file");
-
-        fs::remove_dir_all(base).expect("remove test directory");
     }
 
     #[test]

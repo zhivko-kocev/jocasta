@@ -366,11 +366,11 @@ fn server_reload_agent_manifests_reports_runtime_override() {
 
     let override_dir = config_home.join("herdr-dev").join("agent-detection");
     fs::create_dir_all(&override_dir).unwrap();
-    let override_path = override_dir.join("codex.toml");
+    let override_path = override_dir.join("pi.toml");
     fs::write(
         &override_path,
         r#"
-id = "codex"
+id = "pi"
 
 [[rules]]
 id = "reload_marker"
@@ -389,8 +389,8 @@ contains = ["server-reload-marker"]
     let manifests = response["result"]["manifests"].as_array().unwrap();
     let codex = manifests
         .iter()
-        .find(|manifest| manifest["agent"] == "codex")
-        .expect("codex manifest summary");
+        .find(|manifest| manifest["agent"] == "pi")
+        .expect("pi manifest summary");
     assert_eq!(codex["source_kind"], "local override");
     assert_eq!(codex["source"], override_path.display().to_string());
     assert!(codex.get("warning").is_none());

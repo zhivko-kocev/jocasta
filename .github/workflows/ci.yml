@@ -56,8 +56,11 @@ jobs:
         shell: bash
       - run: mise exec -- cargo nextest run --locked --no-fail-fast
         shell: bash
-      # The herdr fork (crates/herdr), built with the workspace's lock: its Zig library and its link on each OS.
-      - run: mise exec -- cargo build -p herdr --locked
+      # The herdr fork's own suite (crates/herdr and its terminal library, built with the workspace's lock: Zig's library
+      # and the link on each OS). Two tests that fail upstream too under WSL (crates/herdr/TESTS-BASELINE.md) are left out.
+      - run: >-
+          mise exec -- cargo nextest run -p herdr -p ghostty-vt --locked --no-fail-fast
+          -E 'not (test(=server_survives_hangup_and_logs_why_it_stops) | test(=sigwinch_refreshes_host_palette_without_resizing))'
         shell: bash
       # Needs the network (the advisory database); the same on every OS, as `mise run check` runs it.
       - run: mise exec -- cargo deny --log-level error check

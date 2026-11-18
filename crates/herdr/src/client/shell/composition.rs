@@ -55,7 +55,6 @@ impl ClientShellState {
                     == Some(ClientEndpointStatus::Online)
         });
         let mut render_state = render::ShellRenderState {
-            machine_diagnostics: &self.machine_diagnostics,
             endpoints: &self.endpoints,
             active_endpoint_id: &self.active_endpoint_id,
             collapsed_endpoints: &self.collapsed_endpoints,
@@ -211,7 +210,6 @@ impl ClientShellState {
             snapshot,
             &self.config,
             render::ShellRenderState {
-                machine_diagnostics: &self.machine_diagnostics,
                 endpoints: &self.endpoints,
                 active_endpoint_id: &self.active_endpoint_id,
                 collapsed_endpoints: &self.collapsed_endpoints,

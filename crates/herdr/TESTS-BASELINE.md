@@ -23,3 +23,13 @@ Each also fails on upstream's own lock and toolchain pin overridden to 1.100.0, 
 - WSL: `server_headless::server_survives_hangup_and_logs_why_it_stops` (the log never says "server shutdown
   initiated") and `client_mode::sigwinch_refreshes_host_palette_without_resizing`: both send a Unix signal to a
   spawned process and fail on every run under WSL 2, upstream's lock too.
+
+## After the trim (phase 2)
+
+| Where | Run | Passed | Failed | Skipped |
+|---|---|---|---|---|
+| Windows 11 (his PC) | 3123 | 3123 | 0 | 10 |
+| Ubuntu in WSL 2 | 3590 | 3589 | 1 | 12 |
+
+WSL's one failure is `sigwinch_refreshes_host_palette_without_resizing` above; `server_survives_hangup_and_logs_why_it_stops`
+passed on that run. CI leaves both out.

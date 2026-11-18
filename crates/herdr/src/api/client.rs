@@ -78,6 +78,7 @@ impl ApiClient {
         self.read_status(None)
     }
 
+    #[cfg(test)]
     pub(crate) fn status_with_timeout(
         &self,
         timeout: Duration,

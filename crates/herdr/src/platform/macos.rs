@@ -7,20 +7,15 @@ use std::process::{Command, Stdio};
 use std::ptr::NonNull;
 use std::sync::OnceLock;
 
-pub(super) const REMOTE_BRIDGE_CLOCK: libc::clockid_t = libc::CLOCK_MONOTONIC;
-
 use super::{
     read_limited_reader, ClipboardCommand, ClipboardImage, ForegroundJob, ForegroundProcess,
     LimitedRead, Signal,
 };
 
 pub(crate) use super::unix_common::{
-    configure_status_command, create_remote_private_dir, create_remote_ssh_config_dir,
-    create_remote_ssh_config_file, hostname, local_datetime, remote_bridge_endpoint_path,
-    remote_private_temp_base, remote_reattach_argument, remote_reattach_program,
-    remote_ssh_config_paths, set_default_plugin_pane_pwd, shutdown_client_stream,
-    status_commands_supported, wait_client_stream_readable, write_client_stream,
-    ClientStreamReader, StatusCommandGuard,
+    configure_status_command, create_remote_ssh_config_file, hostname, local_datetime,
+    set_default_plugin_pane_pwd, shutdown_client_stream, status_commands_supported,
+    wait_client_stream_readable, write_client_stream, ClientStreamReader, StatusCommandGuard,
 };
 
 mod bootstrap;
@@ -30,30 +25,10 @@ mod shutdown;
 pub(crate) use shutdown::monitor_host_shutdown;
 
 #[cfg(test)]
-mod config_file_tests;
-
-#[cfg(test)]
 mod input_tests;
 
 mod input;
 pub(crate) use input::PtyInputGuard;
-
-pub(crate) fn config_file_link_count(path: &Path) -> std::io::Result<u64> {
-    use std::os::unix::fs::MetadataExt;
-    Ok(std::fs::metadata(path)?.nlink())
-}
-
-pub(crate) fn check_config_write_target(_target: &std::path::Path) -> std::io::Result<()> {
-    Ok(())
-}
-
-pub(crate) fn write_existing_config(
-    _target: &std::path::Path,
-    _contents: &[u8],
-) -> std::io::Result<bool> {
-    // Unix keeps atomic replacement for existing files too.
-    Ok(false)
-}
 
 pub(crate) fn create_config_temporary(
     path: &Path,
@@ -137,45 +112,6 @@ pub(crate) fn create_config_temporary(
         acl_free(acl);
     }
     result
-}
-
-pub(crate) fn write_config_temporary(
-    source: Option<&Path>,
-    temporary: &Path,
-    contents: &[u8],
-) -> std::io::Result<()> {
-    use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
-    let mut output = std::fs::OpenOptions::new()
-        .write(true)
-        .truncate(true)
-        .open(temporary)?;
-    if let Some(source) = source {
-        let input = std::fs::File::open(source)?;
-        let metadata = input.metadata()?;
-        let current = output.metadata()?;
-        if (metadata.uid(), metadata.gid()) != (current.uid(), current.gid())
-            && unsafe { libc::fchown(output.as_raw_fd(), metadata.uid(), metadata.gid()) } != 0
-        {
-            return Err(std::io::Error::last_os_error());
-        }
-        // Prepare access controls while the temporary is still empty. Copy ACLs
-        // before mode bits so no inherited/default grant can expose the content.
-        // Do not copy data or old timestamps.
-        if unsafe {
-            libc::fcopyfile(
-                input.as_raw_fd(),
-                output.as_raw_fd(),
-                std::ptr::null_mut(),
-                libc::COPYFILE_ACL | libc::COPYFILE_XATTR,
-            )
-        } != 0
-        {
-            return Err(std::io::Error::last_os_error());
-        }
-        output.set_permissions(metadata.permissions())?;
-    }
-    output.write_all(contents)?;
-    output.sync_all()
 }
 
 const PROC_PGRP_ONLY: u32 = 2;

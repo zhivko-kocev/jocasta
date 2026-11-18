@@ -11,15 +11,54 @@ binary; it is not shipped as `herdr`. Changed files are listed below, as Apache-
 - Its own toolchain and lock, which the workspace root holds: `rust-toolchain.toml`, `.cargo/`, `Cargo.lock`; the Nix
   files (`flake.*`, `nix/`), `justfile`, `SPONSORS.md`, `README.zh-CN.md`, and the README's images under `assets/`
   (the sounds stay).
+- Remote and machine access: `src/remote/`, the `machine` CLI and its spec, the remote bridge and SSH-agent platform
+  files, `client/endpoint/ssh_metadata.rs`, `client/shell/machine_diagnostics.rs`, and the tests `remote_attach.rs`,
+  `machine_api.rs`, `machine_setup.rs`. `remote.rs` stays as three constants the client still reads; a saved SSH
+  endpoint answers `Unsupported`, and `server.ssh_agent.register` answers `not_supported`.
+- The self-updater: `update.rs` keeps only `Version` and the install hint (137,701 B to 2,835 B); the `update` and
+  `channel` words, `checksum.rs`, and the manifest updater `detect/manifest_update.rs` (replaced by the local
+  `detect/manifest_version.rs`). The `[update]` and `[remote]` config tables are still parsed, and ignored, so an
+  existing config raises no unknown-key notice.
+- The render benchmark `server/render_scale_benchmark.rs`.
+- Other agents: 21 of the 22 detection manifests (only `pi.toml` stays; omp is detected through it), the 21
+  integration assets other than `omp/` and `pi/` with their install code and config editors (`claude_settings.rs`,
+  `opencode_config.rs`, `config_edit.rs`, `config_file*`, `command.rs`, `file_ops.rs`, `version.rs`,
+  `test_support.rs`, `platform/windows/config_backup.rs`). A dropped target answers `unknown integration target`. The
+  `IntegrationTarget` and `Agent` enums, the API schema and every wire type stay whole. Codex's manifest survives as a
+  test fixture (`tests/fixtures/codex-manifest.toml`) for the loader's tests.
+- Packaging and docs: `distribution/`, `docs/` except `docs/next/api/herdr-api.schema.json` (embedded by `cli/api.rs`),
+  `scripts/` except the ConPTY, vendor and libghostty scripts, `CHANGELOG.md`.
+
+Kept whole: plugins, kitty graphics, live handoff, worktrees, notifications and sound, persistence, sessions,
+`vendor/`, `skills/herdr/SKILL.md`, `tests/fixtures/`, the local release notes and announcements, onboarding.
 
 ## Changed
 
-- `Cargo.toml`: no `[workspace]`, `[patch.crates-io]` or `build`; the root's workspace lists this crate and
-  `crates/ghostty-vt`, and patches `portable-pty` with `vendor/portable-pty`. The MSVC static C runtime is set in the
-  root's `.cargo/config.toml`.
-- `src/pane/terminal.rs`, the test `render_keeps_halfwidth_katakana_voiced_tail_empty`: it checks what the host
-  terminal is sent (no write over the wide tail) rather than the test backend's copy, because the workspace's ratatui
-  0.30.2 counts a halfwidth voiced mark's cell and so skips the tail that 0.30.0 wrote as empty.
+### Trim edits
+
+The removals above reached into these kept files; each edit only deletes a dropped feature's code path, help line,
+event, field or test: `Cargo.toml` (no `[workspace]`, `[patch.crates-io]` or `build`; the root's workspace lists this
+crate and `crates/ghostty-vt` and patches `portable-pty`; the MSVC static C runtime is in the root's
+`.cargo/config.toml`), `api/client.rs`, `api/server.rs`, `app/{actions,api,mod,runtime,state}.rs`,
+`app/api/worktrees.rs`, `cli.rs`, `cli/{integration,plugin,server,spec,status,target,worktree}.rs`,
+`client/{endpoint,handshake,mod,shell,shell_runtime,transport}.rs`, `client/endpoint/{catalog,supervisor}.rs`,
+`client/shell/{composition,endpoint_sidebar,endpoints,input,render,state}.rs`, `client/shell/tests/endpoints.rs`,
+`config.rs`, `detect/{mod,manifest}.rs`, `detect/manifest/tests.rs`, `events.rs`,
+`integration/{actions,env,mod,registry,targets,tests,types}.rs`, `ipc.rs`, `logging.rs`, `noninteractive_process.rs`,
+`pane.rs`, `platform/{fallback,linux,macos,mod,unix_common,windows}.rs`, `product_announcements.rs`,
+`release_notes.rs`, `server/{mod,headless}.rs`, `server/headless/notifications.rs`, `server/headless/tests/mod.rs`.
+
+Also `src/pane/terminal.rs`, the test `render_keeps_halfwidth_katakana_voiced_tail_empty`: it checks what the host
+terminal is sent (no write over the wide tail) rather than the test backend's copy, because the workspace's ratatui
+0.30.2 counts a halfwidth voiced mark's cell and so skips the tail that 0.30.0 wrote as empty.
+
+### Seams for Jocasta
+
+- `src/lib.rs` (new; upstream's `src/main.rs` with `pub mod embed` and a `pub fn main`) and a thin `src/main.rs`, the
+  `herdr` bin herdr's integration tests spawn.
+- `src/embed.rs` (new): `Dirs`, `set_dirs`, `version`.
+- `src/config/io.rs`: `config_dir`, `state_dir` and `config_path` take `embed`'s dirs first (`HERDR_CONFIG_PATH` still
+  wins for the config file).
 
 ## Taking an upstream release
 

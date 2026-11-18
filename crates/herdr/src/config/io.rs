@@ -28,6 +28,10 @@ pub fn app_dir_name() -> &'static str {
 }
 
 pub fn config_dir() -> PathBuf {
+    // Fork seam (FORK.md): Jocasta's dirs first.
+    if let Some(dirs) = crate::embed::dirs() {
+        return dirs.config.clone();
+    }
     if let Ok(dir) = std::env::var("XDG_CONFIG_HOME") {
         return PathBuf::from(dir).join(app_dir_name());
     }
@@ -35,6 +39,9 @@ pub fn config_dir() -> PathBuf {
 }
 
 pub fn state_dir() -> PathBuf {
+    if let Some(dirs) = crate::embed::dirs() {
+        return dirs.state.clone();
+    }
     if let Ok(dir) = std::env::var("XDG_STATE_HOME") {
         return PathBuf::from(dir).join(app_dir_name());
     }
@@ -195,6 +202,9 @@ pub(super) fn resolve_config_relative_path(path: &Path) -> PathBuf {
 pub fn config_path() -> PathBuf {
     if let Ok(path) = std::env::var(CONFIG_PATH_ENV_VAR) {
         return PathBuf::from(path);
+    }
+    if let Some(dirs) = crate::embed::dirs() {
+        return dirs.config_file.clone();
     }
     config_dir().join("config.toml")
 }

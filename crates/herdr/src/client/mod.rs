@@ -127,7 +127,6 @@ use frame_output::{
     contains_kitty_graphics_bytes, record_received_kitty_graphics,
     write_encoded_frame_with_graphics,
 };
-pub(crate) use handshake::probe_endpoint_negotiation;
 use handshake::{
     client_shell_keybinding_source, do_handshake, is_remote_client_process,
     HandshakePixelCapabilities,
@@ -1333,7 +1332,6 @@ async fn run_client_loop(
                     }
                     let unavailable = state.shell.as_mut().and_then(|shell| {
                         shell.set_endpoint_status(&endpoint_id, status);
-                        shell.set_machine_diagnostic(&endpoint_id, message.clone());
                         (status == endpoint::ClientEndpointStatus::Attention
                             && shell.endpoint_is_active(&endpoint_id))
                         .then(|| format!("{}: {message}", shell.endpoint_label(&endpoint_id)))

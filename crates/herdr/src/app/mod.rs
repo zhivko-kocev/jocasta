@@ -39,7 +39,6 @@ use std::time::{Duration, Instant};
 pub(crate) const MIN_RENDER_INTERVAL: Duration = Duration::from_millis(16);
 const GIT_REMOTE_STATUS_REFRESH_INTERVAL: Duration = Duration::from_millis(1500);
 const GIT_REPO_DISCOVERY_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
-const AUTO_UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const PENDING_AGENT_RESUME_THEME_WAIT: Duration = Duration::from_millis(750);
 const SESSION_SAVE_DEBOUNCE: Duration = Duration::from_secs(5);
 
@@ -74,7 +73,6 @@ pub(crate) struct AppPolicy {
     pub(crate) restore_session: bool,
     pub(crate) persist_session: bool,
     pub(crate) persist_plugin_registry: bool,
-    pub(crate) background_updates: bool,
 }
 
 impl AppPolicy {
@@ -82,7 +80,6 @@ impl AppPolicy {
         restore_session: true,
         persist_session: true,
         persist_plugin_registry: true,
-        background_updates: true,
     };
 
     #[cfg(test)]
@@ -90,7 +87,6 @@ impl AppPolicy {
         restore_session: false,
         persist_session: false,
         persist_plugin_registry: false,
-        background_updates: false,
     };
 
     #[cfg(unix)]
@@ -98,7 +94,6 @@ impl AppPolicy {
         restore_session: false,
         persist_session: true,
         persist_plugin_registry: true,
-        background_updates: true,
     };
 }
 
@@ -133,10 +128,6 @@ pub struct App {
     pub(crate) pending_worktree_remove_runtime_exits: HashMap<crate::layout::PaneId, usize>,
     pub(crate) pending_worktree_remove_runtime_restores: HashMap<crate::layout::PaneId, u64>,
     pub(crate) next_api_worktree_operation_id: u64,
-    pub(crate) next_auto_update_check: Option<Instant>,
-    pub(crate) next_agent_manifest_update_check: Option<Instant>,
-    pub(crate) update_version_check_enabled: bool,
-    pub(crate) update_manifest_check_enabled: bool,
     pub(crate) loaded_host_cursor: crate::config::HostCursorModeConfig,
     pub(crate) agent_metadata_deadline: Option<Instant>,
     pub(crate) pending_agent_resume_deadline: Option<Instant>,
@@ -177,14 +168,6 @@ pub struct App {
 
 pub(crate) const APP_EVENT_CHANNEL_CAPACITY: usize = 256;
 pub(crate) const APP_EVENT_DRAIN_LIMIT: usize = 64;
-
-fn auto_updates_enabled(background_updates: bool) -> bool {
-    background_updates && !cfg!(debug_assertions)
-}
-
-fn background_update_check_enabled(background_updates: bool, check_enabled: bool) -> bool {
-    auto_updates_enabled(background_updates) && check_enabled
-}
 
 fn load_plugin_registry(
     persist_plugin_registry: bool,
@@ -472,7 +455,7 @@ impl App {
             .filter(|notes| notes.preview)
             .map(|notes| notes.version.clone());
         let latest_release_notes_available = latest_release_notes.is_some();
-        let update_install_command = crate::update::update_install_command().to_string();
+        let update_install_command = crate::update::HERDR_UPDATE_COMMAND.to_string();
         let startup_product_announcement =
             crate::product_announcements::load_unseen_for_current_version();
 
@@ -522,7 +505,6 @@ impl App {
             update_available,
             update_install_command,
             latest_release_notes_available,
-            update_dismissed: false,
             config_diagnostic,
             toast: None,
             pending_agent_notifications: std::collections::HashMap::new(),
@@ -561,7 +543,6 @@ impl App {
             host_terminal_appearance_explicit: false,
             integration_recommendations: crate::integration::integration_recommendations(),
             agent_manifest_summaries,
-            agent_manifest_update_status: crate::detect::manifest_update::load_status(),
             installed_plugins: load_plugin_registry(
                 policy.persist_plugin_registry,
                 &mut plugin_installation_leases,
@@ -578,32 +559,6 @@ impl App {
         };
 
         state.terminals = restored_terminals;
-
-        // Background auto-update is disabled for non-persistent test apps
-        // and in debug/test builds so local development never mutates the
-        // running binary out from under spawned test processes.
-        let version_check_enabled =
-            background_update_check_enabled(policy.background_updates, config.update.version_check);
-        let manifest_check_enabled = background_update_check_enabled(
-            policy.background_updates,
-            config.update.manifest_check,
-        );
-        if version_check_enabled {
-            let update_tx = event_tx.clone();
-            if let Err(err) = crate::thread_spawn::spawn_named("herdr-update-check", move || {
-                crate::update::auto_update(update_tx)
-            }) {
-                tracing::warn!(err = %err, "failed to spawn update check thread");
-            }
-        }
-        if manifest_check_enabled {
-            let manifest_update_tx = event_tx.clone();
-            if let Err(err) = crate::thread_spawn::spawn_named("herdr-manifest-check", move || {
-                crate::detect::manifest_update::auto_update(manifest_update_tx)
-            }) {
-                tracing::warn!(err = %err, "failed to spawn agent manifest check thread");
-            }
-        }
 
         let last_focus = state.active.and_then(|idx| {
             state
@@ -642,12 +597,6 @@ impl App {
             pending_worktree_remove_runtime_exits: HashMap::new(),
             pending_worktree_remove_runtime_restores: HashMap::new(),
             next_api_worktree_operation_id: 1,
-            next_auto_update_check: version_check_enabled
-                .then_some(Instant::now() + AUTO_UPDATE_CHECK_INTERVAL),
-            next_agent_manifest_update_check: manifest_check_enabled
-                .then_some(Instant::now() + AUTO_UPDATE_CHECK_INTERVAL),
-            update_version_check_enabled: config.update.version_check,
-            update_manifest_check_enabled: config.update.manifest_check,
             loaded_host_cursor: config.ui.host_cursor,
             agent_metadata_deadline: None,
             pending_agent_resume_deadline: None,
@@ -965,37 +914,6 @@ impl App {
 
         if !invalid_section("advanced") {
             self.state.pane_scrollback_limit_bytes = config.advanced.scrollback_limit_bytes;
-        }
-
-        if !invalid_section("update") {
-            let now = Instant::now();
-            let previous_version_check_enabled = self.update_version_check_enabled;
-            let previous_manifest_check_enabled = self.update_manifest_check_enabled;
-            self.update_version_check_enabled = config.update.version_check;
-            self.update_manifest_check_enabled = config.update.manifest_check;
-
-            if !self.update_version_check_enabled {
-                self.next_auto_update_check = None;
-            } else if !previous_version_check_enabled
-                && background_update_check_enabled(
-                    self.policy.background_updates,
-                    self.update_version_check_enabled,
-                )
-                && self.state.update_available.is_none()
-            {
-                self.next_auto_update_check = Some(now);
-            }
-
-            if !self.update_manifest_check_enabled {
-                self.next_agent_manifest_update_check = None;
-            } else if !previous_manifest_check_enabled
-                && background_update_check_enabled(
-                    self.policy.background_updates,
-                    self.update_manifest_check_enabled,
-                )
-            {
-                self.next_agent_manifest_update_check = Some(now);
-            }
         }
 
         if !invalid_section("terminal") {
@@ -1356,20 +1274,15 @@ mod tests {
         let mut app = test_app();
         for i in 0..=APP_EVENT_DRAIN_LIMIT {
             app.event_tx
-                .try_send(AppEvent::UpdateReady {
-                    version: format!("2.0.{i}"),
-                    install_command: "herdr install".into(),
+                .try_send(AppEvent::WorktreeRuntimeRestoreFailed {
+                    pane_id: crate::layout::PaneId::from_raw(9),
+                    operation_id: i as u64,
                 })
                 .unwrap();
         }
 
         assert!(app.drain_internal_events());
 
-        let expected_version = format!("2.0.{}", APP_EVENT_DRAIN_LIMIT - 1);
-        assert_eq!(
-            app.state.update_available.as_deref(),
-            Some(expected_version.as_str())
-        );
         assert!(app.event_rx.try_recv().is_ok());
     }
 
@@ -1378,9 +1291,9 @@ mod tests {
         let mut app = test_app();
         for i in 0..=APP_EVENT_DRAIN_LIMIT {
             app.event_tx
-                .try_send(AppEvent::UpdateReady {
-                    version: format!("3.0.{i}"),
-                    install_command: "herdr install".into(),
+                .try_send(AppEvent::WorktreeRuntimeRestoreFailed {
+                    pane_id: crate::layout::PaneId::from_raw(9),
+                    operation_id: i as u64,
                 })
                 .unwrap();
         }
@@ -1394,11 +1307,6 @@ mod tests {
         let response: serde_json::Value = serde_json::from_str(&response).unwrap();
 
         assert_eq!(response["result"]["type"], "ok");
-        let expected_version = format!("3.0.{APP_EVENT_DRAIN_LIMIT}");
-        assert_eq!(
-            app.state.update_available.as_deref(),
-            Some(expected_version.as_str())
-        );
         assert!(app.event_rx.try_recv().is_err());
     }
 
@@ -1587,33 +1495,6 @@ mod tests {
     }
 
     #[test]
-    fn update_ready_refreshes_cached_release_notes() {
-        let _guard = config_env_lock().lock().unwrap();
-        let path = temp_config_path("update-ready-refreshes-release-notes");
-        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
-        let mut app = test_app();
-        assert!(app.state.latest_release_notes.is_none());
-
-        crate::release_notes::save_pending("99.99.99", "### Changed\n- One").unwrap();
-        app.handle_internal_event(AppEvent::UpdateReady {
-            version: "99.99.99".into(),
-            install_command: "herdr update".into(),
-        });
-
-        assert_eq!(
-            app.state.latest_release_notes.as_ref().map(|notes| (
-                notes.version.as_str(),
-                notes.body.as_str(),
-                notes.preview
-            )),
-            Some(("99.99.99", "### Changed\n- One", true))
-        );
-
-        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
     fn release_notes_dismiss_api_marks_current_seen_but_keeps_preview_unseen() {
         let _guard = config_env_lock().lock().unwrap();
         let path = temp_config_path("release-notes-dismiss-persistence");
@@ -1762,8 +1643,6 @@ mod tests {
         std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
 
         let mut app = test_app();
-        app.next_auto_update_check = Some(Instant::now());
-        app.next_agent_manifest_update_check = Some(Instant::now());
         let report = app.reload_config();
 
         assert_eq!(report.status, crate::config::ConfigReloadStatus::Applied);
@@ -1794,10 +1673,6 @@ mod tests {
             app.state.new_terminal_cwd,
             crate::config::NewTerminalCwdConfig::Home
         );
-        assert!(!app.update_version_check_enabled);
-        assert!(!app.update_manifest_check_enabled);
-        assert!(app.next_auto_update_check.is_none());
-        assert!(app.next_agent_manifest_update_check.is_none());
         assert!(app.state.config_diagnostic.is_none());
         let toast = app.state.toast.as_ref().unwrap();
         assert_eq!(toast.kind, crate::app::state::ToastKind::UpdateInstalled);
@@ -3173,7 +3048,6 @@ mod tests {
         let mut app = test_app();
         let now = Instant::now();
         app.session_save_deadline = Some(now + Duration::from_secs(2));
-        app.next_auto_update_check = Some(now + Duration::from_secs(6));
 
         assert_eq!(
             app.next_headless_loop_deadline_with_git_refresh(now, false, true),
@@ -3187,7 +3061,6 @@ mod tests {
         let now = Instant::now();
         app.config_diagnostic_deadline = None;
         app.toast_deadline = None;
-        app.next_auto_update_check = None;
         app.session_save_deadline = None;
         app.state.workspaces.clear();
 
@@ -3406,9 +3279,9 @@ mod tests {
 
         for i in 0..APP_EVENT_CHANNEL_CAPACITY {
             app.event_tx
-                .try_send(AppEvent::UpdateReady {
-                    version: format!("9.9.{i}"),
-                    install_command: "herdr update".into(),
+                .try_send(AppEvent::WorktreeRuntimeRestoreFailed {
+                    pane_id: crate::layout::PaneId::from_raw(9),
+                    operation_id: i as u64,
                 })
                 .unwrap();
         }

@@ -1,6 +1,7 @@
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use sha2::{Digest as _, Sha256};
 
 mod activation;
@@ -9,7 +10,6 @@ mod control;
 mod health;
 mod message_policy;
 mod registry;
-mod ssh_metadata;
 mod supervisor;
 mod writer;
 
@@ -18,7 +18,6 @@ pub(crate) use catalog::*;
 pub(crate) use control::*;
 pub(crate) use message_policy::*;
 pub(crate) use registry::*;
-pub(crate) use ssh_metadata::{SshMachineMetadata, SshMetadataCache};
 pub(crate) use supervisor::*;
 pub(crate) use writer::NativeEndpointTransport;
 
@@ -41,6 +40,7 @@ impl ProfileId {
         Ok(Self(value))
     }
 
+    #[cfg(test)]
     pub(crate) fn generate() -> Self {
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -59,6 +59,7 @@ impl ProfileId {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn as_str(&self) -> &str {
         &self.0
     }

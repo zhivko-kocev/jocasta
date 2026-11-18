@@ -284,13 +284,11 @@ fn connect_once(
             })?;
             (stream, Box::new(()))
         }
-        ConnectTarget::Ssh(profile) => {
-            let connected = crate::remote::connect_saved_ssh(
-                profile.id.as_str(),
-                &profile.target,
-                &profile.session,
-            )?;
-            (connected.stream, Box::new(connected.bridge))
+        ConnectTarget::Ssh(_) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "remote machines are not supported in this build",
+            ));
         }
     };
     let handshake = super::super::do_handshake(
@@ -340,7 +338,20 @@ fn connect_once(
 }
 
 fn failure_needs_attention(error: &std::io::Error) -> bool {
-    crate::remote::saved_ssh_failure_needs_attention(error)
+    if matches!(
+        error.kind(),
+        std::io::ErrorKind::InvalidInput
+            | std::io::ErrorKind::InvalidData
+            | std::io::ErrorKind::NotFound
+            | std::io::ErrorKind::PermissionDenied
+            | std::io::ErrorKind::Unsupported
+    ) {
+        return true;
+    }
+    let message = error.to_string().to_ascii_lowercase();
+    ["not ready", "install or update", "protocol", "handshake"]
+        .iter()
+        .any(|needle| message.contains(needle))
 }
 
 fn handshake_error(error: crate::client::ClientError) -> std::io::Error {

@@ -26,6 +26,7 @@ pub(crate) struct SavedSshEndpoint {
 }
 
 impl SavedSshEndpoint {
+    #[cfg(test)]
     pub(crate) fn new(
         label: impl Into<String>,
         target: impl Into<String>,
@@ -58,7 +59,9 @@ impl SavedSshEndpoint {
                 "SSH target must be at most {MAX_TARGET_BYTES} bytes and contain no control characters"
             ));
         }
-        crate::remote::validate_remote_target(&self.target).map(|_| ())?;
+        if self.target.is_empty() || self.target.starts_with('-') {
+            return Err("SSH target must not be empty or start with '-'".into());
+        }
         let authority = self.target.strip_prefix("ssh://").unwrap_or(&self.target);
         if authority
             .rsplit_once('@')
@@ -139,10 +142,6 @@ impl EndpointCatalog {
         Ok(catalog)
     }
 
-    pub(crate) fn store_profiles(&self) -> Result<(), String> {
-        self.store_to_path(&catalog_path())
-    }
-
     pub(crate) fn store_selection(&self) -> Result<(), String> {
         self.store_selection_to_path(&selection_path())
     }
@@ -157,6 +156,7 @@ impl EndpointCatalog {
         store_private_json(path, &content, "endpoint selection")
     }
 
+    #[cfg(test)]
     pub(crate) fn add_ssh(
         &mut self,
         label: impl Into<String>,
@@ -172,6 +172,7 @@ impl EndpointCatalog {
         Ok(id)
     }
 
+    #[cfg(test)]
     pub(crate) fn rename_ssh(
         &mut self,
         id: &ProfileId,
@@ -187,6 +188,7 @@ impl EndpointCatalog {
         Ok(true)
     }
 
+    #[cfg(test)]
     pub(crate) fn remove_ssh(&mut self, id: &ProfileId) -> bool {
         let previous_len = self.ssh.len();
         self.ssh.retain(|profile| &profile.id != id);
@@ -226,12 +228,14 @@ impl EndpointCatalog {
         self.ssh.iter().any(|profile| profile.enabled)
     }
 
+    #[cfg(test)]
     pub(crate) fn contains_enabled_target_session(&self, target: &str, session: &str) -> bool {
         self.ssh.iter().any(|profile| {
             profile.enabled && profile.target == target && profile.session == session
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn set_enabled(&mut self, id: &ProfileId, enabled: bool) -> bool {
         let Some(profile) = self.ssh.iter_mut().find(|profile| &profile.id == id) else {
             return false;
@@ -303,6 +307,7 @@ impl EndpointCatalog {
         Ok(catalog)
     }
 
+    #[cfg(test)]
     fn store_to_path(&self, path: &Path) -> Result<(), String> {
         self.validate()?;
         let content = serde_json::to_vec_pretty(self)
