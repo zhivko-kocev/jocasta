@@ -204,9 +204,8 @@ mod platform {
 			let ticks = std::slice::from_raw_parts(info, size as usize);
 			let (mut busy, mut total) = (0i64, 0i64);
 			// Per core: user, system, idle, nice; a tick is 10 ms.
-			for core in ticks.chunks_exact(4) {
-				let (user, sys, idle, nice) =
-					(i64::from(core[0]), i64::from(core[1]), i64::from(core[2]), i64::from(core[3]));
+			for &[user, sys, idle, nice] in ticks.as_chunks::<4>().0 {
+				let (user, sys, idle, nice) = (i64::from(user), i64::from(sys), i64::from(idle), i64::from(nice));
 				busy += (user + sys + nice) * 10;
 				total += (user + sys + idle + nice) * 10;
 			}

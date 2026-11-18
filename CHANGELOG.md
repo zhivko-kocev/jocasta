@@ -543,3 +543,4 @@
 - **0647:** `deny.toml` ignores RUSTSEC-2026-0543 (chrono) and RUSTSEC-2026-0555 (chrono-tz), two "unmaintained" notices with no fix, which rmcp and icalendar bring in too.
 - `CONTRIBUTING.md`'s check step and the plan's sections 5.1 and 5.5 name the Rust build.
 - The gate: typecheck, lint, knip, 66 Bun tests, `cargo fmt --check`, clippy, 1469 Rust tests through cargo-nextest, cargo-deny and cargo-machete pass.
+- **The cutover's CI run** failed on all three OSes, each for its own reason, fixed: clippy's `chunks_exact_to_as_chunks` in the macOS-only CPU reader (`machine.rs`), which Windows never compiles; two urgent `[event]` lines raced to the boss pane (each went on its own task), and now each waits for the one before it, so they arrive in the order they were raised; and **0648**: CI's `bun audit` ignores GHSA-fc5q-39xc-vjpf, a ReDoS in picomatch through 4.0.7 with no fixed release, reached only through knip.

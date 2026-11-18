@@ -71,7 +71,8 @@ jobs:
         shell: bash
         run: mise exec -- bunx knip
       # Fails on high and critical advisories only; it needs the network, so it is not in `mise run check`. Once per run
-      # (the advisories don't depend on the OS).
+      # (the advisories don't depend on the OS). GHSA-fc5q-39xc-vjpf (picomatch's ReDoS, no fixed release) is ignored
+      # until a fix ships: knip matches only the repo's own globs against its own files (0648).
       - if: matrix.os == 'ubuntu-latest'
         shell: bash
-        run: mise exec -- bun audit --audit-level=high
+        run: mise exec -- bun audit --audit-level=high --ignore=GHSA-fc5q-39xc-vjpf

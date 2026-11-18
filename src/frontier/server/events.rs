@@ -128,6 +128,9 @@ struct State {
 	/// Until herdr first answers a notification for a client, or `UNSHOWN_WAIT_MS` passed with none.
 	starting: bool,
 	resending: bool,
+	/// Done when the last `[event]` line sent without waiting has been told: the next one waits for it, so lines reach
+	/// the boss pane in the order they were raised.
+	last_alert: Option<tokio::sync::oneshot::Receiver<()>>,
 }
 
 /// Whitespace as JavaScript's `\s` has it.
@@ -206,7 +209,16 @@ impl Events {
 		}
 		let url = web_link(details.url.as_deref()).map(|url| format!(" · {url}")).unwrap_or_default();
 		let (line, priority, ctx) = (format!("[event] {said}{url}"), details.priority, self.link.ctx());
-		self.in_flight.spawn(async move { ctx.events.tell(&line, priority, None).await });
+		let (told, done) = tokio::sync::oneshot::channel();
+		let before = self.st().last_alert.replace(done);
+		self.in_flight.spawn(async move {
+			if let Some(before) = before {
+				// A dropped sender (its task ended early) lets this line go too.
+				let _ = before.await;
+			}
+			ctx.events.tell(&line, priority, None).await;
+			let _ = told.send(());
+		});
 	}
 
 	/// Urgent lines go into the boss pane at once; normal ones wait until it is idle (0405). A line put in makes the boss

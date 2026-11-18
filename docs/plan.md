@@ -718,6 +718,7 @@ The image's statements are numbered V1–V14 so decisions can cite them.
 | 0645 | The quality checks after the cutover | process | 0610's three syntax-tree checks become a Rust test on `syn` with today's cases as the baseline; cargo-machete 0.9.2 through mise checks for unused dependencies; the docs and config checks stay Bun tests pointed at the Rust sources; the scorecard measures clippy, jscpd and cargo-deny (program; amends 0610, 0614) |
 | 0646 | A README for newcomers, the reference in the manual | product | The README is a newcomer's guide in the second person, without record numbers, linking by GitHub address to `docs/manual.md`, which holds the full reference with its record numbers (program; amends 0039) |
 | 0647 | cargo-deny ignores chrono's two "unmaintained" notices by ID | process | `deny.toml` ignores RUSTSEC-2026-0543 (chrono) and RUSTSEC-2026-0555 (chrono-tz), unmaintained with no fix and pulled in by rmcp and icalendar too; every other advisory still fails the check (program; amends 0639) |
+| 0648 | CI's `bun audit` ignores picomatch's ReDoS advisory by ID | process | CI's audit ignores GHSA-fc5q-39xc-vjpf (picomatch through 4.0.7, no fixed release, reached only through knip on the repo's own files) until a fix ships; every other high or critical advisory still fails CI (program; amends 0614) |
 
 Notes:
 - **0001–0008** fold v4's nine planning-era process records into their current form. 0001's wording now points to 0020.
@@ -804,6 +805,7 @@ Notes:
 - **0644** came when the suite grew from about 65 s to 400 s with wave 8; his answer was nextest, as recommended.
 - **0645** came from the cutover's checklist, when no record said what the TypeScript-only checks become; he asked which option was best for each and took the recommendations.
 - **0647** came from the cutover's gate, when RustSec marked chrono and chrono-tz unmaintained in the week before it; he took the recommendation.
+- **0648** came from the cutover's CI run, when a ReDoS in picomatch with no fixed release failed the audit; he took the recommendation.
 
 ## 4. Process, principles and rules
 

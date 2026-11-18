@@ -619,7 +619,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0611](0611-a-design-section-in-the-review.md) | The review gets a design section; the weekly review gets the same rubric | product | v1 | program | 2026-11-14 |  |
 | [0612](0612-ponytail-two-lines-rewritten.md) | Ponytail: two lines rewritten, one removed | product, prompts | v1 | program | 2026-11-14 |  |
 | [0613](0613-pushes-to-trunk-ask-once-per-repo.md) | A push to main, master or develop asks him once per repo | product, security | v1 | program | 2026-11-14 |  |
-| [0614](0614-quality-and-security-tools.md) | Quality and security tools: what enters the flow, what stays on demand | product, process | v1 | program | 2026-11-14 | 0624, 0627, 0639, 0645 |
+| [0614](0614-quality-and-security-tools.md) | Quality and security tools: what enters the flow, what stays on demand | product, process | v1 | program | 2026-11-14 | 0624, 0627, 0639, 0645, 0648 |
 | [0615](0615-whiteboard-0-5-2-with-animations.md) | Whiteboard moves to v0.5.2 before the benchmarks, with animations on | product | v1 | program | 2026-11-14 |  |
 | [0616](0616-tuning-program-small-calls-2.md) | Tuning program: four more small calls | product, process | v1 | program | 2026-11-14 |  |
 | [0617](0617-project-pane-check-through-omps-turn-end-event.md) | A failed check reaches a project pane's agent through omp's turn-end event | product | v1 | program | 2026-11-15 |  |
@@ -653,3 +653,4 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0645](0645-quality-checks-after-the-cutover.md) | The quality checks after the cutover | process | v1 | program | 2026-11-16 |  |
 | [0646](0646-readme-for-newcomers.md) | A README for newcomers, the reference in the manual | product | v1 | program | 2026-11-17 |  |
 | [0647](0647-deny-ignores-chrono-unmaintained.md) | cargo-deny ignores chrono's two "unmaintained" notices by ID | process | v1 | program | 2026-11-18 |  |
+| [0648](0648-audit-ignores-picomatch-redos.md) | CI's `bun audit` ignores picomatch's ReDoS advisory by ID | process | v1 | program | 2026-11-18 |  |
