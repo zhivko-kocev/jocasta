@@ -131,9 +131,13 @@ async fn his_keys_stop_refuses_an_idle_thread_with_why_and_stops_a_working_one_f
 
 		key("stop", Some(&pane_id)).await;
 		assert!(said("Stop: demo/Readme line isn't working; nothing to stop.", false).await.1);
-		assert!(server.herdr.of("notify").contains(&vec![
-			json!({ "title": "Jocasta", "body": "Stop: demo/Readme line isn't working; nothing to stop.", "sound": "none" })
-		]));
+		// The toast reaches herdr after the answer goes out (CI's Ubuntu run read it between the two).
+		until(|| {
+			server.herdr.of("notify").contains(&vec![
+				json!({ "title": "Jocasta", "body": "Stop: demo/Readme line isn't working; nothing to stop.", "sound": "none" }),
+			])
+		})
+		.await;
 		// Logged as the toasts' notifications are (0552).
 		until(|| {
 			read(&data_dir().join("notifications.jsonl"))
