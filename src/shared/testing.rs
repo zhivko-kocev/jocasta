@@ -12,11 +12,36 @@ use crate::shared::env::overlay;
 /// The variables that name Jocasta's and omp's roots, as `test/preload.ts` sets them.
 const ROOT_VARS: [&str; 4] = ["JOCASTA_CODING_AGENT_DIR", "JOCASTA_DATA_DIR", "PI_CODING_AGENT_DIR", "PI_CONFIG_DIR"];
 
+/// A sandbox older than this is a finished run's: the next process removes it.
+const SANDBOX_KEPT: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// Every test process's sandbox sits in `<temp>/jocasta-sandboxes`, named by the process id and the start time:
+/// Windows reuses a process id soon, and nextest starts one process per test, so a name by the id alone met an
+/// earlier process's folder (its template repos already committed). One parent keeps the cleanup's scan to ours.
 static SANDBOX: LazyLock<PathBuf> = LazyLock::new(|| {
-	let root = std::env::temp_dir().join(format!("jocasta-sandbox-{}", std::process::id()));
-	std::fs::create_dir_all(&root).expect("making the test sandbox");
+	let parent = std::env::temp_dir().join("jocasta-sandboxes");
+	std::fs::create_dir_all(&parent).expect("making the sandboxes' folder");
+	remove_old_sandboxes(&parent);
+	let started =
+		std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_nanos());
+	let root = parent.join(format!("{}-{started}", std::process::id()));
+	std::fs::create_dir(&root).expect("making the test sandbox");
 	root
 });
+
+/// Removes the sandboxes in `parent` of runs that ended more than [`SANDBOX_KEPT`] ago; one that can't go stays.
+fn remove_old_sandboxes(parent: &Path) {
+	let Ok(entries) = std::fs::read_dir(parent) else { return };
+	for entry in entries.flatten() {
+		let old = entry
+			.metadata()
+			.and_then(|meta| meta.modified())
+			.is_ok_and(|modified| modified.elapsed().is_ok_and(|age| age > SANDBOX_KEPT));
+		if old {
+			let _ = std::fs::remove_dir_all(entry.path());
+		}
+	}
+}
 
 /// This test process's sandbox folder.
 pub fn sandbox() -> &'static Path {

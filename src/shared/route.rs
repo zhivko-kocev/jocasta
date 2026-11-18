@@ -1,1 +1,178 @@
-//! The Rust port of `route.ts` (0625); not yet ported (0628).
+//! The `jocasta` command's words, kept apart from what each runs so `entry` loads only the one it routes to (PM-11).
+//! clap parses them (0637): its help and its usage errors replace the hand-written usage text; the words and flags, the
+//! internal roles kept out of the help and the exit codes (0140) stay as decided.
+
+use clap::{Parser, Subcommand};
+
+use crate::frontier::protocol::{PLUGIN_ACTIONS, PluginAction};
+
+/// Which part of the herdr plugin `jocasta plugin …` runs (0553).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginPart {
+	Today,
+	Ask,
+	Startup,
+	/// `plugin action <id>`.
+	Action(PluginAction),
+}
+
+/// The `jocasta` command's words (0387, 0467, 0468, 0472, 0544): open the work surface, `setup [--refresh <file>]`,
+/// `uninstall`, `diagnose`, `mcp [--boss]`, `project …`, `thread …`, `worktree …`, `--version`; and, not listed in the
+/// help, `service`, the Jocasta service bare `jocasta` starts as its own process (0552), and `plugin
+/// today|ask|startup|action <id>`, what the `jocasta` herdr plugin runs (0553), and `push-hook <remote> <address>`, the
+/// `pre-push` hook git runs in every Jocasta pane (0613), and `pane-check`, what a project pane's omp extension runs
+/// when a turn ends (0617). `--help` and a word that is no command are not routes: [`route`] returns clap's error for
+/// them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Route {
+	Surface,
+	Service,
+	Setup { refresh: Option<String> },
+	Uninstall,
+	Diagnose,
+	Mcp { boss: bool },
+	Project { args: Vec<String> },
+	Thread { args: Vec<String> },
+	Worktree { args: Vec<String> },
+	Plugin { part: PluginPart },
+	PushHook { args: Vec<String> },
+	PaneCheck,
+	Version,
+}
+
+#[derive(Parser)]
+#[command(
+	name = "jocasta",
+	about = "Open the work surface (herdr session `jocasta`; starts the Jocasta service)",
+	override_usage = "jocasta [COMMAND]",
+	disable_help_subcommand = true,
+	disable_version_flag = true,
+	args_conflicts_with_subcommands = true
+)]
+struct Cli {
+	/// Print the versions of Jocasta, omp and herdr
+	#[arg(short = 'v', long = "version")]
+	version: bool,
+	#[command(subcommand)]
+	command: Option<Word>,
+}
+
+#[derive(Subcommand)]
+enum Word {
+	/// Show what Jocasta adds to omp, herdr, Windows Terminal and mise; write after `y`
+	Setup {
+		/// Reset one Jocasta-owned file to the shipped version, keeping a backup: herdr.toml, jocasta.json or mcp.json
+		#[arg(long, value_name = "FILE", value_parser = clap::builder::NonEmptyStringValueParser::new())]
+		refresh: Option<String>,
+	},
+	/// Remove what install and setup added, after `y`
+	Uninstall,
+	/// A read-only pane that explains what went wrong from Jocasta's log
+	Diagnose,
+	/// The MCP server omp starts (history_search, report_result and check; the boss's tools with --boss)
+	Mcp {
+		/// Add the boss's tools
+		#[arg(long)]
+		boss: bool,
+	},
+	/// list | add <path> | remove <name|id>
+	#[command(disable_help_flag = true)]
+	Project {
+		#[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "ARGS")]
+		args: Vec<String>,
+	},
+	/// Threads through the running service; changes ask you first
+	///
+	/// new <project> "<brief>" [--title <t>] [--done-when "<cmd>"]... [--heavy] | list [<project>] | status <thread> |
+	/// send <thread> "<text>" | stop <thread> | finish <thread> merge|pr
+	#[command(disable_help_flag = true)]
+	Thread {
+		#[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "ARGS")]
+		args: Vec<String>,
+	},
+	/// Leftover worktrees through the running service; changes ask you first
+	///
+	/// list | remove <path>
+	#[command(disable_help_flag = true)]
+	Worktree {
+		#[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "ARGS")]
+		args: Vec<String>,
+	},
+	/// The Jocasta service bare `jocasta` starts (0552)
+	#[command(hide = true)]
+	Service,
+	/// What the `jocasta` herdr plugin runs (0553)
+	#[command(hide = true, subcommand_required = true, arg_required_else_help = true)]
+	Plugin {
+		#[command(subcommand)]
+		part: Part,
+	},
+	/// Git's `pre-push` hook in every Jocasta pane (0613)
+	#[command(name = "push-hook", hide = true, disable_help_flag = true)]
+	PushHook {
+		#[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "ARGS")]
+		args: Vec<String>,
+	},
+	/// What a project pane's omp extension runs when a turn ends (0617)
+	#[command(name = "pane-check", hide = true)]
+	PaneCheck,
+}
+
+#[derive(Subcommand)]
+enum Part {
+	Today,
+	Ask,
+	Startup,
+	Action {
+		#[arg(value_parser = clap::builder::PossibleValuesParser::new(ACTION_WORDS))]
+		id: String,
+	},
+}
+
+/// The words a plugin action is named by, in `PLUGIN_ACTIONS`' order.
+const ACTION_WORDS: [&str; 5] = ["finish", "stop", "review", "new-thread", "quit"];
+
+/// The action a plugin word names.
+fn plugin_action(word: &str) -> Option<PluginAction> {
+	ACTION_WORDS.iter().position(|known| *known == word).map(|at| PLUGIN_ACTIONS[at])
+}
+
+impl From<Word> for Route {
+	fn from(word: Word) -> Self {
+		match word {
+			Word::Setup { refresh } => Self::Setup { refresh },
+			Word::Uninstall => Self::Uninstall,
+			Word::Diagnose => Self::Diagnose,
+			Word::Mcp { boss } => Self::Mcp { boss },
+			Word::Project { args } => Self::Project { args },
+			Word::Thread { args } => Self::Thread { args },
+			Word::Worktree { args } => Self::Worktree { args },
+			Word::Service => Self::Service,
+			Word::Plugin { part } => Self::Plugin {
+				part: match part {
+					Part::Today => PluginPart::Today,
+					Part::Ask => PluginPart::Ask,
+					Part::Startup => PluginPart::Startup,
+					Part::Action { id } => PluginPart::Action(plugin_action(&id).unwrap_or(PluginAction::Quit)),
+				},
+			},
+			Word::PushHook { args } => Self::PushHook { args },
+			Word::PaneCheck => Self::PaneCheck,
+		}
+	}
+}
+
+/// Routes argv, the program's name left out (0387). `Err` is clap's help (`--help`, `-h`: exit 0, to stdout) or its
+/// usage error (exit 2, to stderr, 0140); `error.print()` writes either and `error.exit_code()` is its code.
+pub fn route(args: &[String]) -> Result<Route, clap::Error> {
+	let cli = Cli::try_parse_from(std::iter::once("jocasta").chain(args.iter().map(String::as_str)))?;
+	Ok(match (cli.version, cli.command) {
+		(true, _) => Route::Version,
+		(false, None) => Route::Surface,
+		(false, Some(word)) => word.into(),
+	})
+}
+
+#[cfg(test)]
+#[path = "route_tests.rs"]
+mod tests;

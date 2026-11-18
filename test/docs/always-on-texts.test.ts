@@ -3,17 +3,27 @@
 import { expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { route } from "../../src/shared/route.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const TEXTS = ["config/ponytail.md", "config/boss-manual.md", "AGENTS.md"];
 const TOP = new Set(readdirSync(ROOT));
 
+/** The `jocasta` command words: the variants of `enum Word` in `src/shared/route.rs`, in kebab-case. */
+const COMMANDS = new Set(
+	[
+		...(
+			readFileSync(join(ROOT, "src", "shared", "route.rs"), "utf8")
+				.split("enum Word {")[1]
+				?.split("\n}")[0] ?? ""
+		).matchAll(/^\t([A-Z]\w*)/gm),
+	].map((m) => (m[1] ?? "").replace(/(?<!^)([A-Z])/g, "-$1").toLowerCase()),
+);
+
 /**
  * What counts as a thing to resolve, by rule (a token that is none of these is prose, a placeholder or another
  * project's example and is skipped):
  * - `mise run <task>` and `bun run <script>`: the task is in mise.toml, the script in package.json;
- * - `jocasta <word>`: the word is one `src/shared/route.ts` knows;
+ * - `jocasta <word>`: the word is one `src/shared/route.rs` knows (a variant of its `Word` enum);
  * - a path: only word characters, `.`, `-`, `@` and `/` (so no placeholder, glob, URL, `~`, drive or `%VAR%`), and its
  *   first segment is a top-level entry of this repo; with no `/` it also needs a file extension (so `test` is a word).
  * Fenced blocks and HTML comments are not scanned: they hold layouts and licence text, not named commands.
@@ -65,10 +75,7 @@ function stale(token: string): string | undefined {
 			: undefined;
 	}
 	const cli = /^jocasta ([a-z-]+)/.exec(token);
-	if (cli)
-		return route([cli[1] ?? ""]).role === "usage" && "unknown" in route([cli[1] ?? ""])
-			? `route.ts has no command ${cli[1]}`
-			: undefined;
+	if (cli) return COMMANDS.has(cli[1] ?? "") ? undefined : `route.rs has no command ${cli[1]}`;
 	if (!/^[\w.@/-]+$/.test(token) || (!token.includes("/") && !/\.\w+$/.test(token))) return undefined;
 	if (!TOP.has(token.split("/")[0] ?? "")) return undefined;
 	return existsSync(join(ROOT, token)) ? undefined : "path doesn't exist";
@@ -92,7 +99,8 @@ test("the rule tells a stale command or path from prose", () => {
 	expect(stale("bun run no-such-script")).toContain("no-such-script");
 	expect(stale("jocasta setup")).toBeUndefined();
 	expect(stale("jocasta nonsense")).toContain("nonsense");
-	expect(stale("src/shared/route.ts")).toBeUndefined();
+	expect(stale("src/shared/route.rs")).toBeUndefined();
+	expect(stale("jocasta pane-check")).toBeUndefined();
 	expect(stale("src/shared/no-such-file.ts")).toBe("path doesn't exist");
 	// Skipped by rule: placeholders, globs, URLs, home and absolute paths, other projects' names, plain words.
 	for (const token of [

@@ -6,6 +6,12 @@ all-features = false
 [advisories]
 version = 2
 yanked = "deny"
+# Two "unmaintained" notices with no fixed version; rmcp and icalendar bring chrono in too (0647). Every other advisory
+# still fails the check.
+ignore = [
+	{ id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained, no fix; rmcp and icalendar depend on it (0647)" },
+	{ id = "RUSTSEC-2026-0555", reason = "chrono-tz is unmaintained, no fix; icalendar depends on it (0647)" },
+]
 
 [licenses]
 version = 2

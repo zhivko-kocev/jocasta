@@ -16,11 +16,12 @@ fn running_exe(exec_path: Option<&Path>) -> PathBuf {
 	exec_path.map(Path::to_path_buf).or_else(|| std::env::current_exe().ok()).unwrap_or_default()
 }
 
-/// The folder holding `jocasta.exe`: the running executable's own (`exec_path`, else this process's); `None` in a
-/// source run.
+/// The folder holding `jocasta.exe` and the shipped `config/` beside it: the running executable's own (`exec_path`,
+/// else this process's); `None` in a source run. A cargo build's `target/<profile>/` holds the exe but never
+/// `config/`, so a source run tells itself from an install as the TypeScript did by Bun's own exec path.
 pub fn install_dir(exec_path: Option<&Path>) -> Option<PathBuf> {
 	let exe_dir = running_exe(exec_path).parent()?.to_path_buf();
-	exe_dir.join(JOCASTA_EXE).exists().then_some(exe_dir)
+	(exe_dir.join(JOCASTA_EXE).exists() && exe_dir.join("config").is_dir()).then_some(exe_dir)
 }
 
 /// The shipped `config/` (boss manual, boss.yml, templates): the install's, or the repo's in a source run.
@@ -46,10 +47,10 @@ mod tests {
 	use crate::shared::testing::temp_dir;
 
 	#[test]
-	fn the_install_dir_is_jocasta_exes_folder_and_a_source_run_has_none() {
+	fn the_install_dir_is_jocasta_exes_folder_with_its_config_and_a_source_run_has_none() {
 		let root = temp_dir("install");
 		let dir = root.path().join("Programs").join("jocasta");
-		std::fs::create_dir_all(&dir).unwrap();
+		std::fs::create_dir_all(dir.join("config")).unwrap();
 		std::fs::write(dir.join(JOCASTA_EXE), "").unwrap();
 		let exe = dir.join(JOCASTA_EXE);
 		let elsewhere = root.path().join("elsewhere").join("bun.exe");
@@ -60,5 +61,13 @@ mod tests {
 		// omp and bare `jocasta` start the install's jocasta.exe (0466, 0552).
 		assert_eq!(self_command(Some(&exe)), vec![exe]);
 		assert_eq!(self_command(Some(&elsewhere)), vec![elsewhere]);
+		// A cargo build: the exe without `config/` beside it is a source run, with the repo's config.
+		let build = root.path().join("target").join("debug");
+		std::fs::create_dir_all(&build).unwrap();
+		std::fs::write(build.join(JOCASTA_EXE), "").unwrap();
+		let built = build.join(JOCASTA_EXE);
+		assert_eq!(install_dir(Some(&built)), None);
+		assert_eq!(shipped_config_dir(Some(&built)), Path::new(REPO).join("config"));
+		assert_eq!(self_command(Some(&built)), vec![built]);
 	}
 }

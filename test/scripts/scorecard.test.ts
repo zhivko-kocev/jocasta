@@ -1,46 +1,46 @@
-// The pure parts of scripts/scorecard.ts (0610, 0614, 0616): Biome's, jscpd's and `bun audit`'s output as lines.
+// The pure parts of scripts/scorecard.ts (0610, 0614, 0616, 0645): clippy's, jscpd's and cargo deny's output as lines.
 import { expect, test } from "bun:test";
-import { auditLine, biomeConfig, biomeLines, jscpdLine } from "../../scripts/scorecard.ts";
+import { clippyConfig, clippyLines, denyLine, jscpdLine } from "../../scripts/scorecard.ts";
 
-test("Biome's diagnostics are counted per rule, a rule with none is 0, and the config reports each at its threshold", () => {
-	const diagnostic = (category: string) => ({ category, severity: "warning" });
-	const json = `{"summary":{},"diagnostics":${JSON.stringify([
-		diagnostic("lint/complexity/noExcessiveCognitiveComplexity"),
-		diagnostic("lint/complexity/noExcessiveCognitiveComplexity"),
-		diagnostic("lint/style/noExcessiveLinesPerFile"),
-		diagnostic("lint/style/noNonNullAssertion"),
-	])}}`;
-	expect(biomeLines(`warning: experimental reporter\n${json}`)).toEqual([
-		"biome src complexity/noExcessiveCognitiveComplexity >25: 2",
-		"biome src complexity/noExcessiveLinesPerFunction >80: 0",
-		"biome src complexity/useMaxParams >4: 0",
-		"biome src style/noExcessiveLinesPerFile >800: 1",
+test("clippy's diagnostics are counted per lint once each, a lint with none is 0, and the config sets each threshold", () => {
+	const diagnostic = (code: string, file: string, line: number) =>
+		JSON.stringify({
+			reason: "compiler-message",
+			message: { code: { code }, spans: [{ file_name: file, line_start: line, is_primary: true }] },
+		});
+	const output = [
+		diagnostic("clippy::cognitive_complexity", "src/a.rs", 10),
+		diagnostic("clippy::cognitive_complexity", "src/a.rs", 10),
+		diagnostic("clippy::cognitive_complexity", "src/b.rs", 4),
+		diagnostic("clippy::too_many_lines", "src/c.rs", 1),
+		diagnostic("clippy::needless_return", "src/c.rs", 9),
+		JSON.stringify({ reason: "compiler-artifact" }),
+		"warning: not a json line",
+	].join("\n");
+	expect(clippyLines(output)).toEqual([
+		"clippy cognitive_complexity >25: 2",
+		"clippy too_many_lines >80: 1",
+		"clippy too_many_arguments >4: 0",
 	]);
-	const rules = JSON.parse(biomeConfig()).linter.rules;
-	expect(rules.recommended).toBe(false);
-	expect(rules.complexity.noExcessiveCognitiveComplexity).toEqual({
-		level: "warn",
-		options: { maxAllowedComplexity: 25 },
-	});
-	expect(rules.complexity.useMaxParams.options).toEqual({ max: 4 });
-	expect(rules.style.noExcessiveLinesPerFile.options).toEqual({ maxLines: 800 });
+	expect(clippyConfig()).toBe(
+		"cognitive-complexity-threshold = 25\ntoo-many-lines-threshold = 80\ntoo-many-arguments-threshold = 4\n",
+	);
 });
 
 test("jscpd's report gives the duplicated share to two places; a report without a total is an error, not 0%", () => {
 	const report = JSON.stringify({
 		statistics: { total: { percentage: 1.9712, clones: 65, duplicatedLines: 549, lines: 27838 } },
 	});
-	expect(jscpdLine("test", report)).toBe("jscpd test duplicated: 1.97% (65 clones, 549 of 27838 lines)");
-	expect(() => jscpdLine("test", "{}")).toThrow("no total");
+	expect(jscpdLine("src", report)).toBe("jscpd src duplicated: 1.97% (65 clones, 549 of 27838 lines)");
+	expect(() => jscpdLine("src", "{}")).toThrow("no total");
 });
 
-test("bun audit's advisories are counted by severity, and none is said as none", () => {
-	const advisory = (severity: string) => ({ id: 1, title: "x", severity });
-	const found = JSON.stringify({
-		dompurify: [advisory("critical"), advisory("high"), advisory("high")],
-		other: [advisory("low")],
-	});
-	expect(auditLine(found)).toBe("bun audit: 1 critical, 2 high, 1 low");
-	expect(auditLine("{}")).toBe("bun audit: none");
-	expect(() => auditLine("error: could not reach the registry")).toThrow();
+test("cargo deny's advisories are counted by severity, and none is said as none", () => {
+	const summary = (counts: Record<string, number>) =>
+		`{"fields":{"advisories":${JSON.stringify({ errors: 0, helps: 0, notes: 0, warnings: 0, ...counts })}},"type":"summary"}`;
+	expect(denyLine(`{"type":"diagnostic","fields":{}}\n${summary({ errors: 1, warnings: 2 })}`)).toBe(
+		"cargo deny advisories: 1 errors, 2 warnings",
+	);
+	expect(denyLine(summary({}))).toBe("cargo deny advisories: none");
+	expect(() => denyLine("error: could not reach the advisory database")).toThrow();
 });

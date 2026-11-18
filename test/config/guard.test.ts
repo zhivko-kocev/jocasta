@@ -1,71 +1,155 @@
-// The guard every pane loads (0450, 0476, 0580), through H1's evaluator (`bench/h1-guard/evaluate.ts`, the matcher
-// `src/shared/guard.ts` it wraps): whitespace runs collapse, `*` is the only wildcard, the match is anchored and
+// The guard every pane loads (0450, 0476, 0580), through H1's evaluator (the built `jocasta-bench h1-guard evaluate`,
+// the matcher `src/shared/guard.rs` it wraps): whitespace runs collapse, `*` is the only wildcard, the match is anchored and
 // case-sensitive, a deny or prompt rule fires on the whole command or any one segment of a compound one, and the first
 // matching rule wins. Each case runs again through omp's own resolver where omp 18.20.2 (H1's pinned omp) is installed
-// (`omp-verdicts.ts`: omp's `BashTool` approval and `resolveApproval` over the guard, nothing executed), asserting the
+// (`bench/h1-guard/omp-verdicts.ts`'s oracle: omp's `BashTool` approval and `resolveApproval` over the guard, nothing executed), asserting the
 // same verdicts; without it (CI) those tests are skipped and say why. omp's verdict here is its approval: `bash.gitGuard`
 // is a refusal by omp's embedded shell at run time, not an approval, and H1's live check measures it (0580).
-import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+
+import { afterAll, beforeAll, expect, test } from "bun:test";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type CorpusEntry, judge, parseGuard, type Verdict } from "../../bench/h1-guard/evaluate.ts";
-import { findOmpDir, loadOmp, ompJudge, PINNED_OMP } from "../../bench/h1-guard/omp-verdicts.ts";
-import { removeTree } from "../../src/shared/fsx.ts";
-import { shippedConfigDir } from "../../src/shared/install.ts";
+import { createInterface } from "node:readline";
+import { builtBinary, REPO_ROOT } from "../shared/binary.ts";
+import { removeTree } from "../shared/remove.ts";
 
-const file = join(shippedConfigDir(), "guard.yml");
+const file = join(REPO_ROOT, "config", "guard.yml");
 const text = readFileSync(file, "utf8");
-const rules = parseGuard(text, file);
-const gitGuard = (Bun.YAML.parse(text) as { bash: { gitGuard: boolean } }).bash.gitGuard;
+type Verdict = "allow" | "deny" | "prompt";
+const { bash } = Bun.YAML.parse(text) as {
+	bash: { gitGuard: boolean; patterns: { match: string; approval: Verdict }[] };
+};
+const gitGuard = bash.gitGuard;
+const rules = bash.patterns;
+
+/** One corpus line, as `jocasta-bench h1-guard evaluate` reads it. */
+interface CorpusEntry {
+	command: string;
+	expected: Verdict;
+	group: string;
+}
 
 /** A case's verdict and the guard pattern that decided it, if one did. */
 type Resolved = CorpusEntry & { verdict: Verdict; rule: string | null };
-type Resolver = (corpus: readonly CorpusEntry[]) => Resolved[];
+type Resolver = (corpus: readonly CorpusEntry[]) => Promise<Resolved[]>;
 
-/** H1's evaluator's verdict path. */
-const evaluator: Resolver = (corpus) => judge(corpus, rules);
+// The evaluator's debug build is made once, before the first case (a cold build takes minutes).
+beforeAll(() => {
+	builtBinary("jocasta-bench");
+}, 900_000);
+
+/** H1's evaluator's verdict path: the built `jocasta-bench h1-guard evaluate` over the shipped guard; its judged rows. */
+const evaluator: Resolver = async (corpus) => {
+	const dir = mkdtempSync(join(tmpdir(), "jocasta-guard-eval-"));
+	try {
+		const input = join(dir, "corpus.jsonl");
+		writeFileSync(input, `${corpus.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+		const out = join(dir, "rows");
+		const run = spawnSync(
+			builtBinary("jocasta-bench"),
+			["h1-guard", "evaluate", "--corpus", input, "--guard", file, "--resamples", "1", "--out", out],
+			{ encoding: "utf8", windowsHide: true },
+		);
+		if (run.status !== 0) throw new Error(`jocasta-bench h1-guard evaluate exited ${run.status}: ${run.stderr}`);
+		return readFileSync(join(out, "h1-guard.jsonl"), "utf8")
+			.split("\n")
+			.filter((line) => line !== "")
+			.map((line) => JSON.parse(line) as Resolved);
+	} finally {
+		removeTree(dir);
+	}
+};
+
+/** omp 18.20.2, H1's pinned omp: the oracle refuses any other version. */
+const PINNED_OMP = "18.20.2";
+
+/** What every answer line of the oracle starts with (`ORACLE_MARK` in `bench/h1-guard/omp-verdicts.ts`). */
+const ORACLE_MARK = "\u0001ORACLE ";
+
+/** The oracle (`bench/h1-guard/omp-verdicts.ts` run with Bun): one JSON request a line, one marked answer a line. */
+function startOracle(): { ask: (request: Record<string, unknown>) => Promise<unknown>; stop: () => void } {
+	const child: ChildProcess = spawn(process.execPath, [join(REPO_ROOT, "bench", "h1-guard", "omp-verdicts.ts")], {
+		stdio: ["pipe", "pipe", "inherit"],
+		windowsHide: true,
+	});
+	const lines = createInterface({ input: child.stdout as NodeJS.ReadableStream })[Symbol.asyncIterator]();
+	return {
+		async ask(request) {
+			child.stdin?.write(`${JSON.stringify(request)}\n`);
+			for (;;) {
+				const next = await lines.next();
+				if (next.done) throw new Error("the oracle ended");
+				if (!next.value.startsWith(ORACLE_MARK)) continue;
+				const reply = JSON.parse(next.value.slice(ORACLE_MARK.length)) as { ok?: unknown; error?: string };
+				if (reply.error !== undefined) throw new Error(reply.error);
+				return reply.ok;
+			}
+		},
+		stop: () => void child.kill(),
+	};
+}
+
+/** omp's approval for one line, as the oracle answers `judge`. */
+interface Approval {
+	approval: Verdict;
+	mechanism: string;
+	match: string | null;
+}
 
 /** omp's resolver over the shipped guard (an empty agent folder and cwd, as H1 runs it), or why there is none. */
-async function openOmp(): Promise<{ resolver: Resolver; empty: string } | { skip: string }> {
-	const dir = findOmpDir();
-	if (dir === undefined) return { skip: "omp isn't installed (not on PATH, not in Bun's global install)" };
-	let omp: Awaited<ReturnType<typeof loadOmp>>;
+async function openOmp(): Promise<{ resolver: Resolver; empty: string; stop: () => void } | { skip: string }> {
+	const oracle = startOracle();
 	try {
-		omp = await loadOmp(dir);
+		const dir = await oracle.ask({ op: "find" });
+		if (dir === null) throw new Error("omp isn't installed (not on PATH, not in Bun's global install)");
+		await oracle.ask({ op: "load", omp: dir, anyVersion: false });
+		const empty = mkdtempSync(join(tmpdir(), "jocasta-guard-omp-"));
+		await oracle.ask({ op: "judge-init", configFiles: [file], cwd: empty, agentDir: empty });
+		return {
+			empty,
+			stop: oracle.stop,
+			resolver: async (corpus) => {
+				const rows: Resolved[] = [];
+				for (const entry of corpus) {
+					const said = (await oracle.ask({ op: "judge", command: entry.command })) as Approval;
+					rows.push({
+						...entry,
+						verdict: said.approval,
+						rule: said.mechanism === "guard-pattern" ? said.match : null,
+					});
+				}
+				return rows;
+			},
+		};
 	} catch (error) {
+		oracle.stop();
 		return { skip: (error as Error).message };
 	}
-	const empty = mkdtempSync(join(tmpdir(), "jocasta-guard-omp-"));
-	const { judge: ompVerdict } = await ompJudge(omp, { configFiles: [file], cwd: empty, agentDir: empty });
-	return {
-		empty,
-		resolver: (corpus) =>
-			corpus.map((entry) => {
-				const said = ompVerdict(entry.command);
-				return { ...entry, verdict: said.approval, rule: said.mechanism === "guard-pattern" ? said.match : null };
-			}),
-	};
 }
 
 const omp = await openOmp();
 afterAll(() => {
-	if ("empty" in omp) removeTree(omp.empty);
+	if ("empty" in omp) {
+		omp.stop();
+		removeTree(omp.empty);
+	}
 });
 
 /** Registers `check` once through the evaluator and once through omp's resolver (skipped, with why, without omp). */
-function both(name: string, check: (resolve: Resolver) => void): void {
+function both(name: string, check: (resolve: Resolver) => Promise<void>): void {
 	test(name, () => check(evaluator));
 	if ("resolver" in omp) test(`${name}, by omp ${PINNED_OMP}'s resolver`, () => check(omp.resolver));
 	else test.skip(`${name}, by omp ${PINNED_OMP}'s resolver (skipped: ${omp.skip})`, () => {});
 }
 
 /** Every command in `expected` gets its verdict. */
-function expectVerdicts(resolve: Resolver, expected: Partial<Record<Verdict, string[]>>): void {
+async function expectVerdicts(resolve: Resolver, expected: Partial<Record<Verdict, string[]>>): Promise<void> {
 	const corpus = Object.entries(expected).flatMap(([verdict, commands]) =>
 		commands.map((command) => ({ command, expected: verdict as Verdict, group: "guard.test" })),
 	);
-	const rows = resolve(corpus);
+	const rows = await resolve(corpus);
 	expect(rows.map((row) => [row.command, row.verdict])).toEqual(corpus.map((entry) => [entry.command, entry.expected]));
 }
 
@@ -245,14 +329,14 @@ const GIT_DENIED = [
 
 both(
 	"every git deny rule has a corpus line here, and its GIT and Git copies deny the same command (0580)",
-	(resolve) => {
+	async (resolve) => {
 		const asDenied = (commands: readonly string[]) =>
 			resolve(commands.map((command) => ({ command, expected: "deny" as const, group: "guard.test" })));
 		const gitRules = rules.filter((rule) => rule.approval === "deny" && rule.match.startsWith("*git*"));
-		const hit = new Set(asDenied(GIT_DENIED).map((row) => row.rule));
+		const hit = new Set((await asDenied(GIT_DENIED)).map((row) => row.rule));
 		expect(gitRules.map((rule) => rule.match).filter((match) => !hit.has(match))).toEqual([]);
 		for (const program of ["GIT", "Git"]) {
-			const rows = asDenied(GIT_DENIED.map((command) => command.replace("git", program)));
+			const rows = await asDenied(GIT_DENIED.map((command) => command.replace("git", program)));
 			expect(rows.map((row) => [row.command, row.verdict, row.rule?.startsWith(`*${program}*`)])).toEqual(
 				rows.map((row) => [row.command, "deny", true]),
 			);

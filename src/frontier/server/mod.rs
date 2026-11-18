@@ -7,10 +7,39 @@ pub mod close;
 pub mod context;
 pub mod day;
 pub mod door_routes;
+#[cfg(test)]
+mod e2e_allow_tests;
+#[cfg(test)]
+mod e2e_day_tests;
+#[cfg(test)]
+mod e2e_finish_tests;
+#[cfg(test)]
+mod e2e_handoff_tests;
+#[cfg(test)]
+mod e2e_keys_tests;
+#[cfg(test)]
+mod e2e_pane_check_tests;
+#[cfg(test)]
+mod e2e_plans_tests;
+#[cfg(test)]
+mod e2e_push_gate_tests;
+#[cfg(test)]
+mod e2e_regressions_tests;
+#[cfg(test)]
+mod e2e_relaunch_tests;
+#[cfg(test)]
+mod e2e_thread_start_tests;
+#[cfg(test)]
+mod e2e_tools_tests;
 pub mod events;
 pub mod feed;
 pub mod finish;
 pub mod health_route;
+#[cfg(test)]
+#[allow(dead_code, reason = "the later waves' service tests build on these helpers")]
+pub(crate) mod helpers;
+#[cfg(test)]
+mod helpers_procs;
 pub mod herdr;
 pub mod history;
 pub mod hosts;

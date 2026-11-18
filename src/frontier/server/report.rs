@@ -5,6 +5,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
+use crate::setup::omp_settings::js_entries;
+
 pub const REPORT_RESULT: &str = "report_result";
 
 /// How a task ended.
@@ -212,7 +214,10 @@ fn record_error(
 	if !missing.is_empty() {
 		return message(path, &format!("must have required properties {}", missing.join(", ")));
 	}
-	if let Some(unknown) = object.keys().find(|key| !fields.iter().any(|(name, _)| name == key)) {
+	// The first unknown key named is the first the object has: in JavaScript's order, so array indexes come first.
+	if let Some((unknown, _)) =
+		js_entries(object).into_iter().find(|(key, _)| !fields.iter().any(|(name, _)| name == key))
+	{
 		return Some((path.clone(), Mismatch::Unknown(unknown.clone())));
 	}
 	fields.iter().find_map(|(name, shape)| {
@@ -358,6 +363,23 @@ mod tests {
 		assert_eq!(problem(&tests), "report_result: unknown field x in tests.0");
 		let decisions = with("decisions", json!([{"question": "q", "choice": "c", "why": "w", "z": 1}]));
 		assert_eq!(problem(&decisions), "report_result: unknown field z in decisions.0");
+		// The first unknown key named is the first in the JSON text, as typebox names it: not the alphabetical first.
+		let text: Value = serde_json::from_str(
+			r#"{"outcome":"done","zeta":1,"summary":"s","files":[],"tests":[],"decisions":[],"questions":[],"followUps":[],"alpha":2}"#,
+		)
+		.unwrap();
+		assert_eq!(problem(&text), "report_result: unknown field zeta in the report");
+		let tests: Value = serde_json::from_str(
+			r#"{"outcome":"done","summary":"s","files":[],"tests":[{"command":"c","passed":true,"zz":1,"aa":2}],"decisions":[],"questions":[],"followUps":[]}"#,
+		)
+		.unwrap();
+		assert_eq!(problem(&tests), "report_result: unknown field zz in tests.0");
+		// An array-index key comes first in a JavaScript object, whatever its place in the text.
+		let indexed: Value = serde_json::from_str(
+			r#"{"outcome":"done","zeta":1,"10":2,"2":3,"summary":"s","files":[],"tests":[],"decisions":[],"questions":[],"followUps":[]}"#,
+		)
+		.unwrap();
+		assert_eq!(problem(&indexed), "report_result: unknown field 2 in the report");
 		// Missing properties come before unknown ones in the same object.
 		let tests = with("tests", json!([{"x": 1}]));
 		assert_eq!(problem(&tests), "report_result: tests.0 must have required properties command, passed");

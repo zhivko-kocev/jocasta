@@ -13,12 +13,12 @@ runs, how often and what is measured is fixed there, as amended for the harness-
   `jocastaSha256`, the SHA-256 of the `jocasta` on PATH, so each row names the build it measured, 0533, 0576) and,
   where it has them, raw rows in `<out>/<name>.jsonl`. A script refuses an `--out` that already holds its `.jsonl`
   ("results are never overwritten"), so a rerun never mixes rows of two runs; tokscale parity rewrites its own rows.
-- Medians, p95 and percentile-bootstrap 95% CIs (10,000 resamples, seed 482) come from `lib/stats.ts`.
+- Medians, p95 and percentile-bootstrap 95% CIs (10,000 resamples, seed 482) come from `lib/stats.rs`.
 - Cost is priced with one table for every arm and benchmark (0538): LiteLLM's `model_prices_and_context_window.json`,
   fetched once and committed in `prices/` with `prices/source.json` (its URL at commit `e58354f0…398f` of
-  2026-11-08, fetched 2026-11-09, and its SHA-256, which `lib/prices.ts` checks on every load). Cache read and cache
-  write are priced apart, a 1-hour cache write at its own rate. The ledger (`lib/ledger.ts` on the product's
-  `src/shared/ledger.ts`, which owns the rows, waste and peak) reads omp's session files,
+  2026-11-08, fetched 2026-11-09, and its SHA-256, which `lib/prices.rs` checks on every load). Cache read and cache
+  write are priced apart, a 1-hour cache write at its own rate. The ledger (`lib/ledger.rs` on the product's
+  `src/shared/ledger.rs`, which owns the rows, waste and peak) reads omp's session files,
   Claude Code's transcripts and opencode's `opencode export` JSON into rows per model request (time, model, uncached
   input, cache read, cache write, output, cost) and per tool call (tool, argument hash, file path, result size,
   error). In omp's session files a request is every assistant message and every side call omp records as
@@ -33,15 +33,15 @@ runs, how often and what is measured is fixed there, as amended for the harness-
 
 | Script | Model calls | Where |
 |---|---|---|
-| `h1-guard/omp-verdicts.ts`, `h1-guard/evaluate.ts` | none | anywhere with omp 18.20.2 installed (no command runs) |
-| `h1-guard/live-check.ts` | 31 cheap-model turns (30 picks and a canary; a few cents) | 0481's VM (an ACP client records omp's calls, 0585) |
-| `h1-guard/git-guard-check.ts` | none, but it runs the corpus's git lines (`--run`) | the VM `JOCASTA-CLEAN` only |
-| `h7-longpath.ts` | none | anywhere (git only, temp folders) |
-| `h2-toast.ts`, `h3-recovery.ts`, `h5-startup.ts` | none, except `h2 --start` | a sandbox Jocasta |
-| `h4-isolation.ts` | the `h4 plant` thread's turn | his PC, in a sandbox Jocasta (0502) |
-| `h6-memory.ts`, `h8-parallel.ts` | the threads' turns | 0481's VM |
-| `h9-footprint.ts` | none | 0481's VM `JOCASTA-CLEAN` only (refused elsewhere) |
-| `tokscale-parity.ts` | none | the VM, with tokscale 4.21.0 on PATH |
+| `h1-guard omp-verdicts`, `h1-guard evaluate` | none | anywhere with omp 18.20.2 installed (no command runs) |
+| `h1-guard live-check` | 31 cheap-model turns (30 picks and a canary; a few cents) | 0481's VM (an ACP client records omp's calls, 0585) |
+| `h1-guard git-guard-check` | none, but it runs the corpus's git lines (`--run`) | the VM `JOCASTA-CLEAN` only |
+| `h7-longpath` | none | anywhere (git only, temp folders) |
+| `h2-toast`, `h3-recovery`, `h5-startup` | none, except `h2 --start` | a sandbox Jocasta |
+| `h4-isolation` | the `h4 plant` thread's turn | his PC, in a sandbox Jocasta (0502) |
+| `h6-memory`, `h8-parallel` | the threads' turns | 0481's VM |
+| `h9-footprint` | none | 0481's VM `JOCASTA-CLEAN` only (refused elsewhere) |
+| `tokscale-parity` | none | the VM, with tokscale 4.21.0 on PATH |
 
 The scripts that act on a running Jocasta (H2–H6, H8) refuse to start without a sandbox (0502, 0576): its own data
 folder in `JOCASTA_DATA_DIR` (not the OS default), a herdr session in `JOCASTA_HERDR_SESSION` that isn't `jocasta` (or
@@ -57,8 +57,8 @@ First of all, the VM's omp moves to 18.20.2 (0623), the way 0497 installed it:
 this commit goes there too, so every row runs on that omp and that build.
 
 Before the full runs (0588), each script runs once in the VM's sandbox, each into its own throwaway `--out` (checks,
-not results): every script's `--dry-run`, then `h3-recovery.ts --runs 1`, `h5-startup.ts --runs 1`,
-`h6-memory.ts --threads 0,1` and `h8-parallel.ts --threads 2`; anything broken is fixed before the long runs. These
+not results): every script's `--dry-run`, then `h3-recovery --runs 1`, `h5-startup --runs 1`,
+`h6-memory --threads 0,1` and `h8-parallel --threads 2`; anything broken is fixed before the long runs. These
 runs need setup's files in tester's omp folder (`restore-setup-files.ps1`); the task benchmark needs them out
 (`fullrun-prep.ps1`) and refuses to start while that folder gives its omp arms an MCP server (0587).
 
@@ -66,27 +66,29 @@ runs need setup's files in tester's omp folder (`restore-setup-files.ps1`); the 
 
 - **H1 (0482, 0500, 0501, 0535, 0600, 0623).** Four scripts; the corpus is a separate file and this folder holds no command list.
   H1 runs on the build's omp, 18.20.2 (0535, 0623); `--any-version` is the exploration override.
-  - `bun bench/h1-guard/omp-verdicts.ts --corpus <corpus.jsonl> --guard <guard.yml> --out <dir>
-    [--git-guard <git-guard-check.jsonl>] [--omp <package dir>] [--any-version]` imports omp's own
-    `config/settings.ts`, `tools/bash.ts` and `tools/approval.ts` from the install (found from `omp` on PATH or Bun's
+  - `jocasta-bench h1-guard omp-verdicts --corpus <corpus.jsonl> --guard <guard.yml> --out <dir>
+    [--git-guard <git-guard-check.jsonl>] [--omp <package dir>] [--any-version]` starts `bun
+    bench/h1-guard/omp-verdicts.ts`, the oracle (0636: the one TypeScript file of the bench, because omp loads only on
+    Bun), which imports omp's own `config/settings.ts`, `tools/bash.ts` and `tools/approval.ts` from the install (found
+    from `omp` on PATH or Bun's
     global install; anything but 18.20.2 is refused), loads the guard as `--config` over omp's defaults, builds the
     real `BashTool` on a session stub that throws if execution is reached, and asks omp's `resolveApproval` for each
     line, as a pane's tool wrapper does. Nothing runs. omp's git guard refuses only when the embedded shell runs `git`:
-    with `--git-guard` the refusals `git-guard-check.ts` measured decide for the lines it ran, and the
-    reimplementation (`git-guard.ts`) for the rest; each line's `gitGuardSource` says which. A line omp allows and the
+    with `--git-guard` the refusals `h1-guard git-guard-check` measured decide for the lines it ran, and the
+    reimplementation (`git_guard.rs`) for the rest; each line's `gitGuardSource` says which. A line omp allows and the
     git guard refuses is `deny` by `git-guard`. Writes `omp-verdicts.jsonl` (verdict, mechanism, the guard pattern,
     omp's approval alone, whether omp's critical list flagged it, the git guard's source, and the reimplementation's
     verdict) and prints where they disagree, by expected class and way of writing.
-  - `bun bench/h1-guard/git-guard-check.ts --corpus <corpus.jsonl> --out <dir> (--dry-run | --run)` measures the git
+  - `jocasta-bench h1-guard git-guard-check --corpus <corpus.jsonl> --out <dir> (--dry-run | --run)` measures the git
     guard. It takes every line made only of git (any spelling the corpus uses, also inside `pwsh -c`/`cmd /c`), `cd`
     and `echo` (423 lines), and runs each twice through omp's own `executeBash` in `C:\work\demo`, with
     `gitGuard: true` and then `false` as the control, each on a fresh fixture: commits on `main`, the branches the
     corpus names with `feature/x` holding its own commit, a tag, a bare `origin` with everything pushed, a stash entry,
     `src/app.ts` modified and an untracked file, with git's config isolated in a temp folder. It refuses without
     `--run`, off the VM `JOCASTA-CLEAN`, or when `C:\work` holds more than the fixture. Writes
-    `git-guard-check.jsonl` and `git-guard-check.json` (agreement with `git-guard.ts` per subcommand and way of writing,
+    `git-guard-check.jsonl` and `git-guard-check.json` (agreement with `git_guard.rs` per subcommand and way of writing,
     every disagreement listed).
-  - `bun bench/h1-guard/evaluate.ts --corpus <corpus.jsonl> [--guard <guard.yml>] [--verdicts <omp-verdicts.jsonl>]
+  - `jocasta-bench h1-guard evaluate --corpus <corpus.jsonl> [--guard <guard.yml>] [--verdicts <omp-verdicts.jsonl>]
     [--out <dir>]` scores, per group and per way of writing (0501: the collected commands as written, and each
     rewrite), deny recall, must-deny asked, must-ask stopped, false deny, false ask and ask rate, each with a CI. The
     as-written row is the 224 lines whose command is one of the collected commands as written: only 223 carry the
@@ -101,25 +103,25 @@ runs need setup's files in tester's omp folder (`restore-setup-files.ps1`); the 
     `D:/thesis/data/bench/h1/{pre-0485,0485,campaign}/`, omp 18.13.1's in `D:/thesis/data/bench/h1/omp-18.13.1/`;
     the build's runs on omp 18.20.2 go in a folder of their own (`D:/thesis/data/bench/h1/omp-18.20.2/`). omp
     18.18.1 changed how its pattern rules combine (a deny matching any part of a compound line beats any prompt;
-    critical patterns come before prompt rules), so `omp-verdicts.ts` is run again on the build's omp, 18.20.2 (on the
+    critical patterns come before prompt rules), so `h1-guard omp-verdicts` is run again on the build's omp, 18.20.2 (on the
     0580 corpus 18.18.6's verdicts matched 18.18.2's line for line before 0589's move, and 18.20.2's matched 18.20.0's
     before 0623's, though 18.20.1 also matches a segment without its leading `NAME=value` words); and 18.14.0 rewrote
     the git guard (whose checkout git is in first; refusals for a failed save of uncommitted changes and for
-    submodule recursion), so `git-guard-check.ts --run` is run again in the VM before H1 reports measured refusals.
+    submodule recursion), so `h1-guard git-guard-check --run` is run again in the VM before H1 reports measured refusals.
   - **The 0580 lines.** The guard's 0580 rules (combined force flags, trunk pushes, restore, update-ref and git's
     credentials, the graph's containers, omp's credentials and critical shapes, `gh repo edit --visibility`, the
     `*GIT*`/`*Git*` copies, merge and publish asks) each have labelled lines in the corpus's `dev` group, taken from
     `test/config/guard.test.ts` (the guard's author saw them, so they are `dev`, never held-out):
     `D:/thesis/data/bench/h1-dev-0580.jsonl` (206 lines; 201 after the builder's duplicates), built with
-    `build-corpus.ts --dev` into `D:/thesis/data/bench/h1-corpus-0580.jsonl` (1,486 lines, SHA-256 `37d77a8f…0718516`).
+    `h1-guard build-corpus --dev` into `D:/thesis/data/bench/h1-corpus-0580.jsonl` (1,486 lines, SHA-256 `37d77a8f…0718516`).
     Its 1,285 held-out lines are the frozen corpus's, byte for byte (`276b223a…39b1de32`, `corpus.sha256`).
-  - `bun bench/h1-guard/live-check.ts --corpus <corpus.jsonl> --out <dir> [--guard <guard.yml>] [--verdicts
+  - `jocasta-bench h1-guard live-check --corpus <corpus.jsonl> --out <dir> [--guard <guard.yml>] [--verdicts
     <omp-verdicts.jsonl>] [--model anthropic/claude-haiku-5-5] [--sample 30] [--seed 482]` is the design's check of the
     in-process verdicts against real omp: 30 random lines (seed 482), each one omp turn told to run that command once,
     read back as refused, asked or ran. The prompt shows the command verbatim between two marker lines (shown
     JSON-escaped, the model copied the escapes). A pick compares only when the call carries the command unchanged; the
     model may decline a destructive one (no-call), which leaves it out. **The recorder (0585)** is an ACP client
-    (`acp-recorder.ts`): each turn is `omp --mode acp` with the script as its client, which advertises a terminal, so
+    (`acp_recorder.rs`): each turn is `omp --mode acp` with the script as its client, which advertises a terminal, so
     every bash call omp's approval lets through comes to the client's `terminal/create` (recorded as ran; the
     terminal runs nothing and answers with a marker), a prompt verdict comes as `session/request_permission` (asked;
     the client rejects it once), and a deny ends the call with omp's policy text (refused). The overlay (a second
@@ -138,7 +140,7 @@ runs need setup's files in tester's omp folder (`restore-setup-files.ps1`); the 
     terminal (0585)`, that the outcomes agree with the in-process verdicts, and that no `h1-live-canary.txt` is left.
     The 18.13.1 run (24/24) used omp's bash interceptor as the recorder, which 18.15.0 moved into the bash tool's
     approval.
-- **H2, `bun bench/h2-toast.ts --out <dir> [--runs 30] [--condition host|herdr] [--start <project>]`.** Jocasta raises
+- **H2, `jocasta-bench h2-toast --out <dir> [--runs 30] [--condition host|herdr] [--start <project>]`.** Jocasta raises
   its notifications through herdr's `notification.show`, which herdr hands to Windows' notification service through
   the foreground client and answers `shown` (or `disabled`, `rate_limited`, `no_foreground_client`, `busy`). H2
   records herdr's `pane.agent_status_changed` pushes (t1, kept as a reference figure) and reads the service's
@@ -157,7 +159,7 @@ runs need setup's files in tester's omp folder (`restore-setup-files.ps1`); the 
   the last one's notification came, or after 5 minutes without one, which `h2-toast.json`'s `missed` lists. Writes
   `h2-toast.jsonl`, `h2-toast.json` (t1−t0, t3−t0 and the count of each herdr answer) and the run's lines of the log
   in `h2-notifications.jsonl`.
-- **H3, `bun bench/h3-recovery.ts --out <dir> [--runs 20] [--faults herdr,service,pane] [--restart jocasta]`.**
+- **H3, `jocasta-bench h3-recovery --out <dir> [--runs 20] [--faults herdr,service,pane] [--restart jocasta]`.**
   Kills herdr's server, the service, or one omp pane and times recovery from the moment the kill returned (the
   lookups before it; the herdr and pane faults' kill, the product's `killTree`, returns once the process tree is gone,
   about 50 ms after the bench's own kill did before 0573's fixes). Every fault counts as recovered when every
@@ -180,7 +182,7 @@ runs need setup's files in tester's omp folder (`restore-setup-files.ps1`); the 
   first). The plugin's `today` pane (0553) is left out of every pane check: it is no thread, and the service opens it
   again under a new id. Logging off and on is done by hand with the same checks. Writes `h3-recovery.jsonl` and
   `h3-recovery.json`.
-- **H4, `bun bench/h4-isolation.ts --out <dir> --project-a <p-…> --pane-a <pane> --pane-b <pane> [--canaries 50]
+- **H4, `jocasta-bench h4-isolation --out <dir> --project-a <p-…> --pane-a <pane> --pane-b <pane> [--canaries 50]
   [--runs 100] [--plant-timeout 30] [--skip-plant]`.** Runs on his PC in a sandbox Jocasta (0502). Plants the
   canaries through the service (0576): it starts a thread `h4 plant` in A as `jocasta thread new`
   does, whose brief tells it to call `report_result` once with exactly the canaries as decisions (`<topic> codename` =
@@ -194,7 +196,7 @@ runs need setup's files in tester's omp folder (`restore-setup-files.ps1`); the 
   project's `mnemopi.db` and `mnemopi.db-wal` for the canaries. Prints e.g. `0 leaks in 4,900 answered checks (2
   queries errored); positive control found canaries in 92/100 queries; 95% upper bound 3/4,900`. Writes
   `h4-canaries.json` and `h4-isolation.json`.
-- **H5, `bun bench/h5-startup.ts --out <dir> [--runs 20] [--tools jocasta,omp,claude,opencode] [--cwd <repo>]
+- **H5, `jocasta-bench h5-startup --out <dir> [--runs 20] [--tools jocasta,omp,claude,opencode] [--cwd <repo>]
   [--ready tool=<regex>]`.** Cold (after 30 s with the tool's processes gone; an OS-cold start needs a reboot per
   run) and warm starts. Jocasta ends at the same point as omp alone (0576): `readyMs` is the boss pane's screen
   matching omp's ready pattern; each row also has `bossIdleMs` (herdr reporting the boss's omp idle) and `serviceMs`
@@ -204,26 +206,26 @@ runs need setup's files in tester's omp folder (`restore-setup-files.ps1`); the 
   in a tab of a separate bench herdr session (`--pty-session bench-pty`; Bun's PTY is POSIX-only; never his session
   nor the sandbox's) and are timed to their ready pattern. Each starts as a command line runs its name
   (`toolCommand`: `Bun.which`, with npm's `.cmd` shim for an `.exe` replaced by that `.exe`), because herdr 0.9.5
-  picks npm's extensionless shim for Git Bash, which Windows can't start. The default patterns (`lib/launch.ts`) were
+  picks npm's extensionless shim for Git Bash, which Windows can't start. The default patterns (`lib/launch.rs`) were
   each seen in the VM on 2026-10-28: omp's prompt after 3.6 s, unsigned opencode's after 9.8 s cold while the VM was
   busy, and Claude Code's after 3.7 s (its footer reads "shift+tab to cycle" in its default auto mode, "? for
   shortcuts" in the others). Claude Code asks to trust each new folder, which a bench pane can't answer, so with it in
   the tools H5 and H6 need `--cwd` at a folder trusted once (in the VM, `C:\jc\bench-cwd`); a real run without one
   stops before any work. Writes `h5-startup.jsonl` and `h5-startup.json`.
-- **H6, `bun bench/h6-memory.ts --out <dir> [--threads 0,1,4,8] [--project <name>] [--tools omp,claude,opencode]
+- **H6, `jocasta-bench h6-memory --out <dir> [--threads 0,1,4,8] [--project <name>] [--tools omp,claude,opencode]
   [--idle 120] [--turn]`.** Working set and private bytes of Jocasta's processes with 0–8 threads: the service's tree,
   herdr's server tree (the panes with their omp and MCP processes) and each attached surface's tree (bare `jocasta`
   and its herdr client, `<data>/surfaces/`), summed and each part apart (`parts`), and each thread pane alone; each
   competitor in a bench pane after idle, and with `--turn` after one prompt. opencode runs unsigned (0506: its
   Anthropic sign-in takes only an API key), so it gets no prompt and `skipped` says why. Writes `h6-memory.jsonl` and
   `h6-memory.json`.
-- **H7, `bun bench/h7-longpath.ts --out <dir> [--lengths 100,…,240] [--root <dir>] [--home <dir>]
+- **H7, `jocasta-bench h7-longpath --out <dir> [--lengths 100,…,240] [--root <dir>] [--home <dir>]
   [--location name=<template>]`.** Fixture repos whose deepest file has a relative path of L characters, checked out
   with `git worktree add` at Jocasta's `<parent>/<name>.wt/<slug>`, herdr's `<home>/.herdr/worktrees/<name>/<slug>`
   and Claude Code's `<repo>/.claude/worktrees/<slug>` (confirm in the VM), with Git's default settings. vibe-kanban's
   folder is added with `--location` once confirmed. Writes `h7-longpath.jsonl` and `h7-longpath.json` (the largest
   passing L per location).
-- **H8, `bun bench/h8-parallel.ts --out <dir> --project <name> --repo <checkout> [--threads 2,4,8] [--layer on|off]
+- **H8, `jocasta-bench h8-parallel --out <dir> --project <name> --repo <checkout> [--threads 2,4,8] [--layer on|off]
   [--make-fixture]`.** Pairs of threads edit one file or one interface from both sides; reports wrong-thread edits,
   overlaps flagged before merge (`jocasta thread list`), `git merge-tree` conflicts, semantic failures and conflicts
   found only at merge. An interface pair is the "Passes Alone, Fails Together" case (0576): the fixture's
@@ -240,16 +242,16 @@ runs need setup's files in tester's omp folder (`restore-setup-files.ps1`); the 
   server's with the threads, and the attached surfaces' trees; sampled every 10 s) and, layer on, the run's shared
   check hits from the service's log (`readLayerCounters`). Writes `h8-parallel.jsonl` and
   `h8-parallel.json`.
-- **tokscale parity (0538), `bun bench/tokscale-parity.ts --out <task-benchmark runDir>`.** The ledger's parser check,
+- **tokscale parity (0538), `jocasta-bench tokscale-parity --out <task-benchmark runDir>`.** The ledger's parser check,
   bench-only: per saved session of the run, the ledger's uncached input, cache read, cache write and output against
   `tokscale models --json --group-by client,session,model` (omp's saved folders passed as `TOKSCALE_EXTRA_DIRS`, in a
   throwaway `TOKSCALE_CONFIG_DIR`; Claude Code's and opencode's records where they live in the VM). Tokens must match
   exactly; dollars aren't compared. tokscale is pinned at v4.21.0 (2026-11-02, MIT), the Windows binary from
   `https://github.com/junhoyeo/tokscale/releases/tag/v4.21.0`, approved for the VM only and not installed on his PC:
-  without it the script stops and `test/bench/tokscale-parity.test.ts`'s live case skips, saying so. Writes
+  without it the script stops and `tokscale_parity_tests.rs`'s live case skips, saying so. Writes
   `tokscale-parity.jsonl` (rewritten on each check) and `tokscale-parity.json`; exits 1 on a mismatch and 2 when it
   compared nothing (`bench: no saved sessions to compare in <runDir>\sessions (results.jsonl names <n> trials)`).
-- **H9, `bun bench/h9-footprint.ts --out <dir> --install "<command>" --uninstall "<command>" [--between "<command>"]
+- **H9, `jocasta-bench h9-footprint --out <dir> --install "<command>" --uninstall "<command>" [--between "<command>"]
   [--roots <dir,…>]`.** Runs only on the VM `JOCASTA-CLEAN` and refuses anywhere else before anything runs.
   Snapshots files (the default roots include `%USERPROFILE%\.config`, where setup writes its mise files, 0468) and the
   registry before install, after install, after `--between` (0481's setup, first run and a thread, when given) and
@@ -263,11 +265,11 @@ runs need setup's files in tester's omp folder (`restore-setup-files.ps1`); the 
 
 <!-- EVL -->
 
-**`bun evals/bench.ts --tasks <tasks.jsonl> --cache <dir> --out <runDir> [--study main|followup]
+**`jocasta-bench evals bench --tasks <tasks.jsonl> --cache <dir> --out <runDir> [--study main|followup]
 [--arms a0,a1,a2,a3,a4,a6,a7] [--reps 3] [--set main] [--only id,id] [--pilot] [--workers 2] [--seed 482]
 [--timeout 90] [--profile <omp profile>] [--work <dir>] [--pty-session bench-pty] [--validate] [--dry-run]`** runs the 40 curated tasks of
 `D:/thesis/data/bench/tasks/tasks.jsonl` through the eval runner's `runTrial` (same transcripts, usage and cost, line
-counts, findings and clean-clone hidden grading as `bun run evals`). The main run (0543) is 30 tasks × 3 reps × 7 arms
+counts, findings and clean-clone hidden grading as `jocasta-bench evals`). The main run (0543) is 30 tasks × 3 reps × 7 arms
 = 630 trials: A0 omp alone, A1 + the pane config, A2 + plan first, A3 + the review, A4 Claude Code, **A6** = A3 + the
 harness-OS layer, **A7** = opencode bare. Results go to `D:/thesis/data/bench/tasks/runs/<run>/`: `results.jsonl`
 (the runner's row plus `task`, `arm`, `language`, `attempt`, `trialIndex`, `leak` and `ledger`, the trial's ledger
@@ -296,15 +298,15 @@ stopped its trials. The fixed choices:
   first as Jocasta's threads do: not A3's `--plan-yolo`, but omp's interactive plan review answered "Approve and
   execute" (`plan_review: execute`); `modelRoles.default` and `.plan` are pinned to `anthropic/claude-opus-5-5:high`, so
   the review's planning role and execution tier stay on the arms' model. The layer is Jocasta's build, not the
-  bench's: each A6 trial imports `src/frontier/layer/bench.ts` (`LAYER_MODULE` in `evals/layer.ts`), whose
-  `benchLayer.setUp(trial)` returns the omp flags, overlay settings and environment that bring in the task file's brief,
+  bench's: each A6 trial runs `src/frontier/layer/bench.rs`, linked into `jocasta-bench` (`LAYER_MODULE` in `evals/layer.rs`), whose
+  `BENCH_LAYER.set_up(trial)` returns the omp flags, overlay settings and environment that bring in the task file's brief,
   `report_result`, the cached checks and `history_search` (0604; a trial has no past sessions, so it answers "Nothing
   in <project>'s history for that."), and a `close()`. The layer's data (its checks and endpoint file) goes in a
   folder of its own per trial, `%TEMP%\jl…`, removed at the trial's end; the trial roots stay in `--work` (EVL-1). A
   checkout without the layer build is refused before any trial ("A6 needs Jocasta's layer build", exit 2); the dry run
   marks such an arm `NOT RUNNABLE`. A6 has no code index (0605): relationship questions go to omp's `lsp`, and nothing
   is built before the trial's clock.
-- **The plan review (0567, `evals/plan-review.ts`):** omp 18.20.2 offers "Approve and execute" (the session is cleared
+- **The plan review (0567, `evals/plan_review.rs`):** omp 18.20.2 offers "Approve and execute" (the session is cleared
   before the plan-approved prompt) and "Approve and keep context" only in its interactive plan review; print mode has
   only `--plan-yolo` and ACP's approval, both keeping the planning context. The interactive review emits
   `plan_review_requested` to extensions, and `ctx.resolvePlanReview(reviewId, "execute" | "keep")` answers it as if he
@@ -333,7 +335,7 @@ stopped its trials. The fixed choices:
 - **Thinking level:** pinned to `high` in every arm: `a0.yaml` passes `--thinking high` (omp's default, inherited by
   A1–A3), `a4.yaml` `--effort high`.
 - **Prompt:** every arm gets `Fix the issue below in the repository in the current folder.` and a blank line, then
-  the task's `problem_statement` verbatim (`TASK_PROMPT_PREFIX` in `evals/tasks.ts`).
+  the task's `problem_statement` verbatim (`TASK_PROMPT_PREFIX` in `evals/tasks.rs`).
 - **Fixture:** the tree at `base_commit` without history, prepared once per task in `<cache>/<id>/fixture` from the
   shared bare repo `<cache>/repos/<owner>__<repo>.git` (`git fetch --depth 1 <repo_url> <base_commit>`), written through
   a throwaway index rather than `git archive` (which drops `export-ignore` files), without line-ending conversion;
@@ -422,8 +424,8 @@ not A6, which starts in plan mode, where omp turns prewalk's automatic switch of
 (0620, 0020). A `--prewalk` trial's results
 row has `prewalkSwitched`: whether omp's session file has a `model_change` entry with the role `prewalk`, which omp
 writes only when the switch fires (`session/prewalk.ts` `advanceAtTurnEnd` → `setModelTemporary` with
-`{ prewalk: true }`, `session/model-controls.ts`). `bun evals/keep.ts` pairs each comparison with its baseline (`baseline`
-in `evals/followup.ts`). `f-ponytail-if` is Ponytail with its "Running tests" rules inside
+`{ prewalk: true }`, `session/model-controls.ts`). `jocasta-bench evals keep` pairs each comparison with its baseline (`baseline`
+in `evals/followup.rs`). `f-ponytail-if` is Ponytail with its "Running tests" rules inside
 `<important if="you are running or writing tests">` (`evals/variants/ponytail-important-if.md`). pitchfork is no
 comparison (0560), and neither are keep-alive pings (0575): a trial has no idle gap for a ping (the review is answered
 inside the event and omp stops at the execution's end), so the task run reports them as not measured. The dry run
@@ -431,7 +433,7 @@ says `not compared: pitchfork (0560), keep-alive pings (no idle gap in a trial)`
 `check` tool isn't a comparison either: the fixtures have no mise check, so A6's tool answers "No checks" and cached
 checks are measured in H8 (0571). `--arms`,
 `--reps`, `--set`, `--only` and `--pilot` are refused with it. **The keep rule** (0543, written before any run),
-`bun evals/keep.ts --out <follow-up runDir>`: a tried feature stays when its paired cost per passing task (the ledger's
+`jocasta-bench evals keep --out <follow-up runDir>`: a tried feature stays when its paired cost per passing task (the ledger's
 priced cost summed over the pairs ÷ hidden-test passes) is lower and its pass rate isn't significantly lower (McNemar's
 exact test on the paired trials, Holm's correction over the three comparisons, α = 0.05), the feature being each arm's
 side.
@@ -439,12 +441,12 @@ Writes `keep.json`.
 
 The single cases of `evals/cases/`:
 
-`bun run evals` (`evals/`) runs the arms: `--variant a0` … `a4` (A0 omp alone, A1 + the pane config, A2 + plan
+`jocasta-bench evals` (`evals/`) runs the arms: `--variant a0` … `a4` (A0 omp alone, A1 + the pane config, A2 + plan
 first, A3 + the review turns, A4 Claude Code), `--profile <name>` for an omp profile apart from his daily one (log it
 in once), hidden graders (`hidden_checks` and a `hidden/` folder per case), and the same quota pacer (it waits while
-every Anthropic account has its 5-hour or 7-day window at 85% or more). `bun run evals compare <A> <B>` adds the paired
+every Anthropic account has its 5-hour or 7-day window at 85% or more). `jocasta-bench evals compare <A> <B>` adds the paired
 statistics (task bootstrap, pass^3, McNemar, Wilcoxon on wall time, cost and tokens, Holm). A4's model id and
 permission flag are Claude Code's documented ones; confirm them against `claude --help` in the VM. A5:
-`bun evals/a5.ts record --out <dir>` records the service's state feed (`/ws`, through `bench/lib/service-feed.ts`)
+`jocasta-bench evals a5 record --out <dir>` records the service's state feed (`/ws`, through `bench/lib/service_feed.rs`)
 during his sessions, and
-`bun evals/a5.ts report` counts interventions, attention minutes and the batch time from it and the session files.
+`jocasta-bench evals a5 report` counts interventions, attention minutes and the batch time from it and the session files.

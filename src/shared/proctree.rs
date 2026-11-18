@@ -61,6 +61,16 @@ pub fn pid_alive(pid: u32) -> bool {
 	pid > 0 && os::alive(pid)
 }
 
+/// SIGKILL (`TerminateProcess` on Windows) to `pid` alone, as Node's `process.kill(pid, "SIGKILL")` does: fails when no
+/// such process is alive.
+pub fn kill_process(pid: u32) -> Result<()> {
+	if !pid_alive(pid) {
+		return Err(crate::shared::errors::Error::other(format!("kill: no process {pid}")));
+	}
+	os::kill(pid);
+	Ok(())
+}
+
 /// FILETIME's epoch (1601-01-01) in Unix epoch milliseconds.
 const FILETIME_EPOCH_MS: i64 = 11_644_473_600_000;
 

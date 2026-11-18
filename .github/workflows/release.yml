@@ -1,8 +1,10 @@
 # Releases on a tag (0051): each target tested, then built on its own platform (0043; CR-07), packaged (0044) with its
 # checksum, then one GitHub release. whiteboard v0.5.2 is cloned at its pinned commit (the build refuses any other, 0417, 0615)
-# and built with Node 24 and pnpm through Corepack (0393); hunk comes from its npm platform package (0394). Each build
-# is checked for what scripts/build.ts ships (the install layout, appendix I) and its `jocasta --version` runs before
-# anything is uploaded. Only the publish job may write; every action is pinned to the commit its tag named when it was
+# and built with Node 24 and pnpm through Corepack (0393); hunk comes from its npm platform package (0394). The runner's
+# own rustup and mise (its official install script, 0476) read the repo's mise.toml and mise.lock; `mise run build`
+# is `cargo build --release --locked` then scripts/build.ts. Each build is checked for what the task ships (the install
+# layout, appendix I) and its `jocasta --version` runs before anything is uploaded; `jocasta-bench` is built beside it
+# in `dist/<target>/bench/` and stays out of the archive. Only the publish job may write; every action is pinned to the commit its tag named when it was
 # pinned.
 # Installer integrity (0484): before the release exists, the publish job commits `checksums.sha256` (one sha256sum line
 # per archive) on top of the release's tag and pushes that commit as the tag `checksums-<tag>`. install.ps1 and
@@ -34,25 +36,48 @@ jobs:
           - target: darwin-arm64
             os: macos-14
     runs-on: ${{ matrix.os }}
+    env:
+      # The mise release the install scripts fetch (checked against GitHub's SHASUMS256.txt by the script).
+      MISE_VERSION: 2026.10.17
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.4.3
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 24
+      # mise through its official install script (0476); both scripts put mise in ~/.local/bin.
+      - name: mise
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          irm https://mise.run/powershell | iex
+          Add-Content -Path $env:GITHUB_PATH -Value "$HOME\.local\bin"
+      - name: mise
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          curl -fsSL https://mise.run | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: mise install --locked
+        shell: bash
       - name: whiteboard v0.5.2
         shell: bash
         run: git clone --depth 1 --branch v0.5.2 https://github.com/devdotfast/whiteboard.git forks/whiteboard
-      - run: bun install --frozen-lockfile
-      - run: bun run typecheck
-      - run: bun run lint
-      - run: bun test
-      - run: bun run build --target ${{ matrix.target }}
-      - name: The build runs and carries what build.ts ships
+      - run: mise exec -- bun install --frozen-lockfile
+        shell: bash
+      - run: mise exec -- cargo fmt --check
+        shell: bash
+      - run: mise exec -- cargo clippy --all-targets --locked
+        shell: bash
+      - run: mise exec -- cargo nextest run --locked
+        shell: bash
+      - run: mise exec -- bun run typecheck
+        shell: bash
+      - run: mise exec -- bun run lint
+        shell: bash
+      - run: mise exec -- bun run test
+        shell: bash
+      - run: mise run build
+        shell: bash
+      - name: The build runs and carries what the build task ships
         shell: bash
         run: |
           set -euo pipefail
@@ -60,10 +85,17 @@ jobs:
           exe=""
           [ "${{ matrix.target }}" = windows-x64 ] && exe=".exe"
           "$out/jocasta$exe" --version
+          "$out/bench/jocasta-bench$exe" --help >/dev/null
           for part in "jocasta$exe" README.md CHANGELOG.md config/boss-manual.md "node/node$exe" whiteboard/dist/cli.js \
-            whiteboard-canvas/.vite/manifest.json editor.worker.js "hunk/hunk$exe"; do
+            whiteboard-canvas/.vite/manifest.json editor.worker.js "hunk/hunk$exe" "bench/jocasta-bench$exe"; do
             [ -e "$out/$part" ] || { echo "$out has no $part" >&2; exit 1; }
           done
+          # The archive carries the install layout without the VM's bench binary.
+          archive="dist/jocasta-${{ matrix.target }}.tar.gz"
+          [ "${{ matrix.target }}" = windows-x64 ] && archive="dist/jocasta-windows-x64.zip"
+          tarbin=tar
+          [ "${{ matrix.target }}" = windows-x64 ] && tarbin="$SYSTEMROOT/System32/tar.exe"
+          if "$tarbin" -tf "$archive" | grep -Eq '^(\./)?bench(/|$)|jocasta-bench'; then echo "$archive carries bench" >&2; exit 1; fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: jocasta-${{ matrix.target }}

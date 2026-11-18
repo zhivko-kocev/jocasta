@@ -23,7 +23,7 @@ export function canvasTrouble(error: string): CanvasTrouble {
 	if (/no mount function/i.test(error)) {
 		return {
 			reason: "Jocasta's whiteboard files don't match this version.",
-			remedy: "Reinstall Jocasta; in a development checkout, run bun run build.",
+			remedy: "Reinstall Jocasta; in a development checkout, run mise run build.",
 			transient: false,
 		};
 	}
@@ -46,7 +46,7 @@ export function canvasTrouble(error: string): CanvasTrouble {
 	if (/isn't built|ENOENT|no such file|not found|manifest|cannot find/i.test(error)) {
 		return {
 			reason: "Jocasta's whiteboard files are missing.",
-			remedy: "Reinstall Jocasta; in a development checkout, run bun run build.",
+			remedy: "Reinstall Jocasta; in a development checkout, run mise run build.",
 			transient: false,
 		};
 	}

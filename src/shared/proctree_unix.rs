@@ -1,7 +1,7 @@
 //! `proctree`'s POSIX reads and kills: `ps`, `/proc` on Linux, `lsof` on macOS, and `kill` for signals (no libc crate).
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use super::FolderProcess;
@@ -18,11 +18,12 @@ fn output_of(program: &str, args: &[&str], c_locale: bool) -> String {
 	command.output().map(|out| String::from_utf8_lossy(&out.stdout).into_owned()).unwrap_or_default()
 }
 
-/// Whether `pid` is alive: `/proc/<pid>` on Linux, else `kill -0` (EPERM, "not permitted", means it exists but
-/// belongs to someone else).
+/// Whether `pid` is alive: `/proc/<pid>/stat` on Linux (a zombie, which only waits for its parent to reap it, has
+/// ended, as it has for Bun, whose event loop reaps at once), else `kill -0` (EPERM, "not permitted", means it exists
+/// but belongs to someone else).
 pub fn alive(pid: u32) -> bool {
 	if cfg!(target_os = "linux") {
-		return Path::new(&format!("/proc/{pid}")).exists();
+		return std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| !is_ended(&stat));
 	}
 	let mut command = Command::new("kill");
 	command.args(["-0", &pid.to_string()]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
@@ -59,16 +60,20 @@ fn parse_lstart(text: &str) -> Option<f64> {
 	Some(local.timestamp_millis() as f64)
 }
 
+/// Whether `/proc/<pid>/stat`'s text says the process is a zombie or dead (state, the field after `comm`).
+fn is_ended(stat: &str) -> bool {
+	stat.rfind(')').and_then(|end| stat.get(end + 2..)).is_some_and(|rest| rest.starts_with(['Z', 'X']))
+}
+
 /// `/proc/<pid>/stat`'s starttime (clock ticks): `Some(None)` for a gone, zombie or dead process.
 fn linux_start(pid: u32) -> Option<f64> {
 	// After `comm` (field 2, which may hold spaces): state (field 3), then starttime (field 22, clock ticks).
 	let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-	let rest = stat.get(stat.rfind(')')? + 2..)?;
-	let fields: Vec<&str> = rest.split(' ').collect();
-	if matches!(fields.first(), Some(&"Z" | &"X")) {
+	if is_ended(&stat) {
 		return None;
 	}
-	fields.get(19)?.parse().ok()
+	let rest = stat.get(stat.rfind(')')? + 2..)?;
+	rest.split(' ').nth(19)?.parse().ok()
 }
 
 pub fn parents(groups: Option<&mut HashMap<u32, u32>>) -> BTreeMap<u32, u32> {

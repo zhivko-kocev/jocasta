@@ -4,7 +4,7 @@
 // Node's built-ins, since omp loads it from the shipped config folder, and answers nothing on any failure of its own.
 import { spawn } from "node:child_process";
 
-/** Holds the role's argv as a JSON array (`PANE_CHECK_ENV` in `src/shared/pane-check.ts`). */
+/** Holds the role's argv as a JSON array (`PANE_CHECK_ENV` in `src/shared/pane_check.rs`). */
 const COMMAND_ENV = "JOCASTA_PANE_CHECK";
 /** Under omp's 30 s limit for a handler (`PANE_CHECK_ASK_MS` is shorter than this). */
 export const LIMIT_MS = 27_000;

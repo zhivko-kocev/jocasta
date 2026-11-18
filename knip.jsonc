@@ -1,32 +1,13 @@
 // knip (0614): the files, exports and dependencies nothing uses. Run as `bunx knip`.
 {
 	"$schema": "https://unpkg.com/knip@6/schema.json",
-	// What starts at no import: the product's entry, the PTT worker (started with `new Worker`), the canvas page's script
-	// (index.html names it; knip does not read the page), the scripts, the bench programs bench/README.md names, the omp
-	// extension project panes load with `-e` (0617), and the programs tests spawn as stand-ins for omp, claude, gh, hunk,
-	// mise and a page server. evals/run.ts and the tests are found from package.json's scripts and the Bun test plugin.
-	"entry": [
-		"src/entry.ts",
-		"src/frontier/server/ptt-worker.ts",
-		"src/frontier/canvas/main.ts",
-		"scripts/*.ts",
-		"bench/*.ts",
-		"bench/h1-guard/*.ts",
-		"test/bench/fake-omp-acp.ts",
-		"test/evals/fixtures/*.ts",
-		"test/frontier/server/fake-*.ts",
-		"test/frontier/server/fixtures/serve-page.ts",
-		"config/pane-check-extension.ts"
-	],
-	"project": ["src/**", "scripts/**", "evals/**", "bench/**", "test/**"],
-	"ignore": [
-		// Fixtures of the eval tasks: failing code on purpose, run in a sandbox, never imported (bunfig.toml).
-		"evals/cases/**",
-		// A git submodule (.gitmodules): another project's code and tests, not Jocasta's.
-		"forks/**"
-	],
+	// What starts at no import: the canvas page's script (index.html names it; knip does not read the page), the
+	// scripts, H1's oracle (the Rust bench starts it with Bun, 0636) and the omp extension project panes load with `-e`
+	// (0617). The tests are found from package.json's scripts and the Bun test plugin.
+	"entry": ["src/frontier/canvas/main.ts", "scripts/*.ts", "bench/h1-guard/*.ts", "config/pane-check-extension.ts"],
+	"project": ["src/**", "scripts/**", "bench/**", "test/**"],
+	// A git submodule (.gitmodules): another project's code and tests, not Jocasta's.
+	"ignore": ["forks/**"],
 	// jscpd is a command, run by hand (0614), and is imported nowhere.
-	"ignoreDependencies": ["jscpd"],
-	// Programs the code starts that are no package: Windows' reg, and the installed jocasta the bench measures.
-	"ignoreBinaries": ["reg", "reg.exe", "jocasta"]
+	"ignoreDependencies": ["jscpd"]
 }

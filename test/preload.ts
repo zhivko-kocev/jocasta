@@ -12,7 +12,7 @@ import { afterAll } from "bun:test";
 import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { removeTree } from "../src/shared/fsx.ts";
+import { removeTree } from "./shared/remove.ts";
 
 const root = realpathSync.native(mkdtempSync(join(tmpdir(), "jocasta-sandbox-")));
 process.env.JOCASTA_CODING_AGENT_DIR = join(root, "config");

@@ -323,3 +323,15 @@ The tables above are the 0481 campaign's map of 2026-10-24 and stay as they were
 | The index's "Amended by" column, checked against the records' own "amends" lines (0622) | `test/docs/process-rules.test.ts` | none | pass (automated) |
 
 Every decided slice of 0599–0624 is built. The 0617 build's second review (0624, Opus 5.5) found three faults and two test gaps, all fixed with tests in `test/frontier/server/pane-check.test.ts` and `test/config/pane-check-extension.test.ts`; the run against a real omp is still pending.
+
+## The Rust port and its cutover (2026-11-15/18, records 0625–0647)
+
+| Surface | Automated test | Live check | Verdict |
+|---|---|---|---|
+| Every module ported case for case from its TypeScript tests (0630) | the `<module>_tests.rs` beside each module, `tests/entry.rs`, `tests/herdr_config.rs` | none | pass (automated): 1469 tests on Windows (2026-11-18) |
+| The service's own tests through the real server (wave 12) | `src/frontier/server/e2e_*_tests.rs` | none | pass (automated) |
+| 0610's three syntax-tree checks on `syn` (0645) | `tests/tree_checks.rs` with `tests/tree-baseline.txt` | none | pass (automated) |
+| The load check: the e2e tests looped beside a release build (0628) | the e2e tests | none | pass after two race fixes; B1's test 600 of 600 |
+| The installed release: setup, diagnose, the service, the boss's tools, the CLI on a throwaway project and thread, the pages, Stop everything | none | `install.ps1` from the local build into a sandbox, its own herdr session and port | pass; open: Stop everything counted an idle thread as working (0434's rule, as the TypeScript) |
+| The herdr live smokes | `live_smoke_*` in `herdr_tests.rs` (`mise run smoke`) | a throwaway herdr session | not run in the 2026-11-18 gate |
+| The Linux suite (0643) | the same suite in his WSL Ubuntu | none | pass at each wave's integration (1459 at the bench port's third wave); not rerun on 2026-11-18's fix |

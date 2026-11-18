@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { removeTree } from "../../src/shared/fsx.ts";
+import { removeTree } from "../shared/remove.ts";
 import { treeFindings } from "./tree-checks.ts";
 
 // 0610's syntax-tree checks over `src`: flag parameters, functions that only forward, exported items without a

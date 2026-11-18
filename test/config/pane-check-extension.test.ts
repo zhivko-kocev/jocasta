@@ -1,6 +1,18 @@
 import { afterEach, expect, jest, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import paneCheckExtension, { LIMIT_MS } from "../../config/pane-check-extension.ts";
-import { PANE_CHECK_ASK_MS, PANE_CHECK_ENV, PANE_CHECK_WAIT_MS } from "../../src/shared/pane-check.ts";
+
+/** A `pub const NAME: type = value;` of `src/shared/pane_check.rs` (the service's side of the contract), as written there. */
+function rustConst(name: string): string {
+	const source = readFileSync(join(import.meta.dir, "..", "..", "src", "shared", "pane_check.rs"), "utf8");
+	const found = source.match(new RegExp(`^pub const ${name}: [^=]+= (.+);$`, "m"))?.[1];
+	if (found === undefined) throw new Error(`pane_check.rs has no pub const ${name}`);
+	return found;
+}
+const PANE_CHECK_ENV = JSON.parse(rustConst("PANE_CHECK_ENV")) as string;
+const PANE_CHECK_WAIT_MS = Number(rustConst("PANE_CHECK_WAIT_MS").replaceAll("_", ""));
+const PANE_CHECK_ASK_MS = Number(rustConst("PANE_CHECK_ASK_MS").replaceAll("_", ""));
 
 /** omp 18.20.2's limit for an extension's handler (`extensibility/extensions/runner.ts`, `EXTENSION_HANDLER_TIMEOUT_MS`). */
 const OMP_HANDLER_LIMIT_MS = 30_000;

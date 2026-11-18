@@ -39,7 +39,7 @@ fn plain(path: PathBuf) -> PathBuf {
 }
 
 /// `path` with its `.` and `..` steps resolved by name alone, as Node's `path.join` and `path.resolve` do.
-pub(crate) fn normalize(path: &Path) -> PathBuf {
+pub fn normalize(path: &Path) -> PathBuf {
 	let mut parts: Vec<Component> = Vec::new();
 	for part in path.components() {
 		match part {
@@ -126,6 +126,15 @@ fn write_and_rename(temp: &Path, target: &WriteTarget, data: &[u8], mode: Option
 	}
 }
 
+/// A temp file beside `file` for one write: the process id and a fresh suffix, so neither two processes nor two threads
+/// of one process writing the same file at once share it (one rename would find it moved already).
+pub fn temp_beside(file: &Path) -> PathBuf {
+	let short = uuid::Uuid::new_v4().simple().to_string();
+	let mut temp = OsString::from(file);
+	temp.push(format!(".{}-{}.tmp", std::process::id(), &short[..8]));
+	PathBuf::from(temp)
+}
+
 /// Writes `file` through a temp file in the same folder and a rename, so a crash or a full disk never leaves it torn.
 /// A symlinked `file` writes its target; an existing file keeps its permission bits. `mode` applies to a new file
 /// (POSIX only; Windows ignores it). A rename Windows refuses while another process has the file open is tried again
@@ -135,9 +144,7 @@ pub fn write_atomically(file: &Path, data: impl AsRef<[u8]>, mode: Option<u32>) 
 	if let Some(dir) = target.path.parent() {
 		fs::create_dir_all(dir)?;
 	}
-	let mut temp = OsString::from(&target.path);
-	temp.push(format!(".{}.tmp", std::process::id()));
-	let temp = PathBuf::from(temp);
+	let temp = temp_beside(&target.path);
 	write_and_rename(&temp, &target, data.as_ref(), mode).inspect_err(|_| {
 		let _ = fs::remove_file(&temp);
 	})?;
@@ -539,6 +546,30 @@ mod tests {
 		write_atomically(&file, "two\n", None).unwrap();
 		assert_eq!(fs::read_to_string(&file).unwrap(), "two\n");
 		let names: Vec<_> = fs::read_dir(root.join("deep")).unwrap().map(|e| e.unwrap().file_name()).collect();
+		assert_eq!(names, vec![OsString::from("state.json")]);
+	}
+
+	#[test]
+	fn write_atomically_lets_threads_of_one_process_write_the_same_file_at_once() {
+		// The service's tasks run on many threads: two writes of one file must not share a temp file, or one rename
+		// finds it already moved (ENOENT).
+		let (_dir, root) = root();
+		let file = root.join("state.json");
+		let writers: Vec<_> = (0..8)
+			.map(|writer| {
+				let file = file.clone();
+				std::thread::spawn(move || {
+					(0..40).try_for_each(|round| write_atomically(&file, format!("{writer}-{round}\n"), None))
+				})
+			})
+			.collect();
+		for writer in writers {
+			writer.join().unwrap().unwrap();
+		}
+		let text = fs::read_to_string(&file).unwrap();
+		let (writer, round) = text.trim_end().split_once('-').unwrap();
+		assert!(writer.parse::<u8>().unwrap() < 8 && round.parse::<u8>().unwrap() < 40 && text.ends_with('\n'));
+		let names: Vec<_> = fs::read_dir(&root).unwrap().map(|e| e.unwrap().file_name()).collect();
 		assert_eq!(names, vec![OsString::from("state.json")]);
 	}
 

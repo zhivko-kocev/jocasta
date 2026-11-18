@@ -11,7 +11,7 @@ use super::*;
 use crate::shared::poll::wait_for;
 use crate::shared::testing::{TempDir, temp_dir};
 
-const SLEEPER_VAR: &str = "JOCASTA_TEST_SLEEPER";
+pub(crate) const SLEEPER_VAR: &str = "JOCASTA_TEST_SLEEPER";
 const SHIM_VAR: &str = "JOCASTA_TEST_SHIM";
 
 /// Waits until `check` holds, at most 10 s: real processes start and end on the OS clock, not a fake one.
@@ -55,7 +55,7 @@ fn sleep_on() {
 	}
 }
 
-fn pid_files(dir: &Path, prefix: &str) -> Vec<u32> {
+pub(crate) fn pid_files(dir: &Path, prefix: &str) -> Vec<u32> {
 	let mut found: Vec<u32> = std::fs::read_dir(dir)
 		.into_iter()
 		.flatten()

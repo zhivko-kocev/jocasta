@@ -20,7 +20,7 @@ async function connect(): Promise<WhiteboardConnection> {
 	}
 	if (!response.ok || !body || typeof body !== "object" || !("url" in body))
 		throw new Error(said ?? `${response.status}`);
-	// The service's own reply (server.ts `whiteboardConnection`).
+	// The service's own reply (`whiteboard_connection` in page_routes.rs).
 	return body as WhiteboardConnection;
 }
 

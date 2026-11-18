@@ -1,7 +1,10 @@
-// Per-target compile and packaging (0043, 0044, 0552): `jocasta.exe` (the command, the Jocasta service it starts and
-// `jocasta mcp`, with whiteboard's canvas page inside) and the shipped `config/` beside the exe (0392); whiteboard's
-// runtime with its Node 24, its canvas build and Monaco's worker (0393, 0411, 0417), and hunk (0394).
-// Usage: bun run build --target <windows-x64|linux-x64|darwin-arm64>
+// Packaging (0043, 0044, 0552, 0636): `mise run build` runs `cargo build --release --locked` (the `jocasta` product,
+// with the canvas page and Monaco's worker inside it by build.rs, 0639, and `jocasta-bench`), then this script, which lays
+// out `dist/<target>/`: `target/release/jocasta` beside the shipped `config/` (0392), whiteboard's runtime with its Node
+// 24, its canvas build and Monaco's worker (0393, 0411, 0417), and hunk (0394), packs it and writes the archive's
+// `.sha256`. `jocasta-bench` goes to `dist/<target>/bench/` for the VM and stays out of the archive.
+// Each target builds on its own OS (0043): the target is this machine's.
+// Usage: mise run build
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -16,24 +19,13 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { dirname, join, parse, resolve } from "node:path";
-import { $, type BuildConfig, type BunPlugin } from "bun";
-import { git } from "../src/shared/git.ts";
+import { $, type BuildConfig } from "bun";
 
 const TARGETS = ["windows-x64", "linux-x64", "darwin-arm64"] as const;
 type Target = (typeof TARGETS)[number];
 
 const root = resolve(import.meta.dir, "..");
 const dist = join(root, "dist");
-
-function parseTarget(argv: string[]): Target {
-	const i = argv.indexOf("--target");
-	const value = i >= 0 ? argv[i + 1] : undefined;
-	if (!value || !(TARGETS as readonly string[]).includes(value)) {
-		console.error(`build: --target must be one of ${TARGETS.join(", ")}`);
-		process.exit(2);
-	}
-	return value as Target;
-}
 
 const uiIndex = join(root, "src/frontier/canvas/index.html");
 const sha1 = (path: string) => createHash("sha1").update(readFileSync(path)).digest("hex");
@@ -77,8 +69,13 @@ const HOST: Target | undefined =
 				? "darwin-arm64"
 				: undefined;
 
-/** whiteboard v0.5.2, the submodule at `forks/whiteboard` (0393, 0417, 0564, 0615); never modified. */
-const WHITEBOARD = join(root, "forks", "whiteboard");
+/**
+ * whiteboard v0.5.2, the submodule at `forks/whiteboard` (0393, 0417, 0564, 0615); never modified. Its real path, so a
+ * junction or symlink to the clone (a second workspace sharing it) is the same clone to the rebuild key.
+ */
+const WHITEBOARD = existsSync(join(root, "forks", "whiteboard"))
+	? realpathSync(join(root, "forks", "whiteboard"))
+	: join(root, "forks", "whiteboard");
 /** The commit tag v0.5.2 names (0383, 0417, 0615): a clone anywhere else is refused (SEC-7). */
 const WHITEBOARD_COMMIT = "03d373ab0bf64ae3e3a5e4e1e592cb4fd173871d";
 /**
@@ -130,7 +127,8 @@ const TAR = process.platform === "win32" ? join(process.env.SystemRoot ?? "C:\\W
 function whiteboardCommit(): string | undefined {
 	let head: string | undefined;
 	try {
-		head = git(WHITEBOARD, ["rev-parse", "HEAD"]);
+		const result = spawnSync("git", ["-C", WHITEBOARD, "rev-parse", "HEAD"], { encoding: "utf8" });
+		if (result.status === 0) head = result.stdout.trim();
 	} catch {
 		// git couldn't run: the clone's content identifies it.
 	}
@@ -367,63 +365,38 @@ function clearOut(out: string): void {
 	}
 }
 
-/**
- * OpenTUI's tree-sitter assets (its wasm, parser worker and grammars, 5.2 MB) as empty files: `today` and `ask` draw
- * plain text and never highlight, so the exe carries none of them (PERF-10). An OpenTUI feature that highlights would
- * need them back.
- */
-const NO_TREE_SITTER: BunPlugin = {
-	name: "no-tree-sitter",
-	setup(build) {
-		build.onResolve({ filter: /(tree-sitter\.wasm|parser\.worker(\.[jt]s)?|\.scm)$|assets[\\/].*\.wasm$/ }, (args) =>
-			/opentui|web-tree-sitter/.test(args.importer + args.path) ? { path: args.path, namespace: "empty" } : undefined,
-		);
-		build.onLoad({ filter: /.*/, namespace: "empty" }, () => ({ contents: "", loader: "file" }));
-	},
-};
-
-async function build(target: Target): Promise<void> {
+async function build(): Promise<void> {
+	if (!HOST) fail(`${process.platform}-${process.arch} builds none of ${TARGETS.join(", ")}`);
+	const target = HOST;
 	const out = join(dist, target);
+	const ext = target.startsWith("windows") ? ".exe" : "";
 	// The last build's archive goes first: a build that fails later leaves nothing installable with
 	// JOCASTA_INSTALL_FROM=dist.
 	if (existsSync(dist)) {
 		for (const name of readdirSync(dist)) if (name.startsWith(`jocasta-${target}.`)) rmSync(join(dist, name));
 	}
+	const release = join(root, "target", "release");
+	for (const name of ["jocasta", "jocasta-bench"]) {
+		const exePath = join(release, `${name}${ext}`);
+		if (!existsSync(exePath)) fail(`${exePath} is missing: run \`mise run build\`, which runs cargo build first`);
+	}
 	clearOut(out);
 	mkdirSync(out, { recursive: true });
-	const exe = join(out, target.startsWith("windows") ? "jocasta.exe" : "jocasta");
-
-	// The command, its service and the service's whiteboard canvas page (an HTML import, bundled into the exe), with
-	// the push-to-talk hook's worker as its own entry so the exe carries it (0552, 0556). Compiled to bytecode (ESM:
-	// entry.ts awaits at top level): every start skips parsing the bundle, `--help` 76 → 22 ms and `mcp` to its
-	// `initialize` reply 83 → 23 ms (PERF-6). OpenTUI's tree-sitter assets stay out (PERF-10).
-	await guardedBuild({
-		entrypoints: [join(root, "src/entry.ts"), join(root, "src/frontier/server/ptt-worker.ts")],
-		root,
-		compile: { target: `bun-${target}`, outfile: exe, autoloadBunfig: false },
-		bytecode: true,
-		format: "esm",
-		minify: true,
-		define: { "process.env.NODE_ENV": '"production"' },
-		plugins: [NO_TREE_SITTER],
-	});
+	cpSync(join(release, `jocasta${ext}`), join(out, `jocasta${ext}`));
+	// The VM's benchmarks run it; the archive leaves it out (see `pack`).
+	mkdirSync(join(out, BENCH), { recursive: true });
+	cpSync(join(release, `jocasta-bench${ext}`), join(out, BENCH, `jocasta-bench${ext}`));
 
 	cpSync(join(root, "README.md"), join(out, "README.md"));
 	cpSync(join(root, "CHANGELOG.md"), join(out, "CHANGELOG.md"));
 	// The boss manual and the templates `jocasta setup` writes from, beside the exe (0392, 0396, 0401).
 	cpSync(join(root, "config"), join(out, "config"), { recursive: true });
 
-	// whiteboard (0393) and hunk (0394) ship native pieces installed for this machine's platform only, so they join
-	// the target this machine is; elsewhere `jocasta setup` says whiteboard isn't there.
 	buildWhiteboard();
-	if (target === HOST) {
-		shipWhiteboardRuntime(join(out, "whiteboard"));
-		await shipNode(target, join(out, "node"));
-		shipHunk(target, join(out, "hunk"));
-	} else {
-		console.log(`build: ${target} isn't this machine's platform; whiteboard, Node and hunk are left out`);
-	}
-	// whiteboard's canvas build and its LICENSE, served to the canvas page from beside the exe (0393, whiteboard.ts).
+	shipWhiteboardRuntime(join(out, "whiteboard"));
+	await shipNode(target, join(out, "node"));
+	shipHunk(target, join(out, "hunk"));
+	// whiteboard's canvas build and its LICENSE, served to the canvas page from beside the exe (0393, whiteboard.rs).
 	cpSync(CANVAS_BUILD, join(out, "whiteboard-canvas"), { recursive: true });
 	cpSync(join(WHITEBOARD, "LICENSE"), join(out, "whiteboard-canvas", "LICENSE"));
 	// Monaco's editor worker (0411), its own module beside the exe; the stylesheet its imports drag in is dead.
@@ -441,19 +414,23 @@ async function build(target: Target): Promise<void> {
 	await pack(target, out);
 }
 
+/** The folder in `dist/<target>/` holding `jocasta-bench`: never in the archive. */
+const BENCH = "bench";
+
 async function pack(target: Target, out: string): Promise<void> {
 	const archive = target.startsWith("windows") ? `jocasta-${target}.zip` : `jocasta-${target}.tar.gz`;
 	const archivePath = join(dist, archive);
 	rmSync(archivePath, { force: true });
+	const entries = readdirSync(out).filter((name) => name !== BENCH);
 	if (archive.endsWith(".zip")) {
-		if (process.platform === "win32") await $`${TAR} -a -c -f ${archivePath} *`.cwd(out);
-		else await $`zip -qr ${archivePath} .`.cwd(out);
+		if (process.platform === "win32") await $`${TAR} -a -c -f ${archivePath} ${entries}`.cwd(out);
+		else await $`zip -qr ${archivePath} ${entries}`.cwd(out);
 	} else {
-		await $`tar -czf ${archivePath} .`.cwd(out);
+		await $`tar -czf ${archivePath} ${entries}`.cwd(out);
 	}
 	const hash = createHash("sha256").update(readFileSync(archivePath)).digest("hex");
 	writeFileSync(`${archivePath}.sha256`, `${hash}  ${archive}\n`);
 	console.log(`build: ${archive} ${hash}`);
 }
 
-await build(parseTarget(process.argv.slice(2)));
+await build();

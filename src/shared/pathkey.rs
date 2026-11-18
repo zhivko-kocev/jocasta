@@ -4,7 +4,7 @@
 use std::path::{Component, Path, PathBuf};
 
 /// `path.resolve`: an absolute path against the working folder, with `.` and `..` folded away (no file system access).
-fn resolve(path: &Path) -> PathBuf {
+pub fn resolve(path: &Path) -> PathBuf {
 	let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
 	let mut out = PathBuf::new();
 	for part in absolute.components() {

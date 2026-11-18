@@ -1,12 +1,11 @@
 // Headless Edge driven over the Chrome DevTools Protocol, for page checks against a real Frontier server. One Edge per
 // test file (`Edge.launch`); each test gets a tab in a browser context of its own (`edge.tab()`), so no cookie, cache
 // or storage carries over from another test.
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { removeTree } from "../../../src/shared/fsx.ts";
-import { endProcesses, processIdOf } from "../../../src/shared/proctree.ts";
+import { removeTree } from "../../shared/remove.ts";
 
 export const EDGE = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe";
 
@@ -149,14 +148,15 @@ export class Edge {
 	 * said and left for a later launch's sweep.
 	 */
 	async close(): Promise<void> {
-		const root = this.proc.pid === undefined ? undefined : processIdOf(this.proc.pid);
+		const root = this.proc.pid;
 		const exited = Promise.withResolvers<void>();
 		if (this.proc.exitCode !== null) exited.resolve();
 		else this.proc.once("exit", () => exited.resolve());
 		await this.browser.send("Browser.close").catch(() => this.proc.kill());
 		await Promise.race([exited.promise, Bun.sleep(5000)]);
 		this.browser.close();
-		if (root) await endProcesses([root]);
+		// Edge is Windows-only here (`EDGE`): its helpers still holding the profile go with the tree.
+		if (root) spawnSync("taskkill", ["/PID", String(root), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
 		// An ended process's open files close a moment after it's gone.
 		const end = Date.now() + PROFILE_REMOVAL_MS;
 		for (;;) {

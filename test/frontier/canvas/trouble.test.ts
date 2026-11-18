@@ -36,7 +36,7 @@ test("whiteboard's files that didn't load can be tried again; a canvas build wit
 		line("couldn't load http://127.0.0.1:47401/assets/canvas.js: Failed to fetch dynamically imported module"),
 	).toEqual(notLoaded);
 	expect(line("whiteboard's canvas bundle has no mount function")).toEqual({
-		text: "Jocasta's whiteboard files don't match this version. Reinstall Jocasta; in a development checkout, run bun run build.",
+		text: "Jocasta's whiteboard files don't match this version. Reinstall Jocasta; in a development checkout, run mise run build.",
 		tryAgain: false,
 	});
 });

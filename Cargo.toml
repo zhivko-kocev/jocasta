@@ -24,6 +24,12 @@ path = "src/main.rs"
 name = "jocasta-bench"
 path = "bench/main.rs"
 
+# Test support (0636): the sandbox, temp folders and the clock and environment seams the library's tests use
+# (`shared::testing`, `shared::clock::testing`, `shared::env`'s overlay). The package's own dev builds turn it on
+# through the self dev-dependency below, so `jocasta-bench`'s tests reach them; a release build leaves them out.
+[features]
+test-support = []
+
 # The crates of 0631–0640. Versions are the newest at the first lock (0640); .cargo/config.toml holds every later
 # addition and bump to the 7-day rule (0627).
 [dependencies]
@@ -34,17 +40,18 @@ futures-util = "0.3.34"
 getrandom = "0.3.4"
 globset = "0.4.18"
 icalendar = { version = "0.17.17", features = ["recurrence"] }
-notify = "8.2.2"
-process-wrap = { version = "10.0.1", features = ["tokio1", "job-object", "process-group"] }
+process-wrap = { version = "10.0.1", features = ["std", "tokio1", "job-object", "process-group"] }
 ratatui = "0.30.2"
 regex = "1.13.1"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
-rmcp = { version = "3.10.0", default-features = false, features = ["server", "transport-io", "macros"] }
+rmcp = { version = "3.10.0", default-features = false, features = ["server", "transport-io"] }
 rusqlite = { version = "0.42.0", features = ["bundled"] }
 saphyr = "0.3.4"
 serde = { version = "1.0.228", features = ["derive"] }
 # preserve_order: objects keep their keys' order, as JavaScript's do (indexmap is already in the tree).
-serde_json = { version = "1.0.154", features = ["preserve_order"] }
+# float_roundtrip: floats parse exactly, as JavaScript's do; a Windows process start (a FILETIME above 2^53, written
+# as a float in service.lock) otherwise reads back one ULP off and a live lock holder looks like another run.
+serde_json = { version = "1.0.154", features = ["preserve_order", "float_roundtrip"] }
 sha2 = "0.11.1"
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "sync", "time", "process", "fs", "signal"] }
@@ -58,13 +65,21 @@ windows-sys = { version = "0.61.2", features = [
 	"Win32_Foundation",
 	"Win32_Security",
 	"Win32_Security_Credentials",
+	"Win32_Storage_FileSystem",
 	"Win32_System_Diagnostics_Debug",
 	"Win32_System_Diagnostics_ToolHelp",
 	"Win32_System_JobObjects",
 	"Win32_System_LibraryLoader",
+	"Win32_System_SystemInformation",
 	"Win32_System_Threading",
 	"Win32_UI_WindowsAndMessaging",
 ] }
+
+[dev-dependencies]
+jocasta = { path = ".", features = ["test-support"] }
+# Reads the Rust sources for tests/tree_checks.rs (0645); the lock's own version, parsing only.
+syn = { version = "3.0.10", default-features = false, features = ["full", "parsing", "visit"] }
+tokio = { version = "1.54.1", features = ["test-util"] }
 
 [profile.release]
 lto = true

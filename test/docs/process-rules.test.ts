@@ -1,6 +1,6 @@
 // Process rules checked by machine instead of by hand (0608): the decisions index equals the record files and names
-// every record that amended each one (0622), every JOCASTA_* variable in src/ is in plan appendix I, and Bun's version
-// is the same in its three files.
+// every record that amended each one (0622), every JOCASTA_* variable in src/ (Rust) is in plan appendix I, and Bun's version is the same in its three
+// files.
 import { expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -86,14 +86,21 @@ test("each index row's Amended by names every record whose text amends it (0622)
 	expect(problems).toEqual([]);
 });
 
-/** The `.ts` and `.tsx` files under `dir`. */
+/** The Rust files under `dir`, the unit tests' own files (`*_tests.rs`) left out: only the product's names count. */
 function sources(dir: string): string[] {
 	return readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
-		e.isDirectory() ? sources(join(dir, e.name)) : /\.tsx?$/.test(e.name) ? [join(dir, e.name)] : [],
+		e.isDirectory()
+			? sources(join(dir, e.name))
+			: e.name.endsWith(".rs") && !e.name.endsWith("_tests.rs")
+				? [join(dir, e.name)]
+				: [],
 	);
 }
 
-test("every JOCASTA_* variable named in src/ is in plan appendix I", () => {
+/** The names the Rust unit tests' stand-ins and probes read (`JOCASTA_TEST_*`, `JOCASTA_TESTING_*`, `JOCASTA_FAKE_*`) are no setting. */
+const TEST_ONLY = /^JOCASTA_(?:TEST|TESTING|FAKE)_/;
+
+test("every JOCASTA_* variable named in src/ (Rust) is in plan appendix I", () => {
 	const plan = read("docs/plan.md");
 	const start = plan.search(/^## Appendix I\b/m);
 	expect(start).toBeGreaterThan(-1);
@@ -105,12 +112,12 @@ test("every JOCASTA_* variable named in src/ is in plan appendix I", () => {
 	const seen = new Set<string>();
 	for (const file of sources(join(ROOT, "src"))) {
 		const text = readFileSync(file, "utf8");
-		// A name the file declares as a code identifier (`const JOCASTA_EXE = …`) is not an environment variable.
+		// A name the file declares as a code identifier (`const JOCASTA_EXE: &str = …`) is not an environment variable.
 		const declared = new Set(
-			[...text.matchAll(/\b(?:const|let|var|function|type|class)\s+(JOCASTA_[A-Z0-9_]*[A-Z0-9])/g)].map((m) => m[1]),
+			[...text.matchAll(/\b(?:const|static|let|fn|type|struct|enum)\s+(JOCASTA_[A-Z0-9_]*[A-Z0-9])/g)].map((m) => m[1]),
 		);
 		for (const m of text.matchAll(/JOCASTA_[A-Z0-9_]*[A-Z0-9]/g)) {
-			if (known.has(m[0]) || seen.has(m[0]) || declared.has(m[0])) continue;
+			if (known.has(m[0]) || seen.has(m[0]) || declared.has(m[0]) || TEST_ONLY.test(m[0])) continue;
 			seen.add(m[0]);
 			problems.push(
 				`${relative(ROOT, file).replaceAll("\\", "/")}:${lineOf(text, m.index)} \`${m[0]}\`: not in plan appendix I`,
@@ -120,21 +127,23 @@ test("every JOCASTA_* variable named in src/ is in plan appendix I", () => {
 	expect(problems).toEqual([]);
 });
 
-test("Bun's version is the same in package.json, mise.toml and the CI workflow", () => {
+test("Bun's version is the same in package.json and mise.toml, and CI takes it from mise", () => {
 	const pick = (file: string, re: RegExp) => {
 		const text = read(file);
 		const m = re.exec(text);
 		return { file, line: m ? lineOf(text, m.index) : 0, version: m?.[1] };
 	};
-	const found = [
-		pick("package.json", /"packageManager":\s*"bun@([^"]+)"/),
-		pick("mise.toml", /^bun = "([^"]+)"/m),
-		pick(".github/workflows/ci.yml", /bun-version:\s*"?([\w.]+)"?/),
-	];
+	const found = [pick("package.json", /"packageManager":\s*"bun@([^"]+)"/), pick("mise.toml", /^bun = "([^"]+)"/m)];
 	for (const f of found) expect(f.version, `${f.file} names no Bun version`).toBeDefined();
 	const versions = new Set(found.map((f) => f.version));
 	expect(
 		versions.size === 1 ? [] : found.map((f) => `${f.file}:${f.line} \`${f.version}\``),
 		"Bun's version differs between files",
 	).toEqual([]);
+	// No second pin to drift: the workflows install the tools mise.toml names.
+	for (const file of [".github/workflows/ci.yml", ".github/workflows/release.yml"]) {
+		const text = read(file);
+		expect(text, `${file} pins Bun itself`).not.toMatch(/bun-version:/);
+		expect(text, `${file} doesn't install mise's tools`).toContain("mise install --locked");
+	}
 });

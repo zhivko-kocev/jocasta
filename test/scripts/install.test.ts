@@ -17,8 +17,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { rcPathLine, readInstallRecord } from "../../src/setup/uninstall.ts";
-import { removeTree } from "../../src/shared/fsx.ts";
+import { removeTree } from "../shared/remove.ts";
 
 const SCRIPTS = resolve(import.meta.dir, "..", "..", "scripts");
 const windows = process.platform === "win32";
@@ -49,6 +48,20 @@ afterEach(async () => {
 	await Promise.all(held.map((child) => child.exited));
 	removeTree(root);
 });
+
+/** What the install scripts write to `<dir>/install.json` (the Rust `jocasta uninstall` reads it back, 0579). */
+interface InstallRecord {
+	dir: string;
+	entries: string[];
+	rc?: string;
+	autostart?: string;
+	appData?: string;
+}
+const readInstallRecord = (folder: string): InstallRecord =>
+	JSON.parse(readFileSync(join(folder, "install.json"), "utf8")) as InstallRecord;
+
+/** The line `install.sh` appends to the rc file for `folder` (and `jocasta uninstall` removes). */
+const rcPathLine = (folder: string) => `export PATH="${folder}:$PATH" # jocasta`;
 
 const sha256 = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex");
 
@@ -137,7 +150,7 @@ test.if(windows)(
 		expect(readFileSync(join(dir, "jocasta.exe"))).toEqual(readFileSync(join(root, "stage", "jocasta.exe")));
 		expect(readFileSync(join(dir, "config", "boss.md"), "utf8")).toBe("fake config\n");
 		// The release's top-level entries are recorded: they are what uninstall takes out (0579).
-		expect(readInstallRecord(dir, join(root, "localappdata"), true)).toEqual({
+		expect(readInstallRecord(dir)).toEqual({
 			dir,
 			entries: ["config", "jocasta.exe"],
 			autostart: "Jocasta",
@@ -217,7 +230,7 @@ test.if(windows)(
 		expect(existsSync(join(dir, "app"))).toBe(false);
 		expect(readFileSync(join(dir, "config", "boss.md"), "utf8")).toBe("the newer config\n");
 		expect(readdirSync(join(dir, "hunk")).some((name) => /^hunk\.exe\.old-\d+$/.test(name))).toBe(true);
-		expect(readInstallRecord(dir, join(root, "localappdata"), true)?.dir).toBe(dir);
+		expect(readInstallRecord(dir).dir).toBe(dir);
 
 		// Once hunk exits, the next install removes what moved aside.
 		hunk.kill();
@@ -258,7 +271,7 @@ test.if(windows)(
 		await holder.exited;
 		expect(readFileSync(join(dir, "jocasta.exe"))).toEqual(before);
 		expect(readFileSync(join(dir, "config", "boss.md"), "utf8")).toBe("fake config\n");
-		expect(readInstallRecord(dir, join(root, "localappdata"), true)?.dir).toBe(dir);
+		expect(readInstallRecord(dir).dir).toBe(dir);
 	},
 	120_000,
 );

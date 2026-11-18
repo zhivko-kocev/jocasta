@@ -1,5 +1,8 @@
-# Type check (0037), lint (0036), knip and the advisory audit (0614) and the tests on windows, ubuntu and macos (plan
-# section 7).
+# The Rust checks (rustfmt, clippy, nextest with the syntax-tree test, cargo-deny, cargo-machete; 0627, 0639, 0644,
+# 0645) and the Bun checks that remain (type check (0037), lint (0036), knip and the advisory audit (0614), the tests)
+# on windows, ubuntu and macos (plan section 7). Tools: the runners' own rustup, and mise from its official install
+# script (0476) at a pinned version, reading the repo's mise.toml and mise.lock (`mise install --locked`: Bun, Node,
+# Rust, cargo-deny, cargo-machete and nextest as pinned there).
 # Evals run his real omp and never run here (0384); opt-in smokes (herdr, omp's SDK, dictation) stay off. Read-only
 # token; every action is pinned to the commit its tag named when it was pinned.
 name: ci
@@ -20,22 +23,55 @@ jobs:
         os: [windows-latest, ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     # A hung process tree never holds a runner for GitHub's default six hours.
-    timeout-minutes: 30
+    timeout-minutes: 45
+    env:
+      # The mise release the install scripts fetch (checked against GitHub's SHASUMS256.txt by the script).
+      MISE_VERSION: 2026.10.17
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.4.3
-      - run: bun install --frozen-lockfile
-      - run: bun run typecheck
-      - run: bun run lint
-      - run: bun run test
+      # mise through its official install script (0476); both scripts put mise in ~/.local/bin.
+      - name: mise
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          irm https://mise.run/powershell | iex
+          Add-Content -Path $env:GITHUB_PATH -Value "$HOME\.local\bin"
+      - name: mise
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          curl -fsSL https://mise.run | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: mise install --locked
+        shell: bash
+      - run: mise exec -- bun install --frozen-lockfile
+        shell: bash
+      - run: mise exec -- cargo fmt --check
+        shell: bash
+      - run: mise exec -- cargo clippy --all-targets --locked
+        shell: bash
+      - run: mise exec -- cargo nextest run --locked
+        shell: bash
+      # Needs the network (the advisory database); the same on every OS, as `mise run check` runs it.
+      - run: mise exec -- cargo deny --log-level error check
+        shell: bash
+      # Unused dependencies of Cargo.toml (0645); the manifest alone, so the whiteboard submodule's crates aren't read.
+      - run: mise exec -- cargo machete ./Cargo.toml
+        shell: bash
+      - run: mise exec -- bun run typecheck
+        shell: bash
+      - run: mise exec -- bun run lint
+        shell: bash
+      - run: mise exec -- bun run test
+        shell: bash
       # Dead code, as in `mise run check` (0614); once per run, like the audit.
       - if: matrix.os == 'ubuntu-latest'
-        run: bunx knip
+        shell: bash
+        run: mise exec -- bunx knip
       # Fails on high and critical advisories only; it needs the network, so it is not in `mise run check`. Once per run
       # (the advisories don't depend on the OS).
       - if: matrix.os == 'ubuntu-latest'
-        run: bun audit --audit-level=high
+        shell: bash
+        run: mise exec -- bun audit --audit-level=high

@@ -9,20 +9,27 @@ bun = "1.4.3"
 node = "24.21.0"
 rust = { version = "1.100.0", profile = "minimal", components = "clippy,rustfmt" }
 cargo-deny = "0.20.2"
+# Unused dependencies of Cargo.toml (0645).
+"github:bnjbvr/cargo-machete" = "0.9.2"
+# Runs the Rust tests, each in its own process, so the tests' environment lock never makes one wait (0644).
+"aqua:nextest-rs/nextest/cargo-nextest" = "0.9.151"
 
 # `verify` is the name Jocasta's idle check looks for (else `test`, 0453); `check` is the same checks under the repo's
-# own name, so the commands are written once. Until the cutover both builds are checked (0628, 0630).
+# own name, so the commands are written once. The TypeScript that remains (the canvas page, the docs and config
+# checks, the install-script tests, the scorecard) is checked by typecheck, lint, knip and the Bun tests; the Rust
+# product by rustfmt, clippy, nextest (with the `syn` tree test, 0645), cargo-deny and cargo-machete.
 [tasks.verify]
-description = "typecheck, lint, the tests and knip; rustfmt, clippy, the Rust tests and cargo-deny (what Jocasta's own check runs)"
+description = "typecheck, lint, knip and the Bun tests; rustfmt, clippy, the Rust tests, cargo-deny and cargo-machete (what Jocasta's own check runs)"
 run = [
 	"bun run typecheck",
 	"bun run lint",
-	"bun run test",
 	"bunx knip",
+	"bun run test",
 	"cargo fmt --check",
 	"cargo clippy --all-targets --locked",
-	"cargo test --locked",
+	"cargo nextest run --locked",
 	"cargo deny --log-level error check",
+	"cargo machete ./Cargo.toml",
 ]
 
 [tasks.check]
@@ -34,20 +41,20 @@ description = "print omp's npm dist-tags and the last commit on its omp2 branch 
 run = "bun scripts/omp2-watch.ts"
 
 [tasks.build]
-description = "the per-platform build (scripts/build.ts)"
-run = "bun run build"
+description = "the per-platform build: cargo's release binaries, then dist/<target>/ and its archive (scripts/build.ts; 0636)"
+run = ["cargo build --release --locked --bin jocasta --bin jocasta-bench", "bun scripts/build.ts"]
 
 [tasks.evals]
-description = "the eval runner (evals/run.ts)"
-run = "bun run evals"
+description = "the eval runner (jocasta-bench evals; 0636)"
+run = "cargo run --locked --release --bin jocasta-bench -- evals"
 
 [tasks.smoke]
 description = "the opt-in smoke on this machine: a throwaway herdr session"
 env = { JOCASTA_HERDR_SMOKE = "1" }
-run = "bun test test/herdr/herdr.test.ts"
+run = "cargo nextest run --locked -E 'test(/live_smoke/)'"
 
-# What Jocasta's weekly review runs for a project that has this task (0616); here Biome's counts, jscpd's duplicated
-# share and the `bun audit` line (0610, 0614). It prints and fails nothing.
+# What Jocasta's weekly review runs for a project that has this task (0616); here clippy's counts, jscpd's duplicated
+# share of `src` and cargo-deny's advisories line (0610, 0614, 0645). It prints and fails nothing.
 [tasks.scorecard]
 description = "the quality scorecard the weekly review keeps week on week (scripts/scorecard.ts)"
 run = "bun scripts/scorecard.ts"

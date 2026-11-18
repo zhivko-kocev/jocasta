@@ -482,7 +482,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0473](0473-mise-in-project-threads.md) | mise in project threads | product | decided | program | 2026-10-23 | 0476, 0477, 0596 |
 | [0474](0474-palette-from-one-file.md) | Tokyo Night colours from one file | product | decided | program | 2026-10-23 |  |
 | [0475](0475-agents-md-rules-status-moves-out.md) | AGENTS.md keeps the rules; "Where we are" moves out | process | decided | program | 2026-10-23 |  |
-| [0476](0476-mise-single-development-entry.md) | mise as the single entry for development | product | decided | program | 2026-10-23 | 0627, 0630, 0639 |
+| [0476](0476-mise-single-development-entry.md) | mise as the single entry for development | product | decided | program | 2026-10-23 | 0627, 0630, 0639, 0644 |
 | [0477](0477-mise-for-every-project-uncommitted.md) | mise for every project, kept outside the repo | product | decided | program | 2026-10-23 | 0583 |
 | [0478](0478-privacy-settings-in-every-pane.md) | The privacy settings ride in every Jarvis pane | product | decided | program | 2026-10-23 |  |
 | [0479](0479-setup-writes-three-omp-files.md) | Setup writes the three omp files after his y | product | decided | program | 2026-10-23 | 0584, 0594 |
@@ -615,11 +615,11 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0607](0607-whiteboard-tools-for-the-boss-only.md) | Whiteboard's tools are mounted for the boss only | product | v1 | program | 2026-11-14 |  |
 | [0608](0608-tuning-program-small-calls.md) | The tuning program's small calls | product, benchmark | v1 | program | 2026-11-14 | 0620, 0622 |
 | [0609](0609-the-code-quality-standard.md) | The code-quality standard: the five sources, Ousterhout where they disagree | process | v1 | program | 2026-11-14 |  |
-| [0610](0610-quality-held-by-machine-checks.md) | Quality is held by machine checks first | product, process | v1 | program | 2026-11-14 | 0617 |
+| [0610](0610-quality-held-by-machine-checks.md) | Quality is held by machine checks first | product, process | v1 | program | 2026-11-14 | 0617, 0645 |
 | [0611](0611-a-design-section-in-the-review.md) | The review gets a design section; the weekly review gets the same rubric | product | v1 | program | 2026-11-14 |  |
 | [0612](0612-ponytail-two-lines-rewritten.md) | Ponytail: two lines rewritten, one removed | product, prompts | v1 | program | 2026-11-14 |  |
 | [0613](0613-pushes-to-trunk-ask-once-per-repo.md) | A push to main, master or develop asks him once per repo | product, security | v1 | program | 2026-11-14 |  |
-| [0614](0614-quality-and-security-tools.md) | Quality and security tools: what enters the flow, what stays on demand | product, process | v1 | program | 2026-11-14 | 0624, 0627, 0639 |
+| [0614](0614-quality-and-security-tools.md) | Quality and security tools: what enters the flow, what stays on demand | product, process | v1 | program | 2026-11-14 | 0624, 0627, 0639, 0645 |
 | [0615](0615-whiteboard-0-5-2-with-animations.md) | Whiteboard moves to v0.5.2 before the benchmarks, with animations on | product | v1 | program | 2026-11-14 |  |
 | [0616](0616-tuning-program-small-calls-2.md) | Tuning program: four more small calls | product, process | v1 | program | 2026-11-14 |  |
 | [0617](0617-project-pane-check-through-omps-turn-end-event.md) | A failed check reaches a project pane's agent through omp's turn-end event | product | v1 | program | 2026-11-15 |  |
@@ -644,6 +644,12 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0636](0636-bench-and-evals-ported-as-a-second-binary.md) | bench/ and evals/ are ported to Rust as a second binary | product, benchmark | v1 | program | 2026-11-15 |  |
 | [0637](0637-clap-for-the-command-words.md) | clap parses the `jocasta` command's words | product | v1 | program | 2026-11-15 |  |
 | [0638](0638-icalendar-for-calendars.md) | icalendar reads the calendar feeds | product | v1 | program | 2026-11-15 |  |
-| [0639](0639-the-ports-remaining-crates.md) | The port's remaining crates and tools | product, process | v1 | program | 2026-11-15 | 0640 |
+| [0639](0639-the-ports-remaining-crates.md) | The port's remaining crates and tools | product, process | v1 | program | 2026-11-15 | 0640, 0641, 0642, 0647 |
 | [0640](0640-port-helper-crates-and-the-first-lock.md) | The port's helper crates; the first lock takes the newest versions | product, process | v1 | program | 2026-11-15 |  |
+| [0641](0641-process-trees-end-two-ways.md) | Process trees end two ways: process-wrap for Jocasta's own programs, the snapshot walk for the rest | product | v1 | program | 2026-11-15 |  |
+| [0642](0642-notify-leaves-the-port.md) | notify leaves the port; the session watcher keeps its timer | product | v1 | program | 2026-11-15 |  |
+| [0643](0643-rust-in-wsl-for-linux-tests.md) | Rust 1.100.0 in his WSL Ubuntu for the port's Linux test runs | process | v1 | program | 2026-11-15 |  |
+| [0644](0644-cargo-nextest-runs-the-rust-tests.md) | cargo-nextest runs the Rust tests | process | v1 | program | 2026-11-15 |  |
+| [0645](0645-quality-checks-after-the-cutover.md) | The quality checks after the cutover | process | v1 | program | 2026-11-16 |  |
 | [0646](0646-readme-for-newcomers.md) | A README for newcomers, the reference in the manual | product | v1 | program | 2026-11-17 |  |
+| [0647](0647-deny-ignores-chrono-unmaintained.md) | cargo-deny ignores chrono's two "unmaintained" notices by ID | process | v1 | program | 2026-11-18 |  |

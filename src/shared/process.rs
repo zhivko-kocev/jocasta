@@ -1,7 +1,9 @@
 //! Running a program to its end with its output captured (CO-10, LC-11): one runner, so every run hides its console
 //! window (the service has none of its own, 0552), ignores stdin unless given, keeps a bounded copy of its output, and
-//! on its time limit or an abort ends the program's whole tree (`kill_tree`, start-checked), never only the direct
-//! child: a `.cmd` shim's cmd.exe or Bun's `omp.exe` shim would leave the real program running and holding the pipes.
+//! on its time limit or an abort ends the program's whole tree, never only the direct child: a `.cmd` shim's cmd.exe or
+//! Bun's `omp.exe` shim would leave the real program running and holding the pipes. The program starts in a Job Object
+//! (a process group elsewhere) through process-wrap and the tree ends through it, orphaned grandchildren too (0641);
+//! the job never kills on close, so Jocasta's exit ends nothing.
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -11,19 +13,18 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use process_wrap::{std as wrap_std, tokio as wrap_tokio};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::watch;
 
 use crate::shared::env;
 use crate::shared::errors::{Error, Result};
-use crate::shared::proctree::kill_tree;
 
 /// The cancel an `AbortSignal` is: the sender sets `Some(reason)` to abort; the run then fails with that reason.
 pub type AbortSignal = watch::Receiver<Option<String>>;
 
 /// `CREATE_NO_WINDOW`: a run opens no console window.
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// How much of each of stdout and stderr a run keeps by default; the rest is read and dropped.
 const MAX_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
@@ -145,6 +146,24 @@ fn signal_of(_status: &std::process::ExitStatus) -> Option<String> {
 	None
 }
 
+/// A program that couldn't start, as the TypeScript's callers read it: Bun says `Executable not found in $PATH: "x"`
+/// for a bare name and `ENOENT: no such file or directory, uv_spawn 'x'` for a path, Node's `spawnSync x ENOENT` for the
+/// synchronous run. Any other failure keeps the operating system's own text.
+fn spawn_failed(error: std::io::Error, program: &impl AsRef<OsStr>, sync: bool) -> Error {
+	if error.kind() != std::io::ErrorKind::NotFound {
+		return Error::Io(error);
+	}
+	let program = program.as_ref().to_string_lossy();
+	let said = if sync {
+		format!("spawnSync {program} ENOENT")
+	} else if program.contains(['/', '\\']) {
+		format!("ENOENT: no such file or directory, uv_spawn '{program}'")
+	} else {
+		format!("Executable not found in $PATH: \"{program}\"")
+	};
+	Error::Io(std::io::Error::new(std::io::ErrorKind::NotFound, said))
+}
+
 /// The command line a run starts: program, arguments, folder, environment (then the test overlay of `env::apply_to`).
 fn command_for(argv: &[impl AsRef<OsStr>], options: &RunOptions) -> Result<std::process::Command> {
 	let (program, args) = argv.split_first().ok_or_else(|| Error::other("no program to run"))?;
@@ -167,12 +186,43 @@ fn command_for(argv: &[impl AsRef<OsStr>], options: &RunOptions) -> Result<std::
 		command.env_clear().envs(vars);
 	}
 	env::apply_to(&mut command);
+	Ok(command)
+}
+
+/// `command` as process-wrap starts it (0641): in its own Job Object on Windows, leading its own process group
+/// elsewhere, so ending it ends the whole tree, orphans included. `creation_flags` are Windows's. No `KillOnDrop`: a
+/// program the TypeScript build left running when Jocasta exited still runs.
+pub(crate) fn wrap_async(command: tokio::process::Command, creation_flags: u32) -> wrap_tokio::CommandWrap {
+	let mut wrapped = wrap_tokio::CommandWrap::from(command);
 	#[cfg(windows)]
 	{
-		use std::os::windows::process::CommandExt;
-		command.creation_flags(CREATE_NO_WINDOW);
+		let mut flags = wrap_tokio::CreationFlags(Default::default());
+		flags.0.0 = creation_flags;
+		wrapped.wrap(flags).wrap(wrap_tokio::JobObject);
 	}
-	Ok(command)
+	#[cfg(unix)]
+	{
+		let _ = creation_flags;
+		wrapped.wrap(wrap_tokio::ProcessGroup::leader());
+	}
+	wrapped
+}
+
+/// [`wrap_async`] for a synchronous start.
+pub(crate) fn wrap_sync(command: std::process::Command, creation_flags: u32) -> wrap_std::CommandWrap {
+	let mut wrapped = wrap_std::CommandWrap::from(command);
+	#[cfg(windows)]
+	{
+		let mut flags = wrap_std::CreationFlags(Default::default());
+		flags.0.0 = creation_flags;
+		wrapped.wrap(flags).wrap(wrap_std::JobObject);
+	}
+	#[cfg(unix)]
+	{
+		let _ = creation_flags;
+		wrapped.wrap(wrap_std::ProcessGroup::leader());
+	}
+	wrapped
 }
 
 /// A stream read to its end, keeping its first `max` bytes in `kept`.
@@ -194,11 +244,6 @@ async fn capture_opt(stream: Option<impl AsyncRead + Unpin>, max: usize, kept: A
 	if let Some(stream) = stream {
 		capture(stream, max, kept).await;
 	}
-}
-
-/// A joined task's result; a task that panicked or was cancelled is a fault.
-fn joined<T>(result: std::result::Result<T, tokio::task::JoinError>) -> Result<T> {
-	result.map_err(|error| Error::other(error.to_string()))
 }
 
 fn text_of(kept: &Mutex<Vec<u8>>) -> String {
@@ -244,32 +289,27 @@ pub async fn run_program(argv: &[impl AsRef<OsStr>], mut options: RunOptions) ->
 		.stdin(if options.stdin.is_some() { Stdio::piped() } else { Stdio::null() })
 		.stdout(Stdio::piped())
 		.stderr(Stdio::piped());
-	let mut child = command.spawn()?;
-	let pid = child.id();
-	if let (Some(input), Some(mut stdin)) = (options.stdin.take(), child.stdin.take()) {
+	let mut child =
+		wrap_async(command, CREATE_NO_WINDOW).spawn().map_err(|error| spawn_failed(error, &argv[0], false))?;
+	if let (Some(input), Some(mut stdin)) = (options.stdin.take(), child.stdin().take()) {
 		tokio::spawn(async move {
 			let _ = stdin.write_all(&input).await;
 			let _ = stdin.shutdown().await;
 		});
 	}
 	let (out, err) = (Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())));
-	let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
+	let (stdout, stderr) = (child.stdout().take(), child.stderr().take());
 	let mut pipes = tokio::spawn({
 		let (out, err) = (out.clone(), err.clone());
 		async move {
 			tokio::join!(capture_opt(stdout, max, out), capture_opt(stderr, max, err));
 		}
 	});
-	let mut exit = tokio::spawn(async move { child.wait().await });
+	// The direct child's exit, not the job's: a program that left a background process running has still ended.
 	let first = tokio::select! {
-		(status, _) = async { tokio::join!(&mut exit, &mut pipes) } => First::Done(joined(status)?),
+		(status, _) = async { tokio::join!(child.inner_mut().wait(), async { (&mut pipes).await }) } => First::Done(status),
 		reason = aborted(&mut options.signal) => First::Aborted(reason),
 		() = limit(options.timeout_ms) => First::TimedOut,
-	};
-	let end = async |pid: Option<u32>| {
-		if let Some(pid) = pid {
-			let _ = kill_tree(pid).await;
-		}
 	};
 	let result = match first {
 		First::Done(status) => {
@@ -283,21 +323,21 @@ pub async fn run_program(argv: &[impl AsRef<OsStr>], mut options: RunOptions) ->
 			}
 		}
 		First::Aborted(reason) => {
-			end(pid).await;
+			let _ = child.start_kill();
 			pipes.abort();
 			return Err(Error::other(reason));
 		}
 		First::TimedOut => {
 			// A grandchild that escaped the walk may still hold the pipes, so the run settles once the program is gone
 			// and its pipes had a moment, with the output read so far.
-			end(pid).await;
-			let gone = async {
-				let _ = (&mut exit).await;
-				tokio::time::sleep(Duration::from_millis(PIPE_GRACE_MS)).await;
-			};
-			tokio::select! { _ = &mut pipes => (), () = gone => () }
+			let _ = child.start_kill();
+			// The signal that ended it, as the child reports one: SIGKILL on POSIX, none on Windows.
+			let status = child.inner_mut().wait().await.ok();
+			let signal = status.and_then(|status| signal_of(&status));
+			let grace = tokio::time::sleep(Duration::from_millis(PIPE_GRACE_MS));
+			tokio::select! { _ = &mut pipes => (), () = grace => () }
 			pipes.abort();
-			RunResult { code: None, signal: None, stdout: text_of(&out), stderr: text_of(&err), timed_out: true }
+			RunResult { code: None, signal, stdout: text_of(&out), stderr: text_of(&err), timed_out: true }
 		}
 	};
 	pipes.abort();
@@ -305,7 +345,7 @@ pub async fn run_program(argv: &[impl AsRef<OsStr>], mut options: RunOptions) ->
 }
 
 /// `run_program` for the callers that must run synchronously (git on the service's sync paths). The synchronous run
-/// can only end the direct child at `timeout_ms`; a program that couldn't start is an `Error::Io`, and so is output
+/// ends the program's whole tree at `timeout_ms`, through its job or group as `run_program` does; a program that couldn't start is an `Error::Io`, and so is output
 /// past `max_bytes` (the child is ended), as Node's `maxBuffer` is. The run has no abort signal.
 pub fn run_program_sync(argv: &[impl AsRef<OsStr>], options: RunOptions) -> Result<RunResult> {
 	let max = options.max_bytes.unwrap_or(MAX_OUTPUT_BYTES);
@@ -314,15 +354,16 @@ pub fn run_program_sync(argv: &[impl AsRef<OsStr>], options: RunOptions) -> Resu
 		.stdin(if options.stdin.is_some() { Stdio::piped() } else { Stdio::null() })
 		.stdout(Stdio::piped())
 		.stderr(Stdio::piped());
-	let mut child = command.spawn()?;
-	if let (Some(input), Some(mut stdin)) = (options.stdin, child.stdin.take()) {
+	let mut child =
+		wrap_sync(command, CREATE_NO_WINDOW).spawn().map_err(|error| spawn_failed(error, &argv[0], true))?;
+	if let (Some(input), Some(mut stdin)) = (options.stdin, child.stdin().take()) {
 		std::thread::spawn(move || {
 			let _ = stdin.write_all(&input);
 		});
 	}
 	let overflow = Arc::new(Mutex::new(false));
-	let out = spawn_reader(child.stdout.take(), max, overflow.clone());
-	let err = spawn_reader(child.stderr.take(), max, overflow.clone());
+	let out = spawn_reader(child.stdout().take(), max, overflow.clone());
+	let err = spawn_reader(child.stderr().take(), max, overflow.clone());
 	let deadline = options.timeout_ms.map(|ms| Instant::now() + Duration::from_millis(ms.max(0).unsigned_abs()));
 	let mut timed_out = false;
 	let status = loop {
@@ -332,7 +373,7 @@ pub fn run_program_sync(argv: &[impl AsRef<OsStr>], options: RunOptions) -> Resu
 		let over = *overflow.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
 		if over || deadline.is_some_and(|at| Instant::now() >= at) {
 			timed_out = !over;
-			let _ = child.kill();
+			let _ = child.start_kill();
 			let status = child.wait()?;
 			if over {
 				return Err(Error::Io(std::io::Error::other("spawnSync ENOBUFS")));
@@ -344,7 +385,8 @@ pub fn run_program_sync(argv: &[impl AsRef<OsStr>], options: RunOptions) -> Resu
 	let (stdout, stderr) = (out.finish(), err.finish());
 	Ok(RunResult {
 		code: if timed_out { None } else { status.code() },
-		signal: signal_of(&status),
+		// Node ends a run at its limit with SIGTERM, and says so on every platform.
+		signal: if timed_out { Some("SIGTERM".to_owned()) } else { signal_of(&status) },
 		stdout: String::from_utf8_lossy(&stdout).into_owned(),
 		stderr: String::from_utf8_lossy(&stderr).into_owned(),
 		timed_out,
@@ -409,17 +451,21 @@ mod tests {
 	#[allow(clippy::zombie_processes)] // The sleeper is ended by the run that started this process.
 	fn process_child() {
 		let Ok(mode) = std::env::var(SPAWNER_VAR) else { return };
-		if mode == "tree" {
+		if mode == "tree" || mode == "orphan" {
+			// An orphan's grandchild keeps the pipes, so the run is still going when its parent has gone.
 			let grandchild = std::process::Command::new(std::env::current_exe().unwrap())
 				.args(["--exact", "shared::process::tests::process_child", "-q", "--nocapture"])
 				.env(SPAWNER_VAR, "sleep")
 				.stdin(Stdio::null())
-				.stdout(Stdio::null())
+				.stdout(if mode == "orphan" { Stdio::inherit() } else { Stdio::null() })
 				.stderr(Stdio::null())
 				.spawn()
 				.unwrap();
 			println!("pid={}", grandchild.id());
 			std::io::stdout().flush().unwrap();
+			if mode == "orphan" {
+				return;
+			}
 		}
 		for _ in 0..1_200 {
 			std::thread::sleep(Duration::from_millis(100));
@@ -489,6 +535,17 @@ mod tests {
 	}
 
 	#[tokio::test]
+	async fn a_program_that_cannot_start_says_so_in_buns_and_nodes_words() {
+		let bare = run_program(&["jocasta-no-such-program"], RunOptions::default()).await.unwrap_err();
+		assert_eq!(bare.to_string(), "Executable not found in $PATH: \"jocasta-no-such-program\"");
+		let path = if cfg!(windows) { "D:/jocasta-none/x.exe" } else { "/jocasta-none/x" };
+		let by_path = run_program(&[path], RunOptions::default()).await.unwrap_err();
+		assert_eq!(by_path.to_string(), format!("ENOENT: no such file or directory, uv_spawn '{path}'"));
+		let sync = run_program_sync(&["jocasta-no-such-program"], RunOptions::default()).unwrap_err();
+		assert_eq!(sync.to_string(), "spawnSync jocasta-no-such-program ENOENT");
+	}
+
+	#[tokio::test]
 	async fn run_program_ends_the_programs_whole_tree_at_its_limit_and_says_so() {
 		let run = run_program(
 			&this_exe(),
@@ -498,6 +555,8 @@ mod tests {
 		.unwrap();
 		assert!(run.timed_out);
 		assert_eq!(run.code, None);
+		// Bun's `signalCode` after the tree kill: SIGKILL on POSIX, none on Windows (TerminateProcess).
+		assert_eq!(run.signal.as_deref(), if cfg!(unix) { Some("SIGKILL") } else { None });
 		let grandchild: u32 = run
 			.stdout
 			.lines()
@@ -505,6 +564,40 @@ mod tests {
 			.expect("the grandchild's pid");
 		assert!(grandchild > 0);
 		assert!(settles(|| !pid_alive(grandchild)).await);
+	}
+
+	/// The pid a stand-in printed as `pid=<n>`.
+	fn printed_pid(stdout: &str) -> u32 {
+		stdout.lines().find_map(|line| line.strip_prefix("pid=")?.trim().parse().ok()).expect("the grandchild's pid")
+	}
+
+	#[tokio::test]
+	async fn run_program_ends_a_grandchild_whose_parent_already_exited_with_the_tree_0641() {
+		let run = run_program(
+			&this_exe(),
+			RunOptions { env: Some(with_mode("orphan")), timeout_ms: Some(3_000), ..RunOptions::default() },
+		)
+		.await
+		.unwrap();
+		assert!(run.timed_out);
+		let grandchild = printed_pid(&run.stdout);
+		assert!(settles(|| !pid_alive(grandchild)).await);
+	}
+
+	#[test]
+	fn run_program_sync_ends_the_programs_whole_tree_at_its_limit_through_its_job_0641() {
+		let run = run_program_sync(
+			&this_exe(),
+			RunOptions { env: Some(with_mode("tree")), timeout_ms: Some(3_000), ..RunOptions::default() },
+		)
+		.unwrap();
+		assert!(run.timed_out);
+		let grandchild = printed_pid(&run.stdout);
+		let start = Instant::now();
+		while pid_alive(grandchild) && start.elapsed() < Duration::from_secs(10) {
+			std::thread::sleep(Duration::from_millis(50));
+		}
+		assert!(!pid_alive(grandchild));
 	}
 
 	#[tokio::test]
@@ -538,5 +631,7 @@ mod tests {
 		.unwrap();
 		assert!(slow.timed_out);
 		assert_eq!(slow.code, None);
+		// Node's `spawnSync` ends it with SIGTERM on every platform.
+		assert_eq!(slow.signal.as_deref(), Some("SIGTERM"));
 	}
 }

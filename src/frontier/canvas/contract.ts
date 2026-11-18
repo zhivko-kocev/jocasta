@@ -243,7 +243,7 @@ export interface ReviewCanvasModule {
 	): ReviewCanvasHandle;
 }
 
-/** `GET /whiteboard/connection` from the Jocasta service (`src/frontier/server/server.ts`). */
+/** `GET /whiteboard/connection` from the Jocasta service (`src/frontier/server/page_routes.rs`). */
 export interface WhiteboardConnection {
 	url: string;
 	token: string;

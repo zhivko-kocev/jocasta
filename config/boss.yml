@@ -60,7 +60,7 @@ statusLine:
 
 # Jocasta's local collab relay (0536, 0561): the boss's session hosts there (omp's host registry reports whether it
 # works or asks), never on omp's public relay; `/share` uploads to the same loopback port, which serves nothing else.
-# The port is `RELAY_PORT` in src/frontier/server/relay.ts. Keys checked against omp 18.20.2's source
+# The port is `RELAY_PORT` in src/frontier/server/relay.rs. Keys checked against omp 18.20.2's source
 # (`collab/settings.ts`, `commands/settings.ts`).
 collab:
   autoStart: control

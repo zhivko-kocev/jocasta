@@ -1,4 +1,5 @@
 pub mod boss_key;
+pub mod clock;
 pub mod credentials;
 pub mod day;
 pub mod db;
@@ -35,7 +36,7 @@ pub mod schema;
 pub mod service_file;
 pub mod settings;
 pub mod surface;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 pub mod thread_cli;
 pub mod yaml;

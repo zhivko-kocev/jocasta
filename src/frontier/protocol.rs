@@ -64,12 +64,47 @@ pub const PLUGIN_ACTIONS: [PluginAction; 5] =
 	[PluginAction::Finish, PluginAction::Stop, PluginAction::Review, PluginAction::NewThread, PluginAction::Quit];
 
 /// A JavaScript number: a whole value goes out without a fraction (`1`, not `1.0`), as `JSON.stringify` writes it.
-fn js_number<S: Serializer>(value: &f64, serializer: S) -> Result<S::Ok, S::Error> {
+pub fn js_number<S: Serializer>(value: &f64, serializer: S) -> Result<S::Ok, S::Error> {
 	if value.is_finite() && value.fract() == 0.0 && value.abs() < 9e15 {
 		serializer.serialize_i64(*value as i64)
 	} else {
 		serializer.serialize_f64(*value)
 	}
+}
+
+/// A number as JavaScript's `Number.prototype.toString` writes it: the shortest digits that read back as the same
+/// double, whole values up to 1e21 without an exponent; `null` for NaN and the infinities, as `JSON.stringify` writes
+/// them. The one formatter of the Rust build, for text that carries a number (messages, the bench's rows, the files
+/// the TypeScript build wrote with `JSON.stringify` or a template).
+pub fn js_number_text(x: f64) -> String {
+	if !x.is_finite() {
+		return "null".to_owned();
+	}
+	if x == 0.0 {
+		return "0".to_owned();
+	}
+	// The shortest digits that round-trip, as `d.ddde±x`; the decimal point sits `n` digits in (value = 0.digits × 10^n).
+	let scientific = format!("{:e}", x.abs());
+	let (mantissa, exponent) = scientific.split_once('e').unwrap_or((&scientific, "0"));
+	let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
+	let n: i32 = exponent.parse::<i32>().unwrap_or(0) + 1;
+	let k = digits.len() as i32;
+	let body = if k <= n && n <= 21 {
+		format!("{digits}{}", "0".repeat((n - k) as usize))
+	} else if 0 < n && n <= 21 {
+		format!("{}.{}", &digits[..n as usize], &digits[n as usize..])
+	} else if -6 < n && n <= 0 {
+		format!("0.{}{digits}", "0".repeat((-n) as usize))
+	} else {
+		let e = n - 1;
+		let sign = if e < 0 { '-' } else { '+' };
+		if k == 1 {
+			format!("{digits}e{sign}{}", e.abs())
+		} else {
+			format!("{}.{}e{sign}{}", &digits[..1], &digits[1..], e.abs())
+		}
+	};
+	if x < 0.0 { format!("-{body}") } else { body }
 }
 
 /// [`js_number`] for an optional field (skipped when absent).
@@ -584,6 +619,27 @@ mod tests {
 		assert_eq!(&serde_json::from_value::<T>(expected.clone()).unwrap(), value);
 		let text = serde_json::to_string(value).unwrap();
 		assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), *expected);
+	}
+
+	#[test]
+	fn js_number_text_writes_a_number_as_number_prototype_to_string_does() {
+		let cases = [
+			(0.0, "0"),
+			(-0.0, "0"),
+			(1.0, "1"),
+			(-2.5, "-2.5"),
+			(0.1, "0.1"),
+			(120_000.0, "120000"),
+			(1e21, "1e+21"),
+			(123_456_789_012_345_680.0, "123456789012345680"),
+			(1.5e-7, "1.5e-7"),
+			(0.000_001, "0.000001"),
+			(f64::NAN, "null"),
+			(f64::INFINITY, "null"),
+		];
+		for (value, text) in cases {
+			assert_eq!(js_number_text(value), text, "{value}");
+		}
 	}
 
 	fn hud() -> (Hud, Value) {

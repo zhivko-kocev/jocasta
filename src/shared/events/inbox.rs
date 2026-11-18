@@ -4,6 +4,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::{Connection, Row, params};
 use serde::{Deserialize, Serialize};
 
+use crate::shared::clock::now_ms;
 use crate::shared::errors::{Error, Result};
 
 /// An inbox row (me.db v1, 0302): a note in a project's next work, or a reminder at a time.
@@ -41,10 +42,6 @@ pub struct InboxWhere<'a> {
 /// `Date.toISOString()` of `ms` since the epoch.
 fn iso(ms: i64) -> String {
 	DateTime::<Utc>::from_timestamp_millis(ms).unwrap_or_default().to_rfc3339_opts(SecondsFormat::Millis, true)
-}
-
-fn now_ms() -> i64 {
-	Utc::now().timestamp_millis()
 }
 
 /// The inbox (0302) in `me.db`.

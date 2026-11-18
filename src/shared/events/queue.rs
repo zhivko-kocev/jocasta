@@ -7,6 +7,7 @@ use rusqlite::types::Type;
 use rusqlite::{Connection, Row, named_params, params};
 use serde::{Deserialize, Serialize};
 
+use crate::shared::clock::now_ms;
 use crate::shared::errors::Result;
 
 /// Where an event came from (0298).
@@ -139,10 +140,6 @@ impl EventRow {
 /// `Date.toISOString()` of `ms` since the epoch.
 fn iso(ms: i64) -> String {
 	DateTime::<Utc>::from_timestamp_millis(ms).unwrap_or_default().to_rfc3339_opts(SecondsFormat::Millis, true)
-}
-
-fn now_ms() -> i64 {
-	Utc::now().timestamp_millis()
 }
 
 /// The event queue in `catalog.db` (0298): one row per source id. A source id seen again while open changes nothing; one

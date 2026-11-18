@@ -1,8 +1,95 @@
-// A stand-in for the Jocasta service, for canvas page checks in headless Edge: it serves the real built page with the
-// service's content policy, and with `whiteboard`, stands in for whiteboard's server and canvas build too.
-import { uiAsset } from "../../../src/frontier/server/assets.ts";
-import { pageGuarded } from "../../../src/frontier/server/server.ts";
-import { monacoWorker, WORKER_PATH } from "../../../src/frontier/server/whiteboard.ts";
+// A stand-in for the Jocasta service, for canvas page checks in headless Edge: it serves the page, bundled as the
+// service's own build bundles it (`build.rs`), with the service's content policy (read from `content_policy` in
+// `src/frontier/server/server.rs`, so a change there reaches these checks), and with `whiteboard`, stands in for
+// whiteboard's server and canvas build too. The Rust service can't be started here: it needs a herdr session.
+import { readFileSync } from "node:fs";
+import { basename, join } from "node:path";
+import { REPO_ROOT } from "../../shared/binary.ts";
+
+/** Where the page loads Monaco's editor worker from (`WORKER_PATH` in `src/frontier/server/whiteboard.rs`). */
+const WORKER_PATH = "/whiteboard/editor.worker.js";
+
+/**
+ * The canvas page's content policy for a server on `port`: the directives of `content_policy` in `server.rs`, whiteboard
+ * on the page's own origin (nothing added to the policy).
+ */
+export function contentPolicy(port: number): string {
+	const source = readFileSync(join(REPO_ROOT, "src", "frontier", "server", "server.rs"), "utf8");
+	const body = source.slice(source.indexOf("pub fn content_policy"));
+	const list = body.slice(body.indexOf("[\n"), body.indexOf('.join("; ")'));
+	return [...list.matchAll(/"([^"]*)"/g)]
+		.map((match) => (match[1] ?? "").replaceAll("{other}", "").replaceAll("{port}", String(port)))
+		.join("; ");
+}
+
+/** One built file of the page: its body and content type. */
+interface Asset {
+	body: Blob;
+	type: string;
+}
+
+/** The page's files by URL path (`/` is the HTML) and Monaco's editor worker, bundled as `build.rs` bundles them. */
+async function bundle(): Promise<{ page: Map<string, Asset>; worker: Blob }> {
+	const page = await Bun.build({
+		entrypoints: [join(REPO_ROOT, "src", "frontier", "canvas", "index.html")],
+		minify: true,
+		target: "browser",
+		// Lazy chunks stay lazy: whiteboard's canvas and Monaco load on first use.
+		splitting: true,
+	});
+	if (!page.success) throw new AggregateError(page.logs, "the canvas page didn't build");
+	const files = new Map<string, Asset>();
+	for (const output of page.outputs) {
+		const name = basename(output.path);
+		files.set(name.endsWith(".html") ? "/" : `/${name}`, { body: output, type: output.type });
+	}
+	const worker = await Bun.build({
+		entrypoints: [join(REPO_ROOT, "node_modules", "monaco-editor", "esm", "vs", "editor", "editor.worker.js")],
+		target: "browser",
+		format: "esm",
+		minify: true,
+		naming: { entry: "editor.worker.[ext]", asset: "[name]-[hash].[ext]" },
+	});
+	const script = worker.outputs.find((output) => output.path.endsWith(".js"));
+	if (!worker.success || !script) throw new AggregateError(worker.logs, "Monaco's editor worker didn't build");
+	return { page: files, worker: script };
+}
+
+let built: Promise<{ page: Map<string, Asset>; worker: Blob }> | undefined;
+
+/** A file name Bun content-hashed (`index-37eqm9x7.js`): its bytes never change under that name. */
+const HASHED = /-[A-Za-z0-9_-]{8}\.(js|css|woff2|ttf|wasm)$/;
+
+/** The page file at `pathname`, or undefined when there is none. */
+async function uiAsset(pathname: string): Promise<Response | undefined> {
+	built ??= bundle();
+	const asset = (await built).page.get(pathname === "/index.html" ? "/" : pathname);
+	return (
+		asset &&
+		new Response(asset.body, {
+			headers: {
+				"content-type": asset.type,
+				"cache-control": HASHED.test(pathname) ? "public, max-age=31536000, immutable" : "no-store",
+			},
+		})
+	);
+}
+
+/** Monaco's editor worker, with its content type and no other header. */
+async function monacoWorker(): Promise<Response> {
+	built ??= bundle();
+	return new Response((await built).worker, { headers: { "content-type": "text/javascript; charset=utf-8" } });
+}
+
+/** Every response carries the content policy, and the page runs cross-origin isolated (`guarded` in `server.rs`). */
+function pageGuarded(served: Response, port: number): Response {
+	const headers = new Headers(served.headers);
+	headers.set("content-security-policy", contentPolicy(port));
+	headers.set("cross-origin-opener-policy", "same-origin");
+	headers.set("cross-origin-embedder-policy", "require-corp");
+	headers.set("cross-origin-resource-policy", "same-origin");
+	return new Response(served.body, { status: served.status, headers });
+}
 
 export interface PageServer {
 	url: string;
@@ -125,7 +212,7 @@ export function startPageServer(
 			case "/reviews-api":
 				return Response.json(whiteboard.reviews);
 			case WORKER_PATH:
-				return monacoWorker();
+				return await monacoWorker();
 			case "/reviews-api/diff/diff":
 				return Response.json([{ path: DIFF_PATH, status: "modified", additions: 1, deletions: 1 }]);
 			case "/reviews-api/diff/file":
@@ -148,7 +235,7 @@ export function startPageServer(
 		async fetch(request, srv) {
 			const url = new URL(request.url);
 			const asset = (await fakeWhiteboard(url, request, srv.port ?? 0)) ?? (await uiAsset(url.pathname));
-			return pageGuarded(asset ?? new Response("not found", { status: 404 }), url.pathname, srv.port ?? 0);
+			return pageGuarded(asset ?? new Response("not found", { status: 404 }), srv.port ?? 0);
 		},
 	});
 	return {

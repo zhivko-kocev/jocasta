@@ -1,8 +1,12 @@
-// H1 (0482, 0500, 0501, 0535, 0600, 0623): omp 18.20.2's own verdict on every corpus line, computed in-process from omp's
-// installed sources, with nothing executed.
+// H1 (0482, 0500, 0501, 0535, 0600, 0623, 0636): the oracle, omp 18.20.2's own code. It is the one TypeScript file of the
+// bench that stays after the Rust port (0636: "H1's oracle stays a TypeScript file, run with Bun"), because omp's modules
+// load only on Bun. It finds and loads omp from the installed sources, judges a command through omp's `BashTool`
+// approval and `resolveApproval` with nothing executed, and runs a line through omp's `executeBash`. It imports node
+// and omp's package only. The script around it (the corpus, the rows, the summary, the git guard's reimplementation and
+// the comparison with the evaluator) is `jocasta-bench h1-guard omp-verdicts`, which starts this file with Bun;
+// `test/config/guard.test.ts` speaks the same protocol.
 //
-//   bun bench/h1-guard/omp-verdicts.ts --corpus <corpus.jsonl> --guard <guard.yml> --out <dir> [--omp <package dir>]
-//     [--any-version] [--dry-run]
+//   bun bench/h1-guard/omp-verdicts.ts
 //
 // How omp decides before a pane's bash tool runs a command (omp 18.20.2, `@oh-my-pi/pi-coding-agent/src`):
 // - `extensibility/extensions/wrapper.ts:270-291,357-374` wraps every tool: `resolveApprovalFromContext`
@@ -26,36 +30,39 @@
 //   switches, under a POSIX shell, to per-`&&` segments. Since 18.20.1 `bash.patterns` from several layers and
 //   `--config` files are joined, the higher one's first, where before the last one replaced the rest.
 // - `bash.gitGuard` isn't an approval: the embedded shell's `git` builtin refuses at run time
-//   (`exec/bash-executor.ts:833-835`).
+//   (`exec/bash-executor.ts:833-835`). The oracle's judge therefore answers omp's approval alone; the git guard's
+//   refusals (measured, or the reimplementation of `git-guard.ts`) are combined with it on the Rust side.
 //
-// The mechanism here: it imports omp's `config/settings.ts`, `tools/bash.ts` and `tools/approval.ts` from the
-// install, loads the guard as `--config` over omp's defaults (an empty agent dir and cwd, so no user or project
-// config), builds the real `BashTool` on a session stub that throws on anything but `settings`, and calls omp's
-// `resolveApproval` as the wrapper does, without a tool context: the bash tool's decision reads the context only for
-// `toolNames`, which only the interceptor uses, and the guard leaves the interceptor off. `execute` is never called.
-// The git guard has no check that doesn't run the command: with `--git-guard <git-guard-check.jsonl>` the refusals
-// measured in the VM (git-guard-check.ts ran those lines through omp's embedded shell) decide for the lines it
-// covers, and `git-guard.ts`'s reimplementation, applied on omp's own tokenizer's argv, for the rest; each line names
-// its source (`gitGuardSource`). A line omp's approval allows and the git guard refuses is `deny` by `git-guard`; a
-// line omp asks about stays `prompt`.
+// The mechanism: it imports omp's `config/settings.ts`, `tools/bash.ts` and `tools/approval.ts` from the install,
+// loads the guard as `--config` over omp's defaults (an empty agent dir and cwd, so no user or project config), builds
+// the real `BashTool` on a session stub that throws on anything but `settings`, and calls omp's `resolveApproval` as the
+// wrapper does, without a tool context: the bash tool's decision reads the context only for `toolNames`, which only the
+// interceptor uses, and the guard leaves the interceptor off. `execute` is never called by the judge.
 //
-// Writes `omp-verdicts.jsonl` (id, command, expected, variant, base, category, verdict, mechanism, match, approval,
-// critical, gitGuard, gitGuardSource, reimplemented = evaluate.ts's verdict) and `omp-verdicts.json` (version,
-// settings, counts), and prints where omp and the reimplementation disagree, by expected class and by way of writing.
-import { existsSync, mkdtempSync, readFileSync, realpathSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+// Run with Bun it speaks JSON lines: one request object per line on stdin; each answer is one line on stdout that starts
+// with ORACLE_MARK (omp's own code may print to stdout too; the client ignores every line without the mark):
+// `{"ok": <result>}` or `{"error": <message>, "usage": <bool>}` (usage: a refusal that is the operator's to fix, the
+// client's exit 2). Requests:
+//   {"op":"find"}                                                        → the package dir or null (`findOmpDir`)
+//   {"op":"load","omp":<package dir>|null,"anyVersion":bool}              → {dir, version, clientTerminalRoute, permissionKinds}
+//   {"op":"tokenize","command"}                                          → string[][] (omp's `tokenizeShellSegments`)
+//   {"op":"judge-init","configFiles":[…],"cwd","agentDir"?}              → {summary, state} (see `ompApprovals`)
+//   {"op":"judge","command"}                                             → omp's approval for the line (`Approval`)
+//   {"op":"exec-init","temp","env"}                                      → null (settings from an empty agent folder)
+//   {"op":"exec","command","cwd","timeout","gitGuard","env"}             → {exitCode, timedOut, output} (`executeBash`)
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
-import { removeTree } from "../../src/shared/fsx.ts";
-import { verdict } from "../../src/shared/guard.ts";
-import { BenchUsageError, flag, parseBenchArgs, REPO_ROOT, runScript } from "../lib/args.ts";
-import { appendRow, conditions, printPlan, writeJson } from "../lib/output.ts";
-import { type CorpusEntry, parseGuard, readCorpus, VARIANTS, type Verdict } from "./evaluate.ts";
-import { gitGuardRefusalOf, type MeasuredGitGuardLine, parseMeasuredGitGuard } from "./git-guard.ts";
 
 export const PINNED_OMP = "18.20.2";
 const PACKAGE = "@oh-my-pi/pi-coding-agent";
 
+/** What the operator is to fix (a wrong package, a wrong version), as opposed to a fault of the oracle's own. */
+export class OracleUsageError extends Error {}
+
+export type Verdict = "allow" | "deny" | "prompt";
 type Decision = string | { tier: string; reason?: string; override?: boolean; policy?: Verdict };
 interface Resolved {
 	policy: Verdict;
@@ -63,8 +70,7 @@ interface Resolved {
 	reason?: string;
 }
 interface ApprovalSubject {
-	name: string;
-	approval: (args: unknown, context?: { toolNames?: string[] }) => Decision;
+	approval(args: unknown): Decision;
 }
 interface Setting<T> {
 	get(settings: unknown): T;
@@ -135,9 +141,9 @@ export function findOmpDir(): string | undefined {
 /** Imports omp's decision modules from `dir`; anything but the pinned version is refused unless `anyVersion`. */
 export async function loadOmp(dir: string, anyVersion = false): Promise<Omp> {
 	const version = ompPackageVersion(dir);
-	if (version === undefined) throw new BenchUsageError(`${dir} is not omp's package (${PACKAGE})`);
+	if (version === undefined) throw new OracleUsageError(`${dir} is not omp's package (${PACKAGE})`);
 	if (version !== PINNED_OMP && !anyVersion)
-		throw new BenchUsageError(`omp ${version} at ${dir}; H1 runs on ${PINNED_OMP} (0535), or pass --any-version`);
+		throw new OracleUsageError(`omp ${version} at ${dir}; H1 runs on ${PINNED_OMP} (0535), or pass --any-version`);
 	const load = (path: string) => import(pathToFileURL(join(dir, "src", path)).href);
 	const [settings, bash, approval, tokenize, exec, tools, gate] = await Promise.all([
 		load("config/settings.ts"),
@@ -169,23 +175,16 @@ export async function loadOmp(dir: string, anyVersion = false): Promise<Omp> {
 	};
 }
 
-export interface OmpVerdict {
-	verdict: Verdict;
-	/** guard-pattern, git-guard, critical-pattern, mode-default, user-policy, restricted-folder or tool. */
-	mechanism: string;
-	/** The guard pattern, or the git guard's refusal. */
-	match: string | null;
-	/** omp's approval alone (before the git guard). */
+/** omp's approval for one line (before the git guard, which is no approval). */
+export interface Approval {
+	/** omp's `resolveApproval` policy. */
 	approval: Verdict;
+	/** guard-pattern, critical-pattern, mode-default, user-policy, restricted-folder or tool. */
+	mechanism: string;
+	/** The guard pattern that decided, or null. */
+	match: string | null;
 	/** omp's `CRITICAL_BASH_PATTERNS` flagged the line (under `yolo` that asks nothing). */
 	critical: boolean;
-	/** The git guard's refusal, whatever the approval said (from `gitGuardSource`). */
-	gitGuard: string | null;
-	/**
-	 * Where `gitGuard` came from: `measured` (git-guard-check.ts ran the line through omp's embedded shell),
-	 * `reimplemented` (git-guard.ts), or `off` (the guard has no `bash.gitGuard`).
-	 */
-	gitGuardSource: "measured" | "reimplemented" | "off";
 }
 
 export interface OmpSettingsSummary {
@@ -199,23 +198,18 @@ export interface OmpSettingsSummary {
 
 const PATTERN_REASON = /^(?:Blocked by|Prompt required by) bash pattern: (.*)$/s;
 
-/** A measured git guard outcome for one line: its refusal message, or null when the guard let it run. */
-export interface MeasuredGitGuard {
-	refusal: string | null;
-}
-
 /**
  * Loads settings as a pane would (`configFiles` as `--config`, in order) and returns omp's judge for one command.
  * `agentDir` unset means omp's own (his global config); H1 passes an empty folder so only omp's defaults and the
  * guard apply.
  */
-export async function ompJudge(
+export async function ompApprovals(
 	omp: Omp,
 	options: { configFiles: string[]; cwd: string; agentDir?: string },
 ): Promise<{
 	settings: unknown;
 	summary: OmpSettingsSummary;
-	judge: (command: string, measured?: MeasuredGitGuard) => OmpVerdict;
+	judge: (command: string) => Approval;
 }> {
 	delete process.env.PI_CONFIG_FILES;
 	const settings = await omp.Settings.loadReadOnly(options);
@@ -233,16 +227,15 @@ export async function ompJudge(
 	const tool = new omp.BashTool(session);
 	const { approvalMode, userPolicies } = omp.resolveApprovalFromContext({ settings });
 	const restrictions = omp.approvalRestrictions(settings, options.cwd);
-	const gitGuardOn = omp.cfgBashGitGuard.get(settings) === true;
 	const summary: OmpSettingsSummary = {
 		approvalMode,
 		userPolicies: Object.keys(userPolicies),
-		gitGuard: gitGuardOn,
+		gitGuard: omp.cfgBashGitGuard.get(settings) === true,
 		allowCompoundCommands: omp.cfgBashAllowCompoundCommands.get(settings) === true,
 		patterns: omp.cfgBashPatterns.get(settings).length,
 		restrictedFolders: restrictions !== undefined,
 	};
-	const judge = (command: string, measured?: MeasuredGitGuard): OmpVerdict => {
+	const judge = (command: string): Approval => {
 		const args = { command };
 		const decision = tool.approval(args);
 		const critical = typeof decision !== "string" && decision.reason === "Critical pattern detected";
@@ -254,184 +247,118 @@ export async function ompJudge(
 		else if (resolved.source === "restriction") mechanism = "restricted-folder";
 		else if (resolved.source === "mode") mechanism = "mode-default";
 		else mechanism = critical ? "critical-pattern" : "tool";
-		const gitGuardSource = !gitGuardOn ? "off" : measured === undefined ? "reimplemented" : "measured";
-		let gitGuard: string | null = null;
-		if (gitGuardSource === "measured") gitGuard = measured?.refusal ?? null;
-		else if (gitGuardSource === "reimplemented") gitGuard = gitGuardRefusalOf(omp.tokenizeShellSegments(command));
-		const common = { critical, gitGuard, gitGuardSource } as const;
-		if (gitGuard !== null && resolved.policy === "allow")
-			return { verdict: "deny", mechanism: "git-guard", match: gitGuard, approval: "allow", ...common };
-		return { verdict: resolved.policy, mechanism, match: pattern, approval: resolved.policy, ...common };
+		return { approval: resolved.policy, mechanism, match: pattern, critical };
 	};
 	return { settings, summary, judge };
 }
 
-export interface VerdictLine extends OmpVerdict {
-	id: string;
-	command: string;
-	expected: Verdict;
-	variant: string;
-	base: string;
-	category: string;
-	reimplemented: Verdict;
+/** The oracle's JSON-lines protocol: what every answer line starts with. */
+const ORACLE_MARK = "\u0001ORACLE ";
+
+type Request = Record<string, unknown>;
+
+let omp: Omp | undefined;
+let judge: ((command: string) => Approval) | undefined;
+let executeBash: ((command: string, options: Record<string, unknown>) => Promise<Record<string, unknown>>) | undefined;
+
+const text = (value: unknown): string => (typeof value === "string" ? value : "");
+
+function loaded(): Omp {
+	if (omp === undefined) throw new Error("the oracle has no omp loaded: send load first");
+	return omp;
 }
 
-export interface Disagreement {
-	key: string;
-	n: number;
-	disagree: number;
-	/** `old→new` (reimplemented→omp) and how many lines moved that way. */
-	moves: Record<string, number>;
+async function load(request: Request): Promise<unknown> {
+	const dir = typeof request.omp === "string" ? resolve(request.omp) : findOmpDir();
+	if (dir === undefined) throw new OracleUsageError("omp's package not found; pass --omp <package dir>");
+	omp = await loadOmp(dir, request.anyVersion === true);
+	return {
+		dir: omp.dir,
+		version: omp.version,
+		clientTerminalRoute: omp.clientTerminalRoute,
+		permissionKinds: omp.acpPermissionOptions.map((option) => option.kind),
+	};
 }
 
-/** Where omp's verdict differs from the reimplementation's, grouped by `keyOf`, in first-seen key order. */
-export function disagreements(
-	lines: readonly { verdict: Verdict; reimplemented: Verdict }[],
-	keyOf: (index: number) => string,
-): Disagreement[] {
-	const byKey = new Map<string, Disagreement>();
-	lines.forEach((line, index) => {
-		const key = keyOf(index);
-		let entry = byKey.get(key);
-		if (entry === undefined) {
-			entry = { key, n: 0, disagree: 0, moves: {} };
-			byKey.set(key, entry);
-		}
-		entry.n += 1;
-		if (line.verdict === line.reimplemented) return;
-		entry.disagree += 1;
-		const move = `${line.reimplemented}→${line.verdict}`;
-		entry.moves[move] = (entry.moves[move] ?? 0) + 1;
+async function judgeInit(request: Request): Promise<unknown> {
+	const current = loaded();
+	const configFiles = Array.isArray(request.configFiles) ? request.configFiles.map(String) : [];
+	const agentDir = typeof request.agentDir === "string" ? request.agentDir : undefined;
+	const made = await ompApprovals(current, { configFiles, cwd: text(request.cwd), agentDir });
+	judge = made.judge;
+	return {
+		summary: made.summary,
+		state: {
+			approvalModeConfigured: current.cfgToolsApprovalMode.isConfigured(made.settings),
+			interceptorEnabled: current.cfgBashInterceptorEnabled.get(made.settings) === true,
+			launchEnabled: current.cfgLaunchEnabled.get(made.settings) !== false,
+			asyncEnabled: current.cfgAsyncEnabled.get(made.settings) !== false,
+		},
+	};
+}
+
+async function execInit(request: Request): Promise<unknown> {
+	const current = loaded();
+	const temp = text(request.temp);
+	// The shell sessions omp starts inherit this process's env; the runs also pass it explicitly.
+	Object.assign(process.env, request.env as Record<string, string>);
+	delete process.env.PI_CONFIG_FILES;
+	const load = (path: string) => import(pathToFileURL(join(current.dir, "src", path)).href);
+	const { Settings } = await load("config/settings.ts");
+	await Settings.init({ cwd: join(temp, "cwd"), agentDir: join(temp, "agent") });
+	executeBash = (await load("exec/bash-executor.ts")).executeBash;
+	return null;
+}
+
+async function exec(request: Request): Promise<unknown> {
+	if (executeBash === undefined) throw new Error("the oracle has no shell: send exec-init first");
+	const result = await executeBash(text(request.command), {
+		cwd: request.cwd,
+		timeout: request.timeout,
+		gitGuard: request.gitGuard,
+		env: request.env,
 	});
-	return [...byKey.values()];
+	return {
+		exitCode: result.exitCode ?? null,
+		timedOut: result.timedOut === true,
+		output: String(result.output ?? ""),
+	};
 }
 
-const renderDisagreements = (title: string, rows: readonly Disagreement[]) =>
-	[
-		`| ${title} | lines | disagree | reimplemented→omp |`,
-		"|---|---|---|---|",
-		...rows.map(
-			(row) =>
-				`| ${row.key} | ${row.n} | ${row.disagree} | ${
-					Object.entries(row.moves)
-						.sort((a, b) => b[1] - a[1])
-						.map(([move, count]) => `${move} ${count}`)
-						.join(", ") || "—"
-				} |`,
-		),
-	].join("\n");
-
-export function judgeCorpus(
-	corpus: readonly CorpusEntry[],
-	judge: (command: string, measured?: MeasuredGitGuard) => OmpVerdict,
-	reimplemented: (command: string) => Verdict,
-	measured: ReadonlyMap<string, MeasuredGitGuardLine> = new Map(),
-): VerdictLine[] {
-	return corpus.map((entry, i) => {
-		if (entry.id === undefined) throw new BenchUsageError(`corpus line ${i + 1} has no id`);
-		const check = measured.get(entry.id);
-		if (check !== undefined && check.command !== entry.command)
-			throw new BenchUsageError(`git guard check: ${entry.id}'s command differs from the corpus's`);
-		return {
-			id: entry.id,
-			command: entry.command,
-			expected: entry.expected,
-			variant: entry.variant ?? "",
-			base: entry.base ?? "",
-			category: entry.category ?? "",
-			...judge(entry.command, check),
-			reimplemented: reimplemented(entry.command),
-		};
-	});
-}
-
-if (import.meta.main) {
-	if (process.argv.slice(2).some((arg) => arg === "--help" || arg === "-h")) {
-		console.log(
-			"usage: bun bench/h1-guard/omp-verdicts.ts --corpus <corpus.jsonl> --guard <guard.yml> --out <dir> [--git-guard <git-guard-check.jsonl>] [--omp <package dir>] [--any-version] [--dry-run]",
-		);
-		process.exit(0);
+async function answer(request: Request): Promise<unknown> {
+	switch (request.op) {
+		case "find":
+			return findOmpDir() ?? null;
+		case "load":
+			return await load(request);
+		case "tokenize":
+			return loaded().tokenizeShellSegments(text(request.command));
+		case "judge-init":
+			return await judgeInit(request);
+		case "judge":
+			if (judge === undefined) throw new Error("the oracle has no judge: send judge-init first");
+			return judge(text(request.command));
+		case "exec-init":
+			return await execInit(request);
+		case "exec":
+			return await exec(request);
+		default:
+			throw new Error(`the oracle doesn't know ${String(request.op)}`);
 	}
-	await runScript(async () => {
-		const args = parseBenchArgs(process.argv.slice(2), {
-			defaultRuns: 1,
-			valued: ["--corpus", "--guard", "--omp", "--git-guard"],
-			booleans: ["--any-version"],
-		});
-		const corpusPath = flag(args, "corpus");
-		if (corpusPath === undefined) throw new BenchUsageError("--corpus <path.jsonl> is required");
-		const guardPath = resolve(flag(args, "guard", resolve(REPO_ROOT, "config", "guard.yml")));
-		const gitGuardPath = flag(args, "git-guard");
-		for (const path of [corpusPath, guardPath, ...(gitGuardPath === undefined ? [] : [gitGuardPath])])
-			if (!existsSync(path)) throw new BenchUsageError(`${path} does not exist`);
-		const measured =
-			gitGuardPath === undefined
-				? new Map<string, MeasuredGitGuardLine>()
-				: parseMeasuredGitGuard(readFileSync(gitGuardPath, "utf8"), gitGuardPath);
-		const ompText = flag(args, "omp");
-		const ompDir = ompText === undefined ? findOmpDir() : resolve(ompText);
-		if (ompDir === undefined) throw new BenchUsageError(`omp's package not found; pass --omp <dir of ${PACKAGE}>`);
-		const { entries: corpus, sha256: corpusSha256 } = readCorpus(corpusPath);
-		const rules = parseGuard(readFileSync(guardPath, "utf8"), guardPath);
-		if (args.dryRun) {
-			printPlan(
-				"H1 omp verdicts",
-				[
-					`import omp from ${ompDir} (refusing anything but ${PINNED_OMP}${args.flags.has("any-version") ? ", overridden by --any-version" : ""})`,
-					`load ${guardPath} as --config over omp's defaults (empty agent dir and cwd); build BashTool on a session stub that throws`,
-					`ask omp's resolveApproval for each of ${corpus.length} commands; git guard ${gitGuardPath === undefined ? "reimplemented (git-guard.ts)" : `measured for the ${measured.size} lines in ${gitGuardPath}, reimplemented (git-guard.ts) for the rest`}; nothing executes`,
-					"compare with the reimplementation (evaluate.ts) by expected class and by way of writing",
-				],
-				args.out,
-			);
-			return;
-		}
-		const out = args.out;
-		if (out === undefined) throw new BenchUsageError("--out <dir> is required (outside the repo)");
-		if (existsSync(join(out, "omp-verdicts.jsonl")))
-			throw new BenchUsageError(`${join(out, "omp-verdicts.jsonl")} exists; results are never overwritten`);
-		const started = conditions([]);
-		const omp = await loadOmp(ompDir, args.flags.has("any-version"));
-		console.log(`omp ${omp.version} from ${omp.dir}`);
-		const empty = mkdtempSync(join(tmpdir(), "h1-omp-"));
+}
+
+if (import.meta.main && process.argv.length <= 2) {
+	for await (const line of createInterface({ input: process.stdin })) {
+		if (line.trim() === "") continue;
+		let reply: unknown;
 		try {
-			const { summary, judge } = await ompJudge(omp, { configFiles: [guardPath], cwd: empty, agentDir: empty });
-			console.log(`settings: ${JSON.stringify(summary)}`);
-			const lines = judgeCorpus(corpus, judge, (command) => verdict(command, rules).verdict, measured);
-			for (const line of lines) appendRow(out, "omp-verdicts", line);
-			const byExpected = disagreements(lines, (i) => lines[i]?.expected ?? "");
-			const variantOrder: readonly string[] = VARIANTS;
-			const byVariant = disagreements(lines, (i) => lines[i]?.variant ?? "").sort(
-				(a, b) => variantOrder.indexOf(a.key) - variantOrder.indexOf(b.key),
-			);
-			const mechanisms: Record<string, number> = {};
-			for (const line of lines) mechanisms[line.mechanism] = (mechanisms[line.mechanism] ?? 0) + 1;
-			const gitGuardSources: Record<string, number> = {};
-			for (const line of lines) gitGuardSources[line.gitGuardSource] = (gitGuardSources[line.gitGuardSource] ?? 0) + 1;
-			console.log(`git guard sources: ${JSON.stringify(gitGuardSources)}`);
-			console.log(renderDisagreements("Expected", byExpected));
-			console.log("");
-			console.log(renderDisagreements("Way of writing", byVariant));
-			console.log(`mechanisms: ${JSON.stringify(mechanisms)}`);
-			const file = writeJson(out, "omp-verdicts", {
-				benchmark: "H1",
-				conditions: { ...started, finishedAt: new Date().toISOString(), versions: { omp: omp.version } },
-				omp: { version: omp.version, sources: "src/ of the installed package" },
-				guard: guardPath,
-				corpusSha256,
-				settings: summary,
-				gitGuardCheck: gitGuardPath === undefined ? null : resolve(gitGuardPath),
-				gitGuardSources,
-				reimplemented: gitGuardSources.reimplemented
-					? ["git guard (git-guard.ts) where gitGuardSource is reimplemented"]
-					: [],
-				commands: lines.length,
-				mechanisms,
-				disagreements: { byExpected, byVariant },
-			});
-			console.log(`wrote ${file}`);
-		} finally {
-			removeTree(empty);
+			reply = { ok: await answer(JSON.parse(line) as Request) };
+		} catch (error) {
+			reply = {
+				error: error instanceof Error ? error.message : String(error),
+				usage: error instanceof OracleUsageError,
+			};
 		}
-	});
+		process.stdout.write(`${ORACLE_MARK}${JSON.stringify(reply)}\n`);
+	}
 }
