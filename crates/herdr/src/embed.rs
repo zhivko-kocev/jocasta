@@ -43,7 +43,9 @@ pub struct ServerHost {
 
 impl std::fmt::Debug for ServerHost {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ServerHost").field("api_socket", &self.api_socket).finish_non_exhaustive()
+        f.debug_struct("ServerHost")
+            .field("api_socket", &self.api_socket)
+            .finish_non_exhaustive()
     }
 }
 

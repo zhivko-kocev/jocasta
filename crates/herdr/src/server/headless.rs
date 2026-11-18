@@ -982,10 +982,7 @@ impl HeadlessServer {
             && removed
                 .as_ref()
                 .is_some_and(|client| client.is_shell_client())
-            && !self
-                .clients
-                .values()
-                .any(|client| client.is_shell_client())
+            && !self.clients.values().any(|client| client.is_shell_client())
         {
             crate::embed::last_client_left();
         }
