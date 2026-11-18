@@ -38,6 +38,13 @@ pub fn version() -> String {
     crate::build_info::version()
 }
 
+/// herdr's omp hook, the file `herdr integration install omp` writes into omp's `extensions/`: Jocasta's omp snapshot
+/// ships this same text, so the hook has one source.
+pub const OMP_HOOK: &str = crate::integration::OMP_EXTENSION_ASSET;
+
+/// The hook's file name in omp's `extensions/`.
+pub const OMP_HOOK_FILE: &str = crate::integration::OMP_EXTENSION_INSTALL_NAME;
+
 /// The prefix of every message kind an extension and its shell extension trade over herdr's client connection, as
 /// `EndpointControl` messages (herdr's own way to add messages without changing its protocol).
 pub const KIND_PREFIX: &str = "jocasta.";

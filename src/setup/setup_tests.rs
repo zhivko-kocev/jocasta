@@ -14,10 +14,9 @@ use regex::Regex;
 use serde_json::{Map, Value, json};
 
 use super::*;
-use crate::setup::config_file::edit_config;
 use crate::setup::markers::{fingerprint, markers_dir};
 use crate::setup::mise::MISE_FRAGMENT;
-use crate::setup::omp_settings::{omp_settings_text, omp_yaml};
+use crate::setup::omp_settings::omp_settings_text;
 use crate::shared::fsx::remove_tree;
 use crate::shared::install::REPO;
 use crate::shared::testing::{TempDir, temp_dir, temp_jocasta};
@@ -96,17 +95,6 @@ struct Out {
 	asked: Vec<String>,
 }
 
-fn run_ok(ran: Arc<Mutex<Vec<Vec<String>>>>, omp_agent_dir: PathBuf) -> RunProgram {
-	// Stands in for herdr: writes the extension file the real install writes.
-	Arc::new(move |argv| {
-		ran.lock().unwrap().push(argv);
-		let file = omp_agent_dir.join("extensions").join(HERDR_OMP_EXTENSION);
-		fs::create_dir_all(file.parent().unwrap()).unwrap();
-		fs::write(file, "// herdr\n").unwrap();
-		Box::pin(async { Ok(RunOutput { code: 0, output: String::new() }) })
-	})
-}
-
 fn ok_check() -> CheckFn {
 	Arc::new(|_, _| Box::pin(async { Ok(HerdrCheck { code: Some(0), output: "config: ok\n".to_owned() }) }))
 }
@@ -123,12 +111,9 @@ fn reloader(code: i32, output: &str, log: Arc<Mutex<Vec<String>>>) -> ReloadFn {
 struct Harness {
 	root: TempDir,
 	paths: SetupPaths,
-	ran: Arc<Mutex<Vec<Vec<String>>>>,
-	run: RunProgram,
 	mise: Option<PathBuf>,
 	check: Option<CheckFn>,
 	reload: Option<ReloadFn>,
-	run_value: Option<Arc<dyn RunValueStore>>,
 	git_version: Option<Arc<dyn Fn() -> BoxFuture<'static, Option<String>> + Send + Sync>>,
 }
 
@@ -150,32 +135,15 @@ impl Harness {
 				cli: PathBuf::from("C:\\Jocasta\\whiteboard\\cli.js"),
 			}),
 		};
-		let ran = Arc::new(Mutex::new(Vec::new()));
-		let run = run_ok(ran.clone(), paths.omp_agent_dir.clone());
 		// herdr's own check isn't run against a stand-in `herdr.exe`.
-		Self {
-			root,
-			paths,
-			ran,
-			run,
-			mise: None,
-			check: Some(ok_check()),
-			reload: None,
-			run_value: None,
-			git_version: None,
-		}
-	}
-
-	fn ran(&self) -> Vec<Vec<String>> {
-		self.ran.lock().unwrap().clone()
+		Self { root, paths, mise: None, check: Some(ok_check()), reload: None, git_version: None }
 	}
 
 	fn deps(&self, herdr: Option<&str>) -> SetupDeps {
-		let mut deps = SetupDeps::new(herdr.map(PathBuf::from), self.run.clone());
+		let mut deps = SetupDeps::new(herdr.map(PathBuf::from));
 		deps.mise = self.mise.clone();
 		deps.check_herdr_config = self.check.clone();
 		deps.reload_herdr = self.reload.clone();
-		deps.run_value = self.run_value.clone();
 		deps.git_version = self.git_version.clone();
 		deps
 	}
@@ -251,6 +219,33 @@ impl Harness {
 
 	fn secrets(&self) -> PathBuf {
 		self.paths.omp_agent_dir.join("secrets.yml")
+	}
+
+	/// herdr's omp hook as the snapshot writes it.
+	fn hook(&self) -> PathBuf {
+		self.paths.omp_agent_dir.join("extensions").join(herdr::embed::OMP_HOOK_FILE)
+	}
+
+	/// The snapshot's backups of this run's replaced files: the one folder under `omp-backup/`.
+	fn backups(&self) -> Option<PathBuf> {
+		let root = markers_dir(&self.paths.jocasta_config_dir).join("omp-backup");
+		let mut stamps: Vec<PathBuf> = fs::read_dir(root).ok()?.map(|entry| entry.unwrap().path()).collect();
+		stamps.sort();
+		stamps.pop()
+	}
+
+	/// Every file of the snapshot, as omp's folder names it.
+	fn snapshot_paths(&self) -> Vec<PathBuf> {
+		vec![
+			self.omp_config(),
+			self.keybindings(),
+			self.lsp(),
+			self.watchdog(),
+			self.mise_skill(),
+			self.global_mcp(),
+			self.hook(),
+			self.secrets(),
+		]
 	}
 
 	fn plugin_dir(&self) -> PathBuf {
@@ -339,34 +334,20 @@ fn other(undo: Undo) -> SetupUndo {
 #[tokio::test]
 async fn a_fresh_machine_the_diff_names_every_file_and_n_writes_nothing() {
 	let h = Harness::new();
-	put(
-		&h.paths.jocasta_config_dir.join("settings.json"),
-		&json!({"frontier": {"port": 47615}, "theme": "x"}).to_string(),
-	);
 	let Out { code, text, asked } = h.setup(Some("n")).await;
 	assert_eq!(code, 0);
 	assert_eq!(asked, ["Write these changes? [y/N] "]);
-	assert!(text.contains(&format!("omp MCP server \"jocasta\": {}", s(&h.global_mcp()))));
 	assert!(text.contains(&format!("omp MCP servers \"jocasta\", \"whiteboard\": {}", s(&h.boss_mcp()))));
-	assert!(text.contains(&format!("omp settings: {}", s(&h.omp_config()))));
-	let extension = h.paths.omp_agent_dir.join("extensions").join(HERDR_OMP_EXTENSION);
-	assert!(text.contains(&format!("+ {} (written by herdr)", s(&extension))));
 	assert!(text.contains(&format!("herdr config for session `jocasta`: {}", s(&h.herdr_toml()))));
-	assert!(text.contains(&format!("Jocasta settings: {}", s(&h.paths.jocasta_config_dir.join("jocasta.yaml")))));
 	assert!(text.contains(&format!("Windows Terminal scheme Tokyo Night: {}", s(&h.fragment()))));
-	assert!(text.contains(&format!("omp skill mise: {}", s(&h.mise_skill()))));
 	assert!(text.contains(&format!(
-		"omp key bindings: Ctrl+L no longer starts live voice; F9 toggles dictation: {}",
-		s(&h.keybindings())
+		"Jocasta's omp snapshot over your omp files, each replaced one kept first in {}",
+		s(&markers_dir(&h.paths.jocasta_config_dir).join("omp-backup"))
 	)));
-	assert!(text.contains(&format!("the advisor's brief: {}", s(&h.watchdog()))));
-	assert!(text.contains(&format!("omp language servers: idle ones stop after 5 minutes: {}", s(&h.lsp()))));
-	assert!(
-		text.contains(&format!(
-			"omp's secrets.yml: your own strings to hide, an empty list to fill: {}",
-			s(&h.secrets())
-		))
-	);
+	for path in h.snapshot_paths() {
+		assert!(text.contains(&format!("\n  {} (new)\n", s(&path))), "{}", s(&path));
+	}
+	assert!(text.contains("\n  + app.stt.toggle: f9\n"));
 	// No mise on this machine: no mise file (0476).
 	assert!(!text.contains(&s(&h.mise_file())));
 	assert!(text.ends_with("Nothing written."));
@@ -375,25 +356,16 @@ async fn a_fresh_machine_the_diff_names_every_file_and_n_writes_nothing() {
 	assert!(!markers_dir(&h.paths.jocasta_config_dir).exists());
 	assert!(!h.herdr_toml().exists());
 	assert!(!h.fragment().exists());
-	assert!(h.ran().is_empty());
 	// End of input is a no too.
 	assert!(h.setup(None).await.text.ends_with("Nothing written."));
 }
 
 #[tokio::test]
-async fn y_writes_every_file_marks_each_migration_runs_herdrs_omp_integration_and_a_second_run_has_nothing_to_do() {
+async fn y_writes_every_file_marks_each_migration_and_a_second_run_has_nothing_to_do() {
 	let h = Harness::new();
-	put(
-		&h.paths.jocasta_config_dir.join("settings.json"),
-		&json!({
-			"frontier": {"quietHours": {"from": "22:00", "to": "07:00"}},
-			"pollers": {"github": {"enabled": true}},
-		})
-		.to_string(),
-	);
 	let Out { code, text, .. } = h.setup(Some("y")).await;
 	assert_eq!(code, 0);
-	assert!(text.contains(&format!("wrote {}", s(&h.global_mcp()))));
+	assert!(text.contains(&format!("wrote {}", s(&h.paths.omp_agent_dir))));
 	assert_eq!(
 		read_json(&h.global_mcp()),
 		json!({"mcpServers": {"jocasta": {
@@ -411,20 +383,19 @@ async fn y_writes_every_file_marks_each_migration_runs_herdrs_omp_integration_an
 			"whiteboard": h.whiteboard_server(),
 		}})
 	);
-	assert_eq!(read(&h.omp_config()), asset_text("omp-config.yml"));
-	assert_eq!(h.ran(), [strings(&["herdr.exe", "integration", "install", "omp"])]);
+	// The snapshot as shipped: `config/omp/` file for file, and herdr's hook from the fork's own asset.
+	assert_eq!(read(&h.omp_config()), asset_text("omp/config.yml"));
+	assert_eq!(read(&h.keybindings()), asset_text("omp/keybindings.yml"));
+	assert_eq!(read(&h.lsp()), asset_text("omp/lsp.json"));
+	assert_eq!(read(&h.watchdog()), asset_text("omp/WATCHDOG.md"));
+	assert_eq!(read(&h.mise_skill()), asset_text("omp/skills/mise/SKILL.md"));
+	assert_eq!(read(&h.secrets()), asset_text("omp/secrets.yml"));
+	assert_eq!(read(&h.hook()), herdr::embed::OMP_HOOK);
+	// Nothing was replaced: no backups.
+	assert_eq!(h.backups(), None);
 	// herdr's config as shipped: Jocasta draws the HUD itself, beside herdr's clock.
 	assert_eq!(read(&h.herdr_toml()), asset_text("herdr.toml"));
-	assert_eq!(
-		yaml(&read(&h.paths.jocasta_config_dir.join("jocasta.yaml"))),
-		json!({"frontier": {"quietHours": {"from": "22:00", "to": "07:00"}}, "pollers": {"github": {"enabled": true}}})
-	);
 	assert_eq!(read_json(&h.fragment()), json!({"schemes": [&*TOKYO_NIGHT_SCHEME]}));
-	assert_eq!(read(&h.mise_skill()), asset_text("skills/mise/SKILL.md"));
-	assert_eq!(read(&h.keybindings()), omp_yaml(&json!({"app.live.toggle": [], "app.stt.toggle": "f9"})));
-	assert_eq!(read(&h.watchdog()), asset_text("WATCHDOG.md"));
-	assert_eq!(read_json(&h.lsp()), json!({"idleTimeoutMs": 300_000}));
-	assert_eq!(read(&h.secrets()), asset_text("secrets.yml"));
 	let mut markers: Vec<String> = fs::read_dir(markers_dir(&h.paths.jocasta_config_dir))
 		.unwrap()
 		.map(|entry| entry.unwrap().file_name().into_string().unwrap())
@@ -433,26 +404,14 @@ async fn y_writes_every_file_marks_each_migration_runs_herdrs_omp_integration_an
 	assert_eq!(
 		markers,
 		[
-			"0001-mcp.json",
 			"0002-boss-mcp.json",
-			"0003-omp-settings.json",
-			"0004-herdr-integration.json",
 			"0005-herdr-config.json",
-			"0006-jocasta-yaml.json",
 			"0007-terminal-scheme.json",
-			"0009-mise-skill.json",
-			"0010-omp-keybindings.json",
-			"0011-omp-watchdog.json",
-			"0012-omp-lsp.json",
-			"0015-omp-secrets.json",
-			"0017-whiteboard-boss-only.json",
 			"0018-herdr-plugin-gone.json",
+			"0019-omp-snapshot.json",
 		]
 	);
-
-	let again = h.setup(Some("y")).await;
-	assert_eq!(again.text, IN_PLACE);
-	assert_eq!(h.ran().len(), 1);
+	assert_eq!(h.setup(Some("y")).await.text, IN_PLACE);
 }
 
 #[tokio::test]
@@ -478,28 +437,29 @@ async fn with_mise_installed_setup_writes_jocastas_mise_file_exact_pins_and_the_
 }
 
 #[tokio::test]
-async fn an_existing_mcp_json_keeps_his_other_servers_and_keys_only_jocastas_entries_change() {
+async fn the_bosss_mcp_json_keeps_his_other_servers_and_keys_only_jocastas_entries_change() {
 	let h = Harness::new();
 	let his = json!({
 		"mcpServers": {
 			"github": {"type": "stdio", "command": "gh-mcp", "args": []},
-			"jocasta": {"type": "stdio", "command": "old\\jocasta.exe", "args": ["mcp"]},
+			"jocasta": {"type": "stdio", "command": "old\\jocasta.exe", "args": ["mcp", "--boss"]},
 		},
 		"disabledServers": ["github"],
 	});
-	put(&h.global_mcp(), &pretty(&his));
+	put(&h.boss_mcp(), &pretty(&his));
 	let Out { text, .. } = h.setup(Some("y")).await;
 	assert!(text.contains("-       \"command\": \"old\\\\jocasta.exe\","));
 	assert!(text.contains("+       \"command\": \"C:\\\\Jocasta\\\\jocasta.exe\","));
 	assert!(text.contains("        \"command\": \"gh-mcp\","));
 	assert_eq!(
-		read_json(&h.global_mcp()),
+		read_json(&h.boss_mcp()),
 		json!({
 			"mcpServers": {
 				"github": {"type": "stdio", "command": "gh-mcp", "args": []},
 				"jocasta": {
-					"type": "stdio", "command": "C:\\Jocasta\\jocasta.exe", "args": ["mcp"], "timeout": 1_860_000,
+					"type": "stdio", "command": "C:\\Jocasta\\jocasta.exe", "args": ["mcp", "--boss"], "timeout": 2_100_000,
 				},
+				"whiteboard": h.whiteboard_server(),
 			},
 			"disabledServers": ["github"],
 		})
@@ -512,80 +472,125 @@ async fn without_whiteboards_build_setup_says_so_and_adds_only_the_jocasta_serve
 	h.paths.whiteboard = None;
 	let Out { text, .. } = h.setup(Some("y")).await;
 	assert!(text.starts_with("whiteboard isn't built: run `mise run build`"));
-	assert!(text.contains(&format!("omp MCP server \"jocasta\": {}", s(&h.global_mcp()))));
 	assert!(text.contains(&format!("omp MCP server \"jocasta\": {}", s(&h.boss_mcp()))));
 	assert!(read_json(&h.boss_mcp())["mcpServers"].get("whiteboard").is_none());
+	assert!(read_json(&h.global_mcp())["mcpServers"].get("whiteboard").is_none());
+}
+
+/// Files of omp's that the snapshot doesn't have: his logins, sessions, memory and history.
+fn his_omp_state(h: &Harness) -> Vec<(PathBuf, &'static str)> {
+	let dir = &h.paths.omp_agent_dir;
+	vec![
+		(dir.join("agent.db"), "his logins\n"),
+		(dir.join("sessions").join("--d--code--").join("one.jsonl"), "{\"type\":\"session\"}\n"),
+		(dir.join("memories").join("notes.md"), "what he remembers\n"),
+		(dir.join("history.db"), "his prompts\n"),
+		(dir.join("extensions").join("his.ts"), "// his own extension\n"),
+	]
 }
 
 #[tokio::test]
-async fn his_config_yml_gets_the_keys_jocasta_ships_merged_in_his_other_keys_untouched_and_his_own_values_kept_and_shown()
- {
-	let mut h = Harness::new();
-	let dir = h.own_assets();
-	put(
-		&dir.join("omp-config.yml"),
-		"# Jocasta's\ncompaction:\n  thresholdPercent: 60\n  idleEnabled: true\nmemory:\n  backend: mnemopi\n",
-	);
-	put(&h.omp_config(), "theme:\n  dark: his-theme\ncompaction:\n  thresholdPercent: 45\n");
+async fn the_snapshot_replaces_his_omp_files_after_y_each_kept_first_and_leaves_every_other_file_byte_for_byte() {
+	let h = Harness::new();
+	let state = his_omp_state(&h);
+	for (path, text) in &state {
+		put(path, text);
+	}
+	put(&h.omp_config(), "theme:\n  dark: his-theme\n");
+	put(&h.keybindings(), "app.model.cycle: [ctrl+k]\n");
+	// Already the snapshot's: no diff, no backup.
+	put(&h.lsp(), &asset_text("omp/lsp.json"));
+
 	let no = h.setup(Some("n")).await;
-	assert!(
-		no.text.contains(&format!(
-			"omp settings Jocasta ships (yours kept where you changed them): {}",
-			s(&h.omp_config())
-		))
-	);
-	assert!(no.text.contains("  kept: compaction.thresholdPercent: yours 45 kept (Jocasta ships 60)"));
-	assert!(has_line(&no.text, r"^\+ {3}idleEnabled: true$"));
-	assert!(has_line(&no.text, r"^\+ memory:$"));
-	assert_eq!(read(&h.omp_config()), "theme:\n  dark: his-theme\ncompaction:\n  thresholdPercent: 45\n");
+	assert!(no.text.contains(&format!("\n  {}\n", s(&h.omp_config()))));
+	assert!(has_line(&no.text, r"^  -   dark: his-theme$"));
+	assert!(has_line(&no.text, r"^  - app\.model\.cycle: \[ctrl\+k\]$"));
+	assert!(!no.text.contains(&format!("\n  {}", s(&h.lsp()))));
+	assert_eq!(read(&h.omp_config()), "theme:\n  dark: his-theme\n");
+	assert_eq!(h.backups(), None);
 
 	h.setup(Some("y")).await;
-	assert_eq!(
-		yaml(&read(&h.omp_config())),
-		json!({
-			"theme": {"dark": "his-theme"},
-			"compaction": {"thresholdPercent": 45, "idleEnabled": true},
-			"memory": {"backend": "mnemopi"},
-		})
-	);
-	// Written as omp writes it, and marked: the same shipped file is never proposed again.
-	assert_eq!(
-		read(&h.omp_config()),
-		omp_yaml(&json!({
-			"theme": {"dark": "his-theme"},
-			"compaction": {"thresholdPercent": 45, "idleEnabled": true},
-			"memory": {"backend": "mnemopi"},
-		}))
-	);
-	assert!(!h.setup(Some("y")).await.text.contains(&s(&h.omp_config())));
+	assert_eq!(read(&h.omp_config()), asset_text("omp/config.yml"));
+	assert_eq!(read(&h.keybindings()), asset_text("omp/keybindings.yml"));
+	let backups = h.backups().expect("the replaced files kept");
+	assert_eq!(read(&backups.join("config.yml")), "theme:\n  dark: his-theme\n");
+	assert_eq!(read(&backups.join("keybindings.yml")), "app.model.cycle: [ctrl+k]\n");
+	assert!(!backups.join("lsp.json").exists());
+	assert!(!backups.join("WATCHDOG.md").exists());
+	for (path, text) in &state {
+		assert_eq!(read(path), *text, "{}", s(path));
+	}
+	assert_eq!(h.setup(Some("y")).await.text, IN_PLACE);
+}
 
-	// A newer shipped value replaces a key still at the value shipped before; his own stays.
+#[tokio::test]
+async fn his_edit_after_the_snapshot_stays_until_a_newer_snapshot_which_keeps_his_first_file_for_uninstall() {
+	let mut h = Harness::new();
+	let dir = h.own_assets();
+	put(&h.omp_config(), "theme:\n  dark: his-theme\n");
+	h.setup(Some("y")).await;
+	let first = h.backups().unwrap();
+	// omp saves a setting he changed in `/settings`: the same snapshot never comes back over it.
+	let edited = format!("{}# his line\n", read(&h.omp_config()));
+	put(&h.omp_config(), &edited);
+	assert_eq!(h.setup(Some("y")).await.text, IN_PLACE);
+	assert_eq!(read(&h.omp_config()), edited);
+
+	// A newer snapshot shows his edit going and keeps it, but uninstall still restores the file from before Jocasta.
 	put(
-		&dir.join("omp-config.yml"),
-		"compaction:\n  thresholdPercent: 70\n  idleEnabled: false\nmemory:\n  backend: mnemopi\n",
+		&dir.join("omp").join("config.yml"),
+		&format!("{}# shipped later\n", read(&dir.join("omp").join("config.yml"))),
 	);
 	let newer = h.setup(Some("y")).await;
-	assert!(newer.text.contains("  kept: compaction.thresholdPercent: yours 45 kept (Jocasta ships 70)"));
+	assert!(has_line(&newer.text, r"^  - # his line$"));
+	assert!(read(&h.omp_config()).ends_with("# shipped later\n"));
+	let second = h.backups().unwrap();
+	assert_ne!(first, second);
+	assert_eq!(read(&second.join("config.yml")), edited);
+	let restore = h
+		.marker("0019-omp-snapshot")
+		.unwrap()
+		.undo
+		.into_iter()
+		.find(|undo| matches!(undo, Undo::Restore { path, .. } if *path == s(&h.omp_config())))
+		.unwrap();
 	assert_eq!(
-		yaml(&read(&h.omp_config())),
-		json!({
-			"theme": {"dark": "his-theme"},
-			"compaction": {"thresholdPercent": 45, "idleEnabled": false},
-			"memory": {"backend": "mnemopi"},
-		})
+		restore,
+		Undo::Restore {
+			path: s(&h.omp_config()),
+			backup: Some(s(&first.join("config.yml"))),
+			fingerprint: fingerprint(&read(&h.omp_config())),
+		}
 	);
 }
 
 #[tokio::test]
-async fn jocasta_yaml_is_never_overwritten_the_terminal_fragment_follows_the_shipped_scheme_after_y() {
+async fn secrets_yml_is_written_only_when_missing_his_own_is_never_shown_backed_up_or_undone() {
+	// omp warns at every start about a file that isn't a YAML list (`secrets/index.ts:299-301`).
+	assert_eq!(yaml(&asset_text("omp/secrets.yml")), json!([]));
+	let mut h = Harness::new();
+	let dir = h.own_assets();
+	let mine = "- type: plain\n  content: his-name-q7z\n";
+	put(&h.secrets(), mine);
+	let his = h.setup(Some("y")).await;
+	assert!(!his.text.contains("his-name-q7z"));
+	assert!(!his.text.contains(&s(&h.secrets())));
+	assert_eq!(read(&h.secrets()), mine);
+	assert_eq!(h.backups(), None);
+	let undo_text = |h: &Harness| h.undo(false).iter().map(|u| u.to_json().to_string()).collect::<String>();
+	assert!(!undo_text(&h).contains(&serde_json::to_string(&s(&h.secrets())).unwrap()));
+	// A newer shipped text leaves his alone, unshown.
+	put(&dir.join("omp").join("secrets.yml"), "# v2\n[]\n");
+	let newer = h.setup(Some("y")).await;
+	assert!(!newer.text.contains("his-name-q7z"));
+	assert_eq!(read(&h.secrets()), mine);
+}
+
+#[tokio::test]
+async fn the_terminal_fragment_follows_the_shipped_scheme_after_y() {
 	let h = Harness::new();
-	let jocasta_yaml = h.paths.jocasta_config_dir.join("jocasta.yaml");
-	put(&jocasta_yaml, "his own\n");
-	put(&h.paths.jocasta_config_dir.join("settings.json"), &json!({"frontier": {"port": 1}}).to_string());
 	put(&h.fragment(), "his own\n");
 	let Out { text, .. } = h.setup(Some("y")).await;
-	assert_eq!(read(&jocasta_yaml), "his own\n");
-	assert!(!text.contains(&s(&jocasta_yaml)));
 	assert!(text.contains(&format!("Windows Terminal scheme Tokyo Night: {}", s(&h.fragment()))));
 	assert!(text.contains("- his own"));
 	assert_eq!(read_json(&h.fragment()), json!({"schemes": [&*TOKYO_NIGHT_SCHEME]}));
@@ -662,24 +667,27 @@ async fn a_migration_runs_once_per_shipped_version_his_later_edit_stays_until_jo
 
 #[tokio::test]
 async fn a_failed_migration_stops_the_rest_and_says_why_the_ones_before_it_are_marked() {
-	let mut h = Harness::new();
-	let ran = h.ran.clone();
-	h.run = Arc::new(move |argv| {
-		ran.lock().unwrap().push(argv);
-		Box::pin(async { Ok(RunOutput { code: 3, output: "no omp found\n".to_owned() }) })
-	});
-	let Out { code, text, .. } = h.setup(Some("y")).await;
+	let h = Harness::new();
+	let mut io = TestIo::new(&[Some("y")]);
+	// herdr.toml appears while the diff that named it new waits for his answer.
+	let herdr_toml = h.herdr_toml();
+	io.on_ask = Some(Box::new(move || put(&herdr_toml, "# his\n")));
+	let code = run_setup(&h.paths, &h.deps(Some("herdr.exe")), &io).await.unwrap();
 	assert_eq!(code, 1);
+	let text = io.text();
 	assert!(
-		text.contains(
-			"jocasta setup: 0004-herdr-integration (herdr's omp integration (`herdr integration install omp`)) failed: herdr integration install omp exited 3: no omp found; the 7 changes after it wait."
-		),
+		text.contains(&format!(
+			"jocasta setup: 0005-herdr-config (herdr config for session `jocasta`) failed: {} changed since the diff; run jocasta setup again; the 2 changes after it wait.",
+			s(&h.herdr_toml())
+		)),
 		"{text}"
 	);
-	assert!(h.global_mcp().exists());
-	assert!(!h.herdr_toml().exists());
-	assert!(h.marker("0003-omp-settings").is_some());
-	assert!(h.marker("0004-herdr-integration").is_none());
+	assert_eq!(read(&h.herdr_toml()), "# his\n");
+	assert!(h.boss_mcp().exists());
+	assert!(h.marker("0002-boss-mcp").is_some());
+	assert!(h.marker("0005-herdr-config").is_none());
+	assert!(!h.global_mcp().exists());
+	assert!(h.marker("0019-omp-snapshot").is_none());
 }
 
 #[tokio::test]
@@ -687,15 +695,14 @@ async fn without_herdr_setup_says_so_and_does_the_rest_a_broken_mcp_json_is_refu
 	let h = Harness::new();
 	let Out { text, .. } = h.setup_without_herdr(Some("y")).await;
 	assert!(text.starts_with("herdr isn't installed: install it from https://herdr.dev"));
-	assert!(h.ran().is_empty());
 	assert!(h.global_mcp().exists());
-	assert!(h.marker("0004-herdr-integration").is_none());
+	assert!(h.hook().exists());
 
 	remove_tree(h.root.path()).unwrap();
-	put(&h.global_mcp(), "{ not json");
+	put(&h.boss_mcp(), "{ not json");
 	let error = h.setup_with(Some("herdr.exe"), Some("y")).await.err().expect("a broken mcp.json is refused");
-	assert!(error.to_string().contains(&format!("{} is not JSON", s(&h.global_mcp()))));
-	assert!(!h.boss_mcp().exists());
+	assert!(error.to_string().contains(&format!("{} is not JSON", s(&h.boss_mcp()))));
+	assert!(!h.global_mcp().exists());
 }
 
 #[tokio::test]
@@ -735,17 +742,19 @@ async fn refresh_says_to_restart_herdr_when_it_cant_reload_resets_jocastas_mcp_e
 		"herdr didn't reload its config (error: no running server for session jocasta): restart herdr to use it (close Jocasta, then run `jocasta`)."
 	));
 
-	let mut mcp = read_json(&h.global_mcp());
+	let mut mcp = read_json(&h.boss_mcp());
 	mcp["mcpServers"]["jocasta"]["args"] = json!(["mcp", "--his"]);
 	mcp["mcpServers"]["github"] = json!({"type": "stdio", "command": "gh-mcp"});
-	put(&h.global_mcp(), &mcp.to_string());
+	put(&h.boss_mcp(), &mcp.to_string());
 	let reset = h.refresh("mcp.json", Some("y")).await.unwrap();
-	assert!(reset.text.contains(&format!("{} already is the shipped version.", s(&h.boss_mcp()))));
-	assert!(reset.text.contains(&format!("kept {}.bak.20261023-090507", s(&h.global_mcp()))));
+	assert!(reset.text.contains(&format!("kept {}.bak.20261023-090507", s(&h.boss_mcp()))));
 	assert_eq!(
-		read_json(&h.global_mcp())["mcpServers"],
+		read_json(&h.boss_mcp())["mcpServers"],
 		json!({
-			"jocasta": {"type": "stdio", "command": "C:\\Jocasta\\jocasta.exe", "args": ["mcp"], "timeout": 1_860_000},
+			"jocasta": {
+				"type": "stdio", "command": "C:\\Jocasta\\jocasta.exe", "args": ["mcp", "--boss"], "timeout": 2_100_000,
+			},
+			"whiteboard": h.whiteboard_server(),
 			"github": {"type": "stdio", "command": "gh-mcp"},
 		})
 	);
@@ -811,61 +820,42 @@ async fn setup_undo_names_what_setup_added_from_its_markers_only_a_step_without_
 	h.mise = Some(PathBuf::from("mise.exe"));
 	h.setup(Some("y")).await;
 	let undo = h.undo(false);
-	let global = undo
-		.iter()
-		.find(|u| matches!(u, SetupUndo::Mcp(m) if m.path == s(&h.global_mcp())))
-		.expect("the global mcp.json's undo");
 	let mut writes = Map::new();
 	writes.insert(
 		"jocasta".to_owned(),
-		json!({"type": "stdio", "command": "C:\\Jocasta\\jocasta.exe", "args": ["mcp"], "timeout": 1_860_000}),
+		json!({"type": "stdio", "command": "C:\\Jocasta\\jocasta.exe", "args": ["mcp", "--boss"], "timeout": 2_100_000}),
 	);
 	writes.insert("whiteboard".to_owned(), h.whiteboard_server());
-	assert_eq!(
-		*global,
-		SetupUndo::Mcp(McpUndo {
-			path: s(&h.global_mcp()),
-			servers: vec!["jocasta".to_owned()],
-			writes,
-			wrote: h.marker("0001-mcp").unwrap().fingerprint,
-		})
-	);
-	assert!(undo.iter().any(|u| matches!(
-		u,
-		SetupUndo::Mcp(m) if m.path == s(&h.boss_mcp()) && m.servers.join(",") == "jocasta,whiteboard"
-	)));
-	let extension = h.paths.omp_agent_dir.join("extensions").join(HERDR_OMP_EXTENSION);
-	assert!(undo.contains(&other(Undo::HerdrIntegration { path: s(&extension) })));
+	assert!(undo.contains(&SetupUndo::Mcp(McpUndo {
+		path: s(&h.boss_mcp()),
+		servers: strings(&["jocasta", "whiteboard"]),
+		writes,
+		wrote: h.marker("0002-boss-mcp").unwrap().fingerprint,
+	})));
 	assert!(undo.contains(&other(Undo::File { path: s(&h.herdr_toml()) })));
 	assert!(undo.contains(&other(Undo::Dir {
 		path: s(h.fragment().parent().unwrap()),
 		file: Some("jocasta.json".to_owned())
 	})));
 	assert!(undo.contains(&other(Undo::File { path: s(&h.mise_file()) })));
-	assert!(
-		undo.contains(&other(Undo::Dir {
-			path: s(h.mise_skill().parent().unwrap()),
-			file: Some("SKILL.md".to_owned())
-		}))
-	);
-	// A file in a folder that goes whole isn't named again (0484).
-	assert!(!undo.contains(&other(Undo::File { path: s(&h.mise_skill()) })));
-	// The three omp files Jocasta made (0479): only its keys, and the brief while it is still Jocasta's text.
-	let Value::Object(keys) = json!({"app.live.toggle": [], "app.stt.toggle": "f9"}) else { unreachable!() };
-	assert!(undo.contains(&other(Undo::Keys { path: s(&h.keybindings()), keys, created: true })));
-	assert!(
-		undo.contains(&other(Undo::Text {
-			path: s(&h.watchdog()),
-			fingerprint: fingerprint(&asset_text("WATCHDOG.md"))
-		}))
-	);
-	let Value::Object(lsp_keys) = json!({"idleTimeoutMs": 300_000}) else { unreachable!() };
-	assert!(undo.contains(&other(Undo::Keys { path: s(&h.lsp()), keys: lsp_keys, created: true })));
-	// omp's config.yml stays: its keys are his settings.
+	// Every file the snapshot made goes while it is still the snapshot's text; none had one before it.
+	for path in h.snapshot_paths() {
+		let restore = Undo::Restore { path: s(&path), backup: None, fingerprint: fingerprint(&read(&path)) };
+		assert!(undo.contains(&other(restore)), "{}", s(&path));
+	}
 	let all: Vec<String> = undo.iter().map(|u| u.to_json().to_string()).collect();
-	assert!(all.iter().all(|u| !u.contains("config.yml")));
 	let unique: std::collections::HashSet<&String> = all.iter().collect();
 	assert_eq!(unique.len(), undo.len());
+
+	// A marker of a migration this build no longer has is ignored.
+	let old = Undo::Mcp { path: s(&h.global_mcp()), servers: strings(&["jocasta"]) };
+	write_marker(
+		&h.paths.jocasta_config_dir,
+		"0001-mcp",
+		&Marker { fingerprint: "f".to_owned(), undo: vec![old], applied_at: "2026-11-01T00:00:00.000Z".to_owned() },
+	)
+	.unwrap();
+	assert_eq!(h.undo(false), undo);
 
 	// Without the markers nothing is setup's to undo, whatever is there, and a stored calendar secret only with its
 	// marker (B1).
@@ -873,156 +863,24 @@ async fn setup_undo_names_what_setup_added_from_its_markers_only_a_step_without_
 	assert!(h.undo(true).is_empty());
 }
 
-#[tokio::test]
-async fn herdrs_omp_integration_that_was_there_before_setup_isnt_setups_to_undo_one_setup_installed_is() {
-	let h = Harness::new();
-	let extension = h.paths.omp_agent_dir.join("extensions").join(HERDR_OMP_EXTENSION);
-	let integration = other(Undo::HerdrIntegration { path: s(&extension) });
-	put(&extension, "// another install's\n");
-	h.setup(Some("y")).await;
-	assert!(h.ran().is_empty());
-	assert!(!h.undo(false).contains(&integration));
-
-	fs::remove_file(&extension).unwrap();
-	remove_tree(&markers_dir(&h.paths.jocasta_config_dir)).unwrap();
-	h.setup(Some("y")).await;
-	assert_eq!(h.ran(), [strings(&["herdr.exe", "integration", "install", "omp"])]);
-	assert!(h.undo(false).contains(&integration));
-}
-
-#[tokio::test]
-async fn keybindings_yml_and_lsp_json_get_only_jocastas_key_his_other_keys_and_his_own_value_for_it_kept() {
-	let h = Harness::new();
-	put(&h.keybindings(), "app.model.cycle:\n  - ctrl+k\n");
-	put(&h.lsp(), &pretty(&json!({"servers": {"biome": {"disabled": true}}, "idleTimeoutMs": 60000})));
-	let no = h.setup(Some("n")).await;
-	assert!(no.text.contains(&format!(
-		"omp key bindings: Ctrl+L no longer starts live voice; F9 toggles dictation: {}",
-		s(&h.keybindings())
-	)));
-	assert!(has_line(&no.text, r"^\+ app\.live\.toggle: \[\]$"));
-	assert!(
-		no.text
-			.contains(&format!("omp language servers: idle ones stop after 5 minutes (yours kept): {}", s(&h.lsp())))
-	);
-	assert!(no.text.contains("  kept: idleTimeoutMs: yours 60000 kept (Jocasta ships 300000)"));
-	assert_eq!(read(&h.keybindings()), "app.model.cycle:\n  - ctrl+k\n");
-
-	let yes = h.setup(Some("y")).await;
-	assert!(yes.text.contains(&format!("kept {}", s(&h.lsp()))));
-	assert_eq!(
-		yaml(&read(&h.keybindings())),
-		json!({"app.model.cycle": ["ctrl+k"], "app.live.toggle": [], "app.stt.toggle": "f9"})
-	);
-	assert_eq!(read_json(&h.lsp()), json!({"servers": {"biome": {"disabled": true}}, "idleTimeoutMs": 60000}));
-	// Setup made neither file and added only its two keys: that is all uninstall may take out.
-	let undo = h.undo(false);
-	let Value::Object(keys) = json!({"app.live.toggle": [], "app.stt.toggle": "f9"}) else { unreachable!() };
-	assert!(undo.contains(&other(Undo::Keys { path: s(&h.keybindings()), keys, created: false })));
-	let all = undo.iter().map(|u| u.to_json().to_string()).collect::<String>();
-	assert!(!all.contains(&serde_json::to_string(&s(&h.lsp())).unwrap()));
-	assert!(!h.setup(Some("y")).await.text.contains(&s(&h.keybindings())));
-}
-
-#[tokio::test]
-async fn his_keybindings_yaml_is_the_one_merged_an_old_keybindings_json_waits_for_omp_to_move_it() {
-	let h = Harness::new();
-	let yaml_file = h.paths.omp_agent_dir.join("keybindings.yaml");
-	put(&yaml_file, "app.model.cycle: [ctrl+k]\n");
-	h.setup(Some("y")).await;
-	assert_eq!(
-		yaml(&read(&yaml_file)),
-		json!({"app.model.cycle": ["ctrl+k"], "app.live.toggle": [], "app.stt.toggle": "f9"})
-	);
-	assert!(!h.keybindings().exists());
-
-	fs::remove_file(&yaml_file).unwrap();
-	remove_tree(&markers_dir(&h.paths.jocasta_config_dir)).unwrap();
-	put(&h.paths.omp_agent_dir.join("keybindings.json"), "{ \"app.model.cycle\": [\"ctrl+k\"] }\n");
-	let Out { text, .. } = h.setup(Some("y")).await;
-	assert!(text.contains("omp's keybindings.json is in its old format: start omp once"));
-	assert!(!h.keybindings().exists());
-}
-
-#[tokio::test]
-async fn watchdog_md_written_when_missing_his_own_shown_and_kept_jocastas_older_text_follows_the_new_one() {
-	let mut h = Harness::new();
-	let dir = h.own_assets();
-	put(&h.watchdog(), "# His brief\n");
-	let his = h.setup(Some("y")).await;
-	let kept_title = format!("the advisor's brief (yours kept; Jocasta's differs as shown): {}", s(&h.watchdog()));
-	assert!(his.text.contains(&kept_title));
-	assert!(has_line(&his.text, r"^- # His brief$"));
-	assert!(has_line(&his.text, r"^\+ # Advisor brief \(Jocasta\)$"));
-	assert!(
-		his.text.contains("  kept: yours stays as it is, never overwritten (Jocasta's text is config/WATCHDOG.md)")
-	);
-	assert!(his.text.contains(&format!("kept {}", s(&h.watchdog()))));
-	assert_eq!(read(&h.watchdog()), "# His brief\n");
-	let undo_text = |h: &Harness| h.undo(false).iter().map(|u| u.to_json().to_string()).collect::<String>();
-	assert!(!undo_text(&h).contains(&serde_json::to_string(&s(&h.watchdog())).unwrap()));
-	// Shown once: the same shipped text never asks again.
-	assert!(!h.setup(Some("y")).await.text.contains(&s(&h.watchdog())));
-	// A newer shipped text is shown again, and his stays.
-	put(&dir.join("WATCHDOG.md"), "# Advisor brief v2\n");
-	assert!(h.setup(Some("y")).await.text.contains(&kept_title));
-	assert_eq!(read(&h.watchdog()), "# His brief\n");
-
-	// Missing: Jocasta's text is written; a newer one replaces it after `y` while he hasn't changed it.
-	fs::remove_file(h.watchdog()).unwrap();
-	remove_tree(&markers_dir(&h.paths.jocasta_config_dir)).unwrap();
-	h.setup(Some("y")).await;
-	assert_eq!(read(&h.watchdog()), "# Advisor brief v2\n");
-	put(&dir.join("WATCHDOG.md"), "# Advisor brief v3\n");
-	let newer = h.setup(Some("y")).await;
-	assert!(newer.text.contains(&format!("the advisor's brief: {}", s(&h.watchdog()))));
-	assert!(has_line(&newer.text, r"^- # Advisor brief v2$"));
-	assert_eq!(read(&h.watchdog()), "# Advisor brief v3\n");
-	assert!(
-		h.undo(false)
-			.contains(&other(Undo::Text { path: s(&h.watchdog()), fingerprint: fingerprint("# Advisor brief v3\n") }))
-	);
-}
-
-#[tokio::test]
-async fn secrets_yml_a_list_omp_reads_written_when_missing_his_own_kept_and_never_shown_jocastas_older_text_follows() {
-	// omp warns at every start about a file that isn't a YAML list (`secrets/index.ts:299-301`).
-	assert_eq!(yaml(&asset_text("secrets.yml")), json!([]));
-	let mut h = Harness::new();
-	let dir = h.own_assets();
-	let mine = "- type: plain\n  content: his-name-q7z\n";
-	put(&h.secrets(), mine);
-	let his = h.setup(Some("y")).await;
-	assert!(!his.text.contains("his-name-q7z"));
-	assert!(!his.text.contains(&s(&h.secrets())));
-	assert_eq!(read(&h.secrets()), mine);
-	let secrets_json = serde_json::to_string(&s(&h.secrets())).unwrap();
-	let undo_text = |h: &Harness| h.undo(false).iter().map(|u| u.to_json().to_string()).collect::<String>();
-	assert!(!undo_text(&h).contains(&secrets_json));
-	// A newer shipped text leaves his alone, unshown.
-	put(&dir.join("secrets.yml"), "# v2\n[]\n");
-	let newer = h.setup(Some("y")).await;
-	assert!(!newer.text.contains("his-name-q7z"));
-	assert_eq!(read(&h.secrets()), mine);
-
-	// Missing: Jocasta's text is written; a newer one replaces it after `y` while he hasn't changed it.
-	fs::remove_file(h.secrets()).unwrap();
-	remove_tree(&markers_dir(&h.paths.jocasta_config_dir)).unwrap();
-	h.setup(Some("y")).await;
-	assert_eq!(read(&h.secrets()), "# v2\n[]\n");
-	put(&dir.join("secrets.yml"), "# v3\n[]\n");
-	let follows = h.setup(Some("y")).await;
-	assert!(has_line(&follows.text, r"^- # v2$"));
-	assert_eq!(read(&h.secrets()), "# v3\n[]\n");
-	assert!(
-		h.undo(false).contains(&other(Undo::Text { path: s(&h.secrets()), fingerprint: fingerprint("# v3\n[]\n") }))
-	);
+#[test]
+fn the_shipped_config_yml_carries_the_decided_values_that_his_own_file_held_where_omp_defaults_differ() {
+	let config = yaml(&asset_text("omp/config.yml"));
+	// omp's default is off: without it the snapshot would turn his advisor off in every pane (0619, 0620).
+	assert_eq!(config["advisor"], json!({"enabled": true, "reviewInterval": 3}));
+	// His fallbacks (0590), dictation and speech kept on the machine (0556).
+	let chains = &config["retry"]["fallbackChains"];
+	assert_eq!(chains["plan"], json!(["anthropic/claude-opus-5-5:max", "anthropic/claude-opus-5:max"]));
+	assert_eq!(chains["slow"], chains["plan"]);
+	assert_eq!(chains["dictation"], json!([]));
+	assert_eq!(chains["speech"], json!([]));
+	assert_eq!(config["modelRoles"]["default"], "anthropic/claude-opus-5-5:high");
 }
 
 #[tokio::test]
 async fn on_windows_the_shipped_fence_also_names_windows_own_folders_and_a_second_run_has_nothing_to_do() {
 	let mut h = Harness::new();
-	let shipped = asset_text("omp-config.yml");
+	let shipped = asset_text("omp/config.yml");
 	let fence = |text: &str| -> Vec<Value> { yaml(text)["tools"]["restrictedFolders"].as_array().unwrap().clone() };
 	assert!(!fence(&shipped).is_empty());
 	assert_eq!(omp_settings_text(&shipped, None).unwrap(), shipped);
@@ -1079,7 +937,7 @@ async fn the_old_herdr_plugins_folder_and_migration_14s_marker_go_after_y_and_un
 }
 
 #[tokio::test]
-async fn a_file_changed_after_the_diff_is_refused_never_overwritten_the_changes_after_it_wait() {
+async fn a_snapshot_file_changed_after_the_diff_is_refused_and_no_file_of_the_snapshot_is_written() {
 	let h = Harness::new();
 	put(&h.omp_config(), "modelRoles:\n  default: anthropic/model-a\n");
 	let mut io = TestIo::new(&[Some("y")]);
@@ -1089,97 +947,23 @@ async fn a_file_changed_after_the_diff_is_refused_never_overwritten_the_changes_
 	let code = run_setup(&h.paths, &h.deps(Some("herdr.exe")), &io).await.unwrap();
 	assert_eq!(code, 1);
 	let failed =
-		io.out.lock().unwrap().iter().find(|l| l.starts_with("jocasta setup: 0003-omp-settings")).cloned().unwrap();
-	assert!(failed.starts_with(&format!(
-		"jocasta setup: 0003-omp-settings (omp settings Jocasta ships) failed: {} changed since the diff; run jocasta setup again; the ",
-		s(&h.omp_config())
-	)));
-	assert!(Regex::new(r"; the \d+ changes after it wait\.$").unwrap().is_match(&failed));
+		io.out.lock().unwrap().iter().find(|l| l.starts_with("jocasta setup: 0019-omp-snapshot")).cloned().unwrap();
+	assert!(failed.starts_with("jocasta setup: 0019-omp-snapshot (Jocasta's omp snapshot over your omp files"));
+	assert!(
+		failed.ends_with(&format!("failed: {} changed since the diff; run jocasta setup again.", s(&h.omp_config())))
+	);
 	assert_eq!(read(&h.omp_config()), "modelRoles:\n  default: anthropic/model-b\n");
-	assert!(h.marker("0003-omp-settings").is_none());
-	// A file that appeared after the diff named it new is refused too.
-	remove_tree(h.root.path()).unwrap();
-	let mut fresh = TestIo::new(&[Some("y")]);
-	let mcp = h.global_mcp();
-	fresh.on_ask = Some(Box::new(move || {
-		put(&mcp, "{ \"mcpServers\": { \"github\": { \"type\": \"stdio\", \"command\": \"gh-mcp\" } } }\n");
-	}));
-	assert_eq!(run_setup(&h.paths, &h.deps(Some("herdr.exe")), &fresh).await.unwrap(), 1);
-	assert!(fresh.text().contains(&format!("{} changed since the diff; run jocasta setup again", s(&h.global_mcp()))));
-	assert_eq!(read_json(&h.global_mcp())["mcpServers"], json!({"github": {"type": "stdio", "command": "gh-mcp"}}));
+	assert!(!h.keybindings().exists() && !h.global_mcp().exists() && !h.hook().exists());
+	assert_eq!(h.backups(), None);
+	assert!(h.marker("0019-omp-snapshot").is_none());
 }
 
 #[tokio::test]
-async fn his_keybindings_yml_keeps_his_comments_and_formatting_only_jocastas_key_lines_change() {
-	let h = Harness::new();
-	let his =
-		"# my bindings, tuned over months\napp.model.cycle: [ctrl+k] # cycle models\n\napp.live.toggle:\n  - ctrl+l\n";
-	put(&h.keybindings(), his);
-	// Jocasta's earlier value for a key it claimed follows the new one; here his own `ctrl+l` stays and is shown.
-	let no = h.setup(Some("n")).await;
-	assert!(no.text.contains("  kept: app.live.toggle: yours"));
-	assert!(!no.text.contains("- # my bindings, tuned over months"));
-	h.setup(Some("y")).await;
-	assert_eq!(read(&h.keybindings()), format!("{his}app.stt.toggle: f9\n"));
-
-	let map = |value: Value| -> Map<String, Value> {
-		let Value::Object(map) = value else { unreachable!() };
-		map
-	};
-	// A key line is replaced in place when its value changes; the lines around it stay.
-	assert_eq!(
-		edit_config(
-			&h.keybindings(),
-			"# mine\napp.live.toggle: [] # off\napp.stt.toggle: f9\n# end\n",
-			&map(json!({"app.live.toggle": [], "app.stt.toggle": "f8"})),
-			&["app.stt.toggle"],
-			&[]
-		)
-		.as_deref(),
-		Some("# mine\napp.live.toggle: [] # off\napp.stt.toggle: f8\n# end\n")
-	);
-	// A CRLF file keeps its line ends; lines that can't give the keys are never rewritten whole: `None`.
-	assert_eq!(
-		edit_config(&h.keybindings(), "a: 1\r\n", &map(json!({"a": 1, "b": 2})), &["b"], &[]).as_deref(),
-		Some("a: 1\r\nb: 2\r\n")
-	);
-	assert_eq!(edit_config(&h.keybindings(), "{a: 1}\n", &map(json!({"a": 1, "b": 2})), &["b"], &[]), None);
-	// His comments alone left read as an empty file.
-	assert_eq!(edit_config(&h.keybindings(), "# mine\nb: 2\n", &Map::new(), &[], &["b"]).as_deref(), Some("# mine\n"));
-}
-
-#[tokio::test]
-async fn a_keybindings_yml_whose_lines_cant_be_edited_stays_byte_for_byte_and_its_migration_fails_saying_why() {
-	let h = Harness::new();
-	let his = "{app.model.cycle: [ctrl+k]} # cycle models, flow style\n";
-	put(&h.keybindings(), his);
-	let Out { code, text, .. } = h.setup(Some("y")).await;
-	assert_eq!(code, 1);
-	assert!(text.contains(&format!(
-		"failed: {} can't be edited line by line, so setup left it as it is; set app.live.toggle: [], app.stt.toggle: \"f9\" in it by hand, then run jocasta setup again",
-		s(&h.keybindings())
-	)));
-	assert_eq!(read(&h.keybindings()), his);
-}
-
-#[tokio::test]
-async fn a_merge_that_keeps_only_his_values_says_kept_and_config_yml_stays_byte_for_byte() {
-	let mut h = Harness::new();
-	let dir = h.own_assets();
-	put(&dir.join("omp-config.yml"), "compaction:\n  thresholdPercent: 60\n");
-	put(&h.omp_config(), "# his\ncompaction:\n  thresholdPercent: 45\n");
-	let Out { text, .. } = h.setup(Some("y")).await;
-	assert!(text.contains(&format!("kept {}", s(&h.omp_config()))));
-	assert!(!text.contains(&format!("wrote {}", s(&h.omp_config()))));
-	assert_eq!(read(&h.omp_config()), "# his\ncompaction:\n  thresholdPercent: 45\n");
-}
-
-#[tokio::test]
-async fn refresh_herdr_toml_works_beside_a_malformed_lsp_json_it_doesnt_reset() {
+async fn refresh_herdr_toml_works_beside_a_malformed_mcp_json_it_doesnt_reset() {
 	let h = Harness::new();
 	h.setup(Some("y")).await;
 	put(&h.herdr_toml(), "# his\n");
-	put(&h.lsp(), "{ broken");
+	put(&h.boss_mcp(), "{ broken");
 	let Out { code, text, .. } = h.refresh("herdr.toml", Some("y")).await.unwrap();
 	assert_eq!(code, 0);
 	assert!(text.contains(&format!("kept {}.bak.20261023-090507", s(&h.herdr_toml()))));
@@ -1189,7 +973,6 @@ async fn refresh_herdr_toml_works_beside_a_malformed_lsp_json_it_doesnt_reset() 
 #[tokio::test]
 async fn without_herdr_setup_ends_by_saying_so_never_done_even_with_its_integration_already_there() {
 	let h = Harness::new();
-	put(&h.paths.omp_agent_dir.join("extensions").join(HERDR_OMP_EXTENSION), "// herdr\n");
 	let Out { text, .. } = h.setup_without_herdr(Some("y")).await;
 	assert!(text.starts_with(HERDR_LINE));
 	assert!(text.ends_with(HERDR_LINE));
@@ -1215,40 +998,6 @@ async fn setup_reloads_herdr_after_writing_herdr_toml_and_says_so() {
 	assert!(h.setup(Some("y")).await.text.contains(
 		"herdr didn't reload its config (error: no running server for session jocasta): restart herdr to use it (close Jocasta, then run `jocasta`)."
 	));
-}
-
-/// A registry stand-in holding Run values.
-struct Values(Mutex<Vec<(String, String)>>);
-
-impl RunValueStore for Values {
-	fn read(&self, name: &str) -> Option<String> {
-		self.0.lock().unwrap().iter().find(|(n, _)| n == name).map(|(_, v)| v.clone())
-	}
-
-	fn remove(&self, name: &str) -> bool {
-		let mut values = self.0.lock().unwrap();
-		let before = values.len();
-		values.retain(|(n, _)| n != name);
-		values.len() < before
-	}
-}
-
-#[tokio::test]
-async fn the_companions_logon_run_value_goes_another_programs_value_of_that_name_stays() {
-	let mut h = Harness::new();
-	let values = Arc::new(Values(Mutex::new(vec![(
-		"Jocasta".to_owned(),
-		"\"C:\\Jocasta\\app\\bin\\launcher.exe\"".to_owned(),
-	)])));
-	h.run_value = Some(values.clone());
-	let Out { text, .. } = h.setup(Some("y")).await;
-	assert!(text.contains("Jocasta no longer starts at logon: its Run value goes"));
-	assert!(values.0.lock().unwrap().is_empty());
-
-	*values.0.lock().unwrap() = vec![("Jocasta".to_owned(), "\"C:\\Other\\program.exe\"".to_owned())];
-	remove_tree(&markers_dir(&h.paths.jocasta_config_dir)).unwrap();
-	assert!(!h.setup(Some("y")).await.text.contains("Run value"));
-	assert_eq!(*values.0.lock().unwrap(), [("Jocasta".to_owned(), "\"C:\\Other\\program.exe\"".to_owned())]);
 }
 
 /// A Credential Manager stand-in for the calendar's secret (0430).
@@ -1284,7 +1033,7 @@ impl CalendarStore for Calendar {
 
 async fn setup_with_calendar(h: &Harness, calendar: &Arc<Calendar>, answers: &[Option<&str>]) -> (String, Vec<String>) {
 	let io = TestIo::new(answers);
-	let mut deps = SetupDeps::new(Some(PathBuf::from("herdr.exe")), h.run.clone());
+	let mut deps = SetupDeps::new(Some(PathBuf::from("herdr.exe")));
 	deps.calendar = Some(calendar.clone());
 	run_setup(&h.paths, &deps, &io).await.unwrap();
 	(io.text(), io.asked())
@@ -1312,7 +1061,7 @@ async fn the_calendars_secret_address_is_asked_for_as_a_secret_off_the_screen_wh
 	let calendar = Calendar::new(None);
 	let mut io = TestIo::new(&[Some("y")]);
 	io.secret_answer = Some("https://calendar.example/secret.ics".to_owned());
-	let mut deps = SetupDeps::new(Some(PathBuf::from("herdr.exe")), h.run.clone());
+	let mut deps = SetupDeps::new(Some(PathBuf::from("herdr.exe")));
 	deps.calendar = Some(calendar.clone());
 	run_setup(&h.paths, &deps, &io).await.unwrap();
 	assert_eq!(
@@ -1336,177 +1085,6 @@ async fn with_no_calendar_secret_anywhere_setup_asks_once_enter_skips_an_address
 	setup_with_calendar(&h, &given, &[Some("webcal://calendar.example/secret.ics")]).await;
 	assert_eq!(given.saved(), ["webcal://calendar.example/secret.ics"]);
 	assert!(h.marker("calendar").is_some());
-}
-
-/// Runs setup on a machine with the old graph's compose file; `docker` answers as `engine_runs` says.
-async fn setup_with_graph(
-	h: &mut Harness,
-	engine_runs: bool,
-	answers: &[Option<&str>],
-) -> (i32, String, Vec<String>, Vec<Vec<String>>, PathBuf) {
-	let compose = h.paths.jocasta_config_dir.join("compose.yaml");
-	put(&compose, "name: jocasta-demo\nservices: {}\n");
-	put(&h.paths.jocasta_config_dir.join("containers").join("graphiti").join("Dockerfile"), "FROM scratch\n");
-	let docker: Arc<Mutex<Vec<Vec<String>>>> = Arc::default();
-	let herdr = h.run.clone();
-	let seen = docker.clone();
-	h.run = Arc::new(move |argv| {
-		if argv[0] != "docker" {
-			return herdr(argv);
-		}
-		let code = i32::from(argv[1] == "info" && !engine_runs);
-		seen.lock().unwrap().push(argv);
-		Box::pin(async move { Ok(RunOutput { code, output: String::new() }) })
-	});
-	let io = TestIo::new(answers);
-	let code = run_setup(&h.paths, &h.deps(Some("herdr.exe")), &io).await.unwrap();
-	let docker = docker.lock().unwrap().clone();
-	(code, io.text(), io.asked(), docker, compose)
-}
-
-fn graph_gone(h: &Harness, compose: &Path) -> bool {
-	!compose.exists() && !h.paths.jocasta_config_dir.join("containers").exists()
-}
-
-fn docker(compose: &Path, args: &[&str]) -> Vec<String> {
-	[vec!["docker".to_owned(), "compose".to_owned(), "-f".to_owned(), s(compose)], strings(args)].concat()
-}
-
-#[tokio::test]
-async fn an_install_with_the_old_graph_its_containers_come_down_the_images_and_volume_go_only_on_his_yes() {
-	let mut h = Harness::new();
-	let (code, text, asked, ran, compose) = setup_with_graph(&mut h, true, &[Some("y"), Some("n")]).await;
-	assert_eq!(code, 0);
-	assert_eq!(ran, [strings(&["docker", "info"]), docker(&compose, &["down"])]);
-	assert_eq!(asked.last().unwrap(), "Also remove the old graph's images and volume (Graphiti and FalkorDB)? [y/N] ");
-	assert!(graph_gone(&h, &compose));
-	assert!(text.contains("docker compose -p jocasta-demo down --rmi all --volumes"));
-}
-
-#[tokio::test]
-async fn an_install_with_the_old_graph_yes_removes_its_images_and_volume_too_with_nothing_left_to_say() {
-	let mut h = Harness::new();
-	let (_, text, _, ran, compose) = setup_with_graph(&mut h, true, &[Some("y"), Some("y")]).await;
-	assert_eq!(
-		ran,
-		[
-			strings(&["docker", "info"]),
-			docker(&compose, &["down"]),
-			docker(&compose, &["down", "--rmi", "all", "--volumes"]),
-		]
-	);
-	assert!(graph_gone(&h, &compose));
-	assert!(!text.contains("docker compose -p"));
-}
-
-#[tokio::test]
-async fn an_install_with_the_old_graph_while_docker_isnt_running_no_question_the_files_go_the_later_command_is_named() {
-	let mut h = Harness::new();
-	let (_, text, asked, ran, compose) = setup_with_graph(&mut h, false, &[Some("y")]).await;
-	assert_eq!(asked, ["Write these changes? [y/N] "]);
-	assert_eq!(ran, [strings(&["docker", "info"])]);
-	assert!(graph_gone(&h, &compose));
-	assert!(text.contains("docker compose -p jocasta-demo down --rmi all --volumes"));
-}
-
-#[tokio::test]
-async fn a_machine_that_never_had_the_old_graph_is_not_asked_about_it_and_runs_no_docker() {
-	let mut h = Harness::new();
-	let docker: Arc<Mutex<Vec<Vec<String>>>> = Arc::default();
-	let herdr = h.run.clone();
-	let seen = docker.clone();
-	h.run = Arc::new(move |argv| {
-		if argv[0] == "docker" {
-			seen.lock().unwrap().push(argv.clone());
-		}
-		herdr(argv)
-	});
-	let Out { asked, .. } = h.setup(Some("y")).await;
-	assert_eq!(asked, ["Write these changes? [y/N] "]);
-	assert!(docker.lock().unwrap().is_empty());
-}
-
-fn jocasta_server() -> Value {
-	json!({"type": "stdio", "command": "C:\\Jocasta\\jocasta.exe", "args": ["mcp"], "timeout": 1_860_000})
-}
-
-/// The user-level mcp.json and migration 1's marker as an install from before 0607 left them.
-fn install_before_0607(h: &Harness, whiteboard: Value) {
-	let github = json!({"type": "stdio", "command": "gh-mcp"});
-	put(
-		&h.global_mcp(),
-		&pretty(&json!({"mcpServers": {"github": github, "jocasta": jocasta_server(), "whiteboard": whiteboard}})),
-	);
-	write_marker(
-		&h.paths.jocasta_config_dir,
-		"0001-mcp",
-		&Marker {
-			fingerprint: fingerprint(
-				&json!({"jocasta": jocasta_server(), "whiteboard": h.whiteboard_server()}).to_string(),
-			),
-			applied_at: "2026-11-01T00:00:00.000Z".to_owned(),
-			undo: vec![Undo::Mcp { path: s(&h.global_mcp()), servers: strings(&["jocasta", "whiteboard"]) }],
-			shipped: None,
-		},
-	)
-	.unwrap();
-}
-
-#[tokio::test]
-async fn a_fresh_install_writes_whiteboard_into_the_bosss_mcp_json_only() {
-	let h = Harness::new();
-	h.setup(Some("y")).await;
-	assert!(read_json(&h.global_mcp())["mcpServers"].get("whiteboard").is_none());
-	assert_eq!(read_json(&h.boss_mcp())["mcpServers"]["whiteboard"], h.whiteboard_server());
-	assert!(h.marker("0017-whiteboard-boss-only").is_some());
-	assert!(h.setup(Some("y")).await.text.contains("Nothing to set up"));
-}
-
-#[tokio::test]
-async fn migration_17_moves_whiteboard_from_the_user_level_file_to_the_bosss_on_an_old_install() {
-	let h = Harness::new();
-	install_before_0607(&h, h.whiteboard_server());
-	let Out { code, text, .. } = h.setup(Some("y")).await;
-	assert_eq!(code, 0);
-	assert!(text.contains(&format!("\"whiteboard\" leaves your MCP config: {}", s(&h.global_mcp()))));
-	// His other servers stay; whiteboard is in the boss's file now.
-	assert_eq!(
-		read_json(&h.global_mcp())["mcpServers"],
-		json!({"github": {"type": "stdio", "command": "gh-mcp"}, "jocasta": jocasta_server()})
-	);
-	assert_eq!(read_json(&h.boss_mcp())["mcpServers"]["whiteboard"], h.whiteboard_server());
-	assert_eq!(
-		h.marker("0001-mcp").unwrap().undo,
-		[Undo::Mcp { path: s(&h.global_mcp()), servers: strings(&["jocasta"]) }]
-	);
-	assert!(h.setup(Some("y")).await.text.contains("Nothing to set up"));
-}
-
-#[tokio::test]
-async fn migration_17_leaves_a_whiteboard_entry_he_changed_and_names_it() {
-	let h = Harness::new();
-	let his = json!({"type": "stdio", "command": "C:\\Programs\\other\\node.exe", "args": ["cli.js", "mcp"]});
-	install_before_0607(&h, his.clone());
-	let Out { text, .. } = h.setup(Some("y")).await;
-	assert!(text.contains(&format!("\"whiteboard\" in {} is yours", s(&h.global_mcp()))));
-	assert_eq!(read_json(&h.global_mcp())["mcpServers"]["whiteboard"], his);
-	assert_eq!(read_json(&h.boss_mcp())["mcpServers"]["whiteboard"], h.whiteboard_server());
-	// Said once: the next run has nothing to say.
-	assert!(h.setup(Some("y")).await.text.contains("Nothing to set up"));
-}
-
-#[test]
-fn setup_undo_on_an_install_where_migration_17_never_ran_still_owns_the_whiteboard_entry_it_wrote() {
-	let h = Harness::new();
-	install_before_0607(&h, h.whiteboard_server());
-	let undo = h.undo(false);
-	let Some(SetupUndo::Mcp(global)) =
-		undo.into_iter().find(|u| matches!(u, SetupUndo::Mcp(m) if m.path == s(&h.global_mcp())))
-	else {
-		panic!("the global mcp.json's undo");
-	};
-	assert_eq!(global.servers, ["jocasta", "whiteboard"]);
-	assert_eq!(global.writes["whiteboard"], h.whiteboard_server());
 }
 
 #[tokio::test]

@@ -1,12 +1,10 @@
 //! `jocasta uninstall` (0468): removes exactly what install and setup added. The installer records its part in
 //! `install.json` (the folder, the release's top-level entries, its PATH entry, the autostart value, the companion's
 //! WebView2 data); setup's migrations record theirs in their markers (`setup_undo`). herdr session `jocasta` and
-//! Jocasta's per-project mise configs (0477) go too. The data folder (history, models) is asked about separately. Keys
-//! setup merged into his omp `config.yml` stay: they are his settings. In `keybindings.yml` and `lsp.json` only the
-//! keys setup added go (in `keybindings.yml` only their lines, 0584), and
-//! `WATCHDOG.md` and `secrets.yml` only while each is still Jocasta's text (0479, 0594). From the install folder only
-//! the release's entries go, and the folder once it is empty (0579); omp sessions still running programs from it are
-//! named and refused first.
+//! Jocasta's per-project mise configs (0477) go too. The data folder (history, models) is asked about separately. Each
+//! of omp's files the omp snapshot wrote gets back the one it replaced while it is still the snapshot's text (fork plan
+//! phase 6). From the install folder only the release's entries go, and the folder once it is empty (0579); omp
+//! sessions still running programs from it are named and refused first.
 
 use std::fs;
 use std::io::ErrorKind;
@@ -19,7 +17,6 @@ use regex::Regex;
 use serde_json::{Map, Value};
 
 use crate::frontier::server::launch::ServiceState;
-use crate::setup::config_file::{edit_config, parse_config};
 use crate::setup::markers::{Undo, fingerprint};
 use crate::setup::run_value::{RUN_KEY, delete_run_value, read_run_value};
 use crate::setup::setup::{McpUndo, RunProgram, SetupIo, SetupUndo, answered_yes};
@@ -176,10 +173,8 @@ enum Action {
 	Path(PathBuf),
 	SetupFolder(PathBuf, Option<String>),
 	Mcp(McpUndo),
-	HerdrIntegration(PathBuf),
 	HerdrSession,
-	Keys(PathBuf, Map<String, Value>, bool),
-	Text(PathBuf, String),
+	Restore(PathBuf, Option<PathBuf>, String),
 	Credential(String),
 	Autostart(String, PathBuf),
 	PathEntry(PathBuf),
@@ -515,68 +510,45 @@ fn not_json(item: &McpUndo) -> Error {
 	Error::other(format!("{} is not JSON; remove {} from it by hand", item.path, item.servers.join(", ")))
 }
 
-/// The keys setup added out of one of his omp files (0479), each only while it still has the value setup wrote; in a
-/// YAML file only their lines go, his comments and formatting stay (0584), and a file whose lines can't be edited is
-/// left as it is. The file goes when setup made it and nothing else is left in it: no key, comment or line of his.
-fn remove_keys(path: &Path, keys: &Map<String, Value>, created: bool) -> Result<String> {
-	let names: Vec<&String> = keys.keys().collect();
+/// One of omp's files the snapshot wrote: while it is still the snapshot's text (`expected`), the file it replaced comes
+/// back from `backup`, or it goes (with its folder once empty) when there was none. One he changed since stays, with
+/// the file from before beside it as `<name>.before-jocasta`.
+fn restore_file(path: &Path, backup: Option<&Path>, expected: &str) -> Result<String> {
 	let shown = path.display();
-	let unreadable = || {
-		let list = names.iter().map(|name| name.as_str()).collect::<Vec<_>>().join(", ");
-		Error::other(format!("{shown} can't be read; remove {list} from it by hand"))
-	};
 	let text = match fs::read(path) {
-		Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
-		Err(error) if error.kind() == ErrorKind::NotFound => return Ok(format!("{shown} was already gone")),
-		Err(_) => return Err(unreadable()),
-	};
-	let config = parse_config(path, &text).map_err(|_| unreadable())?;
-	let mut gone: Vec<&str> = Vec::new();
-	let mut yours: Vec<&str> = Vec::new();
-	for name in &names {
-		match config.get(*name) {
-			None => {}
-			Some(value) if *value == keys[*name] => gone.push(name),
-			Some(_) => yours.push(name),
-		}
-	}
-	let left: Map<String, Value> =
-		config.iter().filter(|(name, _)| !gone.contains(&name.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect();
-	let edited = if gone.is_empty() { Some(text.clone()) } else { edit_config(path, &text, &left, &[], &gone) };
-	let Some(edited) = edited else {
-		return Err(Error::other(format!(
-			"{shown} can't be edited line by line, so uninstall left it as it is; remove {} from it by hand",
-			gone.join(", ")
-		)));
-	};
-	// `{}` is what an emptied JSON file reads as; a YAML one with anything of his left still has lines.
-	if created && left.is_empty() && matches!(edited.trim(), "" | "{}") {
-		remove_file_forced(path)?;
-		return Ok(format!("removed {shown}"));
-	}
-	if !gone.is_empty() {
-		write_atomically(path, &edited, None)?;
-	}
-	let said = if gone.is_empty() {
-		format!("{shown} has none of Jocasta's keys left")
-	} else {
-		format!("removed {} from {shown}", gone.join(", "))
-	};
-	Ok(if yours.is_empty() { said } else { format!("{said}; kept {} (you changed it)", yours.join(", ")) })
-}
-
-/// A file setup wrote, only while it is still that text (0479).
-fn remove_text(path: &Path, expected: &str) -> Result<String> {
-	let text = match fs::read(path) {
-		Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
-		Err(error) if error.kind() == ErrorKind::NotFound => return Ok(format!("{} was already gone", path.display())),
+		Ok(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
+		Err(error) if error.kind() == ErrorKind::NotFound => None,
 		Err(error) => return Err(error.into()),
 	};
-	if fingerprint(&text) != expected {
-		return Ok(format!("kept {}: you changed it", path.display()));
+	let backup = backup.filter(|backup| backup.is_file());
+	match (text, backup) {
+		(Some(text), backup) if fingerprint(&text) == expected => match backup {
+			Some(backup) => {
+				fs::copy(backup, path)?;
+				Ok(format!("put back {shown}"))
+			}
+			None => {
+				remove_file_forced(path)?;
+				if let Some(dir) = path.parent() {
+					remove_if_empty(dir);
+				}
+				Ok(format!("removed {shown}"))
+			}
+		},
+		(None, Some(backup)) => {
+			fs::copy(backup, path)?;
+			Ok(format!("put back {shown}"))
+		}
+		(None, None) => Ok(format!("{shown} was already gone")),
+		(Some(_), Some(backup)) => {
+			let mut beside = path.as_os_str().to_owned();
+			beside.push(".before-jocasta");
+			let beside = PathBuf::from(beside);
+			fs::copy(backup, &beside)?;
+			Ok(format!("kept {shown}: changed since setup; yours from before is {}", beside.display()))
+		}
+		(Some(_), None) => Ok(format!("kept {shown}: changed since setup")),
 	}
-	remove_file_forced(path)?;
-	Ok(format!("removed {}", path.display()))
 }
 
 /// What an undo item removes, and how.
@@ -595,16 +567,14 @@ fn undo_removal(item: &SetupUndo) -> Result<Removal> {
 			),
 			Action::Mcp(mcp.clone()),
 		),
-		SetupUndo::Other(Undo::HerdrIntegration { path }) => {
-			(format!("herdr's omp integration: {path}"), Action::HerdrIntegration(PathBuf::from(path)))
-		}
-		SetupUndo::Other(Undo::Keys { path, keys, created }) => (
-			format!("Jocasta's {} in {path}", keys.keys().map(String::as_str).collect::<Vec<_>>().join(", ")),
-			Action::Keys(PathBuf::from(path), keys.clone(), *created),
-		),
-		SetupUndo::Other(Undo::Text { path, fingerprint }) => (
-			format!("{path} (while it is still Jocasta's text)"),
-			Action::Text(PathBuf::from(path), fingerprint.clone()),
+		SetupUndo::Other(Undo::Restore { path, backup, fingerprint }) => (
+			match backup {
+				Some(_) => {
+					format!("{path}: yours from before Jocasta's omp snapshot back (while it is the snapshot's)")
+				}
+				None => format!("{path} (while it is still the snapshot's)"),
+			},
+			Action::Restore(PathBuf::from(path), backup.as_ref().map(PathBuf::from), fingerprint.clone()),
 		),
 		SetupUndo::Other(Undo::Credential { target }) => {
 			(format!("Windows Credential Manager: {target}"), Action::Credential(target.clone()))
@@ -644,18 +614,7 @@ async fn perform(action: &Action, deps: &UninstallDeps) -> Result<String> {
 		Action::Path(path) => remove_path(path),
 		Action::SetupFolder(path, file) => remove_setup_folder(path, file.as_deref()),
 		Action::Mcp(item) => remove_mcp_servers(item),
-		Action::HerdrIntegration(path) => {
-			let Some(herdr) = &deps.herdr else { return remove_path(path) };
-			let out = (deps.run)(argv(herdr, &["integration", "uninstall", "omp"])).await?;
-			if out.code != 0 {
-				return Err(Error::other(format!(
-					"herdr integration uninstall omp exited {}: {}",
-					out.code,
-					out.output.trim()
-				)));
-			}
-			Ok("removed herdr's omp integration".to_owned())
-		}
+		Action::Restore(path, backup, expected) => restore_file(path, backup.as_deref(), expected),
 		Action::HerdrSession => {
 			let herdr = deps.herdr.as_deref().unwrap_or(Path::new("herdr"));
 			// Jocasta's own session is herdr's default one in Jocasta's data folder: its server stops, and its files go
@@ -678,8 +637,6 @@ async fn perform(action: &Action, deps: &UninstallDeps) -> Result<String> {
 			}
 			Ok(format!("removed herdr session `{}`", deps.session))
 		}
-		Action::Keys(path, keys, created) => remove_keys(path, keys, *created),
-		Action::Text(path, expected) => remove_text(path, expected),
 		Action::Credential(target) => Ok(if (deps.delete_credential)(target) {
 			format!("removed {target}")
 		} else {
@@ -737,9 +694,6 @@ fn install_removals(install: &InstallRecord) -> Vec<Removal> {
 
 /// Everything to remove, in order.
 fn plan(paths: &UninstallPaths, deps: &UninstallDeps) -> Result<Vec<Removal>> {
-	// A plugin migration 14 linked before the fork sits in another herdr's registry, never Jocasta's to change; its
-	// folder went with migration 18.
-	let is_plugin = |item: &&SetupUndo| matches!(item, SetupUndo::Other(Undo::HerdrPlugin { .. }));
 	let mut removals = Vec::new();
 	if deps.herdr.is_some() {
 		removals.push(Removal {
@@ -751,7 +705,7 @@ fn plan(paths: &UninstallPaths, deps: &UninstallDeps) -> Result<Vec<Removal>> {
 			action: Action::HerdrSession,
 		});
 	}
-	for item in deps.setup_undo.iter().filter(|item| !is_plugin(item)) {
+	for item in &deps.setup_undo {
 		removals.push(undo_removal(item)?);
 	}
 	for file in mise_project_configs(&paths.mise_config_dir) {
@@ -866,7 +820,6 @@ pub async fn run_uninstall(paths: &UninstallPaths, deps: &UninstallDeps, io: &dy
 	if let Some(install) = &paths.install {
 		io.print(&format!("- the install: {}", install.dir.display()));
 	}
-	io.print("Keys setup merged into omp's config.yml stay: they are your settings.");
 	io.print("");
 	if !answered_yes(io.ask("Remove these? [y/N] ").await.as_deref()) {
 		io.print("Nothing removed.");

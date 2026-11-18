@@ -1,4 +1,3 @@
-pub mod config_file;
 pub mod diagnose;
 pub mod diff;
 pub mod markers;

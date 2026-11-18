@@ -19,10 +19,9 @@ use crate::frontier::server::herdr::{HerdrOptions, connect_herdr};
 use crate::frontier::server::launch::{service_health, service_state};
 use crate::mcp::server::run_mcp_stdio;
 use crate::setup::diagnose::{DiagnoseDeps, ServiceInfo, run_diagnose};
-use crate::setup::run_value::{delete_run_value, read_run_value};
 use crate::setup::setup::{
-	RunOutput, RunProgram, RunValueStore, SetupDeps, SetupIo, default_calendar_store, default_setup_paths,
-	mise_config_dir, refresh_setup, run_setup, setup_check, setup_undo,
+	RunOutput, RunProgram, SetupDeps, SetupIo, default_calendar_store, default_setup_paths, mise_config_dir,
+	refresh_setup, run_setup, setup_check, setup_undo,
 };
 use crate::setup::uninstall::{
 	UninstallDeps, UninstallPaths, processes_under, read_install_record, remove_after_exit, remove_run_value_for,
@@ -141,23 +140,10 @@ impl SetupIo for ConsoleIo {
 	}
 }
 
-/// The logon Run value the companion wrote (0367), through `reg`.
-struct RegistryRunValue;
-
-impl RunValueStore for RegistryRunValue {
-	fn read(&self, name: &str) -> Option<String> {
-		read_run_value(name)
-	}
-
-	fn remove(&self, name: &str) -> bool {
-		delete_run_value(name)
-	}
-}
-
 async fn run_setup_route(refresh: Option<String>, calendar_env: Option<String>) -> Result<i32> {
 	let herdr = herdr_program();
 	let paths = default_setup_paths(&shipped_config_dir(None), self_command(None));
-	let mut deps = SetupDeps::new(herdr.clone(), run_program_dep());
+	let mut deps = SetupDeps::new(herdr.clone());
 	deps.mise = on_path("mise", None);
 	deps.calendar = default_calendar_store(calendar_env);
 	deps.git_version = Some(Arc::new(|| {
@@ -175,9 +161,6 @@ async fn run_setup_route(refresh: Option<String>, calendar_env: Option<String>) 
 				.collect();
 			Box::pin(run(argv))
 		}));
-	}
-	if cfg!(windows) {
-		deps.run_value = Some(Arc::new(RegistryRunValue));
 	}
 	let io = ConsoleIo::new();
 	match refresh {

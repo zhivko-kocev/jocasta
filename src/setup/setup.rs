@@ -1,20 +1,19 @@
-//! `jocasta setup` (0387, 0392, 0393, 0396, 0401, 0430, 0440, 0466, 0467, 0476, 0479, 0594): what Jocasta adds to omp,
-//! herdr, Windows Terminal and mise, and the calendar's secret in Windows Credential Manager. Each thing is a numbered
-//! migration with a marker in `~/.jocasta/agent/setup/` (0466): it is pending until applied, and again when what Jocasta
-//! ships for it changes, so one runs once per shipped version and a file he edits afterwards is left alone until then
-//! (`--refresh` resets one, 0467). Every pending change is shown as a diff and written only after his `y`, in order; a
-//! failed one stops the rest, and so does a file changed since its diff was shown (0584). Jocasta's entries in omp's MCP
-//! configs are merged beside his other servers; omp's settings are merged into his `config.yml` key by key, keys he set
-//! to another value kept and shown, and so are its keys in his `keybindings.yml` (only their lines edited) and
-//! `lsp.json` (0479, 0584); his own advisor brief (`WATCHDOG.md`) is shown and kept, and his own `secrets.yml` is kept
-//! and never shown (0594). Every file is written through a temp file and a rename, so a crash never leaves one torn.
-//! Each marker names how to undo its migration (0468).
+//! `jocasta setup` (0387, 0392, 0393, 0401, 0430, 0440, 0466, 0467, 0476, 0594, fork plan phase 6): Jocasta's omp
+//! snapshot over omp's own files, herdr's config, Windows Terminal's scheme and mise's file, and the calendar's secret
+//! in Windows Credential Manager. Each thing is a numbered migration with a marker in `~/.jocasta/agent/setup/` (0466):
+//! it is pending until applied, and again when what Jocasta ships for it changes, so one runs once per shipped version
+//! and a file he edits afterwards is left alone until then (`--refresh` resets one, 0467). Every pending change is
+//! shown as a diff and written only after his `y`, in order; a failed one stops the rest, and so does a file changed
+//! since its diff was shown (0584). The snapshot replaces each of omp's files it has, the one it replaces kept first
+//! (`setup_snapshot.rs`); Jocasta's entries in the boss's MCP config are merged beside any other servers there. Every
+//! file is written through a temp file and a rename, so a crash never leaves one torn. Each marker names how to undo its
+//! migration (0468).
 //!
 //! The shipped `config/` is read from `assets_dir` (the install's, or the repo's in a source run, as
-//! `shared::install::shipped_config_dir` says): the TypeScript embeds nothing of it either.
+//! `shared::install::shipped_config_dir` says).
 //!
-//! The module is split by `#[path]` children: `setup_steps.rs` (what a step is and the helpers that build one) and
-//! `setup_migrations.rs` (the numbered migrations).
+//! The module is split by `#[path]` children: `setup_steps.rs` (what a step is and the helpers that build one),
+//! `setup_migrations.rs` (the numbered migrations) and `setup_snapshot.rs` (the omp snapshot).
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -40,6 +39,8 @@ use crate::shared::process::{RunOptions, on_path, run_program};
 
 #[path = "setup_migrations.rs"]
 mod migrations;
+#[path = "setup_snapshot.rs"]
+mod snapshot;
 #[path = "setup_steps.rs"]
 mod steps;
 
@@ -95,18 +96,11 @@ pub trait CalendarStore: Send + Sync {
 	fn env_secret(&self) -> Option<String>;
 }
 
-/// The logon Run value the companion wrote (0367), read and removed (0557).
-pub trait RunValueStore: Send + Sync {
-	fn read(&self, name: &str) -> Option<String>;
-	fn remove(&self, name: &str) -> bool;
-}
-
 pub struct SetupDeps {
 	/// The herdr binary, or `None` when herdr isn't installed.
 	pub herdr: Option<PathBuf>,
 	/// The mise binary, or `None` when mise isn't installed: then setup writes no mise file (0476).
 	pub mise: Option<PathBuf>,
-	pub run: RunProgram,
 	/// The calendar secret's store; `None` where there is none (off Windows).
 	pub calendar: Option<Arc<dyn CalendarStore>>,
 	/// `herdr config check` on a config file (herdr, path), for setup's check of the herdr.toml it wrote (0608);
@@ -120,9 +114,6 @@ pub struct SetupDeps {
 	/// `herdr server reload-config` for Jocasta's session, after a herdr.toml refresh (0467).
 	#[allow(clippy::type_complexity)]
 	pub reload_herdr: Option<Arc<dyn Fn() -> BoxFuture<'static, Result<RunOutput>> + Send + Sync>>,
-	/// The logon Run value the companion wrote (0367), read and removed (0557); `None` off Windows and in tests, so
-	/// nothing touches his registry there.
-	pub run_value: Option<Arc<dyn RunValueStore>>,
 }
 
 impl Clone for SetupDeps {
@@ -130,29 +121,18 @@ impl Clone for SetupDeps {
 		Self {
 			herdr: self.herdr.clone(),
 			mise: self.mise.clone(),
-			run: self.run.clone(),
 			calendar: self.calendar.clone(),
 			check_herdr_config: self.check_herdr_config.clone(),
 			git_version: self.git_version.clone(),
 			reload_herdr: self.reload_herdr.clone(),
-			run_value: self.run_value.clone(),
 		}
 	}
 }
 
 impl SetupDeps {
-	/// Deps with the two required members and nothing else.
-	pub fn new(herdr: Option<PathBuf>, run: RunProgram) -> Self {
-		Self {
-			herdr,
-			mise: None,
-			run,
-			calendar: None,
-			check_herdr_config: None,
-			git_version: None,
-			reload_herdr: None,
-			run_value: None,
-		}
+	/// Deps with herdr and nothing else.
+	pub fn new(herdr: Option<PathBuf>) -> Self {
+		Self { herdr, mise: None, calendar: None, check_herdr_config: None, git_version: None, reload_herdr: None }
 	}
 }
 
@@ -252,9 +232,6 @@ pub fn default_setup_paths(assets_dir: &Path, jocasta_command: Vec<PathBuf>) -> 
 	}
 }
 
-/// The file herdr's omp integration writes (`herdr:src/integration/targets.rs:89-106`).
-pub const HERDR_OMP_EXTENSION: &str = "herdr-omp-agent-state.ts";
-
 /// herdr's Tokyo Night as a Windows Terminal scheme, so pane content matches the chrome (0401), from the one palette
 /// file (0474). A fragment scheme must define all 16 colours.
 pub static TOKYO_NIGHT_SCHEME: LazyLock<Value> = LazyLock::new(|| {
@@ -321,19 +298,16 @@ impl SetupUndo {
 	}
 }
 
-/// How to undo what setup added on this machine (0468): only what its markers recorded (a step without its marker
-/// isn't setup's to undo), the calendar's secret while it is stored. Reads only.
+/// How to undo what setup added on this machine (0468): only what the markers of this build's migrations recorded (a
+/// step without its marker isn't setup's to undo; a marker of a migration the omp snapshot replaced is ignored), the
+/// latest migration first, and the calendar's secret while it is stored. Reads only.
 pub fn setup_undo(paths: &SetupPaths, calendar_stored: bool) -> Vec<SetupUndo> {
 	let mut written: Vec<(String, Map<String, Value>, String)> = Vec::new();
 	for migration in &MIGRATIONS {
 		let marker = read_marker(&paths.jocasta_config_dir, &marker_name(migration));
 		let Some(servers) = migration.servers else { continue };
 		let Some(marker) = marker.filter(|m| m.undo.iter().any(|u| matches!(u, Undo::Mcp { .. }))) else { continue };
-		// A marker from before 0607 names whiteboard too: its entry is the one migration 1 wrote then.
-		let mut writes = servers(paths);
-		if let Some(legacy) = migration.legacy_servers {
-			writes.extend(legacy(paths));
-		}
+		let writes = servers(paths);
 		for undo in &marker.undo {
 			if let Undo::Mcp { path, .. } = undo {
 				let key = path_key(Path::new(path));
@@ -342,8 +316,10 @@ pub fn setup_undo(paths: &SetupPaths, calendar_stored: bool) -> Vec<SetupUndo> {
 			}
 		}
 	}
+	let names: Vec<String> =
+		std::iter::once("calendar".to_owned()).chain(MIGRATIONS.iter().rev().map(marker_name)).collect();
 	let mut undo: Vec<SetupUndo> = Vec::new();
-	for item in recorded_undo(&paths.jocasta_config_dir) {
+	for item in recorded_undo(&paths.jocasta_config_dir, &names) {
 		match item {
 			Undo::Credential { .. } if !calendar_stored => {}
 			Undo::Mcp { path, servers } => {
@@ -425,13 +401,13 @@ fn plan_migrations(
 		if !force && current.as_deref() == Some(step.fingerprint.as_str()) {
 			continue;
 		}
-		let Step { path, fingerprint, change, undo, shipped } = step;
+		let Step { path, fingerprint, change, undo } = step;
 		planned.push(PlannedChange {
 			name,
 			slug: migration.slug.to_owned(),
 			path,
 			change,
-			marker: Marker { fingerprint, undo, shipped, applied_at: String::new() },
+			marker: Marker { fingerprint, undo, applied_at: String::new() },
 		});
 	}
 	Ok(planned)
@@ -441,7 +417,6 @@ fn calendar_marker() -> Marker {
 	Marker {
 		fingerprint: CALENDAR_CREDENTIAL.to_owned(),
 		undo: vec![Undo::Credential { target: CALENDAR_CREDENTIAL.to_owned() }],
-		shipped: None,
 		applied_at: String::new(),
 	}
 }
@@ -467,7 +442,6 @@ fn plan_setup(paths: &SetupPaths, deps: &SetupDeps) -> Result<SetupPlan> {
 				path,
 				diff: vec![format!("+ {CALENDAR_CREDENTIAL} (the address itself isn't shown)")],
 				kept: Vec::new(),
-				keeps_only: false,
 				apply: Box::new(move |_| Box::pin(async move { store.save(&secret) })),
 			}),
 			marker: calendar_marker(),
@@ -488,7 +462,7 @@ async fn apply_in_order(paths: &SetupPaths, changes: Vec<PlannedChange>, io: &dy
 	let total = changes.len();
 	for (index, mut planned) in changes.into_iter().enumerate() {
 		let Some(change) = planned.change.take() else { continue };
-		let SetupChange { title, path, keeps_only, apply, .. } = change;
+		let SetupChange { title, path, apply, .. } = change;
 		if let Err(error) = apply(io).await {
 			let waiting = total - index - 1;
 			let after = match waiting {
@@ -500,7 +474,7 @@ async fn apply_in_order(paths: &SetupPaths, changes: Vec<PlannedChange>, io: &dy
 			return Ok(false);
 		}
 		mark(paths, &planned)?;
-		io.print(&format!("{} {path}", if keeps_only { "kept" } else { "wrote" }));
+		io.print(&format!("wrote {path}"));
 	}
 	Ok(true)
 }
@@ -697,9 +671,7 @@ pub struct SetupCheck {
 
 /// Setup's pending changes on this machine, read only (0466); a failure is returned, never thrown (SET-14).
 pub async fn setup_check() -> SetupCheck {
-	let read_only: RunProgram =
-		Arc::new(|_| Box::pin(async { Ok(RunOutput { code: 1, output: "read only".to_owned() }) }));
-	let mut deps = SetupDeps::new(herdr_program(), read_only);
+	let mut deps = SetupDeps::new(herdr_program());
 	deps.mise = on_path("mise", None);
 	deps.calendar = default_calendar_store(None);
 	let paths = default_setup_paths(&shipped_config_dir(None), self_command(None));

@@ -228,7 +228,7 @@ fn the_shipped_diagnose_skill_is_one_omp_finds_in_the_overlays_folder_name_and_d
 	let front = front_matter(&skill);
 	assert_eq!(front["name"], "diagnose");
 	assert!(front["description"].is_string());
-	let mise = fs::read_to_string(assets().join("skills").join("mise").join("SKILL.md")).unwrap();
+	let mise = fs::read_to_string(assets().join("omp").join("skills").join("mise").join("SKILL.md")).unwrap();
 	assert_eq!(front_matter(&mise)["name"], "mise");
 	assert!(diagnose_overlay(Path::new("C:\\x\\skills")).contains("- \"C:\\\\x\\\\skills\""));
 }

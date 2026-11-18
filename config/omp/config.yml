@@ -1,0 +1,142 @@
+# Jocasta's omp snapshot (fork plan phase 6): `jocasta setup` writes this file over ~/.omp/agent/config.yml after
+# showing the diff and his `y`, keeping the file it replaces in ~/.jocasta/agent/setup/omp-backup/<UTC time>/; keys of
+# his that aren't here go with it (they stay in the backup). Deltas from omp's defaults (principle 3), pins where a
+# later default would send data out, and his model roles (0590, 0591, 0618). Keys checked against omp 18.20.2's source.
+# Per-pane values are not here: every project and thread pane gets `--config <config>/guard.yml` (the guard, 0450) and
+# `--config <data>/projects/<pid>/omp.yml` (memory off, no completion probe, no job widgets, compaction, plan mode,
+# AGENTS.local.md, lessons, and the privacy settings `dev.autoqa`, `disabledProviders`, `modelRoles.web`; 0447–0449,
+# 0459, 0478, 0601, 0602, 0606; no reviewer model, so omp's reviewer runs on his `slow` role, 0488); the boss pane
+# gets `config/boss.yml` (memory off and the same privacy settings; it keeps the job widgets) and the guard.
+#
+# The snapshot's other files, written the same way: `keybindings.yml` (Ctrl+L no longer starts omp's live voice, which
+# sends mic audio and the session to OpenAI; F9 toggles dictation, the key Right Ctrl sends, 0556), `WATCHDOG.md` (the
+# advisor's brief), `lsp.json` (idle language servers shut down; each pane holds its own), `skills/mise/`, `mcp.json`
+# (Jocasta's `jocasta mcp` server, made for each install), herdr's omp hook `extensions/herdr-omp-agent-state.ts`
+# (from the fork's own asset) and `secrets.yml`, written only when missing: his own strings never enter this repo.
+
+# One shared theme with herdr and Jocasta's canvas (0401).
+theme:
+  dark: dark-tokyo-night
+
+# Memory (0389, 0400): his own omp's Mnemopi, as he set it. Every Jocasta pane sets `memory.backend: "off"` itself
+# (0606), so this applies only to omp started outside Jocasta.
+memory:
+  backend: mnemopi
+
+# One continuous thread (0399, 0448, 0592): compaction at 300k tokens, not a percent of a 1M window. A handoff first,
+# prepared in the background; remote takes an overflow, shake and snapcompact are the no-model last resorts.
+compaction:
+  methodOrder: [handoff, remote, soft, shake, snapcompact]
+  thresholdTokens: 300000
+  idleEnabled: true
+  idleThresholdTokens: 100000
+
+# A warning once a session, its subagents included, has spent $50; threads start with the same (0541, 0593).
+session:
+  warnCost: 50
+
+# The advisor stays on in the boss, project panes and threads (0619, 0620; omp's default is off), on his `advisor`
+# role, and reviews every third update instead of every one; the updates it skipped go with its next review (0616).
+advisor:
+  enabled: true
+  reviewInterval: 3
+
+# Every read, write, edit, search or command in these folders asks him first, whatever the mode (0593). On Windows
+# setup adds Windows' own folders, %SystemRoot% and %ProgramFiles% (0594): keep the list on one line.
+tools:
+  restrictedFolders: ["~/.ssh", "~/.aws", "~/.azure", "~/.docker"]
+
+# Nothing leaves the machine that doesn't have to (0398, 0451, 0593).
+telemetry:
+  otlpExportEnabled: false
+dev:
+  autoqa: false
+  autoqaConsent: denied
+startup:
+  checkUpdate: false
+  quiet: true
+  # Onboarding scenes and changelog chrome stay out of panes.
+  setupWizard: false
+  changelogMode: hidden
+marketplace:
+  autoUpdate: "off"
+recap:
+  enabled: false
+# His Claude Code plugins stop loading into omp.
+disabledProviders: [claude-plugins]
+# His model roles (0590, 0591, 0618; the settings trials may change them): Opus 5.5 at high by default, Fable 5.2 for
+# planning and his `slow` role (heavy threads), Sonnet 5.5 for subagents, Haiku 5.5 for the small jobs, local models
+# for speech, dictation and `tiny`. Web search off parallel.ai (keyless Parallel sends the query, session id and model
+# name).
+modelRoles:
+  default: anthropic/claude-opus-5-5:high
+  slow: anthropic/claude-fable-5-2:xhigh
+  plan: anthropic/claude-fable-5-2:xhigh
+  advisor: anthropic/claude-fable-5-2:medium
+  vision: anthropic/claude-fable-5-2:medium
+  task: anthropic/claude-sonnet-5-5:medium
+  memory: anthropic/claude-sonnet-5-5:medium
+  smol: anthropic/claude-haiku-5-5:low
+  commit: anthropic/claude-haiku-5-5:low
+  judge: anthropic/claude-haiku-5-5
+  tiny: local/lfm2.5-350m
+  speech: local/kokoro
+  dictation: local/parakeet-tdt-0.6b-v3
+  web: web/duckduckgo
+# His fallbacks per role (0590): `plan` and `slow` on Opus 5.5 then Opus 5 at max, `vision` Opus 5.5 low first; web
+# search keyless; speech and dictation never leave the machine (0556).
+retry:
+  fallbackChains:
+    default:
+      - anthropic/claude-opus-5:high
+      - anthropic/claude-sonnet-5:high
+    slow:
+      - anthropic/claude-opus-5-5:max
+      - anthropic/claude-opus-5:max
+    smol:
+      - anthropic/claude-sonnet-5:low
+    task:
+      - anthropic/claude-opus-5-5:medium
+      - anthropic/claude-sonnet-5:high
+    plan:
+      - anthropic/claude-opus-5-5:max
+      - anthropic/claude-opus-5:max
+    vision:
+      - anthropic/claude-opus-5-5:low
+      - anthropic/claude-sonnet-5:low
+    tiny:
+      - anthropic/claude-haiku-5-5
+    web:
+      - web/duckduckgo
+      - web/startpage
+      - web/public
+    judge:
+      - "@tiny"
+      - "@smol"
+    speech: []
+    dictation: []
+# No file passages sent to the `judge` role.
+find:
+  enabled: "off"
+github:
+  enabled: true
+# Pinned off for his own omp: when on, every session is hosted through wss://my.omp.sh. Jocasta's panes and the boss
+# host on Jocasta's loopback relay instead (`control`, 0561).
+collab:
+  autoStart: "off"
+# Pinned off: when on, tool output goes to cloud.stencil.so to be shaped (0593).
+spotlight:
+  experiment:
+    enabled: false
+# Configured strings and credential-shaped tokens are replaced before provider requests (~/.omp/agent/secrets.yml).
+secrets:
+  enabled: true
+providers:
+  cacheWarming: streaming
+  # ChatGPT logins stay out of OpenAI's Daybreak program, whose sessions OpenAI may train on (0593).
+  openai-codex:
+    daybreak: false
+lsp:
+  diagnosticsOnEdit: true
+paste:
+  largeMenuThreshold: 0

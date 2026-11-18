@@ -10,12 +10,9 @@ use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::setup::markers::{Marker, markers_dir, write_marker};
-use crate::setup::setup::{
-	CalendarStore, HERDR_OMP_EXTENSION, HerdrCheck, RunOutput, SetupDeps, SetupPaths, run_setup, setup_undo,
-};
+use crate::setup::markers::markers_dir;
+use crate::setup::setup::{CalendarStore, HerdrCheck, RunOutput, SetupDeps, SetupPaths, run_setup, setup_undo};
 use crate::shared::testing::{TempDir, TempJocasta, temp_dir, temp_jocasta};
-use crate::shared::yaml::parse_value;
 
 type Calls = Arc<Mutex<Vec<String>>>;
 
@@ -106,16 +103,12 @@ struct Machine {
 	calls: Calls,
 }
 
-fn ok_run(agent: PathBuf) -> RunProgram {
-	Arc::new(move |_argv| {
-		put(&agent.join("extensions").join(HERDR_OMP_EXTENSION), "// herdr\n");
-		Box::pin(async { Ok(RunOutput { code: 0, output: String::new() }) })
-	})
-}
+/// His own `keybindings.yml` from before Jocasta, with CRLF line ends and a comment.
+const HIS_KEYS: &str = "# mine\r\napp.model.cycle: [ctrl+k] # cycle\r\n";
 
 /// `jocasta setup`, answering `y`, with herdr's config check standing in.
 async fn setup_run(paths: &SetupPaths, herdr: Option<&str>, mise: Option<&str>, calendar: bool) {
-	let mut deps = SetupDeps::new(herdr.map(PathBuf::from), ok_run(paths.omp_agent_dir.clone()));
+	let mut deps = SetupDeps::new(herdr.map(PathBuf::from));
 	deps.mise = mise.map(PathBuf::from);
 	deps.check_herdr_config =
 		Some(Arc::new(|_, _| Box::pin(async { Ok(HerdrCheck { code: Some(0), output: "config: ok\n".to_owned() }) })));
@@ -147,11 +140,13 @@ impl Machine {
 			jocasta_command: vec![PathBuf::from("C:\\Jocasta\\jocasta.exe")],
 			whiteboard: None,
 		};
-		// A machine set up by `jocasta setup`, with his own MCP server beside Jocasta's and the calendar's secret stored.
+		// A machine set up by `jocasta setup` over his own omp `mcp.json` and `keybindings.yml`, with the calendar's
+		// secret stored.
 		put(
 			&setup.omp_agent_dir.join("mcp.json"),
 			&json!({ "mcpServers": { "github": { "command": "gh-mcp" } } }).to_string(),
 		);
+		put(&setup.omp_agent_dir.join("keybindings.yml"), HIS_KEYS);
 		setup_run(&setup, Some("herdr.exe"), Some("mise.exe"), true).await;
 		put(&setup.data_dir.join("catalog.db"), "db");
 		put(&setup.mise_config_dir.join("config.jocasta-p1.override.toml"), "[tools]\n");
@@ -187,12 +182,9 @@ impl Machine {
 	}
 
 	fn deps(&self, state: ServiceState) -> UninstallDeps {
-		let (run_calls, agent) = (self.calls.clone(), self.setup.omp_agent_dir.clone());
+		let run_calls = self.calls.clone();
 		let run: RunProgram = Arc::new(move |argv| {
 			run_calls.lock().unwrap().push(argv.join(" "));
-			if argv.iter().any(|word| word == "integration") {
-				fs::remove_file(agent.join("extensions").join(HERDR_OMP_EXTENSION)).unwrap();
-			}
 			Box::pin(async { Ok(RunOutput { code: 0, output: String::new() }) })
 		});
 		let (path_calls, run_value_calls, credential_calls, exit_calls) =
@@ -255,13 +247,16 @@ async fn a_running_jocasta_is_refused_and_n_removes_nothing() {
 	assert_eq!(asked, ["Remove these? [y/N] "]);
 	let agent = &m.setup.omp_agent_dir;
 	assert!(text.contains("herdr session `jocasta-test` (stopped, its panes closed, then deleted)"));
-	assert!(text.contains(&format!("MCP server \"jocasta\" in {}", agent.join("mcp.json").display())));
+	assert!(text.contains(&format!(
+		"{}: yours from before Jocasta's omp snapshot back (while it is the snapshot's)",
+		agent.join("mcp.json").display()
+	)));
+	assert!(text.contains(&format!("{} (while it is still the snapshot's)", agent.join("config.yml").display())));
 	assert!(text.contains(&format!(
 		"Jocasta's mise config for a project: {}",
 		m.setup.mise_config_dir.join("config.jocasta-p1.override.toml").display()
 	)));
 	assert!(text.contains("Windows Credential Manager: jocasta/calendar-ical"));
-	assert!(text.contains("Keys setup merged into omp's config.yml stay: they are your settings."));
 	assert!(text.ends_with("Nothing removed."));
 	assert!(m.calls().is_empty());
 	assert!(m.setup.jocasta_config_dir.join("herdr.toml").exists());
@@ -289,24 +284,28 @@ async fn y_removes_what_install_and_setup_added_and_keeps_his_own_the_data_folde
 			"herdr.exe session stop jocasta-test".to_owned(),
 			"herdr.exe session delete jocasta-test".to_owned(),
 			"credential jocasta/calendar-ical".to_owned(),
-			"herdr.exe integration uninstall omp".to_owned(),
 			format!("run Jocasta {}", record.dir.join("app").join("bin").join("launcher.exe").display()),
 			format!("path {}", record.dir.display()),
 		]
 	);
-	// His MCP server, omp settings and mise config stay; Jocasta's are gone.
+	// His own mcp.json and keybindings are back byte for byte and his mise config stays; Jocasta's are gone.
 	let agent = &m.setup.omp_agent_dir;
-	assert_eq!(read_json(&agent.join("mcp.json")), json!({ "mcpServers": { "github": { "command": "gh-mcp" } } }));
-	assert!(agent.join("config.yml").exists());
+	assert_eq!(
+		read(&agent.join("mcp.json")),
+		json!({ "mcpServers": { "github": { "command": "gh-mcp" } } }).to_string()
+	);
+	assert_eq!(read(&agent.join("keybindings.yml")), HIS_KEYS);
 	assert!(m.setup.mise_config_dir.join("config.toml").exists());
 	let gone = [
 		m.setup.data_dir.join("home").join(".omp").join("mcp.json"),
 		agent.join("skills").join("mise"),
 		m.setup.mise_config_dir.join("conf.d").join("jocasta.toml"),
-		// The three omp files setup made, with nothing of his in them (0479).
-		agent.join("keybindings.yml"),
+		// The snapshot's files that had nothing of his before them.
+		agent.join("config.yml"),
 		agent.join("WATCHDOG.md"),
 		agent.join("lsp.json"),
+		agent.join("secrets.yml"),
+		agent.join("extensions"),
 		m.setup.mise_config_dir.join("config.jocasta-p1.override.toml"),
 		m.root.join("Fragments").join("jocasta"),
 		m.setup.jocasta_config_dir.clone(),
@@ -327,80 +326,27 @@ impl Machine {
 }
 
 #[tokio::test]
-async fn uninstall_takes_out_only_what_setup_added_to_the_three_omp_files() {
+async fn a_snapshot_file_he_changed_since_stays_with_his_file_from_before_jocasta_beside_it() {
 	let m = Machine::new().await;
 	let agent = m.setup.omp_agent_dir.clone();
-	// Files setup made that he changed since.
-	put(&agent.join("keybindings.yml"), "app.live.toggle: []\napp.model.cycle: [ctrl+k]\n");
+	let mcp = agent.join("mcp.json");
+	put(&mcp, "{ \"mcpServers\": {} }\n");
 	put(&agent.join("WATCHDOG.md"), "# His brief\n");
-	put(&agent.join("lsp.json"), "{ \"idleTimeoutMs\": 60000 }\n");
 	let Out { code, text, .. } = m.run(&["y", "n"]).await;
 	assert_eq!(code, 0);
-	let keys = agent.join("keybindings.yml");
-	assert!(text.contains(&format!("- Jocasta's app.live.toggle, app.stt.toggle in {}", keys.display())));
-	assert!(text.contains(&format!("- {} (while it is still Jocasta's text)", agent.join("WATCHDOG.md").display())));
-	assert!(text.contains(&format!("removed app.live.toggle from {}", keys.display())));
-	assert!(text.contains(&format!("kept {}: you changed it", agent.join("WATCHDOG.md").display())));
+	let before = agent.join("mcp.json.before-jocasta");
 	assert!(text.contains(&format!(
-		"{} has none of Jocasta's keys left; kept idleTimeoutMs (you changed it)",
-		agent.join("lsp.json").display()
+		"kept {}: changed since setup; yours from before is {}",
+		mcp.display(),
+		before.display()
 	)));
-	assert_eq!(parse_value(&read(&keys)).unwrap(), json!({ "app.model.cycle": ["ctrl+k"] }));
+	assert!(text.contains(&format!("kept {}: changed since setup", agent.join("WATCHDOG.md").display())));
+	assert_eq!(read(&mcp), "{ \"mcpServers\": {} }\n");
+	assert_eq!(read_json(&before), json!({ "mcpServers": { "github": { "command": "gh-mcp" } } }));
 	assert_eq!(read(&agent.join("WATCHDOG.md")), "# His brief\n");
-	assert_eq!(read_json(&agent.join("lsp.json")), json!({ "idleTimeoutMs": 60000 }));
-}
-
-#[tokio::test]
-async fn key_removal_keeps_his_keybindings_comments_and_formatting_only_jocastas_lines_go() {
-	let m = Machine::new().await;
-	let file = m.setup.omp_agent_dir.join("keybindings.yml");
-	put(
-		&file,
-		"# my bindings, tuned over months\napp.model.cycle: [ctrl+k] # cycle models\napp.live.toggle: []\napp.stt.toggle: f9\n",
-	);
-	let Out { text, .. } = m.run(&["y", "n"]).await;
-	assert!(text.contains(&format!("removed app.live.toggle, app.stt.toggle from {}", file.display())));
-	assert_eq!(read(&file), "# my bindings, tuned over months\napp.model.cycle: [ctrl+k] # cycle models\n");
-}
-
-#[tokio::test]
-async fn a_keybindings_file_setup_made_stays_when_his_comment_is_left_in_it() {
-	let m = Machine::new().await;
-	let file = m.setup.omp_agent_dir.join("keybindings.yml");
-	put(&file, "# F9 dictation is how I like it\napp.live.toggle: []\napp.stt.toggle: f9\n");
-	let Out { text, .. } = m.run(&["y", "n"]).await;
-	assert!(text.contains(&format!("removed app.live.toggle, app.stt.toggle from {}", file.display())));
-	assert_eq!(read(&file), "# F9 dictation is how I like it\n");
-}
-
-#[tokio::test]
-async fn a_keybindings_file_whose_lines_cant_be_edited_stays_byte_for_byte() {
-	let m = Machine::new().await;
-	let file = m.setup.omp_agent_dir.join("keybindings.yml");
-	let his = "{app.live.toggle: [], app.stt.toggle: f9, app.model.cycle: [\"ctrl+k\"]}\n";
-	put(&file, his);
-	let Out { text, .. } = m.run(&["y", "n"]).await;
-	let shown = file.display();
-	assert!(text.contains(&format!(
-		"couldn't remove Jocasta's app.live.toggle, app.stt.toggle in {shown}: {shown} can't be edited line by line, so uninstall left it as it is; remove app.live.toggle, app.stt.toggle from it by hand"
-	)));
-	assert_eq!(read(&file), his);
-}
-
-#[tokio::test]
-async fn a_file_of_his_that_setup_added_a_key_to_stays_when_only_that_key_goes() {
-	let mut m = Machine::new().await;
-	m.setup.omp_agent_dir = m.root.join("omp2").join("agent");
-	m.setup.jocasta_config_dir = m.root.join("jocasta2").join("agent");
-	let lsp = m.setup.omp_agent_dir.join("lsp.json");
-	put(&lsp, "{ \"servers\": { \"biome\": { \"disabled\": true } } }\n");
-	setup_run(&m.setup, None, None, false).await;
-	assert_eq!(read_json(&lsp), json!({ "servers": { "biome": { "disabled": true } }, "idleTimeoutMs": 300_000 }));
-	// He drops his servers: the file setup didn't make stays, emptied of Jocasta's key.
-	put(&lsp, "{ \"idleTimeoutMs\": 300000 }\n");
-	let Out { text, .. } = m.run(&["y", "n"]).await;
-	assert!(text.contains(&format!("removed idleTimeoutMs from {}", lsp.display())));
-	assert_eq!(read_json(&lsp), json!({}));
+	assert!(!agent.join("WATCHDOG.md.before-jocasta").exists());
+	// The snapshot's files he left alone are gone.
+	assert!(!agent.join("config.yml").exists());
 }
 
 #[tokio::test]
@@ -464,7 +410,7 @@ async fn without_setups_markers_nothing_outside_jocastas_own_folders_is_listed_o
 	assert_eq!(read(&mcp), his);
 	let agent = &m.setup.omp_agent_dir;
 	for kept in [
-		agent.join("extensions").join(HERDR_OMP_EXTENSION),
+		agent.join("extensions").join(herdr::embed::OMP_HOOK_FILE),
 		agent.join("keybindings.yml"),
 		agent.join("skills").join("mise").join("SKILL.md"),
 		m.setup.mise_config_dir.join("conf.d").join("jocasta.toml"),
@@ -476,73 +422,33 @@ async fn without_setups_markers_nothing_outside_jocastas_own_folders_is_listed_o
 }
 
 #[tokio::test]
-async fn an_mcp_entry_that_isnt_what_setup_wrote_is_kept_and_said_one_still_as_its_marker_recorded_goes() {
-	let mut m = Machine::new().await;
-	let mcp = m.setup.omp_agent_dir.join("mcp.json");
-	let mut config = read_json(&mcp);
-	// He changed Jocasta's entry; `whiteboard` is another install's (setup writes none in this file since 0607).
-	config["mcpServers"]["jocasta"]["args"] = json!(["mcp", "--his"]);
-	config["mcpServers"]["whiteboard"] =
-		json!({ "type": "stdio", "command": "C:\\Programs\\other\\node.exe", "args": ["cli.js", "mcp"] });
-	put(&mcp, &config.to_string());
-	// Jocasta moved since setup ran: the boss's entry differs from today's but still is what setup wrote.
-	m.setup.jocasta_command = vec![PathBuf::from("D:\\Moved\\jocasta.exe")];
+async fn an_mcp_entry_that_isnt_what_setup_wrote_is_kept_and_said() {
+	let m = Machine::new().await;
 	let boss = m.setup.data_dir.join("home").join(".omp").join("mcp.json");
+	let mut config = read_json(&boss);
+	config["mcpServers"]["jocasta"]["args"] = json!(["mcp", "--his"]);
+	put(&boss, &config.to_string());
 	let Out { code, text, .. } = m.run(&["y", "n"]).await;
 	assert_eq!(code, 0);
-	let shown = mcp.display();
+	let shown = boss.display();
 	assert!(text.contains(&format!("- MCP server \"jocasta\" in {shown} (each while it is still what setup wrote)")));
 	assert!(
 		text.contains(&format!(
 			"{shown} has none of Jocasta's MCP servers left; kept \"jocasta\" (not what setup wrote)"
 		))
 	);
-	assert_eq!(read_json(&mcp), config);
-	assert!(text.contains(&format!("removed {}", boss.display())));
-	assert!(!boss.exists());
+	assert_eq!(read_json(&boss), config);
 }
 
 #[tokio::test]
-async fn an_install_where_migration_17_never_ran_the_whiteboard_entry_goes_and_the_bosss_goes_with_its_file() {
+async fn an_mcp_entry_still_as_its_marker_recorded_goes_after_jocasta_moved() {
 	let mut m = Machine::new().await;
-	// Setup from before 0607: whiteboard built, its entry in his file beside his own server, the old marker.
-	m.setup.whiteboard = Some(crate::frontier::server::whiteboard::WhiteboardRuntime {
-		node: PathBuf::from("C:\\Jocasta\\node\\node.exe"),
-		cli: PathBuf::from("C:\\Jocasta\\whiteboard\\cli.js"),
-	});
-	setup_run(&m.setup, Some("herdr.exe"), None, false).await;
-	let mcp = m.setup.omp_agent_dir.join("mcp.json");
+	// Jocasta moved since setup ran: the boss's entry differs from today's but still is what setup wrote.
+	m.setup.jocasta_command = vec![PathBuf::from("D:\\Moved\\jocasta.exe")];
 	let boss = m.setup.data_dir.join("home").join(".omp").join("mcp.json");
-	let boss_servers = read_json(&boss)["mcpServers"].clone();
-	let keys: Vec<&String> = boss_servers.as_object().unwrap().keys().collect();
-	assert_eq!(keys, ["jocasta", "whiteboard"]);
-	let jocasta = read_json(&mcp)["mcpServers"]["jocasta"].clone();
-	put(
-		&mcp,
-		&json!({ "mcpServers": { "github": { "command": "gh-mcp" }, "jocasta": jocasta, "whiteboard": boss_servers["whiteboard"] } })
-			.to_string(),
-	);
-	write_marker(
-		&m.setup.jocasta_config_dir,
-		"0001-mcp",
-		&Marker {
-			fingerprint: fingerprint(
-				&json!({ "jocasta": jocasta, "whiteboard": boss_servers["whiteboard"] }).to_string(),
-			),
-			undo: vec![Undo::Mcp {
-				path: mcp.to_string_lossy().into_owned(),
-				servers: strings(&["jocasta", "whiteboard"]),
-			}],
-			shipped: None,
-			applied_at: "2026-11-01T00:00:00.000Z".to_owned(),
-		},
-	)
-	.unwrap();
-	fs::remove_file(markers_dir(&m.setup.jocasta_config_dir).join("0017-whiteboard-boss-only.json")).unwrap();
 	let Out { code, text, .. } = m.run(&["y", "n"]).await;
 	assert_eq!(code, 0);
-	assert!(text.contains(&format!("MCP servers \"jocasta\", \"whiteboard\" in {}", mcp.display())));
-	assert_eq!(read_json(&mcp), json!({ "mcpServers": { "github": { "command": "gh-mcp" } } }));
+	assert!(text.contains(&format!("removed {}", boss.display())));
 	assert!(!boss.exists());
 }
 
@@ -819,8 +725,9 @@ async fn a_folder_setup_didnt_make_stays_only_setups_file_in_it_goes() {
 	put(&skill.join("notes.md"), "his");
 	setup_run(&m.setup, None, Some("mise.exe"), false).await;
 	let undo = setup_undo(&m.setup, false);
+	let file = skill.join("SKILL.md").to_string_lossy().into_owned();
 	assert!(
-		undo.contains(&SetupUndo::Other(Undo::File { path: skill.join("SKILL.md").to_string_lossy().into_owned() }))
+		undo.iter().any(|u| matches!(u, SetupUndo::Other(Undo::Restore { path, backup: None, .. }) if *path == file))
 	);
 	let skill_text = skill.to_string_lossy();
 	assert!(!undo.iter().any(|u| matches!(u, SetupUndo::Other(Undo::Dir { path, .. }) if *path == skill_text)));

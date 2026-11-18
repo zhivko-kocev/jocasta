@@ -57,7 +57,8 @@ terminal is sent (no write over the wide tail) rather than the test backend's co
 
 - `src/lib.rs` (new; upstream's `src/main.rs` with `pub mod embed` and a `pub fn main`) and a thin `src/main.rs`, the
   `herdr` bin herdr's integration tests spawn.
-- `src/embed.rs` (new): `Dirs`, `set_dirs`, `version`; `ServerExtension`, `ServerHost` (an in-process `stop` and a
+- `src/embed.rs` (new): `Dirs`, `set_dirs`, `version`; `OMP_HOOK` and `OMP_HOOK_FILE`, the omp integration's asset and
+  file name for Jocasta's omp snapshot; `ServerExtension`, `ServerHost` (an in-process `stop` and a
   `send` to the clients by `Target`: one client or every shell), `set_server_extension`, the hooks a server in
   Jocasta's process runs its service through (`started`, `client_joined` with the client's peer process,
   `client_left`, `last_client_left`, `client_message`, `action`, `stopped`); `peer_pid`, the process at the other end
@@ -89,6 +90,12 @@ terminal is sent (no write over the wide tail) rather than the test backend's co
   status at the left of the tab bar's right side.
 - `src/client/mod.rs` (the client's failure exit) and `src/lib.rs` (a launch that failed) end the process through
   `embed::exit`, which runs the exit hook first.
+
+### Vendored build dependency
+
+- `vendor/translate-c/` (new): Zig's `translate-c` package (MIT, commit `4e879eb8aba615de112eabd1231ea6e01920cead`,
+  17 files as Zig fetched them), and `vendor/libghostty-vt/build.zig.zon` names it by `.path` instead of its
+  codeberg.org URL, so a build fetches nothing from codeberg. Its own dependency `aro` still comes from github.com.
 
 ## Taking an upstream release
 

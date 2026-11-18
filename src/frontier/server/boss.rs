@@ -18,7 +18,7 @@ use super::herdr::{AgentState, Env, Herdr, HerdrSnapshot, PaneInfo, RespawnOptio
 use crate::shared::errors::{Error, Result};
 use crate::shared::fsx::{read_json_object, same_token, write_atomically};
 use crate::shared::install::shipped_config_dir;
-use crate::shared::pathkey::{same_dir, same_path};
+use crate::shared::pathkey::same_dir;
 use crate::shared::paths::data_dir;
 
 /// The boss's workspace label (0392, 0404).
@@ -548,9 +548,10 @@ pub enum DefaultClosed {
 
 /// herdr's default workspace in a session Jocasta created (0495): herdr makes it only while a session has no workspace,
 /// so it is the one made before "Jocasta". It closes while untouched: its one pane a shell (no agent) in his home
-/// folder whose screen (`pane.read`) is one prompt with nothing typed after it. `Wait` while there is nothing to judge
-/// yet ("Jocasta" not made yet, or a shell that hasn't drawn its prompt); `None` when there is no default to close
-/// ("Jocasta" came first) or it was touched. `home` is his home folder by default.
+/// folder (links followed: macOS reports `/tmp` as `/private/tmp`) whose screen (`pane.read`) is one prompt with
+/// nothing typed after it. `Wait` while there is nothing to judge yet ("Jocasta" not made yet, or a shell that hasn't
+/// drawn its prompt); `None` when there is no default to close ("Jocasta" came first) or it was touched. `home` is his
+/// home folder by default.
 pub async fn close_herdr_default(
 	herdr: &dyn Herdr,
 	snapshot: &HerdrSnapshot,
@@ -568,7 +569,7 @@ pub async fn close_herdr_default(
 	let Some(cwd) = pane.cwd.as_deref().filter(|cwd| !cwd.as_os_str().is_empty()) else {
 		return Ok(DefaultClosed::None);
 	};
-	if has_agent(pane) || pane.agent_state != AgentState::Unknown || !same_path(cwd, &home) {
+	if has_agent(pane) || pane.agent_state != AgentState::Unknown || !same_dir(cwd, &home) {
 		return Ok(DefaultClosed::None);
 	}
 	let screen = herdr.screen(&pane.pane_id).await?;

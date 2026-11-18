@@ -412,6 +412,9 @@ enum Touch {
 	CommandRun,
 	TypedNotRun,
 	AnotherWorkspace,
+	/// His home folder as herdr reports it through a link (macOS's `/tmp` is `/private/tmp`).
+	#[cfg(unix)]
+	HomeThroughLink,
 }
 
 /// What happens to herdr's session before the default workspace is made.
@@ -456,6 +459,15 @@ async fn touch_default(herdr: &FakeHerdr, pane_id: &str, touch: Touch, root: &Pa
 		}
 		Touch::AnotherWorkspace => {
 			herdr.ensure_workspace("notes", &home(), None, None).await.unwrap();
+		}
+		#[cfg(unix)]
+		Touch::HomeThroughLink => {
+			let link = root.join("home-link");
+			std::os::unix::fs::symlink(home(), &link).unwrap();
+			let mut state = herdr.state();
+			if let Some(pane) = state.pane_list.iter_mut().find(|p| p.pane_id == pane_id) {
+				pane.cwd = Some(link);
+			}
 		}
 	}
 }
@@ -509,6 +521,15 @@ async fn a_session_jocasta_created_loses_herdrs_untouched_default_workspace_once
 	server.service.refresh().await;
 	server.stop().await;
 	assert_eq!(empty.of("closeWorkspace"), Vec::<Vec<Value>>::new());
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn the_untouched_default_workspace_closes_when_herdr_names_his_home_through_a_link_0495() {
+	let j = temp_jocasta();
+	let (_, workspace_id, closed) =
+		default_workspace_after_start(Touch::HomeThroughLink, Before::Nothing, j.root()).await;
+	assert_eq!(closed, vec![workspace_id]);
 }
 
 #[tokio::test(flavor = "multi_thread")]

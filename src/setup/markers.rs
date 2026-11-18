@@ -2,11 +2,10 @@
 //! (`<NNNN>-<slug>.json`), plus `calendar.json` once the calendar's secret is stored. Each marker names how to undo what
 //! it did, so `jocasta uninstall` removes exactly what setup added.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::shared::errors::Result;
@@ -30,20 +29,11 @@ pub enum Undo {
 	/// Jocasta's servers in an omp `mcp.json`; his other servers stay.
 	#[serde(rename = "mcp")]
 	Mcp { path: String, servers: Vec<String> },
-	/// herdr's omp integration (`herdr integration uninstall omp`), whose file is `path`.
-	#[serde(rename = "herdr-integration")]
-	HerdrIntegration { path: String },
-	/// A herdr plugin setup linked (`herdr plugin unlink <id>`), from folder `path` (0553).
-	#[serde(rename = "herdr-plugin")]
-	HerdrPlugin { id: String, path: String },
-	/// Keys setup added to one of his omp files (`keybindings.yml`, `lsp.json`; 0479) with the values it wrote: each
-	/// goes only while it still has that value, and the file goes when setup made it and nothing else is left in it.
-	#[serde(rename = "keys")]
-	Keys { path: String, keys: Map<String, Value>, created: bool },
-	/// A file setup wrote that he may make his own (`WATCHDOG.md`, `secrets.yml`; 0479, 0594): it goes only while its
-	/// text is still this one.
-	#[serde(rename = "text")]
-	Text { path: String, fingerprint: String },
+	/// A file of Jocasta's omp snapshot (migration 19): while it is still the snapshot's text (`fingerprint`), the file
+	/// it replaced comes back from `backup`, the one kept before Jocasta's first snapshot; with no backup, the snapshot
+	/// made it and it goes.
+	#[serde(rename = "restore")]
+	Restore { path: String, backup: Option<String>, fingerprint: String },
 	/// A Windows Credential Manager entry.
 	#[serde(rename = "credential")]
 	Credential { target: String },
@@ -67,8 +57,8 @@ fn undo_entries<S: serde::Serializer>(undo: &[Undo], serializer: S) -> std::resu
 	serializer.collect_seq(undo.iter().map(Undo::to_json))
 }
 
-/// One marker. Its keys are written in the order the TypeScript's setup writes them: `fingerprint`, `undo`, `shipped`,
-/// then `appliedAt`.
+/// One marker. Its keys are written in the order the TypeScript's setup wrote them: `fingerprint`, `undo`, then
+/// `appliedAt`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Marker {
@@ -76,9 +66,6 @@ pub struct Marker {
 	pub fingerprint: String,
 	#[serde(serialize_with = "undo_entries")]
 	pub undo: Vec<Undo>,
-	/// The omp settings Jocasta shipped when applied: a key he still has at that value may follow a newer one.
-	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub shipped: Option<Value>,
 	/// When it was applied (ISO 8601); empty on a marker setup has planned and not yet applied.
 	#[serde(default)]
 	pub applied_at: String,
@@ -109,7 +96,6 @@ pub fn read_marker(jocasta_config_dir: &Path, name: &str) -> Option<Marker> {
 	Some(Marker {
 		fingerprint,
 		undo,
-		shipped: marker.get("shipped").filter(|value| !value.is_null()).cloned(),
 		applied_at: marker.get("appliedAt").and_then(Value::as_str).unwrap_or_default().to_owned(),
 	})
 }
@@ -119,38 +105,23 @@ pub fn write_marker(jocasta_config_dir: &Path, name: &str, marker: &Marker) -> R
 	write_atomically(&markers_dir(jocasta_config_dir).join(format!("{name}.json")), text, None)
 }
 
-/// Every undo the markers name, the latest migration first.
-pub fn recorded_undo(jocasta_config_dir: &Path) -> Vec<Undo> {
-	let Ok(entries) = fs::read_dir(markers_dir(jocasta_config_dir)) else { return Vec::new() };
-	let mut names: Vec<String> = entries
-		.filter_map(|entry| entry.ok()?.file_name().into_string().ok())
-		.filter(|name| name.ends_with(".json"))
-		.collect();
-	names.sort();
-	names.reverse();
-	names
-		.iter()
-		.flat_map(|name| {
-			read_marker(jocasta_config_dir, name.strip_suffix(".json").unwrap_or(name))
-				.map_or_else(Vec::new, |m| m.undo)
-		})
-		.collect()
+/// Every undo the markers `names` name, in that order: a marker of a migration this build no longer has is ignored
+/// (fork plan phase 6).
+pub fn recorded_undo(jocasta_config_dir: &Path, names: &[String]) -> Vec<Undo> {
+	names.iter().flat_map(|name| read_marker(jocasta_config_dir, name).map_or_else(Vec::new, |m| m.undo)).collect()
 }
 
 #[cfg(test)]
 mod tests {
+	use std::fs;
+
 	use serde_json::json;
 
 	use super::*;
 	use crate::shared::testing::temp_dir;
 
 	fn marker(fingerprint: &str, undo: Vec<Undo>) -> Marker {
-		Marker {
-			fingerprint: fingerprint.to_owned(),
-			undo,
-			shipped: None,
-			applied_at: "2026-11-01T00:00:00.000Z".to_owned(),
-		}
+		Marker { fingerprint: fingerprint.to_owned(), undo, applied_at: "2026-11-01T00:00:00.000Z".to_owned() }
 	}
 
 	#[test]
@@ -166,8 +137,7 @@ mod tests {
 			Undo::Mcp { path: "C:/m.json".to_owned(), servers: vec!["jocasta".to_owned()] },
 			Undo::Dir { path: "C:/d".to_owned(), file: None },
 		];
-		let mut written = marker("abc", undo);
-		written.shipped = Some(json!({ "a": 1 }));
+		let written = marker("abc", undo);
 		write_marker(dir.path(), "0001-mcp", &written).unwrap();
 		let text = fs::read_to_string(markers_dir(dir.path()).join("0001-mcp.json")).unwrap();
 		assert_eq!(
@@ -175,7 +145,7 @@ mod tests {
 			concat!(
 				"{\n  \"fingerprint\": \"abc\",\n  \"undo\": [\n    {\n      \"kind\": \"mcp\",\n      \"path\": \"C:/m.json\",\n",
 				"      \"servers\": [\n        \"jocasta\"\n      ]\n    },\n    {\n      \"kind\": \"dir\",\n",
-				"      \"path\": \"C:/d\"\n    }\n  ],\n  \"shipped\": {\n    \"a\": 1\n  },\n",
+				"      \"path\": \"C:/d\"\n    }\n  ],\n",
 				"  \"appliedAt\": \"2026-11-01T00:00:00.000Z\"\n}\n"
 			)
 		);
@@ -206,24 +176,25 @@ mod tests {
 		fs::write(setup.join("0001-x.json"), text.to_string()).unwrap();
 		let read = read_marker(dir.path(), "0001-x").unwrap();
 		assert_eq!(read.undo, vec![Undo::File { path: "a".to_owned() }, Undo::Unknown(odd.clone())]);
-		assert_eq!(recorded_undo(dir.path()), read.undo);
+		assert_eq!(recorded_undo(dir.path(), &["0001-x".to_owned()]), read.undo);
 		write_marker(dir.path(), "0002-y", &read).unwrap();
 		let back: Value = serde_json::from_str(&fs::read_to_string(setup.join("0002-y.json")).unwrap()).unwrap();
 		assert_eq!(back["undo"][1], odd);
 	}
 
 	#[test]
-	fn the_recorded_undo_is_every_markers_with_the_latest_migration_first() {
+	fn the_recorded_undo_is_the_named_markers_in_the_order_named_and_no_others() {
 		let dir = temp_dir("markers");
-		assert_eq!(recorded_undo(dir.path()), vec![]);
+		let names = ["calendar", "0003-c", "0001-a"].map(str::to_owned);
+		assert_eq!(recorded_undo(dir.path(), &names), vec![]);
 		let file = |path: &str| Undo::File { path: path.to_owned() };
 		write_marker(dir.path(), "0001-a", &marker("1", vec![file("a1"), file("a2")])).unwrap();
+		write_marker(dir.path(), "0002-gone", &marker("2", vec![file("b")])).unwrap();
 		write_marker(dir.path(), "0003-c", &marker("3", vec![file("c")])).unwrap();
 		write_marker(dir.path(), "calendar", &marker("cal", vec![Undo::Credential { target: "t".to_owned() }]))
 			.unwrap();
-		fs::write(markers_dir(dir.path()).join("notes.txt"), "x").unwrap();
 		assert_eq!(
-			recorded_undo(dir.path()),
+			recorded_undo(dir.path(), &names),
 			vec![Undo::Credential { target: "t".to_owned() }, file("c"), file("a1"), file("a2")]
 		);
 	}

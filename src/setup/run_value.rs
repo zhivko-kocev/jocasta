@@ -1,27 +1,13 @@
-//! The logon Run value the companion app wrote (0367) until there was no app (0552, 0557): setup and uninstall remove it.
+//! The logon Run value an install wrote (0367): uninstall removes it while it still starts that install.
 
 use std::process::{Command, Stdio};
 use std::sync::LazyLock;
 
-use regex::{Regex, RegexBuilder};
+use regex::Regex;
 
 use crate::shared::env;
 
 pub const RUN_KEY: &str = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
-
-/// The released companion's Run value name (0367).
-pub const RUN_VALUE: &str = "Jocasta";
-
-/// Whether a Run value's data started the companion's launcher, `"<install dir>\app\bin\launcher.exe"`.
-pub fn starts_companion(data: &str) -> bool {
-	static LAUNCHER: LazyLock<Regex> = LazyLock::new(|| {
-		RegexBuilder::new(r#"^"[^"]*\\app\\bin\\launcher\.exe"$"#)
-			.case_insensitive(true)
-			.build()
-			.expect("a fixed pattern")
-	});
-	LAUNCHER.is_match(data.trim())
-}
 
 /// `reg.exe`, with no console window.
 fn reg() -> Command {
@@ -63,15 +49,6 @@ pub fn delete_run_value(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
 	use super::*;
-
-	#[test]
-	fn only_the_companions_launcher_in_quotes_starts_it() {
-		assert!(starts_companion("\"C:\\Users\\x\\AppData\\Local\\Jocasta\\app\\bin\\launcher.exe\""));
-		assert!(starts_companion("  \"C:\\Jocasta\\APP\\BIN\\Launcher.EXE\"  "));
-		assert!(!starts_companion("C:\\Jocasta\\app\\bin\\launcher.exe"));
-		assert!(!starts_companion("\"C:\\Jocasta\\app\\bin\\launcher.exe\" --quiet"));
-		assert!(!starts_companion("\"C:\\Jocasta\\jocasta.exe\""));
-	}
 
 	#[test]
 	fn the_value_is_read_from_reg_querys_listing() {

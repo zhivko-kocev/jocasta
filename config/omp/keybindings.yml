@@ -1,0 +1,5 @@
+# Jocasta's omp snapshot: omp's key bindings (0451, 0479, 0556). Ctrl+L no longer starts omp's live voice, which sends
+# mic audio and the session to OpenAI; F9, which omp and herdr leave unused, toggles dictation: Right Ctrl sends it to
+# the boss pane through herdr.
+app.live.toggle: []
+app.stt.toggle: f9
