@@ -17,10 +17,13 @@ const SANDBOX_KEPT: std::time::Duration = std::time::Duration::from_secs(24 * 60
 
 /// Every test process's sandbox sits in `<temp>/jocasta-sandboxes`, named by the process id and the start time:
 /// Windows reuses a process id soon, and nextest starts one process per test, so a name by the id alone met an
-/// earlier process's folder (its template repos already committed). One parent keeps the cleanup's scan to ours.
+/// earlier process's folder (its template repos already committed). One parent keeps the cleanup's scan to ours. The
+/// parent is the temp folder's real path, as git and the service resolve a folder: macOS's temp folder is under the
+/// `/var` link to `/private/var`, and a Windows runner's can be an 8.3 short name.
 static SANDBOX: LazyLock<PathBuf> = LazyLock::new(|| {
 	let parent = std::env::temp_dir().join("jocasta-sandboxes");
 	std::fs::create_dir_all(&parent).expect("making the sandboxes' folder");
+	let parent = crate::shared::pathkey::real_path(&parent);
 	remove_old_sandboxes(&parent);
 	let started =
 		std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_nanos());

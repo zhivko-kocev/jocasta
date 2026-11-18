@@ -331,19 +331,20 @@ impl SessionWalker {
 		SessionWalker { sessions_dir, dirs: HashMap::new() }
 	}
 
-	/// The `*.jsonl` files directly inside `path`; `None` when it can't be listed (removed since).
+	/// The `*.jsonl` files directly inside `path`, by name; `None` when it can't be listed (removed since). omp names a
+	/// session by its start time, so by name a moved session's sibling comes after the file it moved from, and its copied
+	/// compactions are known as copies (the OS lists a folder in no set order: ext4 by hash).
 	fn list(path: &Path) -> Option<Vec<PathBuf>> {
 		let names = fs::read_dir(path).ok()?;
-		Some(
-			names
-				.flatten()
-				.filter(|e| {
-					e.file_type().is_ok_and(|kind| kind.is_file())
-						&& e.file_name().to_string_lossy().ends_with(".jsonl")
-				})
-				.map(|e| e.path())
-				.collect(),
-		)
+		let mut files: Vec<PathBuf> = names
+			.flatten()
+			.filter(|e| {
+				e.file_type().is_ok_and(|kind| kind.is_file()) && e.file_name().to_string_lossy().ends_with(".jsonl")
+			})
+			.map(|e| e.path())
+			.collect();
+		files.sort();
+		Some(files)
 	}
 
 	/// Every session file under the sessions dir, each cwd dir answered from its last listing while its mtime holds.

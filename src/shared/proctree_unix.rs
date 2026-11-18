@@ -18,19 +18,16 @@ fn output_of(program: &str, args: &[&str], c_locale: bool) -> String {
 	command.output().map(|out| String::from_utf8_lossy(&out.stdout).into_owned()).unwrap_or_default()
 }
 
-/// Whether `pid` is alive: `/proc/<pid>/stat` on Linux (a zombie, which only waits for its parent to reap it, has
-/// ended, as it has for Bun, whose event loop reaps at once), else `kill -0` (EPERM, "not permitted", means it exists
-/// but belongs to someone else).
+/// Whether `pid` is alive. A zombie, which only waits for its parent to reap it, has ended, as it has for Bun, whose
+/// event loop reaps at once: Linux reads `/proc/<pid>/stat`'s state, macOS asks `ps` for it (`kill -0` succeeds on a
+/// zombie, and `ps` lists every user's processes).
 pub fn alive(pid: u32) -> bool {
 	if cfg!(target_os = "linux") {
 		return std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| !is_ended(&stat));
 	}
-	let mut command = Command::new("kill");
-	command.args(["-0", &pid.to_string()]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
-	env::apply_to(&mut command);
-	command
-		.output()
-		.is_ok_and(|out| out.status.success() || String::from_utf8_lossy(&out.stderr).contains("not permitted"))
+	let state = output_of("ps", &["-o", "stat=", "-p", &pid.to_string()], true);
+	let state = state.trim();
+	!state.is_empty() && !state.starts_with('Z')
 }
 
 /// The start of each of `pids`: Linux reads `/proc/<pid>/stat`, macOS asks `ps` once.

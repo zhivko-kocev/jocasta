@@ -90,11 +90,12 @@ pub(crate) struct FakeHerdrServer {
 impl FakeHerdrServer {
 	/// Listens on `path` when given (a server started again on the same socket), else on a fresh one.
 	pub(crate) async fn start(path: Option<&str>) -> Self {
-		let name = format!("jocasta-herdr-test-{}-{}", std::process::id(), uuid::Uuid::new_v4().simple());
+		// A Unix socket's path fits in 104 bytes on macOS, whose temp dir alone is about 50: the name stays short.
+		let name = format!("jh-{}-{}", std::process::id(), &uuid::Uuid::new_v4().simple().to_string()[..12]);
 		let at = path.map_or_else(
 			|| {
 				if cfg!(windows) {
-					format!("\\\\.\\pipe\\{name}")
+					format!("\\\\.\\pipe\\jocasta-herdr-test-{name}")
 				} else {
 					std::env::temp_dir().join(format!("{name}.sock")).display().to_string()
 				}

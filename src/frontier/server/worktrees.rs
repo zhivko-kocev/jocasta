@@ -348,15 +348,18 @@ pub async fn find_leftovers(
 	let held: HashSet<String> = open.iter().map(|path| path_key(&real_path(path))).collect();
 	let mut found = Vec::new();
 	for project in projects.iter().filter(|project| project.git) {
-		let folder = project.main_path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
-		let root = path_key(&project.main_path.parent().unwrap_or(Path::new("")).join(format!("{folder}.wt")));
+		// Real paths on both sides: git lists a worktree by its real path, and the project's may run through a link
+		// (macOS's `/var` to `/private/var`).
+		let main = real_path(&project.main_path);
+		let folder = main.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+		let root = path_key(&main.parent().unwrap_or(Path::new("")).join(format!("{folder}.wt")));
 		let worktrees = worktree_list(&project.main_path).await?.unwrap_or_default();
 		let left: Vec<Listed> = worktrees
 			.into_iter()
 			.filter(|w| {
 				w.path.exists()
 					&& !held.contains(&path_key(&real_path(&w.path)))
-					&& path_key(w.path.parent().unwrap_or(Path::new(""))).starts_with(&root)
+					&& path_key(&real_path(w.path.parent().unwrap_or(Path::new("")))).starts_with(&root)
 			})
 			.collect();
 		if left.is_empty() {
