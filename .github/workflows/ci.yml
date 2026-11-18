@@ -52,7 +52,7 @@ jobs:
         shell: bash
       - run: mise exec -- cargo clippy --all-targets --locked
         shell: bash
-      - run: mise exec -- cargo nextest run --locked
+      - run: mise exec -- cargo nextest run --locked --no-fail-fast
         shell: bash
       # Needs the network (the advisory database); the same on every OS, as `mise run check` runs it.
       - run: mise exec -- cargo deny --log-level error check

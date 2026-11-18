@@ -804,7 +804,7 @@ Notes:
 - **0643** came when 0641's Unix half had never been compiled; his answer was to install the pinned Rust in WSL, as recommended.
 - **0644** came when the suite grew from about 65 s to 400 s with wave 8; his answer was nextest, as recommended.
 - **0645** came from the cutover's checklist, when no record said what the TypeScript-only checks become; he asked which option was best for each and took the recommendations.
-- **0647** came from the cutover's gate, when RustSec marked chrono and chrono-tz unmaintained in the week before it; he took the recommendation.
+- **0647** came from the cutover's gate, which first met RustSec's notices of 2026-09-14 marking chrono and chrono-tz unmaintained; he took the recommendation.
 - **0648** came from the cutover's CI run, when a ReDoS in picomatch with no fixed release failed the audit; he took the recommendation.
 
 ## 4. Process, principles and rules

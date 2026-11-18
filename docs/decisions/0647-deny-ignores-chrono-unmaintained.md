@@ -6,7 +6,7 @@
 - Date: 2026-11-18
 
 ## Question
-The cutover's gate fails `cargo deny check` on two new RustSec notices: RUSTSEC-2026-0543 (chrono is unmaintained) and RUSTSEC-2026-0555 (chrono-tz is unmaintained). Neither is a vulnerability, and no fixed version exists. 0639's policy fails the check on any advisory. What does the check do?
+The cutover's gate fails `cargo deny check` on two RustSec notices dated 2026-09-14: RUSTSEC-2026-0543 (chrono is unmaintained) and RUSTSEC-2026-0555 (chrono-tz is unmaintained). Neither is a vulnerability, and no fixed version exists. 0639's policy fails the check on any advisory. What does the check do?
 
 ## Facts
 Verified 2026-11-18.

@@ -70,12 +70,14 @@ fn strings(words: &[&str]) -> Vec<String> {
 // ---- repositories ----
 
 /// Runs git in `dir` with a throwaway identity; panics on failure with git's exit code and stderr (the TypeScript's
-/// `sh`).
+/// `sh`). Git's automatic maintenance is off: since 2.47 a commit starts it detached, and its lock files coming and
+/// going under `.git` broke a template's copy on CI's macOS.
 pub(crate) fn sh(dir: &Path, args: &[&str]) -> String {
 	let mut argv = vec!["git", "-C"];
 	let shown = dir.to_string_lossy();
 	argv.push(&shown);
 	argv.extend_from_slice(&["-c", "user.name=Test", "-c", "user.email=test@example.com"]);
+	argv.extend_from_slice(&["-c", "maintenance.auto=false", "-c", "gc.auto=0"]);
 	argv.extend_from_slice(args);
 	let out = run_program_sync(&argv, RunOptions { timeout_ms: Some(30_000), ..RunOptions::default() })
 		.unwrap_or_else(|error| panic!("git {args:?} didn't run in {shown}: {error}"));
@@ -101,7 +103,8 @@ fn copy_tree(from: &Path, to: &Path) {
 		if entry.file_type().unwrap().is_dir() {
 			copy_tree(&entry.path(), &target);
 		} else {
-			fs::copy(entry.path(), &target).unwrap();
+			fs::copy(entry.path(), &target)
+				.unwrap_or_else(|error| panic!("copying {}: {error}", entry.path().display()));
 		}
 	}
 }

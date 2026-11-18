@@ -460,7 +460,8 @@ async fn svc_7_a_start_that_fails_once_herdr_made_its_worktree_takes_back_the_wo
 		assert_eq!(call(&server, "thread_status", &json!({})).await.text, "No threads.");
 		server.herdr.state().create_worktree_fails = None;
 		let path = start_thread(&server, ThreadOptions::default()).await.path;
-		assert_eq!(path_key(&path), path_key(&folder));
+		// The worktree's path is git's, long names resolved; the temp root may be an 8.3 short name (CI's Windows).
+		assert_eq!(path_key(&path), path_key(&real_path(&folder)));
 	})
 	.await;
 }
