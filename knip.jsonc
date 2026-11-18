@@ -6,8 +6,8 @@
 	// (0617). The tests are found from package.json's scripts and the Bun test plugin.
 	"entry": ["src/frontier/canvas/main.ts", "scripts/*.ts", "bench/h1-guard/*.ts", "config/pane-check-extension.ts"],
 	"project": ["src/**", "scripts/**", "bench/**", "test/**"],
-	// A git submodule (.gitmodules): another project's code and tests, not Jocasta's.
-	"ignore": ["forks/**"],
+	// A git submodule (.gitmodules) and the herdr fork's subtree: other projects' code and tests, not Jocasta's.
+	"ignore": ["forks/**", "crates/**"],
 	// jscpd is a command, run by hand (0614), and is imported nowhere.
 	"ignoreDependencies": ["jscpd"]
 }

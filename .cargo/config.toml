@@ -3,3 +3,8 @@
 # versions once (0640); every addition and bump after it waits.
 [registry]
 global-min-publish-age = "7 days"
+
+# herdr's static C runtime on Windows (from its own .cargo/config.toml, read only at the workspace root): its binary
+# runs without the Visual C++ redistributable, and Jocasta's is the same binary from the fork on.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

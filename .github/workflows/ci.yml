@@ -2,7 +2,8 @@
 # 0645) and the Bun checks that remain (type check (0037), lint (0036), knip and the advisory audit (0614), the tests)
 # on windows, ubuntu and macos (plan section 7). Tools: the runners' own rustup, and mise from its official install
 # script (0476) at a pinned version, reading the repo's mise.toml and mise.lock (`mise install --locked`: Bun, Node,
-# Rust, cargo-deny, cargo-machete and nextest as pinned there).
+# Rust, cargo-deny, cargo-machete, nextest and Zig as pinned there). The herdr fork in crates/herdr builds too; its
+# terminal library is compiled with Zig.
 # Evals run his real omp and never run here (0384); opt-in smokes (herdr, omp's SDK, dictation) stay off. Read-only
 # token; every action is pinned to the commit its tag named when it was pinned.
 name: ci
@@ -22,8 +23,9 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    # A hung process tree never holds a runner for GitHub's default six hours.
-    timeout-minutes: 45
+    # A hung process tree never holds a runner for GitHub's default six hours; the herdr fork's build from scratch
+    # (Zig's libghostty-vt among it) needs more than the 45 minutes the product alone did.
+    timeout-minutes: 90
     env:
       # The mise release the install scripts fetch (checked against GitHub's SHASUMS256.txt by the script).
       MISE_VERSION: 2026.10.17
@@ -53,6 +55,9 @@ jobs:
       - run: mise exec -- cargo clippy --all-targets --locked
         shell: bash
       - run: mise exec -- cargo nextest run --locked --no-fail-fast
+        shell: bash
+      # The herdr fork (crates/herdr), built with the workspace's lock: its Zig library and its link on each OS.
+      - run: mise exec -- cargo build -p herdr --locked
         shell: bash
       # Needs the network (the advisory database); the same on every OS, as `mise run check` runs it.
       - run: mise exec -- cargo deny --log-level error check

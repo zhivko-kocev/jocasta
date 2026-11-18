@@ -13,6 +13,12 @@ cargo-deny = "0.20.2"
 "github:bnjbvr/cargo-machete" = "0.9.2"
 # Runs the Rust tests, each in its own process, so the tests' environment lock never makes one wait (0644).
 "aqua:nextest-rs/nextest/cargo-nextest" = "0.9.151"
+# The herdr fork's terminal binding builds its vendored libghostty-vt with Zig, at the version its build names.
+zig = "0.16.0"
+
+# Cargo's build jobs, held down so the fork's build, its link and a test run fit in his PC's memory beside his work.
+[env]
+CARGO_BUILD_JOBS = "4"
 
 # `verify` is the name Jocasta's idle check looks for (else `test`, 0453); `check` is the same checks under the repo's
 # own name, so the commands are written once. The TypeScript that remains (the canvas page, the docs and config

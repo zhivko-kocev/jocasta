@@ -11,6 +11,17 @@ autobins = false
 autotests = true
 autobenches = false
 
+# The workspace (the fork, 2026-11-18): Jocasta and the trimmed herdr fork at crates/herdr with its terminal binding.
+# A bare cargo command builds and tests Jocasta alone; `-p herdr` or `--workspace` takes the fork too.
+[workspace]
+members = [".", "crates/herdr", "crates/herdr/crates/ghostty-vt"]
+default-members = ["."]
+
+# herdr's patched portable-pty (its Windows ConPTY patches, crates/herdr/vendor/portable-pty.patches.md); a patch is
+# read from the workspace root only.
+[patch.crates-io]
+portable-pty = { path = "crates/herdr/vendor/portable-pty" }
+
 # The product (0629): one package, its modules in src/ beside the TypeScript files they replace until the cutover
 # (0628). The library is what both binaries build on; `jocasta-bench` is bench/ and evals/ (0636).
 [lib]
@@ -80,6 +91,14 @@ jocasta = { path = ".", features = ["test-support"] }
 # Reads the Rust sources for tests/tree_checks.rs (0645); the lock's own version, parsing only.
 syn = { version = "3.0.10", default-features = false, features = ["full", "parsing", "visit"] }
 tokio = { version = "1.54.1", features = ["test-util"] }
+
+# Line tables only for the workspace's own crates and none for dependencies: with herdr in the workspace, full debug
+# info made the links and the PDBs the heaviest part of a build on his PC. Panics and backtraces still name lines.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
 
 [profile.release]
 lto = true

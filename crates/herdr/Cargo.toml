@@ -2,7 +2,6 @@
 name = "herdr"
 version = "0.9.5"
 edition = "2021"
-build = "build.rs"
 description = "terminal workspace manager for AI coding agents"
 license = "Apache-2.0"
 repository = "https://github.com/herdrdev/herdr"
@@ -19,10 +18,6 @@ include = [
     "LICENSE",
     "Cargo.toml",
 ]
-
-[workspace]
-members = ["crates/ghostty-vt"]
-default-members = [".", "crates/ghostty-vt"]
 
 [dependencies]
 ghostty-vt = { path = "crates/ghostty-vt" }
@@ -52,9 +47,6 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 unicode-width = "0.2"
 unicode-segmentation = "1.13.1"
 schemars = { version = "1.2.1", features = ["derive"] }
-
-[patch.crates-io]
-portable-pty = { path = "vendor/portable-pty" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # logind's delay inhibitor lets the server save before host shutdown kills panes.

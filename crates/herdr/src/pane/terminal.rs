@@ -5775,16 +5775,19 @@ mod tests {
 
         let backend = ratatui::backend::TestBackend::new(20, 1);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        terminal
+        let frame = terminal
             .draw(|frame| pane.render(frame, Rect::new(0, 0, 20, 1), false))
             .unwrap();
-        let buffer = terminal.backend().buffer();
+        let buffer = frame.buffer;
 
         assert_eq!(buffer[(0, 0)].symbol(), "ｶ\u{ff9e}");
-        assert_eq!(
-            buffer[(1, 0)].symbol(),
-            "",
-            "wide spacer tail must stay empty so the host terminal does not overwrite the voiced kana"
+        assert_eq!(buffer[(1, 0)].symbol(), "");
+        // What the host terminal is sent: since ratatui 0.30.2 counts the voiced mark's cell, the diff writes
+        // nothing over the tail at all (Jocasta's fork; upstream's lock holds ratatui 0.30.0).
+        let blank = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 20, 1));
+        assert!(
+            blank.diff(buffer).iter().all(|(x, _, _)| *x != 1),
+            "wide spacer tail must stay unwritten so the host terminal does not overwrite the voiced kana"
         );
         assert_eq!(buffer[(2, 0)].symbol(), "Z");
     }
