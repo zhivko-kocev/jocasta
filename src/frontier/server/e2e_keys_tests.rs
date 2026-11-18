@@ -1,8 +1,7 @@
-//! The cases of `test/frontier/server/service-keys.test.ts`, case for case on the real server: his keys through
-//! `/api/plugin/action`, the omp hosts' pipes, the relay URL, the overlay's writes, the task file, the approved plan,
+//! The cases of `test/frontier/server/service-keys.test.ts`, case for case on the real server: his keys as the dock
+//! and his keybinds send them, the omp hosts' pipes, the relay URL, the overlay's writes, the task file, the approved plan,
 //! `report_result`, the review's gates, the check tool, `jocasta thread|worktree` and the thread keys in today's pane.
 
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,17 +11,18 @@ use futures_util::FutureExt;
 use regex::Regex;
 use serde_json::{Value, json};
 
-use crate::frontier::protocol::{PLUGIN_ACTION_PATH, POPUP_PATH, POPUP_READER_HEADER, ServerMessage};
+use crate::frontier::protocol::{PluginAction, ServerMessage};
 use crate::frontier::server::allow::{Answer, Confirmation};
 use crate::frontier::server::helpers::{
 	BRIEF, Msg, Page, TestServer, boss_pane, call, call_as, cli, commit_in, demo_project, guard, http,
 	proposed_plan_file, session_file, sh, task_dir_of, thread_omp, until, use_hunk_daemon, with_server,
 };
-use crate::frontier::server::herdr::{AgentState, Herdr, SplitOptions};
+use crate::frontier::server::herdr::AgentState;
 use crate::frontier::server::history::search_history;
 use crate::frontier::server::hosts::fake::{FakeHostState, fake_host};
+use crate::frontier::server::native::NativeServer;
 use crate::frontier::server::overlay::overlay_file;
-use crate::frontier::server::popups::{Popup, PopupEnd};
+use crate::frontier::server::popups::{AnswerTaken, Popup, PopupEnd};
 use crate::frontier::server::server::ServerOptions;
 use crate::frontier::server::tools::ToolReply;
 use crate::frontier::server::wording::{HANDOFF_PROMPT, IDLE_CHECK_FRAME, REPORT_STEER, WHEN_YOU_FINISH};
@@ -69,52 +69,8 @@ fn base_name(path: &Path) -> String {
 	path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
-/// A popup's answer goes with the reader secret its one view handed out (0578): viewed once per question.
-struct Poster {
-	port: u16,
-	readers: Mutex<HashMap<String, String>>,
-}
-
-impl Poster {
-	fn new(server: &TestServer) -> Self {
-		Self { port: server.port, readers: Mutex::default() }
-	}
-
-	async fn post(&self, route: &str, body: &Value, token: Option<&str>) -> u16 {
-		let client = http();
-		let url = format!("http://127.0.0.1:{}{route}", self.port);
-		let authorize = |request: reqwest::RequestBuilder| match token {
-			Some(token) => request.bearer_auth(token),
-			None => request,
-		};
-		let mut reader = None;
-		if route.starts_with(POPUP_PATH) {
-			let known = self.readers.lock().unwrap_or_else(PoisonError::into_inner).get(route).cloned();
-			let secret = match known {
-				Some(secret) => secret,
-				None => {
-					let view = authorize(client.get(&url)).send().await.expect("the popup's view");
-					let secret = view.headers().get(POPUP_READER_HEADER).and_then(|v| v.to_str().ok()).unwrap_or("");
-					let secret = secret.to_owned();
-					self.readers
-						.lock()
-						.unwrap_or_else(PoisonError::into_inner)
-						.insert(route.to_owned(), secret.clone());
-					secret
-				}
-			};
-			reader = Some(secret);
-		}
-		let mut request = authorize(client.post(&url)).body(body.to_string());
-		if let Some(reader) = reader {
-			request = request.header(POPUP_READER_HEADER, reader);
-		}
-		request.send().await.expect("an answer").status().as_u16()
-	}
-}
-
 #[tokio::test(flavor = "multi_thread")]
-async fn his_keys_through_api_plugin_action_stop_refuses_an_idle_thread_with_why_and_stops_a_working_one_finish_and_review_refuse_while_it_works_quits_stop_everything_and_finishs_merge_take_the_popups_code_cancel_doesnt_0544_0554_0568()
+async fn his_keys_stop_refuses_an_idle_thread_with_why_and_stops_a_working_one_finish_and_review_refuse_while_it_works_quits_stop_everything_and_finishs_merge_take_the_popups_code_cancel_doesnt_0544_0554_0568()
  {
 	let j = temp_jocasta();
 	let project = demo_project(j.root(), "demo").await;
@@ -133,16 +89,14 @@ async fn his_keys_through_api_plugin_action_stop_refuses_an_idle_thread_with_why
 		let started = crate::frontier::server::helpers::start_thread(&server, Default::default()).await;
 		let (pane_id, path) = (started.pane_id, started.path);
 		let page = Page::open(&server, "").await;
-		let poster = Poster::new(&server);
-		let token = server.token.clone();
 		let key = |action: &str, pane: Option<&str>| {
-			let mut body = json!({ "action": action });
-			if let Some(pane) = pane {
-				body["paneId"] = json!(pane);
+			let action: PluginAction = serde_json::from_value(json!(action)).expect("one of his keys");
+			let (server, pane) = (server.server.clone(), pane.map(str::to_owned));
+			async move {
+				tokio::spawn(async move { server.key(action, pane).await });
 			}
-			let (poster, token) = (&poster, token.clone());
-			async move { assert_eq!(poster.post(PLUGIN_ACTION_PATH, &body, Some(&token)).await, 202) }
 		};
+		let answer = |popup: &Popup, body: Value| server.answer(popup.code(), &body).0;
 		let said = |text: &str, pattern: bool| {
 			let (text, page) = (text.to_owned(), &page);
 			async move {
@@ -204,9 +158,8 @@ async fn his_keys_through_api_plugin_action_stop_refuses_an_idle_thread_with_why
 		let close = popup("Jocasta: Stop everything?").await;
 		let code = close.view().code.clone().expect("a code");
 		assert!(code.len() == 3 && code.bytes().all(|b| b.is_ascii_uppercase() && !b"IO".contains(&b)), "{code}");
-		let route = format!("{POPUP_PATH}{}", close.code());
-		assert_eq!(poster.post(&route, &json!({ "choice": "Stop everything" }), Some(&token)).await, 409);
-		assert_eq!(poster.post(&route, &json!({ "choice": "Cancel" }), Some(&token)).await, 204);
+		assert_eq!(answer(&close, json!({ "choice": "Stop everything" })), AnswerTaken::Wrong);
+		assert_eq!(answer(&close, json!({ "choice": "Cancel" })), AnswerTaken::Taken);
 		said("Jocasta keeps running.", false).await;
 
 		// Finish once idle with a commit: Merge without its code is refused, with it the thread merges.
@@ -216,16 +169,13 @@ async fn his_keys_through_api_plugin_action_stop_refuses_an_idle_thread_with_why
 		key("finish", Some(&pane_id)).await;
 		let finish = popup("Jocasta: Finish demo/Readme line").await;
 		assert_eq!(finish.view().choices, words(&["Merge", "PR", "Cancel"]));
-		let route = format!("{POPUP_PATH}{}", finish.code());
-		assert_eq!(poster.post(&route, &json!({ "choice": "Merge", "typed": "" }), Some(&token)).await, 409);
+		assert_eq!(answer(&finish, json!({ "choice": "Merge", "typed": "" })), AnswerTaken::Wrong);
 		let typed = finish.view().code.clone().map(|code| code.to_lowercase());
-		assert_eq!(poster.post(&route, &json!({ "choice": "Merge", "typed": typed }), Some(&token)).await, 204);
+		assert_eq!(answer(&finish, json!({ "choice": "Merge", "typed": typed })), AnswerTaken::Taken);
 		let (_, is_error) = said("^Merged demo/Readme line into main", true).await;
 		assert!(!is_error);
 		assert!(!path.exists());
 
-		assert_eq!(poster.post(PLUGIN_ACTION_PATH, &json!({ "action": "merge" }), Some(&token)).await, 400);
-		assert_eq!(poster.post(PLUGIN_ACTION_PATH, &json!({}), None).await, 401);
 		page.close();
 	})
 	.await;
@@ -943,34 +893,11 @@ async fn jocasta_thread_and_worktree_commands_run_the_services_own_functions_and
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_thread_key_pressed_in_todays_own_pane_names_todays_key_for_it_any_other_pane_that_isnt_a_threads_gets_the_plain_refusal_0581_ux_16()
- {
-	let j = temp_jocasta();
+async fn a_thread_key_on_a_pane_that_isnt_a_threads_gets_the_plain_refusal_0581_ux_16() {
+	let _j = temp_jocasta();
 	with_server(ServerOptions::default(), |server| async move {
 		let boss = boss_pane(&server.herdr).expect("a boss pane");
-		let today = Herdr::split_beside(
-			&*server.herdr,
-			&boss,
-			&SplitOptions {
-				command: words(&["jocasta", "today"]),
-				cwd: j.root().to_path_buf(),
-				label: Some("today".to_owned()),
-				..SplitOptions::default()
-			},
-		)
-		.await
-		.expect("today's pane");
 		let refused = |result: crate::shared::errors::Result<String>| result.expect_err("a refusal").to_string();
-		assert!(
-			refused(server.service.key_stop(Some(&today)).await)
-				.contains("Stop: in today, press s on the picked thread.")
-		);
-		assert!(
-			refused(server.service.key_review(Some(&today)).await)
-				.contains("Review: in today, press r on the picked thread.")
-		);
-		let finish = server.service.key_finishable(Some(&today)).await.expect_err("a refusal").to_string();
-		assert!(finish.contains("Finish: in today, press f on the picked thread."), "{finish}");
 		assert!(
 			refused(server.service.key_stop(Some(&boss)).await)
 				.contains("Stop: the focused pane isn't a thread's; focus a thread or pick one in today.")

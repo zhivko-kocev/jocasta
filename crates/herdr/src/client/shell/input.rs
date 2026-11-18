@@ -244,6 +244,13 @@ impl ClientShellState {
                 }
                 RawInputEvent::Text(text) => {
                     let text = text.into_string();
+                    // Fork seam (FORK.md): Jocasta's question is drawn over every overlay and takes its text first.
+                    if crate::embed::shell_asking()
+                        && self.extension_takes_text(&text, false, &mut outcome)
+                    {
+                        self.reconcile_input_source();
+                        continue;
+                    }
                     if matches!(
                         self.overlay,
                         Some(
@@ -256,6 +263,10 @@ impl ClientShellState {
                         continue;
                     }
                     if self.prepare_committed_text(&text, &mut outcome) {
+                        self.reconcile_input_source();
+                        continue;
+                    }
+                    if self.extension_takes_text(&text, false, &mut outcome) {
                         self.reconcile_input_source();
                         continue;
                     }
@@ -277,6 +288,12 @@ impl ClientShellState {
                     }
                 }
                 RawInputEvent::Paste(text) => {
+                    if crate::embed::shell_asking()
+                        && self.extension_takes_text(&text, true, &mut outcome)
+                    {
+                        self.reconcile_input_source();
+                        continue;
+                    }
                     if matches!(
                         self.overlay,
                         Some(
@@ -289,6 +306,10 @@ impl ClientShellState {
                         continue;
                     }
                     if self.prepare_committed_text(&text, &mut outcome) {
+                        self.reconcile_input_source();
+                        continue;
+                    }
+                    if self.extension_takes_text(&text, true, &mut outcome) {
                         self.reconcile_input_source();
                         continue;
                     }
@@ -609,6 +630,10 @@ impl ClientShellState {
         key: &crate::input::TerminalKey,
         outcome: &mut ClientShellInput,
     ) -> Option<ClientInputTarget> {
+        // Fork seam (FORK.md): Jocasta's question is drawn over every overlay and takes its keys first.
+        if crate::embed::shell_asking() && self.extension_takes_key(key, outcome) {
+            return None;
+        }
         if self.handle_modal_paste_shortcut_with(key, outcome, crate::platform::read_clipboard_text)
         {
             return None;
@@ -624,6 +649,10 @@ impl ClientShellState {
             if key.kind == KeyEventKind::Press {
                 self.route_overlay_key(key, outcome);
             }
+            return None;
+        }
+        // Fork seam (FORK.md): Jocasta's question, then its dock while it has his keys.
+        if self.extension_takes_key(key, outcome) {
             return None;
         }
         if let Some(target) = self.popup_input_target() {

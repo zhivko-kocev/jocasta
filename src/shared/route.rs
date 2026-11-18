@@ -4,24 +4,11 @@
 
 use clap::{Parser, Subcommand};
 
-use crate::frontier::protocol::{PLUGIN_ACTIONS, PluginAction};
-
-/// Which part of the herdr plugin `jocasta plugin …` runs (0553).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PluginPart {
-	Today,
-	Ask,
-	Startup,
-	/// `plugin action <id>`.
-	Action(PluginAction),
-}
-
 /// The `jocasta` command's words (0387, 0467, 0468, 0472, 0544): open the work surface, `setup [--refresh <file>]`,
 /// `uninstall`, `diagnose`, `mcp [--boss]`, `project …`, `thread …`, `worktree leftover|remove <path>`, `--version`;
-/// and, not listed in the help, `service`, the Jocasta service bare `jocasta` starts as its own process (0552), and
-/// `plugin today|ask|startup|action <id>`, what the `jocasta` herdr plugin runs (0553), and `push-hook <remote>
-/// <address>`, the `pre-push` hook git runs in every Jocasta pane (0613), and `pane-check`, what a project pane's omp
-/// extension runs when a turn ends (0617). Every other word of herdr's (the fork built in, `crates/herdr`) is
+/// and, not listed in the help, `push-hook <remote> <address>`, the `pre-push` hook git runs in every Jocasta pane
+/// (0613), and `pane-check`, what a project pane's omp extension runs when a turn ends (0617). Every other word of
+/// herdr's (the fork built in, `crates/herdr`) is
 /// [`Route::Herdr`]: herdr's own entry reads the command line. `--help` and a word that is no command are not routes:
 /// [`route`] returns clap's error for them.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,16 +21,15 @@ pub enum Route {
 	Project { args: Vec<String> },
 	Thread { args: Vec<String> },
 	Worktree { args: Vec<String> },
-	Plugin { part: PluginPart },
 	PushHook { args: Vec<String> },
 	PaneCheck,
 	Version,
 	Herdr,
 }
 
-/// herdr's words (`crates/herdr/src/cli.rs`'s `maybe_run` and `lib.rs`'s `main`); `worktree` and `plugin` are shared
-/// with Jocasta's and decided by [`herdrs`].
-const HERDR_WORDS: [&str; 15] = [
+/// herdr's words (`crates/herdr/src/cli.rs`'s `maybe_run` and `lib.rs`'s `main`); `worktree` is shared with Jocasta's
+/// and decided by [`herdrs`].
+const HERDR_WORDS: [&str; 16] = [
 	"server",
 	"client",
 	"api",
@@ -59,6 +45,7 @@ const HERDR_WORDS: [&str; 15] = [
 	"pane",
 	"integration",
 	"session",
+	"plugin",
 ];
 
 /// herdr's flags that may come first. `--notification-activate` is how Windows starts the exe again when he clicks one
@@ -66,9 +53,7 @@ const HERDR_WORDS: [&str; 15] = [
 const HERDR_FLAGS: [&str; 5] = ["--session", "--default-config", "--skill", "-V", "--notification-activate"];
 
 /// Whether the command line is herdr's. `worktree leftover` and `worktree remove [<path>]` are Jocasta's leftover
-/// worktrees (0544); herdr's `worktree list|create|open|remove --workspace <id>` are its. `plugin today|ask|startup`
-/// and `plugin action <one of Jocasta's actions>` are what Jocasta's herdr plugin runs; every other `plugin` word
-/// (herdr's `plugin action list|invoke` among them) is herdr's.
+/// worktrees (0544); herdr's `worktree list|create|open|remove --workspace <id>` are its.
 fn herdrs(args: &[String]) -> bool {
 	let word = |at: usize| args.get(at).map(String::as_str);
 	match word(0) {
@@ -76,11 +61,6 @@ fn herdrs(args: &[String]) -> bool {
 		Some("worktree") => match word(1) {
 			Some("leftover") => false,
 			Some("remove") => word(2).is_some_and(|next| next.starts_with('-')),
-			_ => true,
-		},
-		Some("plugin") => match word(1) {
-			Some("today" | "ask" | "startup") => false,
-			Some("action") => !word(2).is_some_and(|action| ACTION_WORDS.contains(&action)),
 			_ => true,
 		},
 		Some(first) => {
@@ -153,12 +133,6 @@ enum Word {
 		#[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "ARGS")]
 		args: Vec<String>,
 	},
-	/// What the `jocasta` herdr plugin runs (0553)
-	#[command(hide = true, subcommand_required = true, arg_required_else_help = true)]
-	Plugin {
-		#[command(subcommand)]
-		part: Part,
-	},
 	/// Git's `pre-push` hook in every Jocasta pane (0613)
 	#[command(name = "push-hook", hide = true, disable_help_flag = true)]
 	PushHook {
@@ -168,25 +142,6 @@ enum Word {
 	/// What a project pane's omp extension runs when a turn ends (0617)
 	#[command(name = "pane-check", hide = true)]
 	PaneCheck,
-}
-
-#[derive(Subcommand)]
-enum Part {
-	Today,
-	Ask,
-	Startup,
-	Action {
-		#[arg(value_parser = clap::builder::PossibleValuesParser::new(ACTION_WORDS))]
-		id: String,
-	},
-}
-
-/// The words a plugin action is named by, in `PLUGIN_ACTIONS`' order.
-const ACTION_WORDS: [&str; 5] = ["finish", "stop", "review", "new-thread", "quit"];
-
-/// The action a plugin word names.
-fn plugin_action(word: &str) -> Option<PluginAction> {
-	ACTION_WORDS.iter().position(|known| *known == word).map(|at| PLUGIN_ACTIONS[at])
 }
 
 impl From<Word> for Route {
@@ -199,14 +154,6 @@ impl From<Word> for Route {
 			Word::Project { args } => Self::Project { args },
 			Word::Thread { args } => Self::Thread { args },
 			Word::Worktree { args } => Self::Worktree { args },
-			Word::Plugin { part } => Self::Plugin {
-				part: match part {
-					Part::Today => PluginPart::Today,
-					Part::Ask => PluginPart::Ask,
-					Part::Startup => PluginPart::Startup,
-					Part::Action { id } => PluginPart::Action(plugin_action(&id).unwrap_or(PluginAction::Quit)),
-				},
-			},
 			Word::PushHook { args } => Self::PushHook { args },
 			Word::PaneCheck => Self::PaneCheck,
 		}

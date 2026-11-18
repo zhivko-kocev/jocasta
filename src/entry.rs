@@ -12,15 +12,11 @@ use std::sync::Arc;
 use futures_util::future::BoxFuture;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-use crate::frontier::ask::main::run_ask;
-use crate::frontier::client::{ask_pane_check, ask_push, post_action};
-use crate::frontier::protocol::PluginAction;
+use crate::frontier::client::{ask_pane_check, ask_push};
 use crate::frontier::server::boss::{EnsureBossOptions, LaunchedPanes, boss_command, ensure_boss_pane};
 use crate::frontier::server::embedded::{SERVICE_ENV, register, serves};
-use crate::frontier::server::herdr::{HerdrOptions, connect_herdr, herdr_pipe};
+use crate::frontier::server::herdr::{HerdrOptions, connect_herdr};
 use crate::frontier::server::launch::{service_health, service_state};
-use crate::frontier::server::plugin::apply_agent_view;
-use crate::frontier::today::main::run_today;
 use crate::mcp::server::run_mcp_stdio;
 use crate::setup::diagnose::{DiagnoseDeps, ServiceInfo, run_diagnose};
 use crate::setup::run_value::{delete_run_value, read_run_value};
@@ -43,7 +39,7 @@ use crate::shared::paths::{config_dir, data_dir};
 use crate::shared::process::{RunOptions, on_path, run_program, run_program_sync};
 use crate::shared::project_cli::project_command;
 use crate::shared::push_hook::{PushHookDeps, PushReply, PushRequest, run_push_hook};
-use crate::shared::route::{PluginPart, Route, route};
+use crate::shared::route::{Route, route};
 use crate::shared::service_file::{read_service_file, running_service};
 use crate::shared::surface::{SurfaceDeps, after_surface, before_surface, last_logged_error};
 use crate::shared::thread_cli::{CliDeps, CliWord, cli_request, run_cli_command};
@@ -217,8 +213,6 @@ async fn run_uninstall_route() -> Result<i32> {
 		delete_credential: Arc::new(delete_credential),
 		remove_after_exit: Arc::new(|dir, entries| remove_after_exit(dir, entries, None)),
 		processes_under: Some(Arc::new(processes_under)),
-		// A server started here would start Jocasta with it; the plugin goes with herdr's files (fork plan phase 5).
-		start_herdr: None,
 	};
 	run_uninstall(&paths, &deps, &ConsoleIo::new()).await
 }
@@ -255,49 +249,6 @@ async fn run_diagnose_route() -> Result<i32> {
 		now: None,
 	};
 	run_diagnose(&deps, &out).await
-}
-
-/// What the `jocasta` herdr plugin runs (0553): its panes, its startup hook and its actions.
-async fn run_plugin(part: PluginPart) -> Result<i32> {
-	match part {
-		PluginPart::Today => run_today().await,
-		PluginPart::Ask => run_ask().await,
-		PluginPart::Startup => {
-			// herdr names its socket file for its plugin commands; on Windows that is a pipe name.
-			let socket = env::var_nonempty("HERDR_SOCKET_PATH").map(|file| herdr_pipe(&file));
-			let options = HerdrOptions { session: herdr_session()?, socket_path: socket, ..HerdrOptions::default() };
-			let herdr = connect_herdr(options).await?;
-			let line = if apply_agent_view(&*herdr).await? {
-				"Agents view set."
-			} else {
-				"No boss workspace yet; the service sets the view."
-			};
-			out(line);
-			herdr.close();
-			Ok(0)
-		}
-		PluginPart::Action(action) => Ok(run_plugin_action(action).await),
-	}
-}
-
-/// The focused pane from herdr's invocation context (`focused_pane_id`), else the pane it ran in.
-async fn run_plugin_action(action: PluginAction) -> i32 {
-	let mut pane_id = env::var("HERDR_PANE_ID");
-	let context = env::var("HERDR_PLUGIN_CONTEXT_JSON").unwrap_or_else(|| "{}".to_owned());
-	// No context: the pane it ran in.
-	if let Ok(serde_json::Value::Object(context)) = serde_json::from_str(&context)
-		&& let Some(focused) = context.get("focused_pane_id").and_then(|focused| focused.as_str())
-		&& !focused.is_empty()
-	{
-		pane_id = Some(focused.to_owned());
-	}
-	match post_action(action, pane_id.as_deref()).await {
-		Some(refused) => {
-			err(&format!("jocasta: {refused}"));
-			1
-		}
-		None => 0,
-	}
 }
 
 /// What git runs before a push (0613): the exit code is its verdict, the reason goes to stderr.
@@ -444,7 +395,6 @@ async fn run_route(target: Route, calendar_env: Option<String>) -> Result<i32> {
 			run_mcp_stdio(boss).await;
 			Ok(0)
 		}
-		Route::Plugin { part } => run_plugin(part).await,
 		Route::PaneCheck => {
 			// What a project pane's omp extension runs when a turn ends (0617): the service's text for the agent, or
 			// nothing.
@@ -479,6 +429,8 @@ fn run_herdr(args: &[String]) -> ExitCode {
 		config: herdr_dir,
 		config_file: config_dir().join("herdr.toml"),
 	});
+	// His client draws the dock and his questions (fork plan phase 5); a run that is no client never asks.
+	crate::frontier::shell::register();
 	if serves(args, env::var(SERVICE_ENV).as_deref()) {
 		take_calendar_env();
 		// SAFETY: before any thread starts, as `std::env::remove_var` requires.

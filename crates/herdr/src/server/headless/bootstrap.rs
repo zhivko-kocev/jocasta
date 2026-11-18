@@ -92,7 +92,7 @@ pub fn run_server() -> io::Result<()> {
         print_ready_message(&api::socket_path(), &client_socket_path());
         server.app.run_plugin_startup_hooks();
         // Fork seam (FORK.md): Jocasta's service starts beside the server.
-        crate::embed::server_started(api::socket_path(), server.stopper());
+        crate::embed::server_started(server.extension_host(api::socket_path()));
 
         server.run().await
     });

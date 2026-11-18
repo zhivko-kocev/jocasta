@@ -1,11 +1,10 @@
 //! His questions (0434, 0484, 0519, 0552, 0558, 0568, 0578): the close question, his Allow box, Finish's merge-or-PR
-//! choice and the New thread form. Each has a one-time code, random and never listed or broadcast: whatever shows the
-//! question (the herdr popup, 0553) gets the code from the service, reads its texts and posts its answer with the
-//! service's token and that code, and the code dies with the answer, so an answer can't be forged by something that only
-//! has the token (the Allow box's, 0484). Allow, Merge, PR and Stop everything also take three letters only their popup
-//! shows (0558, 0568): herdr's socket can press keys in an open popup, but blind keys can't type letters they can't see.
-//! One reader per question (0578): the first read of its texts gets a reader secret its hold and answer must carry, and a
-//! second read ends it as its fallback, so a program that took the code from the popup's environment gets nothing.
+//! choice and the New thread form. Each has a one-time code, random and never listed or broadcast: only the client shell
+//! it is shown in gets it (fork plan phase 5), its answer names it, and the code dies with the answer, so an answer can't
+//! be forged by something that only has the service's token (the Allow box's, 0484). Allow, Merge, PR and Stop
+//! everything also take three letters only their box shows (0558, 0568): herdr's socket can press keys in a client, but
+//! blind keys can't type letters they can't see. One reader per question (0578): the client it reached; `native.rs`
+//! keeps that rule.
 
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
@@ -15,7 +14,6 @@ use tokio::sync::watch;
 
 use super::herdr::clean_text;
 use crate::frontier::protocol::{PopupForm, PopupView};
-use crate::shared::fsx::same_token;
 
 /// The close question's buttons (0434, 0549); Cancel is the default, Escape's and the answer of no answer.
 pub const STOP: &str = "Stop everything";
@@ -40,7 +38,7 @@ fn random_bytes<const N: usize>() -> [u8; N] {
 	bytes
 }
 
-/// 32 random bytes as hex: a question's code and its reader secret.
+/// 32 random bytes as hex: a question's code.
 fn random_hex() -> String {
 	random_bytes::<32>().iter().fold(String::with_capacity(64), |mut hex, byte| {
 		let _ = write!(hex, "{byte:02x}");
@@ -144,14 +142,13 @@ pub fn new_thread_question(projects: &[String], project: Option<&str>) -> PopupV
 }
 
 /// How a question ended (0578): his answer (`Answered`, his Deny or Cancel included), three wrong codes
-/// (`WrongCodes`), its popup closed without an answer (`Closed`), a second program read it (`SecondReader`), or the
-/// asker stopped waiting (`Withdrawn`: the wait ran out, Jocasta is closing).
+/// (`WrongCodes`), the terminal it showed in left without an answer (`Closed`), or the asker stopped waiting
+/// (`Withdrawn`: the wait ran out, Jocasta is closing).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PopupEnd {
 	Answered,
 	WrongCodes,
 	Closed,
-	SecondReader,
 	Withdrawn,
 }
 
@@ -167,7 +164,6 @@ struct EntryState {
 	open: bool,
 	fields: PopupFields,
 	wrong: u32,
-	reader: Option<String>,
 }
 
 struct Inner {
@@ -229,11 +225,6 @@ impl Popup {
 		locked(&self.inner.state).open
 	}
 
-	/// Whether its texts were read (its reader secret handed out).
-	pub fn read(&self) -> bool {
-		locked(&self.inner.state).reader.is_some()
-	}
-
 	async fn ended(&self) -> (String, PopupEnd) {
 		let mut rx = self.inner.ended.subscribe();
 		match rx.wait_for(Option::is_some).await {
@@ -282,15 +273,6 @@ pub enum AnswerTaken {
 	Exhausted,
 }
 
-/// What `Popups::read` made of a read.
-#[derive(Debug, PartialEq)]
-pub enum PopupRead {
-	/// The first read: the view and the reader secret its hold and answer must carry.
-	First { view: Box<PopupView>, reader: String },
-	/// A second read ended the question as its fallback.
-	Second(Popup),
-}
-
 /// The open questions by code. A code is only ever looked up here; a used or unknown one finds nothing.
 pub struct Popups {
 	entries: Arc<Registry>,
@@ -327,37 +309,6 @@ impl Popups {
 		};
 		locked(&self.entries).push(popup.clone());
 		popup
-	}
-
-	/// The first read of `code`'s texts (0578): the view and the reader secret its hold and answer must carry. A second
-	/// read of an open question ends it as its fallback (`SecondReader`) and gives `Second`; `None` for a code that is
-	/// unknown or already answered.
-	pub fn read(&self, code: &str) -> Option<PopupRead> {
-		let popup = self.find(code)?;
-		let first = {
-			let mut state = locked(&popup.inner.state);
-			if state.reader.is_some() {
-				None
-			} else {
-				let reader = random_hex();
-				state.reader = Some(reader.clone());
-				Some(reader)
-			}
-		};
-		match first {
-			Some(reader) => Some(PopupRead::First { view: Box::new(popup.inner.view.clone()), reader }),
-			None => {
-				popup.settle(&popup.inner.view.fallback, PopupEnd::SecondReader);
-				Some(PopupRead::Second(popup))
-			}
-		}
-	}
-
-	/// Whether `secret` is `code`'s reader secret: its texts were read, and by the one asking.
-	pub fn is_reader(&self, code: &str, secret: Option<&str>) -> bool {
-		let Some(popup) = self.find(code) else { return false };
-		let reader = locked(&popup.inner.state).reader.clone();
-		reader.is_some_and(|reader| same_token(Some(secret.unwrap_or("")), &reader))
 	}
 
 	/// The texts for `code`'s question; `None` for a code that is unknown or already answered.

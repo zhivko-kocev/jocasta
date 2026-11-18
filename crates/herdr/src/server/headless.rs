@@ -137,6 +137,8 @@ enum LoopEvent {
     Api(Box<api::ApiRequestMessage>),
     ServerEvent(ServerEvent),
     RenderRequested,
+    /// Fork seam (FORK.md): a message from Jocasta's service for the clients.
+    Extension(crate::embed::Outbound),
 }
 
 /// Presentation work caused by a server event.
@@ -260,6 +262,9 @@ pub struct HeadlessServer {
     server_event_rx: mpsc::Receiver<ServerEvent>,
     /// Sender for server events (cloned for each client thread).
     server_event_tx: mpsc::Sender<ServerEvent>,
+    /// Fork seam (FORK.md): what Jocasta's service sends to the clients, drained by the loop.
+    extension_rx: mpsc::UnboundedReceiver<crate::embed::Outbound>,
+    extension_tx: mpsc::UnboundedSender<crate::embed::Outbound>,
 }
 
 #[cfg(windows)]
@@ -339,6 +344,7 @@ impl HeadlessServer {
 
         // Channel for server events from client threads.
         let (server_event_tx, server_event_rx) = mpsc::channel(64);
+        let (extension_tx, extension_rx) = mpsc::unbounded_channel();
         #[cfg(windows)]
         spawn_windows_client_accept_thread(listener, should_quit.clone(), server_event_tx.clone())?;
 
@@ -397,20 +403,32 @@ impl HeadlessServer {
             server_stop,
             server_event_rx,
             server_event_tx,
+            extension_rx,
+            extension_tx,
         })
     }
 
-    /// Stops the server as `server stop` does, from any thread of its process (fork seam, FORK.md: Jocasta's service
-    /// stops the server it couldn't start in).
-    pub(crate) fn stopper(&self) -> Arc<dyn Fn() + Send + Sync> {
+    /// What Jocasta's service gets of this server (fork seam, FORK.md): its stop, as `server stop` does, from any thread
+    /// of its process (the service stops the server it couldn't start in), and a way to send to its clients.
+    pub(crate) fn extension_host(
+        &self,
+        api_socket: std::path::PathBuf,
+    ) -> crate::embed::ServerHost {
         let server_stop = self.server_stop.clone();
         let quit_notify = self.server_event_tx.clone();
-        Arc::new(move || {
-            server_stop.request(ShutdownReason::ApiStop {
-                caller: Some("Jocasta's service".to_owned()),
-            });
-            let _ = quit_notify.try_send(ServerEvent::QuitSignal);
-        })
+        let outbound = self.extension_tx.clone();
+        crate::embed::ServerHost::new(
+            api_socket,
+            Arc::new(move || {
+                server_stop.request(ShutdownReason::ApiStop {
+                    caller: Some("Jocasta's service".to_owned()),
+                });
+                let _ = quit_notify.try_send(ServerEvent::QuitSignal);
+            }),
+            Arc::new(move |message| {
+                let _ = outbound.send(message);
+            }),
+        )
     }
 
     /// Runs the headless server event loop until shutdown.
@@ -652,6 +670,7 @@ impl HeadlessServer {
                     },
                     _ = sleep_until_or_pending(next_deadline) => LoopEvent::Timer,
                     _ = self.app.render_notify.notified() => LoopEvent::RenderRequested,
+                    Some(outbound) = self.extension_rx.recv() => LoopEvent::Extension(outbound),
                 }
             };
 
@@ -703,6 +722,7 @@ impl HeadlessServer {
                         needs_render = true;
                     }
                 }
+                LoopEvent::Extension(outbound) => self.send_extension(outbound),
             }
         }
 
@@ -976,15 +996,17 @@ impl HeadlessServer {
         });
         let was_foreground = self.foreground_client_id == Some(client_id);
         let removed = self.clients.remove(&client_id);
-        // Fork seam (FORK.md): Jocasta is told when the last shell client of his left, unless the server is stopping.
+        // Fork seam (FORK.md): Jocasta is told of each shell client that left, and when the last one of his left, unless
+        // the server is stopping.
         let stopping = self.shutting_down || self.should_quit.load(Ordering::Acquire);
-        if !stopping
-            && removed
-                .as_ref()
-                .is_some_and(|client| client.is_shell_client())
-            && !self.clients.values().any(|client| client.is_shell_client())
+        if removed
+            .as_ref()
+            .is_some_and(|client| client.is_shell_client())
         {
-            crate::embed::last_client_left();
+            crate::embed::client_left(client_id);
+            if !stopping && !self.clients.values().any(|client| client.is_shell_client()) {
+                crate::embed::last_client_left();
+            }
         }
         self.tab_geometry_controllers
             .retain(|_, controller_id| *controller_id != client_id);
@@ -1668,6 +1690,20 @@ impl HeadlessServer {
         sent
     }
 
+    /// Sends what Jocasta's service sent (fork seam, FORK.md) as an `EndpointControl` message.
+    fn send_extension(&mut self, outbound: crate::embed::Outbound) {
+        let crate::embed::Outbound { target, kind, data } = outbound;
+        let message = ServerMessage::EndpointControl { kind, data };
+        match target {
+            crate::embed::Target::Client(client_id) => {
+                self.send_to_client(client_id, message);
+            }
+            crate::embed::Target::Shells => {
+                self.send_to_client_shells(message);
+            }
+        }
+    }
+
     /// Sends a client-local side effect to the foreground client only.
     fn send_to_foreground_client(&mut self, msg: ServerMessage) -> bool {
         let Some(client_id) = self.foreground_client_id else {
@@ -2052,6 +2088,8 @@ impl HeadlessServer {
                 self.sync_foreground_client_state();
                 self.claim_unowned_shell_tab_geometry(client_id, true);
                 self.nudge_handoff_panes_on_first_client_attach();
+                // Fork seam (FORK.md): Jocasta's service hears of each shell that attaches.
+                crate::embed::client_joined(client_id);
                 true
             }
             ServerEvent::GraphicsTransmissionResult {
@@ -2676,6 +2714,14 @@ impl HeadlessServer {
                     return false;
                 };
                 client.take_deferred_render() != DeferredRender::None
+            }
+            ServerEvent::ExtensionMessage {
+                client_id,
+                kind,
+                data,
+            } => {
+                crate::embed::client_message(client_id, &kind, &data);
+                false
             }
             ServerEvent::QuitSignal => {
                 // The quit check at the top of the loop handles this.

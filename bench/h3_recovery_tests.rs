@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use super::{
 	FOLDER_SPACING_MS, FolderState, Picked, closed_itself, end_restart, folder_key, folders_intact, herdr_recovery,
-	omp_back, pane_back, pick_pane, same_pane_ids, session_parses, thread_panes,
+	omp_back, pane_back, pick_pane, same_pane_ids, session_parses,
 };
 use crate::lib::proctree::ProcessInfo;
 use jocasta::frontier::server::herdr::{AgentState, PaneInfo};
@@ -152,22 +152,6 @@ fn recovered_when_every_workspace_that_had_omp_has_omp_again_under_any_pane_id_0
 		&before,
 		&[pane("a", Some("omp"), AgentState::Idle, "w1", None), pane("c", None, AgentState::Unknown, "w3", None)]
 	));
-}
-
-#[test]
-fn the_plugins_today_pane_is_no_thread_left_out_of_the_panes_h3_compares_0553() {
-	let labeled = |pane: PaneInfo, label: &str| PaneInfo { label: Some(label.to_owned()), ..pane };
-	let listed = [
-		labeled(pane("w1:p1", Some("omp"), AgentState::Idle, "w1", None), "boss"),
-		labeled(pane("w1:p2", None, AgentState::Unknown, "w1", None), "today"),
-		labeled(pane("w2:p1", Some("omp"), AgentState::Working, "w2", None), "today"),
-	];
-	let ids: Vec<String> = thread_panes(&listed).into_iter().map(|p| p.pane_id).collect();
-	assert_eq!(ids, vec!["w1:p1", "w2:p1"]);
-	// today opened again under a new id doesn't make the panes differ.
-	let reopened = PaneInfo { pane_id: "w1:p3".to_owned(), ..listed[1].clone() };
-	let after = thread_panes(&[listed[0].clone(), reopened, listed[2].clone()]);
-	assert!(same_pane_ids(&thread_panes(&listed), &after));
 }
 
 #[test]

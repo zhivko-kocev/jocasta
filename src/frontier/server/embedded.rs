@@ -5,6 +5,7 @@
 //! the single-instance lock as the plain service did (taking over a hung holder, 0534) and starts the push-to-talk hook
 //! (0556). herdr's own signal handling ends the server; the service's stop follows.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -14,6 +15,7 @@ use tokio::runtime::Runtime;
 use crate::frontier::server::herdr::herdr_pipe;
 use crate::frontier::server::instance::{Instance, InstanceOptions, take_instance};
 use crate::frontier::server::launch::service_state;
+use crate::frontier::server::native::Native;
 use crate::frontier::server::ptt::start_push_to_talk;
 use crate::frontier::server::server::{JocastaServer, ServerOptions, start_server};
 use crate::shared::herdr_session::herdr_session;
@@ -36,6 +38,8 @@ struct Running {
 	runtime: Runtime,
 	/// The server once it listens; `None` while it starts or when it couldn't.
 	server: Arc<OnceLock<JocastaServer>>,
+	/// herdr's client shells: there from the start, so no shell that attaches early is missed.
+	shell: Arc<Native>,
 	/// The task that runs the service until it stops.
 	task: tokio::task::JoinHandle<()>,
 }
@@ -52,9 +56,10 @@ impl ServerExtension for EmbeddedService {
 			Ok(runtime) => runtime,
 			Err(error) => return failed(&error.to_string(), &stop),
 		};
+		let shell = Native::new(host, runtime.handle().clone());
 		let server = Arc::new(OnceLock::new());
-		let task = runtime.spawn(run(session, socket, stop, Arc::clone(&server)));
-		self.running = Some(Running { runtime, server, task });
+		let task = runtime.spawn(run(session, socket, stop, Arc::clone(&server), Arc::clone(&shell)));
+		self.running = Some(Running { runtime, server, shell, task });
 	}
 
 	fn last_client_left(&mut self) {
@@ -66,7 +71,7 @@ impl ServerExtension for EmbeddedService {
 	}
 
 	fn stopped(&mut self) {
-		let Some(Running { runtime, server, task }) = self.running.take() else { return };
+		let Some(Running { runtime, server, task, .. }) = self.running.take() else { return };
 		runtime.block_on(async move {
 			// herdr's server is gone: Jocasta closes as one, unasked (a stop already under way is joined).
 			if let Some(server) = server.get() {
@@ -78,6 +83,28 @@ impl ServerExtension for EmbeddedService {
 			}
 		});
 		runtime.shutdown_timeout(Duration::from_secs(1));
+	}
+
+	fn client_joined(&mut self, client: u64, pid: Option<u32>) {
+		if let Some(running) = &self.running {
+			running.shell.joined(client, pid);
+		}
+	}
+
+	fn client_left(&mut self, client: u64) {
+		if let Some(running) = &self.running {
+			running.shell.left(client);
+		}
+	}
+
+	fn client_message(&mut self, client: u64, kind: &str, data: &str) {
+		if let Some(running) = &self.running {
+			running.shell.message(client, kind, data);
+		}
+	}
+
+	fn action(&mut self, action: &str, pane_id: Option<&str>) -> bool {
+		self.running.as_ref().is_some_and(|running| running.shell.action(action, pane_id))
 	}
 }
 
@@ -99,14 +126,19 @@ async fn run(
 	socket: String,
 	stop: Arc<dyn Fn() + Send + Sync>,
 	published: Arc<OnceLock<JocastaServer>>,
+	shell: Arc<Native>,
 ) {
 	let instance = match take_lock().await {
 		Ok(Some(instance)) => instance,
 		Ok(None) => return failed("another Jocasta service is running; close it first", &stop),
 		Err(error) => return failed(&error.to_string(), &stop),
 	};
-	let options =
-		ServerOptions { herdr_session: Some(session), herdr_socket: Some(socket), ..ServerOptions::default() };
+	let options = ServerOptions {
+		herdr_session: Some(session),
+		herdr_socket: Some(socket),
+		shell: Some(Arc::clone(&shell)),
+		..ServerOptions::default()
+	};
 	let server = match start_server(options).await {
 		Ok(server) => server,
 		Err(error) => {
@@ -114,16 +146,19 @@ async fn run(
 			return failed(&error.to_string(), &stop);
 		}
 	};
+	shell.attach(Arc::new(server.clone()));
 	let _ = published.set(server.clone());
 	// A start that fails after the server listened (LC-10) stops what it started, herdr's server among its steps (the
-	// panes' processes listed first, 0486), so the service says it is closing before herdr's client ends; the
-	// in-process stop after it is for a herdr that didn't take its stop. The service's own start logged why.
+	// panes' processes listed first, 0486), so the service says it is closing before herdr's client ends; herdr's own
+	// stop follows here, once that stop ended. The failure is marked before its stop begins: the stop's end wakes this
+	// task too, which then aborts the watcher. The service's own start logged why.
 	let failed = server.clone();
-	let stop_herdr = Arc::clone(&stop);
+	let start_failed = Arc::new(AtomicBool::new(false));
+	let marked = Arc::clone(&start_failed);
 	let watching = tokio::spawn(async move {
 		if failed.ready().await.is_err() {
+			marked.store(true, Ordering::SeqCst);
 			failed.stop().await;
-			stop_herdr();
 		}
 	});
 	// Right Ctrl toggles omp's dictation in the boss pane (0556).
@@ -134,6 +169,9 @@ async fn run(
 	});
 	server.stopped().await;
 	watching.abort();
+	if start_failed.load(Ordering::SeqCst) {
+		stop();
+	}
 	if let Some(ptt) = ptt {
 		ptt.stop().await;
 	}

@@ -195,7 +195,8 @@ async fn deny_writes_pull_requests_and_refuses_later_pushes_are_refused_unasked_
 async fn no_answer_in_the_wait_or_a_popup_closed_unanswered_refuses_and_writes_nothing_0613() {
 	let j = temp_jocasta();
 	let project = demo_project(j.root(), "demo").await;
-	for (reply, said) in [(Reply::Never, "No answer within"), (Reply::Answer(false, PopupEnd::Closed), "popup closed")]
+	for (reply, said) in
+		[(Reply::Never, "No answer within"), (Reply::Answer(false, PopupEnd::Closed), "terminal closed")]
 	{
 		let box_ = asking(reply);
 		let main = project.main_path.clone();

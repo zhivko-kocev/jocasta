@@ -7,6 +7,12 @@ use std::process::{Command, Stdio};
 use super::FolderProcess;
 use crate::shared::env;
 
+/// The system's own programs by their full paths: a process whose PATH holds none of them (a sandbox's, a stripped
+/// service environment) still reads and signals processes.
+const PS: &str = "/bin/ps";
+const LSOF: &str = "/usr/sbin/lsof";
+const KILL: &str = "/bin/kill";
+
 /// `program args` run to its end with stdout captured (and stderr dropped), as text; empty when it can't run.
 fn output_of(program: &str, args: &[&str], c_locale: bool) -> String {
 	let mut command = Command::new(program);
@@ -25,7 +31,7 @@ pub fn alive(pid: u32) -> bool {
 	if cfg!(target_os = "linux") {
 		return std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| !is_ended(&stat));
 	}
-	let state = output_of("ps", &["-o", "stat=", "-p", &pid.to_string()], true);
+	let state = output_of(PS, &["-o", "stat=", "-p", &pid.to_string()], true);
 	let state = state.trim();
 	!state.is_empty() && !state.starts_with('Z')
 }
@@ -38,7 +44,7 @@ pub fn starts(pids: &[u32]) -> HashMap<u32, Option<f64>> {
 	}
 	let mut starts: HashMap<u32, Option<f64>> = pids.iter().map(|pid| (*pid, None)).collect();
 	let list = pids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
-	for line in output_of("ps", &["-o", "pid=,stat=,lstart=", "-p", &list], true).lines() {
+	for line in output_of(PS, &["-o", "pid=,stat=,lstart=", "-p", &list], true).lines() {
 		let mut parts = line.split_whitespace();
 		let Some(pid) = parts.next().and_then(|pid| pid.parse::<u32>().ok()) else { continue };
 		if parts.next().is_none_or(|state| state.starts_with('Z')) {
@@ -80,7 +86,7 @@ fn linux_start(pid: u32) -> Option<f64> {
 pub fn parents(groups: Option<&mut HashMap<u32, u32>>) -> BTreeMap<u32, u32> {
 	let mut parents = BTreeMap::new();
 	let mut groups = groups;
-	for line in output_of("ps", &["-A", "-o", "pid=,ppid=,pgid="], false).lines() {
+	for line in output_of(PS, &["-A", "-o", "pid=,ppid=,pgid="], false).lines() {
 		let mut numbers = line.split_whitespace().map(|field| field.parse::<u32>().ok());
 		let Some(Some(pid)) = numbers.next() else { continue };
 		let Some(Some(ppid)) = numbers.next() else { continue };
@@ -120,7 +126,7 @@ fn linux_cwds() -> Vec<FolderProcess> {
 fn lsof_cwds() -> Vec<FolderProcess> {
 	let mut found = Vec::new();
 	let mut current: Option<(u32, String)> = None;
-	for line in output_of("lsof", &["-w", "-d", "cwd", "-F", "pcn"], false).lines() {
+	for line in output_of(LSOF, &["-w", "-d", "cwd", "-F", "pcn"], false).lines() {
 		let field = line.get(1..).unwrap_or("");
 		if line.starts_with('p') {
 			current = field.parse().ok().map(|pid| (pid, "?".to_owned()));
@@ -138,7 +144,7 @@ fn lsof_cwds() -> Vec<FolderProcess> {
 }
 
 fn signal(args: &[&str]) {
-	let mut command = Command::new("kill");
+	let mut command = Command::new(KILL);
 	command.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
 	env::apply_to(&mut command);
 	let _ = command.status();

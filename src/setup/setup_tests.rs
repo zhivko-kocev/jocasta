@@ -336,22 +336,6 @@ fn other(undo: Undo) -> SetupUndo {
 	SetupUndo::Other(undo)
 }
 
-/// The basic string after `key` (`command = "`) in the first line that isn't a comment, read back as TOML reads it.
-fn toml_string(text: &str, key: &str) -> String {
-	let line = text.lines().find(|l| !l.trim_start().starts_with('#') && l.contains(key)).unwrap();
-	let rest = &line[line.find(key).unwrap() + key.len()..];
-	let mut value = String::new();
-	let mut chars = rest.chars();
-	while let Some(c) = chars.next() {
-		match c {
-			'"' => return value,
-			'\\' => value.push(chars.next().unwrap()),
-			c => value.push(c),
-		}
-	}
-	panic!("unterminated string in {line}");
-}
-
 #[tokio::test]
 async fn a_fresh_machine_the_diff_names_every_file_and_n_writes_nothing() {
 	let h = Harness::new();
@@ -428,28 +412,9 @@ async fn y_writes_every_file_marks_each_migration_runs_herdrs_omp_integration_an
 		}})
 	);
 	assert_eq!(read(&h.omp_config()), asset_text("omp-config.yml"));
-	let plugin_dir = h.plugin_dir();
-	assert_eq!(
-		h.ran(),
-		[
-			strings(&["herdr.exe", "integration", "install", "omp"]),
-			vec!["herdr.exe".to_owned(), "plugin".to_owned(), "link".to_owned(), s(&plugin_dir)],
-		]
-	);
-	// The plugin's manifest names this Jocasta's command (0553).
-	let manifest = read(&plugin_dir.join("herdr-plugin.toml"));
-	assert!(manifest.contains("id = \"jocasta\"\n"));
-	assert!(manifest.contains("command = [\"C:\\\\Jocasta\\\\jocasta.exe\", \"plugin\", \"today\"]\n"));
-	assert!(manifest.contains("command = [\"C:\\\\Jocasta\\\\jocasta.exe\", \"plugin\", \"ask\"]\n"));
-	assert!(
-		!manifest.contains("{{jocasta}}") || manifest.lines().all(|l| !l.contains("{{jocasta}}") || l.starts_with('#'))
-	);
-	// The HUD's command is a TOML string that prints the data folder's hud.txt.
-	let toml = read(&h.herdr_toml());
-	let data = s(&h.paths.data_dir);
-	let hud = if cfg!(windows) { format!("type \"{data}\\hud.txt\"") } else { format!("cat '{data}/hud.txt'") };
-	assert_eq!(toml_string(&toml, "type = \"command\", command = \""), hud);
-	assert!(toml.contains("{ type = \"datetime\""));
+	assert_eq!(h.ran(), [strings(&["herdr.exe", "integration", "install", "omp"])]);
+	// herdr's config as shipped: Jocasta draws the HUD itself, beside herdr's clock.
+	assert_eq!(read(&h.herdr_toml()), asset_text("herdr.toml"));
 	assert_eq!(
 		yaml(&read(&h.paths.jocasta_config_dir.join("jocasta.yaml"))),
 		json!({"frontier": {"quietHours": {"from": "22:00", "to": "07:00"}}, "pollers": {"github": {"enabled": true}}})
@@ -479,15 +444,15 @@ async fn y_writes_every_file_marks_each_migration_runs_herdrs_omp_integration_an
 			"0010-omp-keybindings.json",
 			"0011-omp-watchdog.json",
 			"0012-omp-lsp.json",
-			"0014-herdr-plugin.json",
 			"0015-omp-secrets.json",
 			"0017-whiteboard-boss-only.json",
+			"0018-herdr-plugin-gone.json",
 		]
 	);
 
 	let again = h.setup(Some("y")).await;
 	assert_eq!(again.text, IN_PLACE);
-	assert_eq!(h.ran().len(), 2);
+	assert_eq!(h.ran().len(), 1);
 }
 
 #[tokio::test]
@@ -662,13 +627,13 @@ fn the_terminal_scheme_comes_from_the_one_palette_file_byte_for_byte_what_setup_
 #[tokio::test]
 async fn a_herdr_toml_that_differs_from_the_shipped_template_shows_its_diff_and_is_replaced_only_after_y() {
 	let h = Harness::new();
-	let wanted = herdr_config(&asset_text("herdr.toml"), &h.paths.data_dir, None);
-	let old = wanted.replacen("interval_seconds = 5", "interval_seconds = 2", 1);
+	let wanted = asset_text("herdr.toml");
+	let old = wanted.replacen("agent_panel_sort = \"priority\"", "agent_panel_sort = \"recent\"", 1);
 	put(&h.herdr_toml(), &old);
 	let no = h.setup(Some("n")).await;
 	assert!(no.text.contains(&format!("Jocasta's herdr config, to the shipped template: {}", s(&h.herdr_toml()))));
-	assert!(has_line(&no.text, r"^- .*interval_seconds = 2"));
-	assert!(has_line(&no.text, r"^\+ .*interval_seconds = 5"));
+	assert!(has_line(&no.text, r#"^- .*agent_panel_sort = "recent""#));
+	assert!(has_line(&no.text, r#"^\+ .*agent_panel_sort = "priority""#));
 	assert_eq!(read(&h.herdr_toml()), old);
 	let yes = h.setup(Some("y")).await;
 	assert!(yes.text.contains(&format!("wrote {}", s(&h.herdr_toml()))));
@@ -705,9 +670,12 @@ async fn a_failed_migration_stops_the_rest_and_says_why_the_ones_before_it_are_m
 	});
 	let Out { code, text, .. } = h.setup(Some("y")).await;
 	assert_eq!(code, 1);
-	assert!(text.contains(
-		"jocasta setup: 0004-herdr-integration (herdr's omp integration (`herdr integration install omp`)) failed: herdr integration install omp exited 3: no omp found; the 8 changes after it wait."
-	));
+	assert!(
+		text.contains(
+			"jocasta setup: 0004-herdr-integration (herdr's omp integration (`herdr integration install omp`)) failed: herdr integration install omp exited 3: no omp found; the 7 changes after it wait."
+		),
+		"{text}"
+	);
 	assert!(h.global_mcp().exists());
 	assert!(!h.herdr_toml().exists());
 	assert!(h.marker("0003-omp-settings").is_some());
@@ -893,10 +861,6 @@ async fn setup_undo_names_what_setup_added_from_its_markers_only_a_step_without_
 	);
 	let Value::Object(lsp_keys) = json!({"idleTimeoutMs": 300_000}) else { unreachable!() };
 	assert!(undo.contains(&other(Undo::Keys { path: s(&h.lsp()), keys: lsp_keys, created: true })));
-	// The plugin is unlinked, then its folder goes (0553).
-	let plugin_dir = h.plugin_dir();
-	assert!(undo.contains(&other(Undo::HerdrPlugin { id: "jocasta".to_owned(), path: s(&plugin_dir) })));
-	assert!(undo.contains(&other(Undo::Dir { path: s(&plugin_dir), file: Some("herdr-plugin.toml".to_owned()) })));
 	// omp's config.yml stays: its keys are his settings.
 	let all: Vec<String> = undo.iter().map(|u| u.to_json().to_string()).collect();
 	assert!(all.iter().all(|u| !u.contains("config.yml")));
@@ -916,14 +880,13 @@ async fn herdrs_omp_integration_that_was_there_before_setup_isnt_setups_to_undo_
 	let integration = other(Undo::HerdrIntegration { path: s(&extension) });
 	put(&extension, "// another install's\n");
 	h.setup(Some("y")).await;
-	let link = vec!["herdr.exe".to_owned(), "plugin".to_owned(), "link".to_owned(), s(&h.plugin_dir())];
-	assert_eq!(h.ran(), std::slice::from_ref(&link));
+	assert!(h.ran().is_empty());
 	assert!(!h.undo(false).contains(&integration));
 
 	fs::remove_file(&extension).unwrap();
 	remove_tree(&markers_dir(&h.paths.jocasta_config_dir)).unwrap();
 	h.setup(Some("y")).await;
-	assert_eq!(h.ran(), [link.clone(), strings(&["herdr.exe", "integration", "install", "omp"]), link]);
+	assert_eq!(h.ran(), [strings(&["herdr.exe", "integration", "install", "omp"])]);
 	assert!(h.undo(false).contains(&integration));
 }
 
@@ -1097,26 +1060,22 @@ async fn setup_toast_one_line_when_setup_has_changes_waiting_none_when_everythin
 	assert!(!omp_agent_dir(None).exists());
 }
 
-#[test]
-fn herdr_config_writes_the_huds_command_per_platform_as_a_toml_string_and_leaves_comments_alone() {
-	let template = "# {{hud}}\ncommand = \"{{hud}}\"\n";
-	let windows = herdr_config(template, Path::new("C:\\D\\da\"ta"), Some(true));
-	assert!(windows.starts_with("# {{hud}}\n"));
-	assert_eq!(toml_string(&windows, "command = \""), "type \"C:\\D\\da\"ta\\hud.txt\"");
-	let posix = herdr_config(template, Path::new("/home/x/it's"), Some(false));
-	assert_eq!(toml_string(&posix, "command = \""), "cat '/home/x/it'\\''s/hud.txt'");
-	// The command a POSIX shell runs prints the file.
-	#[cfg(unix)]
-	{
-		let root = temp_dir("herdr-config-hud");
-		let data = root.path().join("it's");
-		fs::create_dir(&data).unwrap();
-		fs::write(data.join("hud.txt"), "2 awaiting you\n").unwrap();
-		let command = format!("cat '{}/it'\\''s/hud.txt'", root.path().display());
-		assert_eq!(toml_string(&herdr_config(template, &data, Some(false)), "command = \""), command);
-		let printed = std::process::Command::new("sh").args(["-c", &command]).output().unwrap();
-		assert_eq!(String::from_utf8_lossy(&printed.stdout), "2 awaiting you\n");
-	}
+#[tokio::test]
+async fn the_old_herdr_plugins_folder_and_migration_14s_marker_go_after_y_and_uninstall_never_looks_for_the_plugin() {
+	let h = Harness::new();
+	let marker = markers_dir(&h.paths.jocasta_config_dir).join("0014-herdr-plugin.json");
+	put(&h.plugin_dir().join("herdr-plugin.toml"), "id = \"jocasta\"\n");
+	let undo = json!({"kind": "herdr-plugin", "id": "jocasta", "path": s(&h.plugin_dir())});
+	put(&marker, &json!({"fingerprint": "f", "undo": [undo], "appliedAt": "2026-11-10T00:00:00Z"}).to_string());
+	let no = h.setup(Some("n")).await;
+	assert!(no.text.contains("the `jocasta` herdr plugin is gone"), "{}", no.text);
+	assert!(no.text.contains(&format!("- {}", s(&h.plugin_dir()))));
+	assert!(no.text.contains(&format!("- {}", s(&marker))));
+	assert!(h.plugin_dir().exists() && marker.exists());
+	h.setup(Some("y")).await;
+	assert!(!h.plugin_dir().exists() && !marker.exists());
+	assert!(h.marker("0018-herdr-plugin-gone").is_some());
+	assert!(h.undo(false).iter().all(|item| !item.to_json().to_string().contains("herdr-plugin")));
 }
 
 #[tokio::test]
@@ -1236,7 +1195,8 @@ async fn without_herdr_setup_ends_by_saying_so_never_done_even_with_its_integrat
 	assert!(text.ends_with(HERDR_LINE));
 	assert!(!text.contains("Done: run `jocasta`"));
 	assert_eq!(text.split(HERDR_LINE).count(), 3);
-	assert_eq!(h.setup_without_herdr(Some("y")).await.text, HERDR_LINE);
+	// Nothing else waits on herdr: the herdr config is written without it, and nothing is said done.
+	assert_eq!(h.setup_without_herdr(Some("y")).await.text, "Nothing to set up: everything Jocasta adds is in place.");
 }
 
 #[tokio::test]
@@ -1245,8 +1205,8 @@ async fn setup_reloads_herdr_after_writing_herdr_toml_and_says_so() {
 	let reloads = Arc::new(Mutex::new(Vec::new()));
 	h.reload = Some(reloader(0, "", reloads.clone()));
 	let first = h.setup(Some("y")).await;
-	// Once for the plugin's link, once for the config, with the line.
-	assert_eq!(*reloads.lock().unwrap(), ["reload", "reload"]);
+	// Once for the config, with the line.
+	assert_eq!(*reloads.lock().unwrap(), ["reload"]);
 	assert!(first.text.contains("herdr reloaded its config.\nDone: run `jocasta` to open Jocasta."));
 	reloads.lock().unwrap().clear();
 	let dir = h.own_assets();

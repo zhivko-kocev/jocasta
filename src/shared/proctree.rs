@@ -216,6 +216,22 @@ pub fn process_id_of(pid: u32) -> Option<ProcessId> {
 	process_start(pid).map(|start| ProcessId { pid, start })
 }
 
+/// Whether `pid` runs under `ancestor` (its child, grandchild, …) by the parent links read now. A process whose parent
+/// ended before the read is cut off there (Windows keeps the dead parent's pid, POSIX moves it under init), so a
+/// process started detached reads as not under.
+pub fn descends_from(pid: u32, ancestor: u32) -> bool {
+	let parents = os::parents(None);
+	let mut at = pid;
+	for _ in 0..parents.len() {
+		match parents.get(&at) {
+			Some(&parent) if parent == ancestor => return true,
+			Some(&parent) if parent != at && parent != 0 => at = parent,
+			_ => return false,
+		}
+	}
+	false
+}
+
 /// A thread pane's omp as Jocasta remembers it (0490), each process by pid and start: `omp` the process herdr started
 /// for the pane (on Windows Bun's `omp.exe` shim) and its children (the real omp), `tree` those and everything that ran
 /// under them when read.

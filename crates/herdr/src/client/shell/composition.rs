@@ -233,6 +233,13 @@ impl ClientShellState {
                 workspace_drop_indicator_row,
             },
         );
+        // Fork seam (FORK.md): Jocasta's dock; without one it can't have his keys.
+        self.hits.dock = layout.dock;
+        if layout.dock.is_empty() {
+            self.dock_focused = false;
+        } else {
+            crate::embed::shell_draw_dock(&mut buffer, layout.dock, self.dock_focused);
+        }
         self.hits.panes = surface
             .panes
             .iter()
@@ -698,6 +705,15 @@ impl ClientShellState {
                 rendered.cursor
             };
             frame.replace_from_ratatui_buffer_preserving_effects(&composed, cursor);
+        }
+        // Fork seam (FORK.md): Jocasta's question, over everything.
+        if crate::embed::shell_asking() {
+            let mut composed = frame.to_ratatui_buffer()?;
+            occlusion.cover(crate::embed::shell_draw_question(
+                &mut composed,
+                Rect::new(0, 0, cols, rows),
+            ));
+            frame.replace_from_ratatui_buffer_preserving_effects(&composed, None);
         }
         if let Some(ClientShellOverlay::Help(help)) = self.overlay.as_mut() {
             help.scroll = help.scroll.min(self.hits.help_max_scroll);

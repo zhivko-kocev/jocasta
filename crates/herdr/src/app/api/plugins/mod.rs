@@ -227,6 +227,13 @@ impl App {
         action_id: String,
         selected_text: Option<String>,
     ) -> Result<(), String> {
+        // Fork seam (FORK.md): Jocasta's own actions (`jocasta.<action>`) go to its service, with the focused pane.
+        if action_id.starts_with(crate::embed::KIND_PREFIX) {
+            let focused = self.current_plugin_context("keybinding").focused_pane_id;
+            if crate::embed::plugin_action(&action_id, focused.as_deref()) {
+                return Ok(());
+            }
+        }
         self.refresh_installed_plugins()
             .map_err(|err| format!("failed to load plugin registry: {err}"))?;
         let (plugin, action) = self

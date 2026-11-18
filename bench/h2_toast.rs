@@ -15,7 +15,7 @@
 //! Conditions (0576): `host` (the default), the service reading each thread's state from omp's collab host, polled
 //! every 1 s (0547); `herdr`, the sandbox service started with `JOCASTA_HOSTS=off`, so it ignores omp's host registry
 //! and falls back to herdr's events and its tick. H2 reads the service's switch from `/health` and refuses a mismatch.
-//! Trials come from threads he starts (the boss's and the today pane left out), or with `--start <project>` from
+//! Trials come from threads he starts (the boss's left out), or with `--start <project>` from
 //! threads H2 starts as `jocasta thread new` does and reads as `jocasta thread list` does (no Allow, 0544, 0576; each
 //! brief makes omp ask one question, so a model runs: VM only): then only those threads' panes are trials (a listed
 //! thread's pane is the one in its branch's worktree), and the next thread starts once the last one's notification
@@ -40,7 +40,7 @@ use crate::lib::sessions::{ask_times, plan_ready_times};
 use crate::lib::stats::{BootstrapOptions, summarize};
 use crate::lib::threads::{ThreadLine, list_threads, start_thread};
 use jocasta::frontier::protocol::js_number_text;
-use jocasta::frontier::server::boss::{BOSS_WORKSPACE, is_today_pane};
+use jocasta::frontier::server::boss::BOSS_WORKSPACE;
 use jocasta::frontier::server::herdr::{AgentState, Herdr, PaneInfo};
 use jocasta::frontier::server::launch::OnOff;
 use jocasta::shared::clock::now_ms;
@@ -287,7 +287,7 @@ impl Recorder<'_> {
 			let trial = if self.project.is_some() {
 				self.ours.iter().any(|thread| thread.pane_id.as_deref() == Some(pane.pane_id.as_str()))
 			} else {
-				Some(pane.workspace_id.as_str()) != boss && !is_today_pane(pane)
+				Some(pane.workspace_id.as_str()) != boss
 			};
 			if let (true, Some(path)) = (trial, &pane.session_path) {
 				upsert(&mut paths, &pane.pane_id, path.to_string_lossy().into_owned());
@@ -342,7 +342,7 @@ fn print_h2_plan(args: &BenchArgs, condition: &str, minutes: f64, project: Optio
 			"start each trial as `jocasta thread new {project}` does (no Allow; model call: VM only), the next after the last one's notification or {} min: \"{ASK_BRIEF}\"",
 			js_number_text(TRIAL_LIMIT_MS / 60_000.0)
 		),
-		None => "trials come from threads started by hand (the boss's and the today pane left out)".to_owned(),
+		None => "trials come from threads started by hand (the boss's left out)".to_owned(),
 	};
 	print_plan(
 		"H2 toast latency",

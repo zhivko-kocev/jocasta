@@ -550,4 +550,4 @@ pub fn render(state: &TodayState, now: i64, width: usize, height: usize) -> Fram
 
 #[cfg(test)]
 #[path = "view_tests.rs"]
-mod tests;
+pub(crate) mod tests;

@@ -24,18 +24,9 @@ use crate::shared::paths::data_dir;
 /// The boss's workspace label (0392, 0404).
 pub const BOSS_WORKSPACE: &str = "Jocasta";
 
-/// The `today` pane's label: the plugin pane's title in `config/herdr-plugin/herdr-plugin.toml` (0553).
-const TODAY_LABEL: &str = "today";
-
 /// Whether `pane` has an agent in it (a name that is not empty).
 fn has_agent(pane: &PaneInfo) -> bool {
 	pane.agent.as_deref().is_some_and(|agent| !agent.is_empty())
-}
-
-/// The herdr plugin's `today` pane (0553): plugin-owned, no agent in it, never the boss or a thread, and never adopted
-/// as either.
-pub fn is_today_pane(pane: &PaneInfo) -> bool {
-	pane.label.as_deref() == Some(TODAY_LABEL) && !has_agent(pane)
 }
 
 /// The boss pane's folder, `<data>/home`.
@@ -369,9 +360,7 @@ async fn boss_workspaces(herdr: &dyn Herdr) -> Result<Vec<WorkspaceInfo>> {
 
 /// The boss's pane in `workspace_id`: one Jocasta started, else one running omp, else the workspace's only pane.
 async fn in_boss(herdr: &dyn Herdr, workspace_id: &str, launched: &LaunchedPanes) -> Result<Option<PaneInfo>> {
-	// `today` beside the boss is never taken for it (0553).
-	let panes: Vec<PaneInfo> =
-		herdr.panes().await?.into_iter().filter(|p| p.workspace_id == workspace_id && !is_today_pane(p)).collect();
+	let panes: Vec<PaneInfo> = herdr.panes().await?.into_iter().filter(|p| p.workspace_id == workspace_id).collect();
 	let found = panes
 		.iter()
 		.find(|p| launched.has(&p.pane_id))

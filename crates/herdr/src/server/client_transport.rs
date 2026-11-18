@@ -394,6 +394,12 @@ impl ClientWriterQueue {
 /// Internal event sent from client transport threads to the main event loop.
 #[derive(Debug)]
 pub(crate) enum ServerEvent {
+    /// Fork seam (FORK.md): a client's message for Jocasta's service.
+    ExtensionMessage {
+        client_id: u64,
+        kind: String,
+        data: String,
+    },
     /// A new client completed the handshake.
     ClientConnected {
         client_id: u64,
@@ -886,6 +892,8 @@ pub(crate) fn handle_client_handshake(
         surface_scroll,
     )) = shell_options
     {
+        // Fork seam (FORK.md): the shell's peer process, for Jocasta's service once it attaches.
+        crate::embed::note_peer(client_id, crate::embed::peer_pid(&stream));
         ServerEvent::ClientShellConnected {
             client_id,
             surface_cols: client_cols,
@@ -1344,6 +1352,16 @@ fn client_read_loop_with_endpoint_controls(
                 ServerEvent::ClientShellPresentationSync {
                     client_id,
                     token: data,
+                }
+            }
+            // Fork seam (FORK.md): Jocasta's messages go to its service.
+            ClientMessage::EndpointControl { kind, data }
+                if kind.starts_with(crate::embed::KIND_PREFIX) =>
+            {
+                ServerEvent::ExtensionMessage {
+                    client_id,
+                    kind,
+                    data,
                 }
             }
             ClientMessage::EndpointControl { kind, data } => {

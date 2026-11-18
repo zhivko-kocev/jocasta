@@ -14,7 +14,7 @@ fn at(y: i32, month: u32, d: u32, h: u32, m: u32) -> i64 {
 	Local.with_ymd_and_hms(y, month, d, h, m, 0).single().expect("a real local time").timestamp_millis()
 }
 
-fn now() -> i64 {
+pub(crate) fn now() -> i64 {
 	at(2026, 11, 9, 14, 30)
 }
 
@@ -72,7 +72,7 @@ fn needs(kind: NeedsYouKind, text: &str) -> NeedsYou {
 	}
 }
 
-fn today() -> Today {
+pub(crate) fn today() -> Today {
 	let mut sync = entry("14:00", "Client-a sync");
 	sync.end = Some("15:00".to_string());
 	sync.url = Some("https://meet.example.org/a".to_string());

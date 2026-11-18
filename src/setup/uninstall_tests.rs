@@ -220,7 +220,6 @@ impl Machine {
 				Ok(())
 			}),
 			processes_under: None,
-			start_herdr: None,
 		}
 	}
 
@@ -256,7 +255,6 @@ async fn a_running_jocasta_is_refused_and_n_removes_nothing() {
 	assert_eq!(asked, ["Remove these? [y/N] "]);
 	let agent = &m.setup.omp_agent_dir;
 	assert!(text.contains("herdr session `jocasta-test` (stopped, its panes closed, then deleted)"));
-	assert!(text.contains("the `jocasta` herdr plugin (unlinked from herdr)"));
 	assert!(text.contains(&format!("MCP server \"jocasta\" in {}", agent.join("mcp.json").display())));
 	assert!(text.contains(&format!(
 		"Jocasta's mise config for a project: {}",
@@ -288,8 +286,6 @@ async fn y_removes_what_install_and_setup_added_and_keeps_his_own_the_data_folde
 	assert_eq!(
 		m.calls(),
 		[
-			// The plugin goes first, while the session can still run the server unlinking needs (0558).
-			"herdr.exe --session jocasta-test plugin unlink jocasta".to_owned(),
 			"herdr.exe session stop jocasta-test".to_owned(),
 			"herdr.exe session delete jocasta-test".to_owned(),
 			"credential jocasta/calendar-ical".to_owned(),
@@ -441,39 +437,6 @@ async fn a_step_that_fails_is_said_and_the_rest_still_go_the_exit_code_says_so()
 	assert!(text.contains("herdr session delete jocasta-test exited 1: session is running"));
 	assert!(text.ends_with("Done, except 1 thing above; remove it by hand."));
 	assert!(!m.setup.jocasta_config_dir.exists());
-}
-
-#[tokio::test]
-async fn unlink_takes_herdrs_real_replies_no_server_starts_one_then_a_plugin_it_doesnt_have_was_already_unlinked() {
-	let m = Machine::new().await;
-	let started = Arc::new(AtomicBool::new(false));
-	let mut unlinking = m.deps(ServiceState::Down);
-	let flag = started.clone();
-	unlinking.start_herdr = Some(Arc::new({
-		let started = started.clone();
-		move || {
-			started.store(true, Ordering::SeqCst);
-			Box::pin(async { Ok(()) })
-		}
-	}));
-	unlinking.run = run_with(
-		move |argv| {
-			if !argv.iter().any(|word| word == "unlink") {
-				return (0, String::new());
-			}
-			// herdr 0.9.5's replies, as seen on Windows (2026-11-09).
-			if flag.load(Ordering::SeqCst) {
-				(0, "{\"id\":\"cli:plugin\",\"result\":{\"plugin_id\":\"jocasta\",\"removed\":false,\"type\":\"plugin_unlinked\"}}\n".to_owned())
-			} else {
-				(1, "{\"id\":\"cli:plugin\",\"error\":{\"code\":\"server_not_running\",\"message\":\"no herdr server is running at C:\\\\h\\\\herdr.sock; run `herdr` to start or attach it\"}}\n".to_owned())
-			}
-		},
-		m.calls.clone(),
-	);
-	let Out { code, text, .. } = m.uninstall(&["y", "n"], &m.paths(None, false), &unlinking).await.unwrap();
-	assert_eq!(code, 0);
-	assert!(started.load(Ordering::SeqCst));
-	assert!(text.contains("the jocasta herdr plugin was already unlinked"));
 }
 
 #[tokio::test]

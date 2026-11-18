@@ -735,17 +735,16 @@ fn reported(herdr: &FakeHerdr, pane: &str, tokens: &Value, labels: &Value) -> bo
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn sidebar_tokens_per_thread_pane_and_project_workspace_data_hud_txt_and_both_cleared_when_the_service_stops_0402_0403_ux_04_ux_13()
+async fn sidebar_tokens_per_thread_pane_and_project_workspace_the_hud_and_the_tokens_cleared_when_the_service_stops_0402_0403_ux_04_ux_13()
  {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
 	let herdr = Arc::new(FakeHerdr::new());
-	let hud = data_dir().join("hud.txt");
 	let pane_id = Arc::new(std::sync::Mutex::new(String::new()));
 	// Every omp session of the day counts (the HUD matches omp's own stats), not only the threads'. The sessions folder
 	// is listed every 30 s (PERF-3): this one is there from the start.
 	session_file(j.root(), &[Msg::new("elsewhere", 9.0)]);
-	let (seen, hud_file) = (Arc::clone(&pane_id), hud.clone());
+	let seen = Arc::clone(&pane_id);
 	with_herdr(Arc::clone(&herdr), options_with_wait(), |server| async move {
 		let started = start_thread(&server, ThreadOptions::default()).await;
 		let pane = started.pane_id.clone();
@@ -767,16 +766,18 @@ async fn sidebar_tokens_per_thread_pane_and_project_workspace_data_hud_txt_and_b
 		};
 		until(|| workspace_metadata("1 at work")).await;
 		// The HUD says NEEDS YOU's rows and the spend; the quota is in `today` (0554, 0581).
-		until(|| fs::read_to_string(&hud_file).is_ok_and(|text| text == "0 awaiting you · $10.75 today\n")).await;
+		let hud = |awaiting: u32| {
+			server.service.hud(None).is_ok_and(|hud| (hud.awaiting, hud.spend_today) == (awaiting, Some(10.75)))
+		};
+		until(|| hud(0)).await;
 
 		// A thread awaiting him counts once.
 		server.herdr.set_state(&pane, AgentState::Blocked, None, true);
-		until(|| fs::read_to_string(&hud_file).is_ok_and(|text| text == "1 awaiting you · $10.75 today\n")).await;
+		until(|| hud(1)).await;
 		until(|| workspace_metadata("1 awaiting you")).await;
 	})
 	.await;
-	// Stopped: the HUD says so, and the tokens are cleared (UX-13).
-	assert_eq!(fs::read_to_string(&hud).unwrap(), "Jocasta isn't running; start it with jocasta.\n");
+	// Stopped: the tokens are cleared (UX-13).
 	let pane = pane_id.lock().unwrap().clone();
 	let last = herdr.of("reportPaneMetadata").pop().unwrap();
 	assert_eq!(last, [json!(pane), json!({ "tokens": { "model": null, "cost": null } })]);

@@ -12,7 +12,6 @@ use std::time::Duration;
 use futures_util::FutureExt;
 use serde_json::{Value, json};
 
-use crate::frontier::protocol::POPUP_READER_HEADER;
 use crate::frontier::server::close::CloseOutcome;
 use crate::frontier::server::helpers::{
 	BRIEF, HunkDaemon, TestServer, ThreadOptions, append_proposal, boss_idle, boss_lines, boss_pane, call, commit_in,
@@ -439,7 +438,7 @@ async fn b4_the_hunk_session_daemon_the_service_started_ends_with_stop_everythin
 		}
 	};
 	let answers = Arc::new(Mutex::new(vec![false, true]));
-	let address: Arc<OnceLock<(u16, String)>> = Arc::new(OnceLock::new());
+	let address: Arc<OnceLock<crate::frontier::server::server::JocastaServer>> = Arc::new(OnceLock::new());
 	let heard = Arc::clone(&address);
 	let asked = Arc::new(AtomicUsize::new(0));
 	let counted = Arc::clone(&asked);
@@ -457,27 +456,15 @@ async fn b4_the_hunk_session_daemon_the_service_started_ends_with_stop_everythin
 			let typed = popup.view().code.clone();
 			let code = popup.code().to_owned();
 			let heard = Arc::clone(&heard);
-			// One reader per question (0578): the view first, then the answer with its reader secret.
 			tokio::spawn(async move {
-				let (port, token) = heard.get().expect("the server's address").clone();
-				let url = format!("http://127.0.0.1:{port}/api/popup/{code}");
-				let client = http();
-				let view = client.get(&url).bearer_auth(&token).send().await.expect("the read");
-				let secret =
-					view.headers().get(POPUP_READER_HEADER).and_then(|v| v.to_str().ok()).unwrap_or("").to_owned();
-				let _ = client
-					.post(&url)
-					.bearer_auth(&token)
-					.header(POPUP_READER_HEADER, secret)
-					.body(json!({ "choice": choice, "typed": typed }).to_string())
-					.send()
-					.await;
+				let server = heard.get().expect("the server").clone();
+				server.answer(&code, &json!({ "choice": choice, "typed": typed }));
 			});
 		})),
 		..ServerOptions::default()
 	})
 	.await;
-	let _ = address.set((server.port, server.token.clone()));
+	let _ = address.set(server.server.clone());
 	finally(&server, |server| async move {
 		let started = start_thread(&server, ThreadOptions::default()).await;
 		// A task ends: the review starts hunk's daemon before its pane opens.

@@ -107,17 +107,11 @@ async fn another_pane_of_the_threads_workspace_names_the_thread_and_any_other_pa
 }
 
 #[tokio::test]
-async fn a_thread_key_pressed_in_todays_own_pane_names_todays_key_for_it_and_any_other_pane_gets_the_plain_refusal() {
+async fn a_thread_key_on_a_pane_that_isnt_a_threads_gets_the_plain_refusal() {
 	let t = test_context(|_| {});
 	let boss = t.with_boss(AgentState::Idle).with(|b| b.pane_id.clone());
-	t.herdr
-		.state()
-		.pane_list
-		.extend([pane(&boss, "w-boss", Some("Jocasta")), pane("today-1", "w-boss", Some("today"))]);
+	t.herdr.state().pane_list.push(pane(&boss, "w-boss", Some("Jocasta")));
 	let keys = keys(&t);
-	assert_eq!(refusal(keys.stop(Some("today-1")).await), "Stop: in today, press s on the picked thread.");
-	assert_eq!(refusal(keys.review(Some("today-1")).await), "Review: in today, press r on the picked thread.");
-	assert_eq!(refusal(keys.finishable(Some("today-1")).await), "Finish: in today, press f on the picked thread.");
 	assert_eq!(
 		refusal(keys.stop(Some(&boss)).await),
 		"Stop: the focused pane isn't a thread's; focus a thread or pick one in today."

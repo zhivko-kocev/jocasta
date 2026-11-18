@@ -51,7 +51,6 @@ use crate::lib::output::{append_row, claim_rows, conditions, print_plan, write_j
 use crate::lib::proctree::{ProcessInfo, snapshot_processes, tree_of};
 use crate::lib::stats::{BootstrapOptions, rate, summarize};
 use crate::lib::timing::{WaitOptions, wait_for};
-use jocasta::frontier::server::boss::is_today_pane;
 use jocasta::frontier::server::herdr::{AgentState, PaneInfo};
 use jocasta::frontier::server::launch::ServiceState;
 use jocasta::shared::clock::now_ms;
@@ -123,18 +122,12 @@ fn clock_ms() -> f64 {
 	START.elapsed().as_secs_f64() * 1000.0
 }
 
-/// herdr's panes as H3 compares them, the plugin's `today` pane left out (0553): it is no thread, and the service opens
-/// it again under a new id.
-pub fn thread_panes(list: &[PaneInfo]) -> Vec<PaneInfo> {
-	list.iter().filter(|pane| !is_today_pane(pane)).cloned().collect()
-}
-
 /// How long one of H3's pane listings may take before the poll counts herdr as not answering.
 const LIST_MS: i64 = 3_000;
 
 async fn panes(jocasta: &SandboxJocasta) -> Option<Vec<PaneInfo>> {
 	let herdr = jocasta.herdr().await.ok()?;
-	herdr.panes().await.ok().map(|list| thread_panes(&list))
+	herdr.panes().await.ok()
 }
 
 /// A folder's git state; a git that fails errors, so a broken check never compares two empty outputs.

@@ -1038,20 +1038,6 @@ async fn the_in_memory_fake_respawns_in_the_same_tab_closes_workspaces_with_thei
 		.unwrap();
 	let split = fake.panes().await.unwrap().into_iter().find(|p| p.pane_id == beside).unwrap();
 	assert_eq!((split.tab_id, split.label.as_deref()), (old.tab_id, Some("review")));
-	let popup = PluginPaneOptions {
-		plugin_id: "jocasta".into(),
-		entrypoint: "popup".into(),
-		placement: Placement::Popup,
-		target_pane_id: None,
-		direction: None,
-		cwd: None,
-		env: Some(env(&[("P", "1")])),
-		focus: None,
-	};
-	assert_eq!(fake.open_plugin_pane(&popup).await.unwrap(), None);
-	assert_eq!(fake.state().popup, Some(env(&[("P", "1")])));
-	assert!(fake.close_popup().await.unwrap());
-	assert!(!fake.close_popup().await.unwrap());
 	fake.state().roots.insert(respawned.pane_id.clone(), 7);
 	assert_eq!(fake.pane_root(&respawned.pane_id, None).await.unwrap(), Some(7));
 	fake.close_workspace(&first).await.unwrap();

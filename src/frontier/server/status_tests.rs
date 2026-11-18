@@ -101,8 +101,12 @@ pub(crate) fn world(options: impl FnOnce(&mut ServiceOptions)) -> World {
 	World { ctx, herdr, sent, j }
 }
 
-fn hud_txt() -> String {
-	fs::read_to_string(data_dir().join("hud.txt")).unwrap_or_default()
+/// The HUD's awaiting count and today's spend as last sent to the page and the client shell.
+fn last_hud(w: &World) -> Option<(u32, Option<f64>)> {
+	w.sent.lock().unwrap().iter().rev().find_map(|message| match message {
+		ServerMessage::Hud { hud } => Some((hud.awaiting, hud.spend_today)),
+		_ => None,
+	})
 }
 
 pub(crate) fn demo(w: &World) -> Project {
@@ -351,10 +355,10 @@ async fn the_spend_reads_null_until_today_s_sessions_are_read_then_the_day_s_tot
 	assert_eq!(w.ctx.status.hud().unwrap().spend_today, Some(0.0));
 }
 
-// ---- hud.txt and the sidebar's tokens ----
+// ---- the HUD and the sidebar's tokens ----
 
 #[tokio::test]
-async fn sidebar_tokens_per_thread_pane_and_project_workspace_hud_txt_and_both_cleared_when_the_service_stops() {
+async fn sidebar_tokens_per_thread_pane_and_project_workspace_the_hud_and_the_tokens_cleared_when_the_service_stops() {
 	let w = world(|_| {});
 	project_workspace(&w, "w_demo");
 	w.ctx.set_warmed();
@@ -374,15 +378,15 @@ async fn sidebar_tokens_per_thread_pane_and_project_workspace_hud_txt_and_both_c
 	// The sessions the listing found are read off the call; the HUD says the spend and NEEDS YOU's rows.
 	w.ctx.calls.settled().await;
 	w.ctx.status.report().await.unwrap();
-	assert_eq!(hud_txt(), "0 awaiting you · $10.75 today\n");
+	assert_eq!(last_hud(&w), Some((0, Some(10.75))));
 	// A thread awaiting him counts once.
 	t.with(|t| t.shown = ThreadState::Blocked);
 	w.ctx.status.report().await.unwrap();
-	assert_eq!(hud_txt(), "1 awaiting you · $10.75 today\n");
+	assert_eq!(last_hud(&w), Some((1, Some(10.75))));
 	assert!(workspace_reports(&w).contains(&vec![json!("w_demo"), json!({"running": "1 at work · 1 awaiting you"})]));
 	// Stopped: the HUD says so, and the tokens are cleared (UX-13).
+	// Stopped: the tokens are cleared (UX-13).
 	w.ctx.status.clear().await;
-	assert_eq!(hud_txt(), "Jocasta isn't running; start it with jocasta.\n");
 	assert_eq!(pane_reports(&w).last().unwrap(), &vec![json!("1-1"), json!({"tokens": {"model": null, "cost": null}})]);
 	assert_eq!(workspace_reports(&w).last().unwrap()[1], json!({"running": null}));
 }
@@ -525,7 +529,7 @@ async fn the_setup_notice_and_the_boss_notice_are_each_said_once_as_a_toast() {
 }
 
 #[tokio::test]
-async fn hud_txt_says_what_awaits_him_and_the_page_gets_the_hud_when_only_the_quota_changed() {
+async fn the_page_gets_the_hud_when_only_the_quota_changed() {
 	let usage =
 		json!({"reports": [{"limits": [{"window": {"id": "5h"}, "amount": {"usedFraction": 0.5}}]}]}).to_string();
 	let w = world(|options| {
@@ -539,9 +543,7 @@ async fn hud_txt_says_what_awaits_him_and_the_page_gets_the_hud_when_only_the_qu
 		});
 	});
 	w.ctx.status.report().await.unwrap();
-	let before = hud_txt();
-	assert!(before.starts_with("0 awaiting you · "), "{before}");
-	assert!(before.ends_with(" today\n"));
+	assert_eq!(last_hud(&w).map(|(awaiting, _)| awaiting), Some(0));
 	w.ctx.day.read_quota().await;
 	w.ctx.status.report().await.unwrap();
 	let sent = w.sent.lock().unwrap();
@@ -555,20 +557,19 @@ async fn hud_txt_says_what_awaits_him_and_the_page_gets_the_hud_when_only_the_qu
 	assert_eq!(huds.len(), 2);
 	assert!(huds[0].quota.is_empty());
 	assert_eq!((huds[1].quota[0].window, huds[1].quota[0].used), (QuotaSpan::FiveHours, 0.5));
-	assert_eq!(hud_txt(), before);
 }
 
 #[tokio::test]
-async fn the_hud_is_written_again_only_when_its_text_changes_and_sent_only_when_its_figures_change() {
+async fn the_hud_is_sent_only_when_its_figures_change() {
 	let w = world(|_| {});
 	w.ctx.status.report().await.unwrap();
 	w.ctx.status.report().await.unwrap();
-	assert_eq!(hud_txt(), "0 awaiting you · … today\n");
+	assert_eq!(last_hud(&w), Some((0, None)));
 	let huds = |w: &World| w.sent.lock().unwrap().iter().filter(|m| matches!(m, ServerMessage::Hud { .. })).count();
 	assert_eq!(huds(&w), 1);
 	w.ctx.set_warmed();
 	w.ctx.status.report().await.unwrap();
-	assert_eq!(hud_txt(), "0 awaiting you · $0.00 today\n");
+	assert_eq!(last_hud(&w), Some((0, Some(0.0))));
 	assert_eq!(huds(&w), 2);
 }
 

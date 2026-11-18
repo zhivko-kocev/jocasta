@@ -1,7 +1,6 @@
 # herdr config for Jocasta's session `jocasta` (0392, 0401–0408). `jocasta setup` copies it to
-# ~/.jocasta/agent/herdr.toml, replacing {{hud}} with the command that prints Jocasta's <data>/hud.txt (cmd's `type` on
-# Windows, `cat` elsewhere); when that file differs from this template, setup shows the diff and replaces it after `y`
-# (0440). herdr reads it through HERDR_CONFIG_PATH.
+# ~/.jocasta/agent/herdr.toml; when that file differs from this one, setup shows the diff and replaces it after `y`
+# (0440). The herdr built into `jocasta` reads it there (HERDR_CONFIG_PATH still wins); it checks for no updates.
 
 # No first-run overlay: `jocasta setup` already installs herdr's omp integration.
 onboarding = false
@@ -15,12 +14,6 @@ resume_agents_on_restore = false
 # One theme with omp's `dark-tokyo-night` and Jocasta's canvas (0401).
 name = "tokyo-night"
 
-[update]
-# Bumps are deliberate (0383).
-version_check = false
-# No agent-detection manifests fetched from herdr.dev: detection stays what the pinned binary ships (0458).
-manifest_check = false
-
 [keys]
 # Alt digits for workspaces: Alt+1 is the boss's workspace "Jocasta" (0404, 0408).
 switch_workspace = ["prefix+shift+1..9", "alt+1..9"]
@@ -28,8 +21,15 @@ goto = ["prefix+g", "alt+g"]
 next_agent = "alt+]"
 previous_agent = "alt+["
 
-# The `jocasta` plugin's thread keys (0554): Ctrl+B, then Alt+F Finish, Alt+S Stop, Alt+R Review, Alt+N New thread;
-# Ctrl+B, then Alt+Q closes Jocasta, asking first while threads work (0563).
+# The thread keys (0554), which Jocasta's service takes: Ctrl+B, then Alt+F Finish, Alt+S Stop, Alt+R Review, Alt+N New
+# thread; Ctrl+B, then Alt+Q closes Jocasta, asking first while threads work (0563); Ctrl+B, then Alt+T gives `today`
+# beside the boss the keys (Esc gives them back).
+[[keys.command]]
+key = "prefix+alt+t"
+type = "plugin_action"
+command = "jocasta.today"
+description = "Today: give the dock the keys"
+
 [[keys.command]]
 key = "prefix+alt+f"
 type = "plugin_action"
@@ -67,10 +67,9 @@ agent_panel_sort = "priority"
 status_indicators = "symbols"
 # The terminal's title (0554).
 window_title = "Jocasta · {workspace}"
-# The HUD: the blocked count and today's spend from hud.txt, which the service rewrites on every change and herdr
-# reads every 5 s, then the time; the quota is in `today` (0403, 0437, 0554).
+# The HUD: the blocked count and today's spend, which Jocasta draws at the left of this side, then the time; the quota
+# is in `today` (0403, 0437, 0554).
 tab_bar_right = [
-  { type = "command", command = "{{hud}}", interval_seconds = 5, timeout_seconds = 1 },
   { type = "datetime", format = "%H:%M" },
 ]
 tab_bar_right_separator = " · "

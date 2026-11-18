@@ -223,11 +223,30 @@ pub(crate) fn render_tab_bar(
     render_tab_bar_status(buffer, area, snapshot, palette);
 }
 
+/// The right side's segments, the shell extension's status first (its figures beside herdr's own).
+fn status_segments<'a>(
+    snapshot: &'a ClientShellSnapshot,
+    extension: &'a Option<String>,
+) -> impl Iterator<Item = (&'a str, bool)> {
+    extension
+        .iter()
+        .filter(|text| !text.is_empty())
+        .map(|text| (text.as_str(), false))
+        .chain(
+            snapshot
+                .tab_bar_right
+                .iter()
+                .map(|segment| (segment.text.as_str(), segment.accent)),
+        )
+}
+
 pub(crate) fn tab_bar_status_width(snapshot: &ClientShellSnapshot) -> u16 {
-    let content = snapshot.tab_bar_right.iter().fold(0u16, |width, segment| {
-        width.saturating_add(display_width(&segment.text))
-    });
-    let separators = snapshot.tab_bar_right.len().saturating_sub(1);
+    let extension = crate::embed::shell_status();
+    let (content, count) = status_segments(snapshot, &extension)
+        .fold((0u16, 0usize), |(width, count), (text, _)| {
+            (width.saturating_add(display_width(text)), count + 1)
+        });
+    let separators = count.saturating_sub(1);
     content.saturating_add(
         display_width(&snapshot.tab_bar_right_separator)
             .saturating_mul(separators.min(u16::MAX as usize) as u16),
@@ -263,9 +282,10 @@ fn render_tab_bar_status(
     let Some(status) = tab_bar_status_area(snapshot, area) else {
         return;
     };
+    let extension = crate::embed::shell_status();
     let separator_width = display_width(&snapshot.tab_bar_right_separator);
     let mut x = status.x;
-    for (index, segment) in snapshot.tab_bar_right.iter().enumerate() {
+    for (index, (text, accent)) in status_segments(snapshot, &extension).enumerate() {
         if index > 0 && separator_width > 0 {
             put_text(
                 buffer,
@@ -277,8 +297,8 @@ fn render_tab_bar_status(
             );
             x = x.saturating_add(separator_width);
         }
-        let width = display_width(&segment.text);
-        let style = if segment.accent {
+        let width = display_width(text);
+        let style = if accent {
             Style::default()
                 .fg(panel_contrast_fg(palette))
                 .bg(palette.accent)
@@ -286,7 +306,7 @@ fn render_tab_bar_status(
         } else {
             Style::default().fg(palette.overlay1).bg(palette.panel_bg)
         };
-        put_text(buffer, x, area.y, width, &segment.text, style);
+        put_text(buffer, x, area.y, width, text, style);
         x = x.saturating_add(width);
     }
 }

@@ -39,7 +39,7 @@ use crate::lib::stats::{BootstrapOptions, summarize};
 use crate::lib::temp::mkdtemp;
 use crate::lib::timing::{WaitOptions, wait_for};
 use jocasta::frontier::protocol::js_number_text;
-use jocasta::frontier::server::boss::{BOSS_WORKSPACE, is_today_pane};
+use jocasta::frontier::server::boss::BOSS_WORKSPACE;
 use jocasta::frontier::server::herdr::{HerdrOptions, PaneInfo, WorkspaceInfo, connect_herdr};
 use jocasta::frontier::server::launch::{ServiceState, ask_shutdown};
 use jocasta::shared::errors::Result;
@@ -114,10 +114,10 @@ async fn stop_jocasta(jocasta: &SandboxJocasta, surface: Option<u32>) {
 	}
 }
 
-/// The boss pane in herdr's lists: the pane in workspace "Jocasta" that isn't the today pane.
+/// The boss pane in herdr's lists: the pane in workspace "Jocasta".
 pub fn boss_pane<'a>(workspaces: &[WorkspaceInfo], panes: &'a [PaneInfo]) -> Option<&'a PaneInfo> {
 	let home = workspaces.iter().find(|w| w.label == BOSS_WORKSPACE).map(|w| w.id.as_str())?;
-	panes.iter().find(|pane| pane.workspace_id == home && !is_today_pane(pane))
+	panes.iter().find(|pane| pane.workspace_id == home)
 }
 
 /// How long each of H5's herdr reads may take while Jocasta starts.

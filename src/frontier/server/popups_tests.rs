@@ -161,23 +161,3 @@ fn a_questions_texts_lose_their_control_characters_before_anything_reads_them() 
 	assert_eq!(popups.view(popup.code()).unwrap().detail.as_deref(), Some("run ]52;c;ZXZpbA==this[2J"));
 	assert!(popup.code().len() == 64 && popup.code().bytes().all(|b| b.is_ascii_hexdigit()));
 }
-
-#[tokio::test]
-async fn the_first_read_hands_out_the_reader_secret_and_a_second_read_ends_the_question_as_its_fallback() {
-	let popups = Popups::new();
-	let popup = popups.open(&allow_question("m", "d", Some("KQX")), false);
-	assert!(!popup.read());
-	assert_eq!(popups.read("unknown"), None);
-	let Some(PopupRead::First { view, reader }) = popups.read(popup.code()) else { panic!("a first read") };
-	assert_eq!(&*view, popup.view());
-	assert!(popup.read());
-	assert!(popups.is_reader(popup.code(), Some(&reader)));
-	assert!(!popups.is_reader(popup.code(), Some(&"f".repeat(64))));
-	assert!(!popups.is_reader(popup.code(), None));
-	assert_eq!(popups.left(popup.code()), 3);
-	assert_eq!(popups.read(popup.code()), Some(PopupRead::Second(popup.clone())));
-	assert_eq!(popup.answer().await, DENY);
-	assert_eq!(popup.how().await, PopupEnd::SecondReader);
-	assert!(!popups.is_reader(popup.code(), Some(&reader)));
-	assert_eq!(popups.left(popup.code()), 0);
-}

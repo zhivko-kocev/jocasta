@@ -1,25 +1,11 @@
-//! The terminal programs' shared shell (0551, 0553, 0634): the `today` pane and the `ask` popup are ratatui programs
-//! that draw plain lines of coloured runs. This module owns what both need: the line model and its column math
-//! (display columns, so wide characters count twice), the lines drawn into a ratatui buffer, and [`run_pane`], the one
-//! lifecycle: no signal left to the terminal library, a redraw on resize, draws that do nothing once torn down, and one
-//! teardown path (the program's cleanup, then the terminal restored).
+//! What the `today` dock and the question box share (0551, 0553, 0634; fork plan phase 5): both draw plain lines of
+//! coloured runs into herdr's client buffer. This module owns the line model and its column math (display columns, so
+//! wide characters count twice), the lines drawn into a ratatui buffer, and pasted text stripped of escape sequences.
 
-use std::io;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
-
-use ratatui::Terminal;
-use ratatui::backend::Backend;
 use ratatui::buffer::Buffer;
-use ratatui::crossterm::event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyEvent, KeyEventKind};
-use ratatui::crossterm::execute;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
-
-use crate::shared::errors::{Error, Result};
 
 /// Tokyo Night as `palette.css` holds it (0474): the one palette file's hex values, as terminal colours.
 pub struct Palette {
@@ -237,46 +223,6 @@ pub fn render_lines(buf: &mut Buffer, area: Rect, lines: &[Line]) {
 	}
 }
 
-/// What a running program can ask of its pane; clones act on the same pane, from any thread or task.
-#[derive(Clone)]
-pub struct Pane {
-	draw: Arc<dyn Fn() + Send + Sync>,
-	end: Arc<dyn Fn(i32) + Send + Sync>,
-}
-
-impl Pane {
-	/// A pane over `draw` and `end`; [`run_pane`] makes the real one, a test makes its own.
-	pub fn new(draw: impl Fn() + Send + Sync + 'static, end: impl Fn(i32) + Send + Sync + 'static) -> Self {
-		Self { draw: Arc::new(draw), end: Arc::new(end) }
-	}
-
-	/// Draws the program's lines now; nothing once the program is ending.
-	pub fn draw(&self) {
-		(self.draw)();
-	}
-
-	/// Ends the program with `code` (the first call counts).
-	pub fn end(&self, code: i32) {
-		(self.end)(code);
-	}
-}
-
-/// A program [`run_pane`] runs.
-pub trait PaneProgram {
-	/// The lines for `width` × `height`.
-	fn lines(&mut self, width: u16, height: u16) -> Vec<Line>;
-
-	/// A key pressed (releases never arrive).
-	fn on_key(&mut self, _key: KeyEvent) {}
-
-	/// Pasted text, stripped of escape sequences (FE-11: a terminal's colour codes never reach a brief).
-	fn on_paste(&mut self, _text: &str) {}
-
-	/// Runs once when the program ends, before the terminal is restored: release held requests, close feeds, clear
-	/// timers.
-	fn cleanup(&mut self) {}
-}
-
 /// `text` without terminal escape sequences: CSI (`ESC [ … final`), OSC (`ESC ] … BEL` or `ESC \`) and two-character
 /// escapes.
 pub fn strip_ansi(text: &str) -> String {
@@ -310,145 +256,6 @@ pub fn strip_ansi(text: &str) -> String {
 		}
 	}
 	out
-}
-
-/// What the loop reacts to.
-enum Msg {
-	Draw,
-	End(i32),
-	Event(Event),
-}
-
-/// One draw of `program`'s lines over the whole terminal.
-fn draw_program<B: Backend, P: PaneProgram>(terminal: &mut Terminal<B>, program: &mut P) -> Result<()> {
-	terminal
-		.draw(|frame| {
-			let area = frame.area();
-			let lines = program.lines(area.width, area.height);
-			render_lines(frame.buffer_mut(), area, &lines);
-		})
-		.map(|_| ())
-		.map_err(|e| Error::other(format!("drawing the pane failed: {e}")))
-}
-
-/// The loop over `terminal`: draws at once, then on every `Draw` and resize, hands keys and paste to the program, and
-/// ends on the first `End`; resolves its code once the program's cleanup ran.
-async fn drive<B: Backend, P: PaneProgram>(
-	terminal: &mut Terminal<B>,
-	tx: UnboundedSender<Msg>,
-	mut rx: UnboundedReceiver<Msg>,
-	setup: impl FnOnce(Pane) -> P,
-) -> Result<i32> {
-	let draw_tx = tx.clone();
-	let pane = Pane::new(
-		move || {
-			let _ = draw_tx.send(Msg::Draw);
-		},
-		move |code| {
-			let _ = tx.send(Msg::End(code));
-		},
-	);
-	let mut program = setup(pane);
-	let ran: Result<i32> = async {
-		draw_program(terminal, &mut program)?;
-		loop {
-			let Some(msg) = rx.recv().await else { return Ok(0) };
-			match msg {
-				Msg::End(code) => return Ok(code),
-				Msg::Draw | Msg::Event(Event::Resize(..)) => draw_program(terminal, &mut program)?,
-				Msg::Event(Event::Key(key)) if key.kind != KeyEventKind::Release => program.on_key(key),
-				Msg::Event(Event::Paste(text)) => program.on_paste(&strip_ansi(&text)),
-				Msg::Event(_) => {}
-			}
-		}
-	}
-	.await;
-	program.cleanup();
-	ran
-}
-
-/// Reads terminal events on a thread of its own until `stop`, handing them to the loop.
-fn read_events(tx: UnboundedSender<Msg>, stop: Arc<AtomicBool>) {
-	while !stop.load(Ordering::Relaxed) {
-		match event::poll(Duration::from_millis(100)) {
-			Ok(true) => match event::read() {
-				Ok(event) => {
-					if tx.send(Msg::Event(event)).is_err() {
-						return;
-					}
-				}
-				Err(_) => return,
-			},
-			Ok(false) => {}
-			Err(_) => return,
-		}
-	}
-}
-
-/// Resolves when a signal that ends a pane arrives (FE-3: a popup that only left its terminal kept its held request
-/// open); the program's cleanup runs on every one.
-async fn end_signal() {
-	#[cfg(windows)]
-	{
-		use tokio::signal::windows::{ctrl_break, ctrl_c, ctrl_close};
-		let (Ok(mut c), Ok(mut b), Ok(mut close)) = (ctrl_c(), ctrl_break(), ctrl_close()) else {
-			return std::future::pending().await;
-		};
-		tokio::select! { _ = c.recv() => {}, _ = b.recv() => {}, _ = close.recv() => {} }
-	}
-	#[cfg(unix)]
-	{
-		use tokio::signal::unix::{SignalKind, signal};
-		let kinds = [
-			SignalKind::interrupt(),
-			SignalKind::terminate(),
-			SignalKind::hangup(),
-			SignalKind::quit(),
-			SignalKind::pipe(),
-		];
-		let mut streams: Vec<_> = kinds.into_iter().filter_map(|k| signal(k).ok()).collect();
-		if streams.is_empty() {
-			return std::future::pending().await;
-		}
-		let waits = streams.iter_mut().map(|s| Box::pin(s.recv())).collect::<Vec<_>>();
-		futures_util::future::select_all(waits).await;
-	}
-}
-
-/// Gives the terminal back when dropped, on every way out.
-struct Restore;
-
-impl Drop for Restore {
-	fn drop(&mut self) {
-		let _ = execute!(io::stdout(), DisableBracketedPaste);
-		ratatui::restore();
-	}
-}
-
-/// Runs one terminal program until it ends (its own `end` or a signal); resolves its exit code once the terminal is
-/// restored. `setup` gets the pane and returns the program; it may draw at once.
-pub async fn run_pane<P: PaneProgram>(setup: impl FnOnce(Pane) -> P) -> Result<i32> {
-	let mut terminal = ratatui::try_init()?;
-	let _restore = Restore;
-	execute!(io::stdout(), EnableBracketedPaste)?;
-	let (tx, rx) = unbounded_channel();
-	let stop = Arc::new(AtomicBool::new(false));
-	let reader = {
-		let (tx, stop) = (tx.clone(), Arc::clone(&stop));
-		std::thread::spawn(move || read_events(tx, stop))
-	};
-	let signals = {
-		let tx = tx.clone();
-		tokio::spawn(async move {
-			end_signal().await;
-			let _ = tx.send(Msg::End(0));
-		})
-	};
-	let code = drive(&mut terminal, tx, rx, setup).await;
-	signals.abort();
-	stop.store(true, Ordering::Relaxed);
-	let _ = reader.join();
-	code
 }
 
 #[cfg(test)]

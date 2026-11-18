@@ -3,5 +3,6 @@ pub mod client;
 pub mod layer;
 pub mod protocol;
 pub mod server;
+pub mod shell;
 pub mod today;
 pub mod tui;

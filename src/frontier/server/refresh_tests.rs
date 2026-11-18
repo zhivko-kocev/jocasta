@@ -13,13 +13,14 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use super::*;
+use crate::frontier::protocol::ServerMessage;
 use crate::frontier::server::context::{TestContext, test_context};
 use crate::frontier::server::herdr::AgentState::{Idle, Unknown, Working};
 use crate::frontier::server::herdr::WorkspaceInfo;
 use crate::frontier::server::service::RelayUrlOf;
 use crate::shared::git::git;
 use crate::shared::pathkey::real_path;
-use crate::shared::paths::{data_dir, projects_file};
+use crate::shared::paths::projects_file;
 use crate::shared::testing::{TempDir, temp_dir};
 
 fn sh(dir: &Path, args: &[&str]) -> String {
@@ -315,8 +316,8 @@ async fn svc_3_a_project_pane_whose_omp_cant_start_again_does_not_end_the_tick()
 	let respawned = w.respawned();
 	assert!(respawned.iter().any(|(_, call)| same_dir(Path::new(call["cwd"].as_str().unwrap()), &w.wt)));
 	assert!(!respawned.iter().any(|(_, call)| same_dir(Path::new(call["cwd"].as_str().unwrap()), &w.main)));
-	let hud = fs::read_to_string(data_dir().join("hud.txt")).unwrap();
-	assert!(hud.starts_with("0 awaiting you · "), "{hud}");
+	let sent = w.t.sent.lock().unwrap();
+	assert!(sent.iter().any(|m| matches!(m, ServerMessage::Hud { hud } if hud.awaiting == 0)), "{sent:?}");
 }
 
 #[tokio::test]
@@ -524,7 +525,7 @@ async fn a_step_that_fails_is_said_once_per_reason_and_the_rest_still_run() {
 	w.t.with_thread("p-gone", "Gone");
 	w.tick().await;
 	assert!(w.t.ctx.threads.get("p-gone").is_none());
-	assert!(data_dir().join("hud.txt").exists());
+	assert!(w.t.sent.lock().unwrap().iter().any(|m| matches!(m, ServerMessage::Hud { .. })));
 }
 
 #[tokio::test]

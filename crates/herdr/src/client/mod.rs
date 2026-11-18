@@ -2087,6 +2087,39 @@ async fn run_client_loop(
                             }
                             continue;
                         }
+                        // Fork seam (FORK.md): Jocasta's messages go to its shell extension; the dock it may now
+                        // show or hide changes the pane area the server lays out.
+                        if kind.starts_with(crate::embed::KIND_PREFIX) {
+                            let (cols, rows) = state.reported_size;
+                            let (cell_width, cell_height) = state.reported_cell_size;
+                            let pixel_mouse = state.pixel_mouse_available();
+                            let Some(shell) = state.shell.as_mut() else {
+                                continue;
+                            };
+                            let before = shell.surface_size(cols, rows);
+                            let (redraw, back) = shell.extension_message(&kind, &data);
+                            for message in &back {
+                                let _ = write_to_server(&mut write_stream, message);
+                            }
+                            if !redraw {
+                                continue;
+                            }
+                            if shell.surface_size(cols, rows) != before {
+                                let resize = client_shell_resize_message(
+                                    shell,
+                                    cols,
+                                    rows,
+                                    cell_width,
+                                    cell_height,
+                                    pixel_mouse,
+                                );
+                                let _ = write_to_server(&mut write_stream, &resize);
+                            }
+                            if let Some(frame) = shell.compose(cols, rows) {
+                                state.present_frame(frame);
+                            }
+                            continue;
+                        }
                         let snapshot = match endpoint::decode_endpoint_control(&kind, &data) {
                             Ok(endpoint::EndpointControlMessage::HealthPong) => continue,
                             Ok(endpoint::EndpointControlMessage::AgentViewProjection(
@@ -2323,7 +2356,8 @@ async fn run_client_loop(
                         outcome.repaint |= notification_repaint
                             | shell.tick_copy_feedback(now)
                             | shell.tick_workspace_highlight(now)
-                            | shell.tick_endpoint_error(now);
+                            | shell.tick_endpoint_error(now)
+                            | shell.tick_extension();
                         let frame = outcome
                             .repaint
                             .then(|| shell.compose(state.reported_size.0, state.reported_size.1))

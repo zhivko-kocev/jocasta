@@ -163,8 +163,7 @@ impl AllowGate {
 		let why = match answer.how {
 			PopupEnd::Answered => format!("{he_cap} chose Deny"),
 			PopupEnd::WrongCodes => "Three wrong codes, which count as Deny".to_owned(),
-			PopupEnd::Closed => "The popup closed without an answer, which counts as Deny".to_owned(),
-			PopupEnd::SecondReader => "Another program read the question, which counts as Deny".to_owned(),
+			PopupEnd::Closed => "Its terminal closed without an answer, which counts as Deny".to_owned(),
 			PopupEnd::Withdrawn => "The question was withdrawn, which counts as Deny".to_owned(),
 		};
 		Err(AskError::Denied(AllowDenied {

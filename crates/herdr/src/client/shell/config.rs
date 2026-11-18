@@ -397,6 +397,7 @@ impl ClientShellConfig {
                 tab_bar: Rect::default(),
                 mobile_header: Rect::new(0, 0, cols, header_height),
                 pane_surface: Rect::new(0, header_height, cols, rows.saturating_sub(header_height)),
+                dock: Rect::default(),
             };
         }
 
@@ -443,6 +444,7 @@ impl ClientShellConfig {
             tab_bar,
             mobile_header: Rect::default(),
             pane_surface,
+            dock: Rect::default(),
         }
     }
 

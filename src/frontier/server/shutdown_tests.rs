@@ -1,14 +1,12 @@
 //! Tests of how the server closes: the cases of `test/frontier/server/shutdown.test.ts` (the stop runner's own case is
 //! in `stop_sequence_tests.rs`).
 
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use serde_json::{Value, json};
 
 use super::*;
-use crate::frontier::protocol::{POPUP_PATH, POPUP_READER_HEADER};
 use crate::frontier::server::helpers::{
 	TestServer, ThreadOptions, call, demo_project, http, relay_test_options, start_test_server, start_test_server_with,
 	start_thread, until, with_test_defaults,
@@ -18,6 +16,7 @@ use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
 use crate::frontier::server::launch::{SHUTDOWN_PATH, ask_shutdown};
 use crate::frontier::server::popups::{CANCEL, STOP};
 use crate::frontier::server::stop_sequence::StopRun;
+use crate::shared::errors::Error;
 use crate::shared::paths::data_dir;
 use crate::shared::service_file::{read_service_file, service_file_path};
 use crate::shared::testing::temp_jocasta;
@@ -52,14 +51,14 @@ struct Guarded {
 }
 
 /// A server whose close question is answered with `answers` in turn (Stop everything, typed with its code, for true;
-/// Cancel for false) through `GET` then `POST /api/popup/<code>` with the reader secret, as what shows it would; every
+/// Cancel for false) as its shell would send it; every
 /// question, terminal opened and stop that follows herdr's kept.
 async fn guarded(answers: Vec<bool>, options: ServerOptions) -> Guarded {
 	let asked: Log = Log::default();
 	let steps: Log = Log::default();
 	let reattached = Arc::new(AtomicUsize::new(0));
 	let answers = Arc::new(Mutex::new(answers));
-	let address: Arc<OnceLock<(u16, String)>> = Arc::new(OnceLock::new());
+	let address: Arc<OnceLock<JocastaServer>> = Arc::new(OnceLock::new());
 	let (told, heard, counted) = (Arc::clone(&asked), Arc::clone(&address), Arc::clone(&reattached));
 	let options = ServerOptions {
 		on_question: Some(Arc::new(move |popup| {
@@ -73,19 +72,8 @@ async fn guarded(answers: Vec<bool>, options: ServerOptions) -> Guarded {
 			let code = popup.code().to_owned();
 			let heard = Arc::clone(&heard);
 			tokio::spawn(async move {
-				let (port, token) = heard.get().expect("the server's address").clone();
-				let url = format!("http://127.0.0.1:{port}{POPUP_PATH}{code}");
-				let client = http();
-				let read = client.get(&url).bearer_auth(&token).send().await.expect("the read");
-				let secret =
-					read.headers().get(POPUP_READER_HEADER).and_then(|v| v.to_str().ok()).unwrap_or("").to_owned();
-				let _ = client
-					.post(&url)
-					.bearer_auth(&token)
-					.header(POPUP_READER_HEADER, secret)
-					.body(json!({ "choice": choice, "typed": typed }).to_string())
-					.send()
-					.await;
+				let server = heard.get().expect("the server").clone();
+				server.answer(&code, &json!({ "choice": choice, "typed": typed }));
 			});
 		})),
 		reattach: Some(Arc::new(move || {
@@ -95,7 +83,7 @@ async fn guarded(answers: Vec<bool>, options: ServerOptions) -> Guarded {
 		..options
 	};
 	let server = start_test_server(options).await;
-	let _ = address.set((server.port, server.token.clone()));
+	let _ = address.set(server.server.clone());
 	// Runs on Stop everything after herdr's own stops, where the containers' stop ran before 0603.
 	let (log, herdr) = (Arc::clone(&steps), Arc::clone(&server.herdr));
 	let _ = server.stops_with(
@@ -235,18 +223,14 @@ async fn a_close_right_after_a_service_restart_waits_for_the_threads_to_be_found
 #[tokio::test(flavor = "multi_thread")]
 async fn a_stop_step_that_throws_or_hangs_never_keeps_the_close_from_finishing() {
 	let _j = temp_jocasta();
-	// hud.txt can't be written (a folder took its name): the service's stop fails at that step.
+	// A stop step fails: the steps after it run, and the close finishes.
 	let Guarded { server, .. } = guarded(vec![], ServerOptions::default()).await;
-	let hud: PathBuf = data_dir().join("hud.txt");
-	let _ = std::fs::remove_file(&hud);
-	let _ = std::fs::remove_dir_all(&hud);
-	std::fs::create_dir_all(&hud).unwrap();
-	std::fs::write(hud.join("keep"), "").unwrap();
+	let fails: StopRun = Arc::new(|| Box::pin(async { Err(Error::other("a stop step failed")) }));
+	let _ = server.stops_with("fails", fails, None);
 	assert_eq!(server.shutdown(true).await, CloseOutcome::Stopped);
 	server.stopped().await;
 	assert_eq!(server.herdr.of("stopServer").len(), 1);
 	assert!(!service_file_path(None).exists());
-	std::fs::remove_dir_all(&hud).unwrap();
 
 	// A stop that never answers is left after its bound.
 	let hung = start_test_server(ServerOptions::default()).await;

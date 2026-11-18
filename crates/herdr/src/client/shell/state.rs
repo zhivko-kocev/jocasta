@@ -59,6 +59,8 @@ pub(super) struct ClientShellLayout {
     pub tab_bar: Rect,
     pub mobile_header: Rect,
     pub pane_surface: Rect,
+    /// Fork seam (FORK.md): Jocasta's dock, beside the panes; empty where it doesn't show.
+    pub dock: Rect,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -138,6 +140,8 @@ pub(super) struct ShellHitMap {
     pub(super) release_notes_scrollbar: Rect,
     pub(super) release_notes_scroll_metrics: Option<crate::pane::ScrollMetrics>,
     pub(super) release_notes_max_scroll: usize,
+    /// Fork seam (FORK.md): Jocasta's dock.
+    pub(super) dock: Rect,
 }
 
 #[derive(Clone)]
@@ -903,6 +907,8 @@ pub(crate) struct ClientShellState {
     pub(super) pending_workspace_highlight: Option<PendingWorkspaceHighlight>,
     pub(super) reveal_navigation_workspace: bool,
     pub(super) overlay: Option<ClientShellOverlay>,
+    /// Fork seam (FORK.md): Jocasta's dock has his keys.
+    pub(super) dock_focused: bool,
     pub(super) previous_pane_id: Option<String>,
     pub(super) pane_mouse_gesture: Option<ClientPaneMouseGesture>,
     pub(super) link_hover: Option<super::link_hover::LinkHover>,
@@ -1076,6 +1082,7 @@ impl ClientShellState {
             pending_workspace_highlight: None,
             reveal_navigation_workspace: false,
             overlay,
+            dock_focused: false,
             previous_pane_id: None,
             pane_mouse_gesture: None,
             link_hover: None,
@@ -1217,13 +1224,14 @@ impl ClientShellState {
     }
 
     pub(super) fn layout(&self, cols: u16, rows: u16) -> ClientShellLayout {
-        self.config.layout(
+        let layout = self.config.layout(
             cols,
             rows,
             self.sidebar_collapsed,
             self.focused_tab_count(),
             self.sidebar_width,
-        )
+        );
+        self.with_dock(layout)
     }
 
     pub(crate) fn surface_size(&self, cols: u16, rows: u16) -> ClientSurfaceSize {

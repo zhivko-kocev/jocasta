@@ -16,9 +16,9 @@ use tokio::task::AbortHandle;
 
 use super::{
 	AgentState, AgentView, Direction, Env, Herdr, HerdrError, HerdrResult, HerdrSnapshot, LineReader, Note,
-	NotificationResult, OnChange, PaneIds, PaneInfo, PaneMetadata, Placement, PluginPaneOptions, RespawnOptions,
-	SplitOptions, StopWatch, TabPane, TabSpec, Tokens, WatchEvent, WorkspaceInfo, WorktreeCreated, WorktreeOptions,
-	env_json, locked, path_json, tokens_json,
+	NotificationResult, OnChange, PaneIds, PaneInfo, PaneMetadata, RespawnOptions, SplitOptions, StopWatch, TabPane,
+	TabSpec, Tokens, WatchEvent, WorkspaceInfo, WorktreeCreated, WorktreeOptions, env_json, locked, path_json,
+	tokens_json,
 };
 use crate::shared::git::git;
 
@@ -335,8 +335,6 @@ pub(crate) struct FakeState {
 	pub close_workspace_fails: Option<HerdrError>,
 	/// What `notification.show` answers; `NoForegroundClient` while no client is attached.
 	pub notify_result: NotificationResult,
-	/// The open popup's env, as `open_plugin_pane` got it; `None` while none is open.
-	pub popup: Option<Env>,
 	/// While set and not yet `true`, `snapshot` waits (a test's gate on the service's discovery).
 	pub snapshot_gate: Option<tokio::sync::watch::Receiver<bool>>,
 	/// Run by `close_workspace` after it recorded the call and before it fails or removes anything.
@@ -377,7 +375,6 @@ impl FakeHerdr {
 				create_worktree_fails: None,
 				close_workspace_fails: None,
 				notify_result: NotificationResult::Shown,
-				popup: None,
 				snapshot_gate: None,
 				on_close_workspace: None,
 				prompt_refused: None,
@@ -745,52 +742,6 @@ impl Herdr for FakeHerdr {
 
 	fn focus<'a>(&'a self, pane_id: &'a str) -> BoxFuture<'a, HerdrResult<()>> {
 		self.record("focus", vec![json!(pane_id)]);
-		done()
-	}
-
-	fn open_plugin_pane<'a>(&'a self, opts: &'a PluginPaneOptions) -> BoxFuture<'a, HerdrResult<Option<String>>> {
-		Box::pin(async move {
-			let mut recorded = json!({
-				"pluginId": opts.plugin_id,
-				"entrypoint": opts.entrypoint,
-				"placement": if opts.placement == Placement::Split { "split" } else { "popup" },
-			});
-			if let Value::Object(map) = &mut recorded {
-				if let Some(target) = &opts.target_pane_id {
-					map.insert("targetPaneId".to_owned(), json!(target));
-				}
-				if let Some(cwd) = &opts.cwd {
-					map.insert("cwd".to_owned(), path_json(cwd));
-				}
-				if let Some(env) = &opts.env {
-					map.insert("env".to_owned(), env_json(env));
-				}
-			}
-			self.record("openPluginPane", vec![recorded]);
-			if opts.placement == Placement::Popup {
-				self.state().popup = Some(opts.env.clone().unwrap_or_default());
-				return Ok(None);
-			}
-			let target =
-				self.state().pane_list.iter().find(|p| Some(&p.pane_id) == opts.target_pane_id.as_ref()).cloned();
-			let Some(target) = target else { panic!("no pane {:?}", opts.target_pane_id) };
-			let cwd = opts.cwd.as_ref().map(|c| c.display().to_string()).unwrap_or_default();
-			let pane = self.add_pane((&target.workspace_id, &cwd), None, Some(&target.tab_id), None);
-			if let Some(listed) = self.state().pane_list.iter_mut().find(|p| p.pane_id == pane.pane_id) {
-				listed.label = Some(opts.entrypoint.clone());
-			}
-			Ok(Some(pane.pane_id))
-		})
-	}
-
-	fn close_popup(&self) -> BoxFuture<'_, HerdrResult<bool>> {
-		self.record("closePopup", Vec::new());
-		let open = self.state().popup.take().is_some();
-		Box::pin(std::future::ready(Ok(open)))
-	}
-
-	fn set_split_ratio<'a>(&'a self, tab_id: &'a str, ratio: f64) -> BoxFuture<'a, HerdrResult<()>> {
-		self.record("setSplitRatio", vec![json!(tab_id), json!(ratio)]);
 		done()
 	}
 

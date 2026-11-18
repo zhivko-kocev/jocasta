@@ -26,7 +26,7 @@ use crate::setup::setup::{McpUndo, RunProgram, SetupIo, SetupUndo, answered_yes}
 use crate::shared::env;
 use crate::shared::errors::{Error, Result};
 use crate::shared::fsx::{read_json_object, remove_tree, write_atomically};
-use crate::shared::herdr_session::{DEFAULT_SESSION, session_args};
+use crate::shared::herdr_session::DEFAULT_SESSION;
 use crate::shared::install::INSTALL_MARKER;
 use crate::shared::pathkey::{is_inside, resolve, same_path};
 
@@ -163,8 +163,6 @@ pub struct UninstallDeps {
 	pub remove_after_exit: RemoveAfterExit,
 	/// The other processes running a program from the install folder (`processes_under`); none when absent.
 	pub processes_under: Option<ProcessesUnder>,
-	/// Starts herdr's server for `session` headless and waits for it, for `plugin unlink` (0558); absent in tests.
-	pub start_herdr: Option<Arc<dyn Fn() -> BoxFuture<'static, Result<()>> + Send + Sync>>,
 }
 
 /// One thing to remove: what it is, and how.
@@ -179,7 +177,6 @@ enum Action {
 	SetupFolder(PathBuf, Option<String>),
 	Mcp(McpUndo),
 	HerdrIntegration(PathBuf),
-	HerdrPlugin(String),
 	HerdrSession,
 	Keys(PathBuf, Map<String, Value>, bool),
 	Text(PathBuf, String),
@@ -601,9 +598,6 @@ fn undo_removal(item: &SetupUndo) -> Result<Removal> {
 		SetupUndo::Other(Undo::HerdrIntegration { path }) => {
 			(format!("herdr's omp integration: {path}"), Action::HerdrIntegration(PathBuf::from(path)))
 		}
-		SetupUndo::Other(Undo::HerdrPlugin { id, .. }) => {
-			(format!("the `{id}` herdr plugin (unlinked from herdr)"), Action::HerdrPlugin(id.clone()))
-		}
 		SetupUndo::Other(Undo::Keys { path, keys, created }) => (
 			format!("Jocasta's {} in {path}", keys.keys().map(String::as_str).collect::<Vec<_>>().join(", ")),
 			Action::Keys(PathBuf::from(path), keys.clone(), *created),
@@ -644,39 +638,6 @@ fn argv(herdr: &Path, rest: &[&str]) -> Vec<String> {
 	std::iter::once(herdr.to_string_lossy().into_owned()).chain(rest.iter().map(|word| (*word).to_owned())).collect()
 }
 
-/// Unlinks herdr plugin `id`; herdr 0.9.5's replies decide what that said (0558).
-async fn unlink_plugin(id: &str, deps: &UninstallDeps) -> Result<String> {
-	let Some(herdr) = &deps.herdr else {
-		return Ok(format!("herdr isn't installed; the {id} plugin had nothing to unlink"));
-	};
-	static NOT_RUNNING: LazyLock<Regex> =
-		LazyLock::new(|| Regex::new(r"(?i)not.running|unreachable").expect("a fixed pattern"));
-	static NOT_REMOVED: LazyLock<Regex> =
-		LazyLock::new(|| Regex::new(r#""removed":\s*false"#).expect("a fixed pattern"));
-	let unlink = || {
-		let words: Vec<String> =
-			session_args(&deps.session).into_iter().chain(["plugin", "unlink", id].map(str::to_owned)).collect();
-		(deps.run)(argv(herdr, &words.iter().map(String::as_str).collect::<Vec<_>>()))
-	};
-	let mut out = unlink().await?;
-	// Unlinking needs a running server (0558): a headless one for the session, which its own step stops.
-	if out.code != 0
-		&& NOT_RUNNING.is_match(&out.output)
-		&& let Some(start) = &deps.start_herdr
-	{
-		start().await?;
-		out = unlink().await?;
-	}
-	// herdr 0.9.5 answers an unlink of a plugin it doesn't have with exit 0 and `"removed":false`.
-	if out.code == 0 && NOT_REMOVED.is_match(&out.output) {
-		return Ok(format!("the {id} herdr plugin was already unlinked"));
-	}
-	if out.code != 0 {
-		return Err(Error::other(format!("herdr plugin unlink {id} exited {}: {}", out.code, out.output.trim())));
-	}
-	Ok(format!("unlinked the {id} herdr plugin"))
-}
-
 /// Does one removal.
 async fn perform(action: &Action, deps: &UninstallDeps) -> Result<String> {
 	match action {
@@ -695,7 +656,6 @@ async fn perform(action: &Action, deps: &UninstallDeps) -> Result<String> {
 			}
 			Ok("removed herdr's omp integration".to_owned())
 		}
-		Action::HerdrPlugin(id) => unlink_plugin(id, deps).await,
 		Action::HerdrSession => {
 			let herdr = deps.herdr.as_deref().unwrap_or(Path::new("herdr"));
 			// Jocasta's own session is herdr's default one in Jocasta's data folder: its server stops, and its files go
@@ -777,12 +737,10 @@ fn install_removals(install: &InstallRecord) -> Vec<Removal> {
 
 /// Everything to remove, in order.
 fn plan(paths: &UninstallPaths, deps: &UninstallDeps) -> Result<Vec<Removal>> {
+	// A plugin migration 14 linked before the fork sits in another herdr's registry, never Jocasta's to change; its
+	// folder went with migration 18.
 	let is_plugin = |item: &&SetupUndo| matches!(item, SetupUndo::Other(Undo::HerdrPlugin { .. }));
 	let mut removals = Vec::new();
-	// The plugin is unlinked first, while session `jocasta` can still run the server unlinking needs (0558).
-	for item in deps.setup_undo.iter().filter(is_plugin) {
-		removals.push(undo_removal(item)?);
-	}
 	if deps.herdr.is_some() {
 		removals.push(Removal {
 			what: if deps.session == DEFAULT_SESSION {

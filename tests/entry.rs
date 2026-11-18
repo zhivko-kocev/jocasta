@@ -1,6 +1,6 @@
 //! `test/entry.test.ts` and the command's part of `test/shared/cli.test.ts`, as black-box tests of the built
 //! `jocasta` binary: each one starts it with roots of its own, never his real folders, and no omp, herdr or git on its
-//! PATH (0637 gives the usage-error texts clap's format).
+//! PATH (0637 gives the usage-error texts clap's format); the PTY test alone adds git's own folder.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -459,6 +459,38 @@ fn fake_omp(sandbox: &Sandbox) {
 	assert!(built.status.success(), "the fake omp didn't build: {}", String::from_utf8_lossy(&built.stderr));
 }
 
+/// The folder of the git on the test's own PATH, so the sandbox's service finds git and nothing else of the machine's.
+fn git_folder() -> PathBuf {
+	let name = format!("git{}", std::env::consts::EXE_SUFFIX);
+	std::env::split_paths(&std::env::var_os("PATH").expect("a PATH"))
+		.find(|dir| dir.join(&name).is_file())
+		.expect("git on the test's PATH")
+}
+
+/// Runs git in `dir` with an identity of its own.
+fn git(dir: &Path, args: &[&str]) {
+	let out = Command::new("git")
+		.args(["-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "init.defaultBranch=main"])
+		.args(args)
+		.current_dir(dir)
+		.output()
+		.expect("git");
+	assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+}
+
+/// Repository `code/demo` with one commit and a clean worktree `code/demo.wt/left` no thread holds; its path.
+fn leftover_worktree(sandbox: &Sandbox) -> PathBuf {
+	let main = sandbox.path().join("code").join("demo");
+	std::fs::create_dir_all(&main).expect("the repository's folder");
+	std::fs::write(main.join("README.md"), "demo\n").expect("a README");
+	git(&main, &["init", "-q"]);
+	git(&main, &["add", "."]);
+	git(&main, &["commit", "-qm", "First"]);
+	let left = sandbox.path().join("code").join("demo.wt").join("left");
+	git(&main, &["worktree", "add", "-q", "-b", "left", &left.display().to_string()]);
+	left
+}
+
 /// Bare `jocasta` in a terminal of its own (120×40), as he runs it; its output is kept, so herdr's client never
 /// blocks on it, and its tail names a failure.
 struct Terminal {
@@ -469,7 +501,8 @@ struct Terminal {
 }
 
 impl Terminal {
-	fn bare(sandbox: &Sandbox, session: &str) -> Self {
+	/// Bare `jocasta` in session `session`; `also_on_path` joins the sandbox's PATH after its own `bin`.
+	fn bare(sandbox: &Sandbox, session: &str, also_on_path: Option<&Path>) -> Self {
 		use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 		let pair = native_pty_system()
@@ -480,11 +513,22 @@ impl Terminal {
 		for (name, value) in sandbox.roots() {
 			bare.env(name, value);
 		}
+		if let Some(also) = also_on_path {
+			let path = std::env::join_paths([sandbox.path().join("bin").as_path(), also]).expect("a PATH");
+			bare.env("PATH", &path);
+			bare.env("Path", &path);
+		}
 		for name in UNSET {
 			bare.env_remove(name);
 		}
 		bare.env("JOCASTA_HERDR_SESSION", session);
 		bare.env("TERM", "xterm-256color");
+		// herdr's default workspace closes only while its shell shows one prompt line (0495): a plain `sh`, not a bash
+		// that greets with a sudo hint (Ubuntu) or a zsh notice (macOS).
+		if cfg!(unix) {
+			bare.env("SHELL", "/bin/sh");
+			bare.env("BASH_SILENCE_DEPRECATION_WARNING", "1");
+		}
 		let client = pair.slave.spawn_command(bare).expect("starting bare jocasta");
 		drop(pair.slave);
 		let mut screen = pair.master.try_clone_reader().expect("the terminal's output");
@@ -514,6 +558,71 @@ impl Terminal {
 		self.shown.lock().expect("the screen").windows(bytes.len()).any(|window| window == bytes)
 	}
 
+	/// The terminal's 40 rows of 120 cells as drawn so far: text written at the cursor, which `CSI row;col H`, `CSI n C`
+	/// and CR/LF move (herdr's client skips unchanged cells with `CSI n C`); other sequences are skipped.
+	fn screen(&self) -> Vec<String> {
+		let shown = self.shown.lock().expect("the screen");
+		let text = String::from_utf8_lossy(&shown);
+		let mut cells = vec![vec![' '; 120]; 40];
+		let (mut row, mut col) = (0_usize, 0_usize);
+		let mut chars = text.chars();
+		while let Some(c) = chars.next() {
+			match c {
+				'\x1b' => match chars.next() {
+					Some('[') => {
+						let mut params = String::new();
+						let mut last = None;
+						for p in chars.by_ref() {
+							if ('\x40'..='\x7e').contains(&p) {
+								last = Some(p);
+								break;
+							}
+							params.push(p);
+						}
+						let numbers: Vec<usize> = params.split(';').map(|n| n.parse().unwrap_or(1)).collect();
+						let first = numbers.first().copied().unwrap_or(1).max(1);
+						match last {
+							Some('H') => {
+								row = first - 1;
+								col = numbers.get(1).copied().unwrap_or(1).max(1) - 1;
+							}
+							Some('C') => col += first,
+							_ => {}
+						}
+					}
+					// An OSC runs to BEL or ST.
+					Some(']') => while chars.next().is_some_and(|p| p != '\x07' && p != '\x1b') {},
+					_ => {}
+				},
+				'\r' => col = 0,
+				'\n' => row += 1,
+				c if !c.is_control() => {
+					if let Some(cell) = cells.get_mut(row).and_then(|line| line.get_mut(col)) {
+						*cell = c;
+					}
+					col += 1;
+				}
+				_ => {}
+			}
+		}
+		cells.into_iter().map(|line| line.into_iter().collect()).collect()
+	}
+
+	/// The three capital letters drawn right after "Type " on screen: a question's code.
+	fn code(&self) -> Option<String> {
+		self.screen().iter().find_map(|line| {
+			let after = &line[line.find("Type ")? + "Type ".len()..];
+			let code: String = after.chars().take_while(char::is_ascii_uppercase).collect();
+			(code.len() == 3).then_some(code)
+		})
+	}
+
+	/// Types `text` into the terminal.
+	fn type_text(&mut self, text: &str) {
+		self.keys.write_all(text.as_bytes()).expect("typing");
+		self.keys.flush().expect("typing");
+	}
+
 	/// What a failure shows: the terminal's tail, whether the client still runs, and the sandbox's logs.
 	fn report(&mut self, sandbox: &Sandbox, session: &str) -> String {
 		let screen = {
@@ -529,7 +638,12 @@ impl Terminal {
 				format!("{}:\n{}", entry.path().display(), std::fs::read_to_string(entry.path()).unwrap_or_default())
 			})
 			.collect();
-		format!("client {:?}; the terminal: {screen:?}\n{}", self.client.try_wait(), logs.join("\n"))
+		let drawn = self.screen().join("\n");
+		format!(
+			"client {:?}; the screen:\n{drawn}\nthe terminal: {screen:?}\n{}",
+			self.client.try_wait(),
+			logs.join("\n")
+		)
 	}
 }
 
@@ -541,7 +655,7 @@ fn bare_jocasta_runs_the_service_in_herdrs_server_one_that_cant_start_ends_it_sa
 	let service_file = sandbox.path().join("data").join("jocasta-service.json");
 
 	// No omp on PATH: the service can't start, so herdr's server stops, and bare `jocasta` says why and exits 1.
-	let mut first = Terminal::bare(&sandbox, "f");
+	let mut first = Terminal::bare(&sandbox, "f", None);
 	let ended = waited(90, || matches!(first.client.try_wait(), Ok(Some(_))));
 	assert!(ended, "herdr's client outlived a service that didn't start; {}", first.report(&sandbox, "f"));
 	let code = first.client.wait().expect("the client's exit").exit_code();
@@ -555,12 +669,46 @@ fn bare_jocasta_runs_the_service_in_herdrs_server_one_that_cant_start_ends_it_sa
 	drop(first);
 
 	fake_omp(&sandbox);
-	let mut terminal = Terminal::bare(&sandbox, "p");
+	// A project with a leftover worktree, for an Allow; the service runs git from git's own folder.
+	let git_dir = git_folder();
+	let leftover = leftover_worktree(&sandbox);
+	let added = finish(
+		sandbox
+			.jocasta(&["project", "add", &sandbox.path().join("code").join("demo").display().to_string()])
+			.env("PATH", std::env::join_paths([sandbox.path().join("bin").as_path(), &git_dir]).expect("a PATH"))
+			.spawn()
+			.expect("project add"),
+		30,
+	);
+	assert_eq!(added.code, Some(0), "{}{}", added.stdout, added.stderr);
+	let mut terminal = Terminal::bare(&sandbox, "p", Some(&git_dir));
 	assert!(waited(90, || service_file.exists()), "the service never listened; {}", terminal.report(&sandbox, "p"));
 	wait_until(90, "the service never made workspace Jocasta", || has_jocastas_workspace(&sandbox, "p"));
 	assert!(matches!(terminal.client.try_wait(), Ok(None)), "herdr's client ended");
+	// herdr's client draws the dock in the boss's workspace.
+	let docked = waited(60, || terminal.screen().iter().any(|line| line.contains("NEEDS YOU")));
+	assert!(docked, "the dock never showed; {}", terminal.report(&sandbox, "p"));
+	// `jocasta worktree remove` waits for his Allow; the question is drawn in his terminal, its code read off it.
+	let mut remove =
+		sandbox.jocasta(&["worktree", "remove", &leftover.display().to_string()]).spawn().expect("worktree remove");
+	let asked = waited(60, || terminal.code().is_some() || matches!(remove.try_wait(), Ok(Some(_))));
+	if matches!(remove.try_wait(), Ok(Some(_))) {
+		let out = finish(remove, 5);
+		panic!("worktree remove ended unasked: {}{}; {}", out.stdout, out.stderr, terminal.report(&sandbox, "p"));
+	}
+	assert!(asked, "no question with a code showed; {}", terminal.report(&sandbox, "p"));
+	let code = terminal.code().expect("the code");
+	// The question ignores keys for its first 750 ms (0578).
+	thread::sleep(Duration::from_millis(1_500));
+	terminal.type_text(&code.to_lowercase());
+	let answered = waited(60, || matches!(remove.try_wait(), Ok(Some(_))));
+	assert!(answered, "worktree remove still waits after the code {code}; {}", terminal.report(&sandbox, "p"));
+	let removed = finish(remove, 5);
+	assert_eq!(removed.code, Some(0), "{}{}; {}", removed.stdout, removed.stderr, terminal.report(&sandbox, "p"));
+	assert!(!leftover.exists(), "the leftover worktree stayed after his Allow");
 	// A plain server of another session runs no service: it answers, and the service file still names the first.
-	let named = std::fs::read_to_string(&service_file).expect("the service file");
+	let named = std::fs::read_to_string(&service_file)
+		.unwrap_or_else(|error| panic!("the service file: {error}; {}", terminal.report(&sandbox, "p")));
 	let plain = HerdrServer::start(&sandbox);
 	assert!(!has_jocastas_workspace(&sandbox, "t"));
 	drop(plain);

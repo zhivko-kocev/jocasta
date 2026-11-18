@@ -2,24 +2,22 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
 
-use regex::Regex;
 use serde_json::{Map, Value, json};
 
 use super::steps::{
 	MergedFile, SetupChange, Step, apply_sync, folder_undo, json, keeps_only, mcp_step, merged_step, new_file,
-	owned_file, owned_step, read_text, shown, text_step, write_if_unchanged,
+	owned_step, read_text, shown, text_step, write_if_unchanged,
 };
 use super::{
 	HERDR_OMP_EXTENSION, HerdrCheck, RunProgram, SetupDeps, SetupIo, SetupPaths, TOKYO_NIGHT_SCHEME, answered_yes,
-	default_herdr_check, fill,
+	default_herdr_check,
 };
 use crate::frontier::server::ptt_hold::{STT_TOGGLE_KEY, STT_TOGGLE_SETTING};
 use crate::frontier::server::whiteboard::WHITEBOARD_ENV;
 use crate::setup::config_file::parse_json_object;
 use crate::setup::diff::line_diff;
-use crate::setup::markers::{Marker, Undo, fingerprint, read_marker};
+use crate::setup::markers::{Marker, Undo, fingerprint, markers_dir, read_marker};
 use crate::setup::mise::MISE_FRAGMENT;
 use crate::setup::omp_settings::{deep_equals, omp_settings_text};
 use crate::setup::run_value::{RUN_KEY, RUN_VALUE, starts_companion};
@@ -59,9 +57,6 @@ pub(super) fn marker_name(migration: &Migration) -> String {
 /// Said before the diff and in place of "Done" while herdr is missing: the plugin can't be linked (0558, 0584).
 pub(super) const HERDR_MISSING: &str =
 	"herdr isn't installed: install it from https://herdr.dev, then run `jocasta setup` again.";
-
-/// The plugin's manifest file name, shipped in `config/herdr-plugin/` and written to `~/.jocasta/agent/herdr-plugin/`.
-const PLUGIN_MANIFEST: &str = "herdr-plugin.toml";
 
 /// omp's request timeout for the thread's MCP server (0577): a thread's `check` may run for 30 minutes, plus a minute;
 /// omp's own default of 30 s would cut it.
@@ -202,16 +197,6 @@ pub(super) static MIGRATIONS: [Migration; 17] = [
 		plan: plan_autostart_off,
 	},
 	Migration {
-		// The `jocasta` herdr plugin (0553): its manifest with how herdr starts this Jocasta, linked into herdr with
-		// `herdr plugin link`, then herdr's config reloaded so its key bindings find the actions (0558).
-		id: 14,
-		slug: "herdr-plugin",
-		refresh: None,
-		servers: None,
-		legacy_servers: None,
-		plan: plan_herdr_plugin,
-	},
-	Migration {
 		// His own strings omp hides before a request leaves (0593, 0594): the format and an empty list, written when
 		// missing and following Jocasta's text while it is still Jocasta's. His own is kept and never shown: it holds his
 		// strings.
@@ -241,6 +226,16 @@ pub(super) static MIGRATIONS: [Migration; 17] = [
 		servers: None,
 		legacy_servers: None,
 		plan: plan_whiteboard_boss_only,
+	},
+	Migration {
+		// The `jocasta` herdr plugin is gone (fork plan phase 5): herdr's client draws `today` and the questions itself.
+		// Its folder goes, and migration 14's marker with it, so uninstall never looks for the plugin again.
+		id: 18,
+		slug: "herdr-plugin-gone",
+		refresh: None,
+		servers: None,
+		legacy_servers: None,
+		plan: plan_herdr_plugin_gone,
 	},
 ];
 
@@ -422,7 +417,7 @@ fn plan_herdr_config(c: &mut PlanContext) -> Result<Option<Step>> {
 	} else {
 		"herdr config for session `jocasta`"
 	};
-	let wanted = super::herdr_config(&asset(c.paths, &["herdr.toml"])?, &c.paths.data_dir, None);
+	let wanted = asset(c.paths, &["herdr.toml"])?;
 	let mut step = owned_step(title, &path, &wanted, vec![Undo::File { path: shown(&path) }])?;
 	let Some(change) = step.change.take() else { return Ok(Some(step)) };
 	let Some(herdr) = c.deps.herdr.clone() else {
@@ -591,60 +586,27 @@ fn plan_autostart_off(c: &mut PlanContext) -> Result<Option<Step>> {
 	}))
 }
 
-fn plan_herdr_plugin(c: &mut PlanContext) -> Result<Option<Step>> {
-	let Some(herdr) = c.deps.herdr.clone() else {
-		// Nothing to link it into: setup says so instead of "Done" (0584).
-		c.notes.push(HERDR_MISSING.to_owned());
-		return Ok(None);
-	};
+fn plan_herdr_plugin_gone(c: &mut PlanContext) -> Result<Option<Step>> {
 	let dir = c.paths.jocasta_config_dir.join("herdr-plugin");
-	let path = dir.join(PLUGIN_MANIFEST);
-	let template = asset(c.paths, &["herdr-plugin", PLUGIN_MANIFEST])?;
-	let argv = c
-		.paths
-		.jocasta_command
-		.iter()
-		.map(|part| serde_json::to_string(&part.display().to_string()).unwrap_or_default())
-		.collect::<Vec<_>>()
-		.join(", ");
-	let wanted = fill(&template, "{{jocasta}}", &argv);
-	let title =
-		if path.exists() { "Jocasta's herdr plugin, to the shipped manifest" } else { "the `jocasta` herdr plugin" };
-	let file = owned_file(title, &path, &wanted)?;
-	let undo = vec![
-		Undo::HerdrPlugin { id: "jocasta".to_owned(), path: shown(&dir) },
-		folder_undo(&dir, PLUGIN_MANIFEST, c.marker.as_ref()),
-	];
-	let mut step = Step::new(&path, fingerprint(&wanted), undo);
-	let (run, reload) = (c.deps.run.clone(), c.deps.reload_herdr.clone());
-	let (title, mut diff, apply) = match file {
-		Some(file) => (file.title, file.diff, Some(file.apply)),
-		None => ("the `jocasta` herdr plugin, linked".to_owned(), Vec::new(), None),
-	};
-	diff.push(format!("+ herdr plugin link {}", dir.display()));
+	let marker = markers_dir(&c.paths.jocasta_config_dir).join("0014-herdr-plugin.json");
+	let mut step = Step::new(&dir, fingerprint("herdr-plugin-gone"), Vec::new());
+	if !dir.exists() && !marker.exists() {
+		return Ok(Some(step));
+	}
+	let gone = [dir.clone(), marker.clone()];
 	step.change = Some(SetupChange {
-		title,
-		path: shown(&path),
-		diff,
-		kept: Vec::new(),
+		title: "the `jocasta` herdr plugin is gone: Jocasta draws `today` and the questions in herdr's own client".to_owned(),
+		path: shown(&dir),
+		diff: gone.iter().filter(|path| path.exists()).map(|path| format!("- {}", path.display())).collect(),
+		kept: vec![
+			"a herdr installed apart from Jocasta still lists the plugin it linked; `herdr plugin unlink jocasta` there removes it"
+				.to_owned(),
+		],
 		keeps_only: false,
-		apply: Box::new(move |io: &dyn SetupIo| {
+		apply: Box::new(move |_| {
 			Box::pin(async move {
-				if let Some(apply) = apply {
-					apply(io).await?;
-				}
-				let argv = vec![herdr.display().to_string(), "plugin".into(), "link".into(), dir.display().to_string()];
-				let done = run(argv).await?;
-				static ALREADY: LazyLock<Regex> = LazyLock::new(|| Regex::new("(?i)already").expect("a fixed pattern"));
-				if done.code != 0 && !ALREADY.is_match(&done.output) {
-					return Err(Error::user_with_code(
-						format!("herdr plugin link exited {}: {}", done.code, done.output.trim()),
-						1,
-					));
-				}
-				// A running herdr takes the plugin's key bindings after a reload (0558); with none running, the next start does.
-				if let Some(reload) = reload {
-					reload().await?;
+				for path in &gone {
+					remove_tree(path)?;
 				}
 				Ok(())
 			})

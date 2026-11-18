@@ -179,6 +179,11 @@ impl ClientShellState {
                 outcome.actions.push(ClientShellAction::Keybind(action));
             }
             crate::input::KeybindMatch::Command(command) => {
+                // Fork seam (FORK.md): the key that gives Jocasta's dock his keys stays in the client.
+                if command.command == crate::embed::DOCK_COMMAND {
+                    self.focus_dock(outcome);
+                    return;
+                }
                 let action = command.action.into();
                 let resolved_labels = command.bindings.labels();
                 let command_id = self.snapshot.as_deref().and_then(|snapshot| {

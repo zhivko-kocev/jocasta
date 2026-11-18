@@ -25,8 +25,8 @@ use crate::frontier::server::helpers::{
 use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
 use crate::frontier::server::herdr::{
 	AgentState, AgentView, Env, Herdr, HerdrError, HerdrResult, HerdrSnapshot, Note, NotificationResult, OnChange,
-	PaneIds, PaneInfo, PaneMetadata, PluginPaneOptions, RespawnOptions, SplitOptions, StopWatch, TabPane, TabSpec,
-	Tokens, WorkspaceInfo, WorktreeCreated, WorktreeOptions,
+	PaneIds, PaneInfo, PaneMetadata, RespawnOptions, SplitOptions, StopWatch, TabPane, TabSpec, Tokens, WorkspaceInfo,
+	WorktreeCreated, WorktreeOptions,
 };
 use crate::frontier::server::keys::FinishHow;
 use crate::frontier::server::popups::PopupEnd;
@@ -187,18 +187,6 @@ impl Herdr for GatedHerdr {
 		self.inner.focus(pane_id)
 	}
 
-	fn open_plugin_pane<'a>(&'a self, opts: &'a PluginPaneOptions) -> BoxFuture<'a, HerdrResult<Option<String>>> {
-		self.inner.open_plugin_pane(opts)
-	}
-
-	fn close_popup(&self) -> BoxFuture<'_, HerdrResult<bool>> {
-		self.inner.close_popup()
-	}
-
-	fn set_split_ratio<'a>(&'a self, tab_id: &'a str, ratio: f64) -> BoxFuture<'a, HerdrResult<()>> {
-		self.inner.set_split_ratio(tab_id, ratio)
-	}
-
 	fn set_agent_view<'a>(&'a self, view: &'a AgentView) -> BoxFuture<'a, HerdrResult<()>> {
 		self.inner.set_agent_view(view)
 	}
@@ -277,7 +265,7 @@ async fn svc_2_a_thread_started_while_the_tick_tells_the_boss_of_a_closed_one_is
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn svc_3_a_project_pane_whose_omp_cant_start_again_doesnt_end_the_tick_the_thread_pane_runs_omp_again_and_the_hud_is_written()
+async fn svc_3_a_project_pane_whose_omp_cant_start_again_doesnt_end_the_tick_the_thread_pane_runs_omp_again_and_the_sidebar_is_reported()
  {
 	let j = temp_jocasta();
 	let project = demo_project(j.root(), "demo").await;
@@ -286,8 +274,8 @@ async fn svc_3_a_project_pane_whose_omp_cant_start_again_doesnt_end_the_tick_the
 	let path = start_thread(&server, ThreadOptions::default()).await.path;
 	server.service.refresh().await;
 	server.stop().await;
-	let hud = data_dir().join("hud.txt");
-	assert_eq!(fs::read_to_string(&hud).unwrap(), "Jocasta isn't running; start it with jocasta.\n");
+	let reports = || fake.of("reportPaneMetadata").len() + fake.of("reportWorkspaceMetadata").len();
+	let cleared = reports();
 	fake.restore();
 	// The project's own omp config names a public relay: its pane is refused (0536, 0561); the thread's isn't.
 	let main = real_path(&project.main_path);
@@ -303,7 +291,8 @@ async fn svc_3_a_project_pane_whose_omp_cant_start_again_doesnt_end_the_tick_the
 	let respawned =
 		fake.of("respawn").iter().any(|args| path_key(Path::new(args[1]["cwd"].as_str().unwrap())) == path_key(&path));
 	assert!(respawned);
-	assert!(fs::read_to_string(&hud).unwrap().starts_with("0 awaiting you · "));
+	// The tick reached its last step: the sidebar's tokens, cleared at the stop, are reported again.
+	assert!(reports() > cleared);
 	server.stop().await;
 }
 
@@ -825,8 +814,7 @@ async fn c11_his_finish_keys_merge_that_landed_but_left_its_workspace_is_half_do
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn ux_13_fe_4_hud_txt_says_what_awaits_him_and_todays_spend_the_page_gets_the_hud_when_only_the_quota_changed_0581()
- {
+async fn ux_13_fe_4_the_hud_says_what_awaits_him_and_todays_spend_the_page_gets_it_when_only_the_quota_changed_0581() {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
 	let usage = json!({ "reports": [{ "limits": [{ "window": { "id": "5h" }, "amount": { "usedFraction": 0.5 } }] }] })
@@ -841,17 +829,16 @@ async fn ux_13_fe_4_hud_txt_says_what_awaits_him_and_todays_spend_the_page_gets_
 	};
 	with_server(ServerOptions { day: Some(day), ..ServerOptions::default() }, |server| async move {
 		let page = Page::open(&server, "").await;
-		let hud = data_dir().join("hud.txt");
 		server.service.refresh().await;
-		let before = fs::read_to_string(&hud).unwrap();
-		assert!(Regex::new(r"^0 awaiting you · (\$\d+\.\d\d|…) today\n$").unwrap().is_match(&before), "{before:?}");
+		let before = server.service.hud(None).unwrap();
+		assert_eq!(before.awaiting, 0);
 		server.service.day().read_quota().await;
 		server.service.refresh().await;
 		page.wait_for(|m| {
 			matches!(m, ServerMessage::Hud { hud } if hud.quota.iter().any(|q| q.window == QuotaSpan::FiveHours && q.used == 0.5))
 		})
 		.await;
-		assert_eq!(fs::read_to_string(&hud).unwrap(), before);
+		assert_eq!(server.service.hud(None).unwrap().awaiting, before.awaiting);
 		page.close();
 	})
 	.await;

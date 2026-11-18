@@ -27,10 +27,10 @@ While threads work, you keep talking to the boss. It tells you when one needs yo
 - **One boss, many threads.** The boss starts, watches and steers threads; it never edits your code itself. Threads run in parallel, each isolated on its own branch.
 - **Plans before code.** Every thread starts in omp's plan mode and waits for your approval. A thread can carry `done_when` commands, and its review runs them.
 - **Reviews you can trust.** When a thread finishes, [hunk](https://github.com/modem-dev/hunk) opens its diff beside the reviewer's notes. A review fails if the change weakens the tests (a removed test, fewer assertions, an added skip). Design findings are judged against a shipped code-quality rubric.
-- **The `today` pane.** Beside the boss: what needs you, what's underway, what landed today, your calendar, your model quota and today's spend, your notes, and optional weather and news.
+- **`today`.** Beside the boss: what needs you, what's underway, what landed today, your calendar, your model quota and today's spend, your notes, and optional weather and news.
 - **Cost in view.** Each thread shows its spend, its peak context, its cache hits and its compactions. A thread warns you at $50, and the tab bar shows today's total.
 - **Checks once per tree.** A project's checks run once for each git tree state and the result is reused, so an unchanged tree is never tested twice.
-- **Guard rails.** A shipped rule list stops or asks about destructive commands (force pushes, `reset --hard`, recursive deletes, reading tokens). Merges, PRs and other irreversible steps need a code that you type into a popup. A push to `main` asks you once per repo.
+- **Guard rails.** A shipped rule list stops or asks about destructive commands (force pushes, `reset --hard`, recursive deletes, reading tokens). Merges, PRs and other irreversible steps need a code that you type into a question drawn over your terminal. A push to `main` asks you once per repo.
 - **Memory across sessions.** `history_search` lets every agent search past sessions of the same project.
 - **Diagrams.** The boss can draw diagrams and code walkthroughs with [whiteboard](https://github.com/devdotfast/whiteboard), which open in your browser.
 - **Your inbox in one place.** GitHub and Azure DevOps reviews and failed pipelines, plus an iCal calendar, appear in `today`.
@@ -65,7 +65,7 @@ This installs to `%LOCALAPPDATA%\Programs\jocasta\` and adds that folder to your
 jocasta setup
 ```
 
-Setup connects Jocasta to omp and herdr. It registers Jocasta's MCP server with omp, merges recommended omp settings into yours, installs herdr's omp integration and the `jocasta` herdr plugin, and adds a Windows Terminal colour scheme. **Each change is shown as a diff and written only after you type `y`.** Settings you already chose are kept and listed. Run it again after each upgrade. Anything it writes, `jocasta uninstall` takes back out.
+Setup connects Jocasta to omp and herdr. It registers Jocasta's MCP server with omp, merges recommended omp settings into yours, installs herdr's omp integration, and adds a Windows Terminal colour scheme. **Each change is shown as a diff and written only after you type `y`.** Settings you already chose are kept and listed. Run it again after each upgrade. Anything it writes, `jocasta uninstall` takes back out.
 
 **2. Add your projects.** A project is a git repository. Add one at a time:
 
@@ -98,7 +98,7 @@ This opens herdr's session `jocasta`. The boss is on the left, and `today` is on
 1. The thread opens in a new workspace and writes a plan. Read it and approve it in that pane.
 2. It works. `today` shows its state, time, cost and context use.
 3. When it's done, you get a notification, and hunk opens with the review.
-4. Press **Ctrl+B, then Alt+F** to finish it. Choose Merge or PR, then type the three-letter code that the popup shows.
+4. Press **Ctrl+B, then Alt+F** to finish it. Choose Merge or PR, then type the three-letter code that the question shows.
 
 ## Keys
 
@@ -114,7 +114,7 @@ This opens herdr's session `jocasta`. The boss is on the left, and `today` is on
 | Hold Right Ctrl | Talk to the boss from anywhere in Windows. omp transcribes your speech on your machine, and the text is sent when you let go |
 | In `today`: ↑↓, Enter, f, s, r, n | Pick a row, go to it, Finish, Stop, Review, New |
 
-Questions that need your permission appear in a popup in front of whatever you're doing. To allow, type the code it shows. Esc denies, and so does no answer within 2 minutes.
+Questions that need your permission appear in front of whatever you're doing, drawn over your terminal. To allow, type the code it shows. Esc denies, and so does no answer within 2 minutes.
 
 ## Commands
 
@@ -154,7 +154,7 @@ The [manual](https://github.com/zhivko-kocev/jocasta/blob/main/docs/manual.md#wh
 
 ## Learn more
 
-- **[The manual](https://github.com/zhivko-kocev/jocasta/blob/main/docs/manual.md):** everything setup writes, the `today` pane row by row, every config key, the guard's rules, and the Linux and macOS differences.
+- **[The manual](https://github.com/zhivko-kocev/jocasta/blob/main/docs/manual.md):** everything setup writes, `today` row by row, every config key, the guard's rules, and the Linux and macOS differences.
 - **[`docs/decisions/`](https://github.com/zhivko-kocev/jocasta/tree/main/docs/decisions):** why each behaviour is the way it is, with one record per decision.
 - **[`docs/plan.md`](https://github.com/zhivko-kocev/jocasta/blob/main/docs/plan.md):** the design and the vision behind it.
 
@@ -177,7 +177,7 @@ Jocasta is written in Rust. The browser page around whiteboard's canvas is TypeS
 
 - [herdr](https://github.com/herdrdev/herdr) (Apache-2.0): the work surface. Its Tokyo Night theme is Jocasta's palette.
 - [oh-my-pi](https://github.com/can1357/oh-my-pi) (MIT): the agent in every pane, and dictation with its local Parakeet TDT 0.6B v3 model.
-- [ratatui](https://github.com/ratatui/ratatui) (MIT): the `today` pane and the `ask` popup.
+- [ratatui](https://github.com/ratatui/ratatui) (MIT): `today` and the questions.
 - [whiteboard](https://github.com/devdotfast/whiteboard) (MIT): the canvas and its server, shipped with its LICENSE.
 - [hunk](https://github.com/modem-dev/hunk) (MIT): the review pane.
 - [Monaco Editor](https://github.com/microsoft/monaco-editor) (MIT): the canvas's code peeks and diffs.

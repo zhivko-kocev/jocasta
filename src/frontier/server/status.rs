@@ -33,12 +33,8 @@ use crate::frontier::server::wording::{Overlap, money, overlap_said, review_said
 use crate::frontier::server::worktrees::{find_leftovers, git_out};
 use crate::shared::clock::now_ms;
 use crate::shared::errors::{Error, Result};
-use crate::shared::fsx::write_atomically;
 use crate::shared::ledger::{ThreadLedger, ledger_line, thread_ledger};
-use crate::shared::log::{LogLevel, log};
-use crate::shared::paths::data_dir;
 use crate::shared::projects::{Project, list_projects};
-use crate::shared::service_file::NOT_RUNNING;
 
 /// The sidebar tokens expire unless reported again within this time, so a stopped service leaves none (UX-13).
 const METADATA_TTL_MS: i64 = 15 * 60_000;
@@ -141,7 +137,6 @@ struct State {
 	setup_notice: Option<String>,
 	/// Sidebar tokens last reported, per pane and per project workspace, in the order first reported.
 	reported: Vec<(String, Reported)>,
-	hud_shown: String,
 	/// The HUD's figures as last pushed to the page (FE-4): sent whenever they change, the quota's included.
 	hud_sent: String,
 	/// Each thread's changed files, by pane, when they were read and the read's number: read again after a minute
@@ -325,7 +320,7 @@ impl StatusViews {
 		self.say_notices(&c);
 		// One `today` for the HUD and the page (CO-15).
 		let today = c.day.today()?;
-		self.write_hud(&c, &today);
+		self.send_hud(&c, &today);
 		c.day.push_built_today(today)
 	}
 
@@ -447,13 +442,10 @@ impl StatusViews {
 		}
 	}
 
-	/// The service stops (UX-13): the HUD says Jocasta is off, and the sidebar's tokens are cleared when herdr answers;
-	/// tokens a herdr that doesn't answer keeps expire with their TTL.
+	/// The service stops (UX-13): the sidebar's tokens are cleared when herdr answers; tokens a herdr that doesn't
+	/// answer keeps expire with their TTL. The tab bar's figures go with the client shell that draws them.
 	pub async fn clear(&self) {
 		let herdr = self.link.ctx().herdr.clone();
-		if let Err(error) = write_atomically(&data_dir().join("hud.txt"), format!("{NOT_RUNNING}\n"), None) {
-			log(LogLevel::Warn, "service", &format!("hud.txt wasn't written: {error}"), None);
-		}
 		// Never through a stopped server: a request would start it again (0431), on the way out.
 		let ping = tokio::time::timeout(Duration::from_millis(STOP_PING_MS.unsigned_abs()), herdr.ping()).await;
 		if !matches!(ping, Ok(Ok(_))) {
@@ -543,20 +535,10 @@ impl StatusViews {
 		Some(spent)
 	}
 
-	/// `<data>/hud.txt` (0403, 0581), rewritten when it changes: NEEDS YOU's rows and today's spend beside herdr's clock,
-	/// `7 awaiting you · $48.73 today`; the quota is in `today` (0554). The page gets the figures whenever any of them
-	/// changed, the quota's included (FE-4), even when the write failed (then it is tried again on the next change or
-	/// tick, CO-18).
-	fn write_hud(&self, c: &ServiceContext, today: &Today) {
+	/// The HUD's figures (0403, 0581): Awaiting you's rows and today's spend, which the client shell's tab bar and the
+	/// page say. They go out whenever any of them changed, the quota's included (FE-4).
+	fn send_hud(&self, c: &ServiceContext, today: &Today) {
 		let hud = self.hud_for(today);
-		let spend = hud.spend_today.map_or_else(|| "…".to_owned(), money);
-		let text = format!("{} awaiting you · {spend} today", hud.awaiting);
-		if text != self.st().hud_shown {
-			match write_atomically(&data_dir().join("hud.txt"), format!("{text}\n"), None) {
-				Ok(()) => self.st().hud_shown = text,
-				Err(error) => c.warn(format!("hud.txt wasn't written: {error}")),
-			}
-		}
 		let json = serde_json::to_string(&hud).unwrap_or_default();
 		{
 			let mut st = self.st();

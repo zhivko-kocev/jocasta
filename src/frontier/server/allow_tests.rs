@@ -22,8 +22,7 @@ async fn allow_resolves_and_deny_ends_say_truly_how_the_question_ended() {
 	let cases = [
 		(PopupEnd::Answered, "He chose Deny".to_owned(), true),
 		(PopupEnd::WrongCodes, "Three wrong codes, which count as Deny".into(), false),
-		(PopupEnd::Closed, "The popup closed without an answer, which counts as Deny".into(), false),
-		(PopupEnd::SecondReader, "Another program read the question, which counts as Deny".into(), false),
+		(PopupEnd::Closed, "Its terminal closed without an answer, which counts as Deny".into(), false),
 		(PopupEnd::Withdrawn, "The question was withdrawn, which counts as Deny".into(), false),
 	];
 	for (how, why, chose) in cases {

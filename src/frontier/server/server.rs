@@ -1,6 +1,6 @@
 //! The Jocasta service's server (the Rust port of `server.ts`; 4.1, 0392, 0552): 127.0.0.1 on `service.port` (0358), or
 //! a free port for this run when that one is busy; `<data>/jocasta-service.json` with `port`, `token` and `pid`. Every
-//! API call carries the token as a bearer (`jocasta mcp`, bare `jocasta`, the plugin's panes); the browser's pages carry
+//! API call carries the token as a bearer (`jocasta mcp`, bare `jocasta`, the benchmark's clients); the browser's pages carry
 //! a separate page token as a per-port cookie, set from a one-time launch code (`/?t=<code>`, SEC-NET-4, SEC-LOC-11). It
 //! serves the MCP tools, the state feed, his questions and whiteboard's canvas page (0393), and runs the herdr-backed
 //! service. A start that fails stops what it had started, its relay included (SRV-A-2).
@@ -14,28 +14,29 @@ use axum::http::{HeaderName, HeaderValue};
 use axum::response::Response;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
+use serde_json::Value;
 
-use crate::frontier::protocol::{PopupView, ServerMessage, ServiceHealth, ServiceName, ServiceState, TOKEN_QUERY};
+use crate::frontier::protocol::{
+	ClientMessage, PluginAction, PopupView, ServerMessage, ServiceHealth, ServiceName, ServiceState, TOKEN_QUERY,
+};
 use crate::frontier::server::allow::{Answer, CONFIRM_WAIT_MS, Confirm, Confirmation};
+use crate::frontier::server::asker::{Ask, Show, asker};
 use crate::frontier::server::close::{CloseFlow, CloseHow, CloseOutcome, CloseParts, CloseService, close_flow};
 use crate::frontier::server::day::{DayOptions, SharedCatalog};
 use crate::frontier::server::door_routes::{DoorParts, DoorService, door_routes};
-use crate::frontier::server::feed::{FeedService, Guard, feed_route, feed_socket, publish};
+use crate::frontier::server::feed::{FeedService, Guard, Reply, feed_route, feed_socket, publish};
 use crate::frontier::server::health_route::health_route;
-use crate::frontier::server::herdr::{Herdr, HerdrOptions, connect_herdr};
+use crate::frontier::server::herdr::{Herdr, HerdrOptions, Note, connect_herdr};
+use crate::frontier::server::native::{Native, NativeServer};
 use crate::frontier::server::page_routes::{LaunchCodes, PageParts, PageResponder, page_responder, whiteboard_reviews};
-use crate::frontier::server::plugin::{AskOptions, AskPopups, PluginPanes};
-use crate::frontier::server::popup_routes::{
-	ActionParts, ActionService, Ask, Notifier, PopupHolder, PopupParts, QuestionRoute, Show, action_route, asker,
-	popup_routes,
-};
-use crate::frontier::server::popups::{ALLOW, Popup, Popups, allow_question};
+use crate::frontier::server::popups::{ALLOW, AnswerTaken, Popup, Popups, allow_question};
 use crate::frontier::server::relay::{Relay, start_relay};
 use crate::frontier::server::routes::{Route, Served, ServerHandle, listen};
 use crate::frontier::server::service::{FindReview, Heal, JocastaService, OpenReview, RelayUrlOf, ServiceOptions};
 use crate::frontier::server::stop_sequence::{
 	StopBounds, StopParts, StopRun, StopService, StopStep, StopWhen, Stopper, stop_steps, stopper, undo_start,
 };
+use crate::frontier::server::thread_keys::{ActionService, KeyParts, ThreadKeys};
 use crate::frontier::server::whiteboard::{
 	ServiceStatus, Whiteboard, WhiteboardOptions, is_stage_file, start_whiteboard,
 };
@@ -141,12 +142,11 @@ pub struct ServerOptions {
 	/// whiteboard's server (0393): started from the install or the built clone by default (`None`); `Some(None)` for
 	/// none (tests).
 	pub whiteboard: Option<Option<WhiteboardOptions>>,
-	/// Shows a question to him (the herdr popup, 0553): it gets the question's one-time code. Until something shows it,
-	/// a question is answered only through `POST /api/popup/<code>`.
+	/// Shows a question to him (test seam): it gets the question's one-time code, and the shell shows none.
 	pub on_question: Option<OnQuestion>,
-	/// The herdr plugin (0553): `today` beside the boss, the Agents view, his questions in its `ask` popup (unless
-	/// `on_question` shows them) and his thread keys. On with the real herdr, off with a test's `herdr` unless set.
-	pub plugin: Option<bool>,
+	/// herdr's client shells (fork plan phase 5): the dock beside the boss, the Agents view, his questions and his
+	/// thread keys. The service herdr's server runs has them; a test's server has none unless set.
+	pub shell: Option<Arc<Native>>,
 	/// Opens a new terminal attached to herdr's session, as bare `jocasta` does (0549): his client closed while
 	/// threads are at work, so the close question has somewhere to show. A new Windows Terminal window running
 	/// `jocasta` by default (test seam).
@@ -211,6 +211,9 @@ struct Inner {
 	stops: Arc<Stopper>,
 	close: CloseFlow,
 	question: Ask,
+	popups: Arc<Popups>,
+	keys: Arc<ThreadKeys>,
+	herdr: Arc<dyn Herdr>,
 }
 
 impl JocastaServer {
@@ -256,11 +259,54 @@ impl JocastaServer {
 		self.service.start().await
 	}
 
-	/// Asks him a question (0519, 0552): its one-time code goes to `on_question` (what shows it) and nowhere else; its
-	/// answer comes through `POST /api/popup/<code>`. Every open one ends unanswered when the server stops. `from_key`:
-	/// one of his keys opened it (no notification; Allow questions go first, 0578, 0581).
+	/// Asks him a question (0519, 0552): its one-time code goes to what shows it (herdr's client shell in front, a
+	/// test's `on_question`) and nowhere else. Every open one ends unanswered when the server stops. `from_key`: one of
+	/// his keys opened it (no notification; Allow questions go first, 0578, 0581).
 	pub fn question(&self, view: &PopupView, signal: Option<AbortSignal>, from_key: bool) -> Popup {
 		(self.inner.question)(view, signal, from_key)
+	}
+
+	/// Takes an answer to question `code` as its shell sends it: what it made of it, and the wrong codes it still takes.
+	pub fn answer(&self, code: &str, answer: &Value) -> (AnswerTaken, u32) {
+		let popups = &self.inner.popups;
+		let taken = popups.answer(code, answer);
+		(taken, popups.left(code))
+	}
+}
+
+impl NativeServer for JocastaServer {
+	fn answer(&self, code: &str, answer: &Value) -> (AnswerTaken, u32) {
+		JocastaServer::answer(self, code, answer)
+	}
+
+	fn key(&self, action: PluginAction, pane_id: Option<String>) -> BoxFuture<'static, ()> {
+		let keys = Arc::clone(&self.inner.keys);
+		async move { keys.run(action, pane_id).await }.boxed()
+	}
+
+	fn snapshot(&self) -> Option<ServerMessage> {
+		match FeedService::snapshot(&*self.service) {
+			Ok(snapshot) => Some(snapshot),
+			Err(error) => {
+				log(LogLevel::Error, "server", &format!("the shell's snapshot failed: {error}"), None);
+				None
+			}
+		}
+	}
+
+	fn handle(&self, message: ClientMessage, reply: Reply) -> BoxFuture<'static, ()> {
+		let service = Arc::clone(&self.service);
+		async move { FeedService::handle(&*service, message, reply).await }.boxed()
+	}
+
+	fn notify(&self, note: Note) -> BoxFuture<'static, ()> {
+		let herdr = Arc::clone(&self.inner.herdr);
+		async move {
+			if let Err(error) = herdr.notify(&note).await {
+				log(LogLevel::Warn, "question", &format!("the question's notification failed: {error}"), None);
+			}
+		}
+		.boxed()
 	}
 }
 
@@ -389,10 +435,9 @@ struct Tokens {
 	page: String,
 }
 
-/// What shows and asks his questions.
+/// What asks his questions.
 struct Questions {
 	popups: Arc<Popups>,
-	ask_popups: Option<Arc<AskPopups>>,
 	question: Ask,
 }
 
@@ -425,36 +470,34 @@ fn relay_stop(relay: &Arc<Relay>) -> StopRun {
 	})
 }
 
-/// The questions' asker: what shows a question is the test's `on_question`, else the plugin's popup once herdr is
-/// connected (0553).
-fn questions(options: &mut ServerOptions, herdr: &Arc<dyn Herdr>, plugin: bool) -> Questions {
+/// The questions' asker: what shows a question is the test's `on_question`, else herdr's client shell in front.
+fn questions(options: &mut ServerOptions, shell: Option<&Arc<Native>>) -> Questions {
 	let popups = Arc::new(Popups::new());
-	let ask_popups = plugin.then(|| Arc::new(AskPopups::new(Arc::clone(herdr), AskOptions::default())));
-	let show: Option<Show> = match (options.on_question.take(), &ask_popups) {
+	let show: Option<Show> = match (options.on_question.take(), shell) {
 		(Some(on_question), _) => Some(Arc::new(move |popup: &Popup| {
 			on_question(popup);
 			Ok(())
 		})),
-		(None, Some(ask_popups)) => {
-			let ask_popups = Arc::clone(ask_popups);
+		(None, Some(shell)) => {
+			let shell = Arc::clone(shell);
 			Some(Arc::new(move |popup: &Popup| {
-				ask_popups.show(popup);
+				shell.show(popup);
 				Ok(())
 			}))
 		}
 		(None, None) => None,
 	};
 	let question = asker(Arc::clone(&popups), show);
-	Questions { popups, ask_popups, question }
+	Questions { popups, question }
 }
 
-/// The plugin's panes, healed on every refresh (0553): the service's `plugin` hook.
-fn heal_of(herdr: &Arc<dyn Herdr>) -> Heal {
-	let panes = Arc::new(PluginPanes::new(Arc::clone(herdr), None));
+/// The Agents view and the dock's workspace, healed on every refresh: the service's `plugin` hook.
+fn heal_of(herdr: &Arc<dyn Herdr>, shell: Arc<Native>) -> Heal {
+	let herdr = Arc::clone(herdr);
 	Arc::new(move |snapshot, boss| {
-		let panes = Arc::clone(&panes);
+		let (herdr, shell) = (Arc::clone(&herdr), Arc::clone(&shell));
 		Box::pin(async move {
-			panes.heal(&snapshot, boss.as_deref()).await;
+			shell.heal(&*herdr, &snapshot, boss.as_deref()).await;
 			Ok(())
 		})
 	})
@@ -468,13 +511,13 @@ fn build_service(
 	whiteboard: Option<&Arc<Whiteboard>>,
 	page_open: Arc<dyn Fn(&str) + Send + Sync>,
 ) -> Result<(Arc<JocastaService>, Questions)> {
-	let plugin = options.plugin.unwrap_or(options.herdr.is_none());
-	let asking = questions(options, herdr, plugin);
+	let shell = options.shell.clone();
+	let asking = questions(options, shell.as_ref());
 	let mut service = ServiceOptions::new(Arc::clone(herdr), Arc::clone(broadcast));
 	let (find_review, open_review) = (options.find_review.take(), options.open_review.take());
 	let confirm = options.confirm.take();
 	options.pass_on(&mut service);
-	service.plugin = plugin.then(|| heal_of(herdr));
+	service.plugin = shell.map(|shell| heal_of(herdr, shell));
 	service.confirm = Some(confirm.unwrap_or_else(|| allow_box(Arc::clone(&asking.question))));
 	let row = whiteboard.cloned();
 	service.services =
@@ -557,39 +600,37 @@ fn close_of(rig: &Rig<'_>, stops: &Arc<Stopper>, reattach: Option<Reattach>) -> 
 	})
 }
 
-/// The API's routes in order, before the pages, and his questions' route among the pages' bearer routes.
-fn routes_of(rig: &Rig<'_>, close: &CloseFlow, waiting_ms: i64) -> (Vec<Box<dyn Route>>, QuestionRoute) {
-	let holder: Option<Arc<dyn PopupHolder>> =
-		rig.asking.ask_popups.as_ref().map(|popups| Arc::clone(popups) as Arc<dyn PopupHolder>);
-	let popup = popup_routes(PopupParts {
-		token: rig.tokens.api.clone(),
-		popups: Arc::clone(&rig.asking.popups),
-		ask_popups: holder.clone(),
-		service: Arc::clone(rig.service) as Arc<dyn Notifier>,
-	});
-	let (closed, quitting) = (close.clone(), close.clone());
-	let mut routes = door_routes(DoorParts {
+/// The API's routes in order, before the pages.
+fn routes_of(rig: &Rig<'_>, close: &CloseFlow) -> Vec<Box<dyn Route>> {
+	let closed = close.clone();
+	door_routes(DoorParts {
 		token: rig.tokens.api.clone(),
 		service: Arc::clone(rig.service) as Arc<dyn DoorService>,
 		client_closed: Arc::new(move || {
 			let close = closed.clone();
 			tokio::spawn(async move { close.close(CloseHow { ask: true, reattach: true }).await });
 		}),
-	});
-	routes.push(Box::new(action_route(ActionParts {
-		token: rig.tokens.api.clone(),
+	})
+}
+
+/// His thread keys, from the dock or his keybinds.
+fn keys_of(rig: &Rig<'_>, close: &CloseFlow, waiting_ms: i64, shell: Option<Arc<Native>>) -> Arc<ThreadKeys> {
+	let quitting = close.clone();
+	ThreadKeys::new(KeyParts {
 		service: Arc::clone(rig.service) as Arc<dyn ActionService>,
 		ask: Arc::clone(&rig.asking.question),
-		ask_popups: holder,
+		front: Box::new(move |popup| {
+			if let Some(shell) = &shell {
+				shell.front(popup);
+			}
+		}),
 		broadcast: Arc::clone(rig.broadcast),
 		quit: Arc::new(move || {
 			let close = quitting.clone();
 			async move { close.close(CloseHow { ask: true, reattach: false }).await }.boxed()
 		}),
 		waiting_ms,
-	})));
-	routes.push(Box::new(popup.hold));
-	(routes, popup.question)
+	})
 }
 
 /// The undo step that closes herdr's connection.
@@ -679,13 +720,12 @@ fn undo_server(handle: &ServerHandle) -> StopStep {
 	)
 }
 
-/// The page responder: the bearer's `/health` and his questions, and the browser's pages.
+/// The page responder: the bearer's `/health`, and the browser's pages.
 fn pages_of(
 	tokens: &Tokens,
 	parts: (&Arc<LaunchCodes>, &Arc<AtomicU16>),
 	whiteboard: Option<Arc<Whiteboard>>,
 	health: Box<dyn Fn() -> bool + Send + Sync>,
-	question: QuestionRoute,
 ) -> PageResponder {
 	let (codes, port) = (Arc::clone(parts.0), Arc::clone(parts.1));
 	page_responder(PageParts {
@@ -694,7 +734,7 @@ fn pages_of(
 		codes,
 		port: Arc::new(move || port.load(Ordering::SeqCst)),
 		whiteboard,
-		bearer_routes: vec![Box::new(health_route(&tokens.api, health)), Box::new(question)],
+		bearer_routes: vec![Box::new(health_route(&tokens.api, health))],
 	})
 }
 
@@ -706,7 +746,13 @@ async fn start_rest(
 ) -> Result<JocastaServer> {
 	let listening: Arc<Mutex<Option<ServerHandle>>> = Arc::new(Mutex::new(None));
 	let slot = Arc::clone(&listening);
-	let broadcast: Broadcast = Arc::new(move |message| publish(locked(&slot).as_ref(), &message));
+	let shell = options.shell.clone();
+	let broadcast: Broadcast = Arc::new(move |message| {
+		if let Some(shell) = &shell {
+			shell.feed(&message);
+		}
+		publish(locked(&slot).as_ref(), &message);
+	});
 	let session = match options.herdr_session.take() {
 		Some(session) => session,
 		None => herdr_session()?,
@@ -737,10 +783,9 @@ async fn start_rest(
 	};
 	let stops = stopper_of(&rig, relay_stop(&relay), &listening, options.stop_bounds_ms);
 	let close = close_of(&rig, &stops, options.reattach.take());
-	let (mut routes, question_route) = routes_of(&rig, &close, waiting_ms);
+	let mut routes = routes_of(&rig, &close);
 	let closing = Arc::clone(&stops);
-	let pages =
-		pages_of(&tokens, (&codes, &port), whiteboard.clone(), Box::new(move || closing.stopping()), question_route);
+	let pages = pages_of(&tokens, (&codes, &port), whiteboard.clone(), Box::new(move || closing.stopping()));
 	let guard: Guard = Arc::new(|response, port| guarded(response, port, None));
 	let feed = feed_socket(Arc::clone(&service) as Arc<dyn FeedService>);
 	routes.push(Box::new(feed_route(&tokens.api, guard, feed)));
@@ -761,13 +806,14 @@ async fn start_rest(
 			log(LogLevel::Error, "service", &format!("didn't start: {error}"), None);
 		}
 	});
+	let keys = keys_of(&rig, &close, waiting_ms, options.shell.clone());
 	Ok(JocastaServer {
 		port: handle.port(),
 		token: tokens.api,
 		relay_port: relay.port,
 		service,
 		whiteboard,
-		inner: Arc::new(Inner { codes, stops, close, question: asking.question }),
+		inner: Arc::new(Inner { codes, stops, close, question: asking.question, popups: asking.popups, keys, herdr }),
 	})
 }
 

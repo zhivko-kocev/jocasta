@@ -276,27 +276,6 @@ pub struct Note {
 	pub sound: Sound,
 }
 
-/// Where a plugin's pane opens.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Placement {
-	Split,
-	Popup,
-}
-
-/// One of a herdr plugin's panes to open.
-#[derive(Debug, Clone)]
-pub struct PluginPaneOptions {
-	pub plugin_id: String,
-	pub entrypoint: String,
-	pub placement: Placement,
-	pub target_pane_id: Option<String>,
-	pub direction: Option<Direction>,
-	pub cwd: Option<PathBuf>,
-	pub env: Option<Env>,
-	/// `false` when omitted.
-	pub focus: Option<bool>,
-}
-
 /// The Agents view's filter and sort for `source`.
 #[derive(Debug, Clone, Default)]
 pub struct AgentView {
@@ -367,13 +346,6 @@ pub trait Herdr: Send + Sync {
 	/// herdr's `request` sound or none. Resolves herdr's reason: `Shown`, or why not.
 	fn notify<'a>(&'a self, note: &'a Note) -> BoxFuture<'a, HerdrResult<NotificationResult>>;
 	fn focus<'a>(&'a self, pane_id: &'a str) -> BoxFuture<'a, HerdrResult<()>>;
-	/// Opens one of a herdr plugin's panes (`plugin.pane.open`, 0553): `Split` beside `target_pane_id` resolves the new
-	/// pane's id; `Popup` (no pane id) resolves `None`. `env` reaches the launched process.
-	fn open_plugin_pane<'a>(&'a self, opts: &'a PluginPaneOptions) -> BoxFuture<'a, HerdrResult<Option<String>>>;
-	/// Closes the session's open popup (`popup.close`); false when none is open.
-	fn close_popup(&self) -> BoxFuture<'_, HerdrResult<bool>>;
-	/// Sets a tab's top split: `ratio` of it for the first side (`layout.set_split_ratio`, path `[]`).
-	fn set_split_ratio<'a>(&'a self, tab_id: &'a str, ratio: f64) -> BoxFuture<'a, HerdrResult<()>>;
 	/// Installs the Agents view's filter and sort for `source` (`agent.view.set`, 0553).
 	fn set_agent_view<'a>(&'a self, view: &'a AgentView) -> BoxFuture<'a, HerdrResult<()>>;
 	/// What the pane shows now, as plain text (`pane.read`, its visible viewport).
@@ -988,21 +960,6 @@ struct WireRead {
 	text: String,
 }
 
-#[derive(Deserialize)]
-struct PluginOpened {
-	pane: Option<PluginPane>,
-}
-
-#[derive(Deserialize)]
-struct PluginPane {
-	pane: Option<PluginPaneInfo>,
-}
-
-#[derive(Deserialize)]
-struct PluginPaneInfo {
-	pane_id: Option<String>,
-}
-
 fn pane_info(pane: WirePane) -> PaneInfo {
 	let session = pane.agent_session.as_ref().filter(|s| s.kind.as_deref() == Some("path"));
 	PaneInfo {
@@ -1325,41 +1282,6 @@ impl HerdrClient {
 		Ok(NotificationResult::of(answer.get("reason").and_then(Value::as_str)))
 	}
 
-	async fn open_plugin_pane(&self, opts: &PluginPaneOptions) -> HerdrResult<Option<String>> {
-		// plugin.pane.open {plugin_id, entrypoint, placement, target_pane_id, direction, cwd, env, focus} →
-		// `{type: "plugin_pane_opened", pane: {plugin_id, entrypoint, pane: PaneInfo}}` for a split, `{type: "ok"}` for
-		// a popup (socket-api.mdx "plugin.pane.open"; schema `PluginPaneOpenParams`, `PluginPaneInfo`).
-		let mut params = Map::new();
-		params.insert("plugin_id".to_owned(), json!(opts.plugin_id));
-		params.insert("entrypoint".to_owned(), json!(opts.entrypoint));
-		params
-			.insert("placement".to_owned(), json!(if opts.placement == Placement::Split { "split" } else { "popup" }));
-		if let Some(target) = opts.target_pane_id.as_ref().filter(|t| !t.is_empty()) {
-			params.insert("target_pane_id".to_owned(), json!(target));
-		}
-		if let Some(direction) = opts.direction {
-			params.insert("direction".to_owned(), json!(direction.as_str()));
-		}
-		if let Some(cwd) = opts.cwd.as_ref().filter(|cwd| !cwd.as_os_str().is_empty()) {
-			params.insert("cwd".to_owned(), path_json(cwd));
-		}
-		if let Some(env) = &opts.env {
-			params.insert("env".to_owned(), env_json(env));
-		}
-		params.insert("focus".to_owned(), json!(opts.focus.unwrap_or(false)));
-		let opened: PluginOpened = self.client.request("plugin.pane.open", &Value::Object(params), None).await?;
-		Ok(opened.pane.and_then(|p| p.pane).and_then(|p| p.pane_id))
-	}
-
-	async fn close_popup(&self) -> HerdrResult<bool> {
-		// popup.close {} → `{type: "ok"}`, or error `popup_not_open`.
-		match self.client.request_value("popup.close", &json!({}), None).await {
-			Ok(_) => Ok(true),
-			Err(error) if error.code == "popup_not_open" => Ok(false),
-			Err(error) => Err(error),
-		}
-	}
-
 	async fn report_pane_metadata(&self, pane_id: &str, meta: &PaneMetadata) -> HerdrResult<()> {
 		// pane.report_metadata {pane_id, source, tokens, state_labels, ttl_ms}: display-only; tokens render as `$name`
 		// in sidebar rows; `null` clears a token; `ttl_ms` (1 ms to 24 h) expires the report (socket-api.mdx "Agent
@@ -1510,23 +1432,6 @@ impl Herdr for HerdrClient {
 		Box::pin(async move {
 			// pane.focus {pane_id} switches to the pane's workspace and tab and marks it seen.
 			self.client.request_value("pane.focus", &json!({"pane_id": pane_id}), None).await.map(drop)
-		})
-	}
-
-	fn open_plugin_pane<'a>(&'a self, opts: &'a PluginPaneOptions) -> BoxFuture<'a, HerdrResult<Option<String>>> {
-		Box::pin(HerdrClient::open_plugin_pane(self, opts))
-	}
-
-	fn close_popup(&self) -> BoxFuture<'_, HerdrResult<bool>> {
-		Box::pin(HerdrClient::close_popup(self))
-	}
-
-	fn set_split_ratio<'a>(&'a self, tab_id: &'a str, ratio: f64) -> BoxFuture<'a, HerdrResult<()>> {
-		Box::pin(async move {
-			// layout.set_split_ratio {tab_id, path, ratio}: `path` [] is the tab's top split; `ratio` is the first
-			// side's share.
-			let params = json!({"tab_id": tab_id, "path": [], "ratio": ratio});
-			self.client.request_value("layout.set_split_ratio", &params, None).await.map(drop)
 		})
 	}
 

@@ -701,6 +701,10 @@ impl ClientShellState {
             }
             return;
         }
+        // Fork seam (FORK.md): Jocasta's dock.
+        if self.overlay.is_none() && self.extension_takes_mouse(mouse, outcome) {
+            return;
+        }
         if matches!(
             self.overlay,
             Some(ClientShellOverlay::ProductAnnouncement(_))

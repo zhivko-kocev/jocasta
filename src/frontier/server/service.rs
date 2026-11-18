@@ -27,6 +27,7 @@ use crate::frontier::protocol::{
 	ToastReason, Today,
 };
 use crate::frontier::server::allow::Confirm;
+use crate::frontier::server::asker::Notifier;
 use crate::frontier::server::boss::fresh_session;
 use crate::frontier::server::checks::CheckRunner;
 use crate::frontier::server::close::CloseService;
@@ -37,14 +38,13 @@ use crate::frontier::server::events::{Toast, clean};
 use crate::frontier::server::feed::{FeedService, Reply};
 use crate::frontier::server::herdr::{AgentState, Env, Herdr, HerdrSnapshot, StopWatch, pane_text};
 use crate::frontier::server::keys::{FinishHow, KeyFinishable, KeyOutcome, Keys, NewThreadForm};
-use crate::frontier::server::plugin::KeyService;
-use crate::frontier::server::popup_routes::Notifier;
 use crate::frontier::server::popups::Counts;
 use crate::frontier::server::ptt_hold::STT_TOGGLE_KEY;
 use crate::frontier::server::push_gate::PushGate;
 use crate::frontier::server::refresh::Refresher;
 use crate::frontier::server::status::Busy;
 use crate::frontier::server::stop_sequence::StopService;
+use crate::frontier::server::thread_keys::KeyService;
 use crate::frontier::server::tools::{Caller, ToolReply, Tools};
 use crate::frontier::server::watcher::{Watcher, WatcherOptions, start_watcher};
 use crate::frontier::server::worklog::WorklogSession;

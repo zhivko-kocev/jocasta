@@ -6,7 +6,6 @@
 
 use std::sync::Arc;
 
-use crate::frontier::server::boss::is_today_pane;
 use crate::frontier::server::context::ServiceContext;
 use crate::frontier::server::finish::Finishable;
 use crate::frontier::server::herdr::AgentState;
@@ -34,14 +33,6 @@ impl KeyAction {
 			Self::Finish => "Finish",
 			Self::Stop => "Stop",
 			Self::Review => "Review",
-		}
-	}
-
-	fn today_key(self) -> &'static str {
-		match self {
-			Self::Finish => "f",
-			Self::Stop => "s",
-			Self::Review => "r",
 		}
 	}
 }
@@ -122,13 +113,6 @@ impl Keys {
 			let of_workspace = c.threads.all().into_iter().find(|t| t.with(|t| t.workspace_id == pane.workspace_id));
 			if let Some(thread) = of_workspace {
 				return Ok(thread);
-			}
-			if is_today_pane(pane) {
-				return Err(Error::user(format!(
-					"{}: in today, press {} on the picked thread.",
-					action.name(),
-					action.today_key()
-				)));
 			}
 		}
 		Err(Error::user(format!(

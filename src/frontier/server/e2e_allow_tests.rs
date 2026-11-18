@@ -15,15 +15,15 @@ use serde_json::{Value, json};
 use crate::frontier::server::allow::{Answer, Confirm, Confirmation};
 use crate::frontier::server::day::{Clock, DayOptions};
 use crate::frontier::server::helpers::{
-	TestServer, ThreadOptions, boss_pane, call, call_as, commit_in, demo_project, http, sh, start_thread, until,
-	with_server, with_test_defaults, write_settings,
+	TestServer, ThreadOptions, boss_pane, call, call_as, commit_in, demo_project, sh, start_thread, until, with_server,
+	with_test_defaults, write_settings,
 };
 use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
 use crate::frontier::server::herdr::{AgentState, Herdr};
 use crate::frontier::server::history::{HistoryEntry, add_history};
 use crate::frontier::server::overlay::overlay_file;
 use crate::frontier::server::popups::PopupEnd;
-use crate::frontier::server::server::{OnQuestion, ServerOptions, start_server};
+use crate::frontier::server::server::{JocastaServer, OnQuestion, ServerOptions, start_server};
 use crate::frontier::server::tools::ToolReply;
 use crate::shared::install::shipped_config_dir;
 use crate::shared::pathkey::path_key;
@@ -172,7 +172,7 @@ async fn start_with_question_api(options: ServerOptions) -> TestServer {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn lesson_saves_only_after_his_allow_of_its_text_deny_three_wrong_codes_a_closed_popup_a_second_reader_no_answer_within_the_wait_or_deny_through_the_question_api_saves_nothing_each_said_truly_0484_0552_0578()
+async fn lesson_saves_only_after_his_allow_of_its_text_deny_three_wrong_codes_its_terminal_closed_no_answer_within_the_wait_or_deny_through_the_question_api_saves_nothing_each_said_truly_0484_0552_0578()
  {
 	let j = temp_jocasta();
 	let project = demo_project(j.root(), "demo").await;
@@ -215,8 +215,7 @@ async fn lesson_saves_only_after_his_allow_of_its_text_deny_three_wrong_codes_a_
 	// How the question ended is said as it was (0578, C3).
 	let ends = [
 		(PopupEnd::WrongCodes, "Three wrong codes, which count as Deny; the lesson wasn't saved."),
-		(PopupEnd::Closed, "The popup closed without an answer, which counts as Deny; the lesson wasn't saved."),
-		(PopupEnd::SecondReader, "Another program read the question, which counts as Deny; the lesson wasn't saved."),
+		(PopupEnd::Closed, "Its terminal closed without an answer, which counts as Deny; the lesson wasn't saved."),
 	];
 	for (how, text) in ends {
 		let confirm: Confirm = Arc::new(move |_, _| async move { Ok(Answer { allow: false, how }) }.boxed());
@@ -251,34 +250,22 @@ async fn lesson_saves_only_after_his_allow_of_its_text_deny_three_wrong_codes_a_
 		}
 	})
 	.await;
-	// Without a test confirm: his Allow box is a question through the service's API, answered there with its code.
+	// Without a test confirm: his Allow box is a question of the service's, answered as its shell sends an answer.
 	let asked = Arc::new(Mutex::new(Vec::<String>::new()));
-	let address: Arc<OnceLock<(u16, String)>> = Arc::new(OnceLock::new());
+	let address: Arc<OnceLock<JocastaServer>> = Arc::new(OnceLock::new());
 	let on_question: OnQuestion = {
 		let (asked, address) = (asked.clone(), address.clone());
 		Arc::new(move |popup| {
 			locked(&asked).push(popup.view().message.clone());
-			let (port, token) = address.get().expect("the server is up").clone();
-			let url = format!("http://127.0.0.1:{port}/api/popup/{}", popup.code());
-			// One reader per question (0578): the view first, then the answer with its reader secret.
+			let (server, code) = (address.get().expect("the server is up").clone(), popup.code().to_owned());
 			tokio::spawn(async move {
-				let client = http();
-				let view = client.get(&url).bearer_auth(&token).send().await.expect("the view");
-				let reader =
-					view.headers().get("x-jocasta-reader").and_then(|v| v.to_str().ok()).unwrap_or("").to_owned();
-				let _ = client
-					.post(&url)
-					.bearer_auth(&token)
-					.header("x-jocasta-reader", reader)
-					.body(json!({ "choice": "Deny" }).to_string())
-					.send()
-					.await;
+				server.answer(&code, &json!({ "choice": "Deny" }));
 			});
 		})
 	};
 	let server =
 		start_with_question_api(ServerOptions { on_question: Some(on_question), ..ServerOptions::default() }).await;
-	address.set((server.port, server.token.clone())).unwrap();
+	assert!(address.set(server.server.clone()).is_ok());
 	let outcome = {
 		let (server, args) = (server.clone(), args.clone());
 		tokio::spawn(async move {

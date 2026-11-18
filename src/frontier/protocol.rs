@@ -1,10 +1,10 @@
-//! The service's state feed and question API (4.1, 0409, 0552): typed JSON messages from the Jocasta service to a
-//! client (the herdr plugin's panes, 0553) and the questions it asks him. The service owns this file.
+//! The service's state feed and its messages to herdr's client shell (4.1, 0409, 0552; fork plan phase 5): typed JSON
+//! messages from the Jocasta service to a client and the questions it asks him. The service owns this file.
 //!
-//! Transport: a client opens `ws://127.0.0.1:<port>/ws` with the service's token as `Authorization: Bearer <token>`
-//! (0254; a browser page has no socket and no API token, SEC-NET-4). Every message is one JSON object with a `type`.
-//! Questions (the close question, his Allow) are read and answered over HTTP with a one-time code, never broadcast
-//! (0519).
+//! Transport: herdr's client shell gets them over herdr's own client connection (the `SHELL_*` kinds below); another
+//! client (the benchmark's) opens `ws://127.0.0.1:<port>/ws` with the service's token as `Authorization: Bearer <token>`
+//! (0254; a browser page has no socket and no API token, SEC-NET-4). Every feed message is one JSON object with a
+//! `type`. A question goes to one client only, never broadcast (0519, 0578).
 
 use std::path::PathBuf;
 
@@ -23,26 +23,65 @@ pub fn token_cookie(port: u16) -> String {
 	format!("{TOKEN_COOKIE}_{port}")
 }
 
-/// Where a question's view reads its texts (`GET /api/popup/<code>`) and posts its answer (`POST /api/popup/<code>`, body
-/// `PopupAnswer`), with the service's token and the question's one-time code (0519). The code is never listed or
-/// broadcast: the service hands it only to what shows the question (the herdr popup, 0553). The popup holds
-/// `GET /api/popup/<code>/hold` open while it shows the question: the question ends unanswered when that request ends
-/// before an answer (closing the popup any other way denies, 0558), and the service ends it once the question is over.
-///
-/// One reader per question (0578): the first `GET /api/popup/<code>` answers the view with a reader secret in the
-/// `POPUP_READER_HEADER` response header; the hold and the answer must carry it in the same request header (403
-/// otherwise). A second GET for an open question ends it as its fallback (410) and warns him. The answer's replies:
-/// 204 taken; 409 a wrong code, body `{"left": n}` (tries left); 410 the third wrong code, which took the fallback.
-pub const POPUP_PATH: &str = "/api/popup/";
-/// The suffix of a popup's held request (`POPUP_PATH` + code + this).
-pub const POPUP_HOLD: &str = "/hold";
-/// The variable that hands the plugin's `ask` popup its question's one-time code (0553), through herdr's `--env`.
-pub const POPUP_ENV: &str = "JOCASTA_POPUP";
-/// The header carrying a question's reader secret (0578): set on the first view read, required on its hold and answer.
-pub const POPUP_READER_HEADER: &str = "x-jocasta-reader";
-/// His thread keys (0544, 0554): `POST /api/plugin/action` with the service's token, body `{action, paneId?}`; answered
-/// at once (202), the outcome follows as an `action` message and, when refused, a notification.
-pub const PLUGIN_ACTION_PATH: &str = "/api/plugin/action";
+/// What herdr's client shell and the service trade over herdr's client connection (fork plan phase 5), as
+/// `EndpointControl` messages of these kinds, each with JSON data. The service sends [`SHELL_FEED`] (a
+/// [`ServerMessage`]) and [`SHELL_BOSS`] (the boss's workspace id) to every shell; [`SHELL_QUESTION`] to the question's
+/// one reader (0578); [`SHELL_ANSWERED`] to that reader once it answered, and [`SHELL_GONE`] once the question is over.
+/// A shell sends [`SHELL_FEED`] (a [`ClientMessage`]), [`SHELL_ACTION`] and [`SHELL_ANSWER`].
+pub const SHELL_FEED: &str = "jocasta.feed";
+/// The boss's workspace id, for the dock.
+pub const SHELL_BOSS: &str = "jocasta.boss";
+/// A [`ShellQuestion`] for its reader.
+pub const SHELL_QUESTION: &str = "jocasta.question";
+/// The code of a question that is over, for every shell.
+pub const SHELL_GONE: &str = "jocasta.question.gone";
+/// A shell's [`ShellAnswer`].
+pub const SHELL_ANSWER: &str = "jocasta.answer";
+/// The service's [`ShellAnswered`] to the reader that answered.
+pub const SHELL_ANSWERED: &str = "jocasta.answered";
+/// A shell's [`ShellAction`]: one of his thread keys.
+pub const SHELL_ACTION: &str = "jocasta.action";
+
+/// A question for its reader's shell: its one-time code (it names the question in the answer) and its texts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShellQuestion {
+	pub code: String,
+	pub view: PopupView,
+}
+
+/// His answer to question `code`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShellAnswer {
+	pub code: String,
+	pub answer: PopupAnswer,
+}
+
+/// The service's reply to an answer (0578): taken; a wrong code with the tries left; the third wrong code, which took
+/// the fallback; or why it failed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum AnswerReply {
+	Taken,
+	Wrong { left: Option<u64> },
+	Exhausted,
+	Failed { text: String },
+}
+
+/// The reply to the answer to question `code`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShellAnswered {
+	pub code: String,
+	pub reply: AnswerReply,
+}
+
+/// One of his thread keys from the dock (0544, 0554): the action and the picked thread's pane.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellAction {
+	pub action: PluginAction,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub pane_id: Option<String>,
+}
 
 /// The herdr plugin's actions (0553, 0554): Finish, Stop, Review and New thread on the focused thread; Quit closes Jocasta.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -820,12 +859,16 @@ mod tests {
 	}
 
 	#[test]
-	fn the_cookie_is_named_after_the_port_and_the_paths_are_the_services() {
+	fn the_cookie_is_named_after_the_port_and_the_shell_kinds_carry_the_prefix_herdr_routes_by() {
 		assert_eq!(token_cookie(5173), "jocasta_service_5173");
-		assert_eq!((WS_PATH, TOKEN_QUERY, POPUP_PATH, POPUP_HOLD), ("/ws", "t", "/api/popup/", "/hold"));
-		assert_eq!(
-			(POPUP_ENV, POPUP_READER_HEADER, PLUGIN_ACTION_PATH),
-			("JOCASTA_POPUP", "x-jocasta-reader", "/api/plugin/action")
+		assert_eq!((WS_PATH, TOKEN_QUERY), ("/ws", "t"));
+		let kinds = [SHELL_FEED, SHELL_BOSS, SHELL_QUESTION, SHELL_GONE, SHELL_ANSWER, SHELL_ANSWERED, SHELL_ACTION];
+		assert!(kinds.iter().all(|kind| kind.starts_with(herdr::embed::KIND_PREFIX)));
+		wire(&AnswerReply::Wrong { left: Some(2) }, &json!({"type": "wrong", "left": 2}));
+		wire(&AnswerReply::Failed { text: "x".to_owned() }, &json!({"type": "failed", "text": "x"}));
+		wire(
+			&ShellAction { action: PluginAction::Stop, pane_id: Some("w1:p1".to_owned()) },
+			&json!({"action": "stop", "paneId": "w1:p1"}),
 		);
 	}
 

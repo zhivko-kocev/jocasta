@@ -289,29 +289,6 @@ pub static TOKYO_NIGHT_SCHEME: LazyLock<Value> = LazyLock::new(|| {
 	})
 });
 
-/// `config/herdr.toml` with `{{hud}}` filled in as a TOML basic-string value (comments keep the placeholder): the HUD's
-/// command printing `<data>/hud.txt`, cmd's `type` on Windows and `cat` elsewhere (0403, 0572). `windows` defaults to
-/// this platform.
-pub fn herdr_config(template: &str, data: &Path, windows: Option<bool>) -> String {
-	let data = data.display().to_string();
-	let hud = if windows.unwrap_or(cfg!(windows)) {
-		format!("type \"{data}\\hud.txt\"")
-	} else {
-		format!("cat '{}'", format!("{data}/hud.txt").replace('\'', "'\\''"))
-	};
-	let escaped = hud.replace('\\', "\\\\").replace('"', "\\\"");
-	fill(template, "{{hud}}", &escaped)
-}
-
-/// `template` with `placeholder` replaced by `value` outside comment lines.
-fn fill(template: &str, placeholder: &str, value: &str) -> String {
-	template
-		.split('\n')
-		.map(|line| if line.trim_start().starts_with('#') { line.to_owned() } else { line.replace(placeholder, value) })
-		.collect::<Vec<_>>()
-		.join("\n")
-}
-
 /// An omp `mcp.json` undo with what setup wrote there (0468): each server goes only while it still is that. A marker
 /// names only the servers and a fingerprint of the entries written, so the entries setup writes today stand in for them.
 #[derive(Debug, Clone, PartialEq)]

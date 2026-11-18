@@ -265,7 +265,8 @@ async fn deny_writes_pull_requests_and_refuses_later_pushes_are_refused_unasked(
 
 #[tokio::test]
 async fn no_answer_in_the_wait_or_a_popup_closed_unanswered_refuses_and_writes_nothing() {
-	for (reply, said) in [(Reply::Never, "No answer within"), (Reply::Answer(false, PopupEnd::Closed), "popup closed")]
+	for (reply, said) in
+		[(Reply::Never, "No answer within"), (Reply::Answer(false, PopupEnd::Closed), "terminal closed")]
 	{
 		let w = world(reply).await;
 		let refused = w.push(&w.main, &["main"], None).await;

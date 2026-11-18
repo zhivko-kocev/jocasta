@@ -34,14 +34,9 @@ fn cold_then_warm_per_run() {
 }
 
 #[test]
-fn jocastas_ready_point_is_the_boss_pane_in_workspace_jocasta_not_the_today_pane_old_rows_companion_ms_reads_as_service_ms()
- {
+fn jocastas_ready_point_is_the_boss_pane_in_workspace_jocasta_old_rows_companion_ms_reads_as_service_ms() {
 	let workspaces = [workspace("w1", "Jocasta"), workspace("w2", "acme")];
-	let panes = [
-		pane("w2:p1", "w2", None, Some("omp")),
-		pane("w1:p2", "w1", Some("today"), None),
-		pane("w1:p1", "w1", Some("boss"), Some("omp")),
-	];
+	let panes = [pane("w2:p1", "w2", None, Some("omp")), pane("w1:p1", "w1", Some("boss"), Some("omp"))];
 	assert_eq!(boss_pane(&workspaces, &panes).map(|p| p.pane_id.as_str()), Some("w1:p1"));
 	assert!(boss_pane(&[workspace("w2", "acme")], &panes).is_none());
 	assert_eq!(row_service_ms(&old_row(None, Some(1450.0), 8123.0)), Some(1450.0));

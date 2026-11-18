@@ -14,8 +14,8 @@ use crate::frontier::server::helpers::{TestServer, start_test_server_with};
 use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
 use crate::frontier::server::herdr::{
 	AgentView, Env, Herdr, HerdrResult, HerdrSnapshot, Note, NotificationResult, OnChange, PaneIds, PaneInfo,
-	PaneMetadata, PluginPaneOptions, RespawnOptions, SplitOptions, StopWatch, TabPane, TabSpec, Tokens, WorkspaceInfo,
-	WorktreeCreated, WorktreeOptions,
+	PaneMetadata, RespawnOptions, SplitOptions, StopWatch, TabPane, TabSpec, Tokens, WorkspaceInfo, WorktreeCreated,
+	WorktreeOptions,
 };
 use crate::frontier::server::server::ServerOptions;
 use crate::shared::proctree::tests::settles;
@@ -132,15 +132,6 @@ impl Herdr for Hooked {
 	}
 	fn focus<'a>(&'a self, pane_id: &'a str) -> BoxFuture<'a, HerdrResult<()>> {
 		self.inner.focus(pane_id)
-	}
-	fn open_plugin_pane<'a>(&'a self, opts: &'a PluginPaneOptions) -> BoxFuture<'a, HerdrResult<Option<String>>> {
-		self.inner.open_plugin_pane(opts)
-	}
-	fn close_popup(&self) -> BoxFuture<'_, HerdrResult<bool>> {
-		self.inner.close_popup()
-	}
-	fn set_split_ratio<'a>(&'a self, tab_id: &'a str, ratio: f64) -> BoxFuture<'a, HerdrResult<()>> {
-		self.inner.set_split_ratio(tab_id, ratio)
 	}
 	fn set_agent_view<'a>(&'a self, view: &'a AgentView) -> BoxFuture<'a, HerdrResult<()>> {
 		self.inner.set_agent_view(view)
