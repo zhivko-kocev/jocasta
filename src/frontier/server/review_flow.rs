@@ -836,11 +836,14 @@ impl ReviewFlow {
 		let wait = Duration::from_millis(u64::try_from((ends - now_ms()).max(0)).unwrap_or(0));
 		let mut signal = signal;
 		let left = abort_reason(&mut signal);
+		// Biased, the stop and the role leaving first: stopping kills the running check, which then ends with a failure
+		// in the same instant, and that failure is no answer to give.
 		tokio::select! {
+			biased;
+			() = &mut notified => None,
+			_ = left => None,
 			text = checking => Some(text),
 			() = tokio::time::sleep(wait) => None,
-			_ = left => None,
-			() = &mut notified => None,
 		}
 	}
 

@@ -408,12 +408,13 @@ pub struct Relay {
 }
 
 impl Relay {
-	/// Closes every room and stops listening; again is a no-op. The port is free once the listener's task has ended,
-	/// a moment after this returns.
-	pub fn stop(&self) {
+	/// Closes every room and stops listening, returning once the listener's task has ended and the port is free; again
+	/// is a no-op.
+	pub async fn stop(&self) {
 		let Some(task) = self.task.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() else { return };
 		self.shared.rooms().clear();
 		task.abort();
+		let _ = task.await;
 	}
 }
 

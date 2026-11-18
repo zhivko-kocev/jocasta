@@ -424,8 +424,11 @@ pub async fn start_server(mut options: ServerOptions) -> Result<JocastaServer> {
 fn relay_stop(relay: &Arc<Relay>) -> StopRun {
 	let relay = Arc::clone(relay);
 	Arc::new(move || {
-		relay.stop();
-		Box::pin(std::future::ready(Ok(())))
+		let relay = Arc::clone(&relay);
+		Box::pin(async move {
+			relay.stop().await;
+			Ok(())
+		})
 	})
 }
 

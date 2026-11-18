@@ -344,15 +344,20 @@ where
 	}
 }
 
-/// Polls until `check` passes or [`WAIT_MS`] run out, which panics.
-pub(crate) async fn until(check: impl FnMut() -> bool) {
-	until_within(check, WAIT_MS).await;
+/// Polls until `check` passes or [`WAIT_MS`] run out, which panics naming the caller's line.
+#[track_caller]
+pub(crate) fn until(check: impl FnMut() -> bool) -> impl Future<Output = ()> {
+	until_within(check, WAIT_MS)
 }
 
-/// Polls until `check` passes or `timeout_ms` run out, which panics.
-pub(crate) async fn until_within(mut check: impl FnMut() -> bool, timeout_ms: i64) {
-	let held = wait_for(|| std::future::ready(Ok(check())), timeout_ms, 10).await.unwrap();
-	assert!(held, "timed out waiting for the test's condition");
+/// Polls until `check` passes or `timeout_ms` run out, which panics naming the caller's line.
+#[track_caller]
+pub(crate) fn until_within(mut check: impl FnMut() -> bool, timeout_ms: i64) -> impl Future<Output = ()> {
+	let caller = std::panic::Location::caller();
+	async move {
+		let held = wait_for(|| std::future::ready(Ok(check())), timeout_ms, 10).await.unwrap();
+		assert!(held, "timed out waiting for the test's condition at {caller}");
+	}
 }
 
 /// [`until`] with a check that awaits.

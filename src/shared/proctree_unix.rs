@@ -30,16 +30,20 @@ pub fn alive(pid: u32) -> bool {
 	!state.is_empty() && !state.starts_with('Z')
 }
 
-/// The start of each of `pids`: Linux reads `/proc/<pid>/stat`, macOS asks `ps` once.
+/// The start of each of `pids`: Linux reads `/proc/<pid>/stat`, macOS asks `ps` once; a zombie has none on both, as
+/// it has ended.
 pub fn starts(pids: &[u32]) -> HashMap<u32, Option<f64>> {
 	if cfg!(target_os = "linux") {
 		return pids.iter().map(|pid| (*pid, linux_start(*pid))).collect();
 	}
 	let mut starts: HashMap<u32, Option<f64>> = pids.iter().map(|pid| (*pid, None)).collect();
 	let list = pids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
-	for line in output_of("ps", &["-o", "pid=,lstart=", "-p", &list], true).lines() {
+	for line in output_of("ps", &["-o", "pid=,stat=,lstart=", "-p", &list], true).lines() {
 		let mut parts = line.split_whitespace();
 		let Some(pid) = parts.next().and_then(|pid| pid.parse::<u32>().ok()) else { continue };
+		if parts.next().is_none_or(|state| state.starts_with('Z')) {
+			continue;
+		}
 		let when = parts.collect::<Vec<_>>().join(" ");
 		match parse_lstart(&when) {
 			Some(start) => starts.insert(pid, Some(start)),

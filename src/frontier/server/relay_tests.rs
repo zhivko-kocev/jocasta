@@ -171,7 +171,7 @@ async fn the_relay_forwards_a_rooms_frames_between_its_host_and_guests_by_peer_i
 	assert_eq!(host.text(2), json!({ "t": "peer-left", "peer": 1 }).to_string());
 	assert_eq!(reqwest::get(format!("http://127.0.0.1:{port}/s")).await.unwrap().status().as_u16(), 404);
 	host.sink.close().await.unwrap();
-	relay.stop();
+	relay.stop().await;
 }
 
 /// Whether anything listens on `port`.
@@ -185,16 +185,10 @@ async fn a_relay_port_another_program_holds_fails_the_start_loudly_a_stopped_rel
 	let refused = start_relay(Some(relay.port)).err().expect("the port is held");
 	assert!(refused.is_user());
 	assert!(refused.to_string().contains(&format!("127.0.0.1:{}", relay.port)), "{refused}");
-	relay.stop();
-	relay.stop();
-	for _ in 0..500 {
-		if !listening(relay.port).await {
-			break;
-		}
-		tokio::time::sleep(Duration::from_millis(10)).await;
-	}
+	relay.stop().await;
 	assert!(!listening(relay.port).await);
-	start_relay(Some(relay.port)).unwrap().stop();
+	relay.stop().await;
+	start_relay(Some(relay.port)).unwrap().stop().await;
 }
 
 /// The result of opening a socket the relay may refuse: the socket, or the HTTP status it answered instead.
@@ -224,7 +218,7 @@ async fn the_relay_refuses_a_web_pages_origin_and_more_guests_than_a_room_takes(
 	for mut socket in sockets {
 		let _ = socket.close(None).await;
 	}
-	relay.stop();
+	relay.stop().await;
 }
 
 #[test]

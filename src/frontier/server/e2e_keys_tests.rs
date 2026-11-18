@@ -21,13 +21,13 @@ use crate::frontier::server::helpers::{
 use crate::frontier::server::herdr::{AgentState, Herdr, SplitOptions};
 use crate::frontier::server::history::search_history;
 use crate::frontier::server::hosts::fake::{FakeHostState, fake_host};
-use crate::frontier::server::overlay::{overlay_file, overlay_text};
+use crate::frontier::server::overlay::overlay_file;
 use crate::frontier::server::popups::{Popup, PopupEnd};
 use crate::frontier::server::server::ServerOptions;
 use crate::frontier::server::tools::ToolReply;
 use crate::frontier::server::wording::{HANDOFF_PROMPT, IDLE_CHECK_FRAME, REPORT_STEER, WHEN_YOU_FINISH};
 use crate::shared::pathkey::same_dir;
-use crate::shared::paths::{data_dir, project_dir};
+use crate::shared::paths::data_dir;
 use crate::shared::schema::open_catalog;
 use crate::shared::testing::temp_jocasta;
 
@@ -379,6 +379,8 @@ fn hold_open(file: &Path) -> fs::File {
 #[tokio::test(flavor = "multi_thread")]
 async fn parallel_thread_starts_in_one_project_dont_race_on_its_overlay_one_write_at_a_time_none_when_unchanged_a_refused_rename_tried_again_0534()
  {
+	use crate::frontier::server::overlay::overlay_text;
+	use crate::shared::paths::project_dir;
 	let j = temp_jocasta();
 	let project = demo_project(j.root(), "demo").await;
 	let options = ServerOptions { agent_wait_ms: Some(0), ..ServerOptions::default() };
