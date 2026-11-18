@@ -35,6 +35,8 @@ use crate::shared::log::{LogLevel, log};
 use crate::shared::pane_check::{PANE_CHECK_ENV, PANE_CHECK_EXTENSION, PANE_CHECK_ROLE};
 use crate::shared::pathkey::{path_key, real_path};
 use crate::shared::paths::data_dir;
+#[cfg(windows)]
+use crate::shared::process::on_path;
 use crate::shared::proctree::{ProcessId, end_processes, process_start};
 use crate::shared::projects::Project;
 use crate::shared::prompt::without_leading_comment;
@@ -168,9 +170,21 @@ struct Config {
 	boss_key: String,
 }
 
+/// omp as the panes start it, when the service is given none. On Windows herdr's panes take their PATH from the
+/// machine's registry (portable-pty's base environment), not from the service, so the omp the service finds on its own
+/// PATH, the one it asks `omp config` and `omp usage`, is named by its full path and every pane runs that same omp.
+/// Elsewhere a pane inherits the service's PATH and `omp` finds it already.
+pub fn pane_omp_program() -> Vec<String> {
+	#[cfg(windows)]
+	if let Some(found) = on_path("omp", None) {
+		return vec![found.display().to_string()];
+	}
+	vec!["omp".to_owned()]
+}
+
 impl Config {
 	fn build(options: &ServiceOptions) -> Self {
-		let omp = options.omp.clone().unwrap_or_else(|| vec!["omp".to_owned()]);
+		let omp = options.omp.clone().unwrap_or_else(pane_omp_program);
 		let boss_key = options.boss_key.clone().unwrap_or_else(|| {
 			let mut bytes = [0_u8; 32];
 			getrandom::fill(&mut bytes).expect("the OS has random bytes");

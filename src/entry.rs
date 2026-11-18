@@ -17,6 +17,7 @@ use crate::frontier::server::boss::{EnsureBossOptions, LaunchedPanes, boss_comma
 use crate::frontier::server::embedded::{SERVICE_ENV, register, serves};
 use crate::frontier::server::herdr::{HerdrOptions, connect_herdr};
 use crate::frontier::server::launch::{service_health, service_state};
+use crate::frontier::server::pane_launch::pane_omp_program;
 use crate::mcp::server::run_mcp_stdio;
 use crate::setup::diagnose::{DiagnoseDeps, ServiceInfo, run_diagnose};
 use crate::setup::setup::{
@@ -223,7 +224,7 @@ async fn run_diagnose_route() -> Result<i32> {
 			Box::pin(async move {
 				let launched = LaunchedPanes::new(None);
 				let assets = shipped_config_dir(None);
-				let mut options = EnsureBossOptions::new(boss_command(&["omp".to_owned()], Some(&assets)), &launched);
+				let mut options = EnsureBossOptions::new(boss_command(&pane_omp_program(), Some(&assets)), &launched);
 				options.config_dir = Some(assets);
 				ensure_boss_pane(&*herdr, options).await
 			})

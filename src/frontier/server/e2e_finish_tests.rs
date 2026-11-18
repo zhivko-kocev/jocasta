@@ -553,6 +553,8 @@ async fn a_task_end_whose_idle_event_herdr_lost_is_caught_on_the_refresh_tick_on
 		server.service.refresh().await;
 		until(|| server.herdr.of("splitBeside").len() == 1).await;
 		let asked = review("main...feature/readme-line", Some(crate::frontier::server::helpers::BRIEF));
+		// The review's prompt follows its pane's split: once there, it is there once.
+		until(|| count_of(&server, &asked) >= 1).await;
 		assert_eq!(count_of(&server, &asked), 1);
 	})
 	.await;

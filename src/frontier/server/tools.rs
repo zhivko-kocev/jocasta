@@ -27,7 +27,7 @@ use crate::shared::clock::now_ms;
 use crate::shared::day::{DayRef, day_label, hhmm, local_day};
 use crate::shared::errors::{Error, Result};
 use crate::shared::fsx::write_atomically;
-use crate::shared::pathkey::path_key;
+use crate::shared::pathkey::same_dir;
 use crate::shared::projects::Project;
 
 /// What an MCP tool call answers (`src/mcp/server.ts`'s HTTP contract).
@@ -688,8 +688,9 @@ impl Tools {
 	/// dirty one is refused, its branch stays.
 	pub async fn remove_leftover(&self, path: &str, door: Door) -> Result<String> {
 		let c = &self.c;
-		let wanted = path_key(Path::new(js_trim(path)));
-		let found = c.status.leftovers().await?.into_iter().find(|l| path_key(&l.folder) == wanted);
+		// Through links and short names (macOS's /tmp is /private/tmp, git names a worktree by its real path).
+		let wanted = Path::new(js_trim(path));
+		let found = c.status.leftovers().await?.into_iter().find(|l| same_dir(&l.folder, wanted));
 		let Some(leftover) = found else {
 			return Err(Error::user(format!(
 				"{path} isn't a leftover worktree (a thread folder no open thread holds); nothing removed."
