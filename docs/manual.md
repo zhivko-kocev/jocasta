@@ -97,7 +97,8 @@ The boss's `show` opens a whiteboard review in your browser, on a page the servi
 | `jocasta thread new <project> "<brief>" [--title <t>] [--done-when "<cmd>"]... [--heavy]` | starts a thread through the running service, as the boss's `thread_start` does: plan mode, a task file, its `done_when` commands (0540, 0544); `--heavy` runs it on your omp `slow` role, from its plan through its execution (0590) |
 | `jocasta thread list [<project>] \| status <thread> \| send <thread> "<text>" \| stop <thread>` | lists threads, shows one, sends it a message or stops its run; `send` and `stop` ask your Allow first (0544) |
 | `jocasta thread finish <thread> merge\|pr` | merges the thread or opens its PR, after your Allow (0426, 0544) |
-| `jocasta worktree list \| remove <path>` | lists leftover worktrees, or removes one after your Allow (0456, 0544). The `thread` and `worktree` commands exit 1 when refused or failed (Deny included), 2 on bad usage and 3 when Jocasta isn't running |
+| `jocasta worktree leftover \| remove <path>` | lists leftover worktrees, or removes one after your Allow (0456, 0544). The `thread` and `worktree` commands exit 1 when refused or failed (Deny included), 2 on bad usage and 3 when Jocasta isn't running |
+| `jocasta server \| status \| config \| session \| workspace \| worktree \| tab \| pane \| agent \| terminal \| notification \| plugin \| integration \| api \| completion …` | herdr's own commands, built into `jocasta` (the fork at `crates/herdr`), with herdr's usage and texts; `--session <name>` and `-V` (herdr's version) too. herdr's files live under Jocasta's data dir (`herdr/`), its config is `~/.jocasta/agent/herdr.toml`. `jocasta <command> --help` shows each |
 | `jocasta --version`, `-v` | `jocasta <version> (omp <version>, herdr <version>)` (0052) |
 | `jocasta --help`, `-h` | the usage |
 

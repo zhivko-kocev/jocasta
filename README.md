@@ -126,7 +126,8 @@ Questions that need your permission appear in a popup in front of whatever you'r
 | `jocasta project list \| add <path> \| remove <name or id>` | Manage projects |
 | `jocasta thread new <project> "<brief>" [--done-when "<cmd>"] [--heavy]` | Start a thread from the command line |
 | `jocasta thread list \| status \| send \| stop \| finish` | Inspect and steer threads (`send`, `stop` and `finish` ask for your permission) |
-| `jocasta worktree list \| remove <path>` | List or remove leftover worktrees |
+| `jocasta worktree leftover \| remove <path>` | List or remove leftover worktrees |
+| `jocasta pane list`, `jocasta workspace …` and herdr's other commands | herdr is built in; `jocasta --help` lists its commands |
 | `jocasta diagnose` | Collect state and logs, and open a read-only omp to find what's wrong |
 | `jocasta uninstall` | Remove everything install and setup added, after one confirmation |
 | `jocasta --version` | Print Jocasta's, omp's and herdr's versions |

@@ -70,7 +70,7 @@ fn thread_and_worktree_words_become_the_services_commands_the_changes_ask_him_05
 		request(Thread, &["finish", "Login", "pr"]),
 		expected("thread finish", json!({ "thread": "Login", "how": "pr" }), true)
 	);
-	assert_eq!(request(Worktree, &["list"]), expected("worktree list", json!({}), false));
+	assert_eq!(request(Worktree, &["leftover"]), expected("worktree list", json!({}), false));
 	assert_eq!(request(Worktree, &["remove", "C:/x"]), expected("worktree remove", json!({ "path": "C:/x" }), true));
 	let usage = |word: CliWord, list: &[&str]| match cli_request(word, &words(list)) {
 		Err(Error::User { message, exit_code }) => {
@@ -98,7 +98,7 @@ fn thread_and_worktree_words_become_the_services_commands_the_changes_ask_him_05
 	] {
 		assert_eq!(usage(Thread, list), THREAD_USAGE, "{list:?}");
 	}
-	for list in [&[][..], &["list", "x"], &["remove"], &["prune"]] {
+	for list in [&[][..], &["leftover", "x"], &["list"], &["remove"], &["prune"]] {
 		assert_eq!(usage(Worktree, list), WORKTREE_USAGE, "{list:?}");
 	}
 }
@@ -181,7 +181,7 @@ async fn a_command_goes_to_the_service_with_its_token_exit_0_done_1_refused_3_wh
 
 	// jocasta-service.json names a live process, but nothing listens on its port.
 	let deps = at(crate::shared::fsx::free_port().unwrap());
-	let worktrees = request(CliWord::Worktree, &["list"]);
+	let worktrees = request(CliWord::Worktree, &["leftover"]);
 	assert_eq!(run_cli_command(&worktrees, &deps).await, EXIT.not_running);
 	assert_eq!(*deps.err.borrow(), ["jocasta: Jocasta isn't running; start it with jocasta."]);
 

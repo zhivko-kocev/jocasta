@@ -563,11 +563,32 @@ async fn run_route(target: Route, calendar_env: Option<String>) -> Result<i32> {
 		Route::Uninstall => run_uninstall_route().await,
 		Route::Diagnose => run_diagnose_route().await,
 		Route::Surface => run_surface(calendar_env).await,
+		Route::Herdr => unreachable!("`main` runs herdr's words before Jocasta's runtime exists"),
 	}
 }
 
 async fn run_service_cli(word: CliWord, args: &[String]) -> Result<i32> {
 	Ok(run_cli_command(&cli_request(word, args)?, &ServiceCli).await)
+}
+
+/// A word of herdr's: herdr's own entry, which reads the command line itself and builds its own runtime (its server,
+/// its client, its socket API's commands), in Jocasta's dirs: its sessions, sockets and plugins under
+/// `<data>/herdr`, their state under `<data>/herdr/state`, its config Jocasta's `herdr.toml` (`HERDR_CONFIG_PATH`
+/// still wins). Its exits inside (usage errors, a busy socket) are its own.
+fn run_herdr() -> ExitCode {
+	let herdr_dir = data_dir().join("herdr");
+	herdr::embed::set_dirs(herdr::embed::Dirs {
+		state: herdr_dir.join("state"),
+		config: herdr_dir,
+		config_file: config_dir().join("herdr.toml"),
+	});
+	match herdr::main() {
+		Ok(()) => ExitCode::SUCCESS,
+		Err(error) => {
+			err(&format!("jocasta: {error}"));
+			ExitCode::from(1)
+		}
+	}
 }
 
 /// Loud one-line failures (0101): DB failures exit 1; refusals exit with their code, 2 for an invocation error (0140).
@@ -595,6 +616,9 @@ pub fn main() -> ExitCode {
 			return ExitCode::from(u8::try_from(error.exit_code()).unwrap_or(2));
 		}
 	};
+	if target == Route::Herdr {
+		return run_herdr();
+	}
 	// The calendar's secret never reaches herdr's server, omp or anything else this command starts (SEC-5, 0430); taken
 	// before any thread starts.
 	let calendar_env = take_calendar_env();

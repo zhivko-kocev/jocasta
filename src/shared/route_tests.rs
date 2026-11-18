@@ -63,9 +63,7 @@ fn the_jocasta_commands_words_0387_0467_0468_0472_0544_anything_else_is_a_usage_
 		&["uninstall", "--yes"],
 		&["diagnose", "now"],
 		&["service", "--x"],
-		&["plugin"],
 		&["plugin", "today", "now"],
-		&["plugin", "action", "merge"],
 		&["plugin", "action", "stop", "x"],
 		&["--version", "setup"],
 		&["--version", "now"],
@@ -125,7 +123,7 @@ fn project_thread_and_worktree_pass_every_remaining_word_on_unchanged_help_flags
 			])
 		}
 	);
-	assert_eq!(go(&["worktree"]), Route::Worktree { args: vec![] });
+	assert_eq!(go(&["worktree", "leftover"]), Route::Worktree { args: words(&["leftover"]) });
 	assert_eq!(go(&["thread", "finish", "x", "squash"]), Route::Thread { args: words(&["finish", "x", "squash"]) });
 }
 
@@ -162,4 +160,43 @@ fn every_plugin_action_has_its_word() {
 		assert_eq!(go(&["plugin", "action", word]), Route::Plugin { part: PluginPart::Action(action) });
 		assert_eq!(serde_json::to_value(action).unwrap(), serde_json::json!(word));
 	}
+}
+
+#[test]
+fn herdrs_words_and_flags_go_to_the_fork_jocastas_shared_ones_stay_jocastas() {
+	for args in [
+		&["server"][..],
+		&["server", "stop"],
+		&["client"],
+		&["pane", "list"],
+		&["workspace", "--help"],
+		&["status"],
+		&["config", "check"],
+		&["session", "list"],
+		&["completion", "zsh"],
+		&["--session", "t", "server"],
+		&["--session=t", "pane", "list"],
+		&["--default-config"],
+		&["--skill"],
+		&["-V"],
+		&["--notification-activate", "herdr-toast://x"],
+		&["worktree"],
+		&["worktree", "list"],
+		&["worktree", "create", "--workspace", "w1"],
+		&["worktree", "remove", "--workspace", "w1"],
+		&["plugin"],
+		&["plugin", "list"],
+		&["plugin", "install", "x"],
+		&["plugin", "action", "invoke", "panes"],
+		&["plugin", "action", "merge"],
+	] {
+		assert_eq!(go(args), Route::Herdr, "{args:?}");
+	}
+	assert_eq!(go(&["worktree", "leftover"]), Route::Worktree { args: words(&["leftover"]) });
+	assert_eq!(go(&["worktree", "remove", "/tmp/w"]), Route::Worktree { args: words(&["remove", "/tmp/w"]) });
+	assert_eq!(go(&["worktree", "remove"]), Route::Worktree { args: words(&["remove"]) });
+	assert_eq!(go(&["plugin", "today"]), Route::Plugin { part: PluginPart::Today });
+	assert_eq!(go(&["--version"]), Route::Version);
+	let text = help();
+	assert!(text.contains("herdr's commands, built in"), "{text}");
 }

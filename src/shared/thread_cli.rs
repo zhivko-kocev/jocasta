@@ -31,7 +31,8 @@ pub const THREAD_USAGE: &str = concat!(
 	"       jocasta thread finish <thread> merge|pr",
 );
 
-pub const WORKTREE_USAGE: &str = "usage: jocasta worktree list | remove <path>";
+/// `leftover`, not `list`: `jocasta worktree list` is herdr's own (the fork built in).
+pub const WORKTREE_USAGE: &str = "usage: jocasta worktree leftover | remove <path>";
 
 /// The word `cli_request` is given: `thread` or `worktree`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,7 +138,7 @@ pub fn cli_request(word: CliWord, args: &[String]) -> Result<CliRequest> {
 	};
 	if word == CliWord::Worktree {
 		return match verb {
-			Some("list") if rest.is_empty() => Ok(request("worktree list", json!({}), false)),
+			Some("leftover") if rest.is_empty() => Ok(request("worktree list", json!({}), false)),
 			Some("remove") => one("path", true),
 			_ => Err(usage()),
 		};

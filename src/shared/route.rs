@@ -17,12 +17,13 @@ pub enum PluginPart {
 }
 
 /// The `jocasta` command's words (0387, 0467, 0468, 0472, 0544): open the work surface, `setup [--refresh <file>]`,
-/// `uninstall`, `diagnose`, `mcp [--boss]`, `project …`, `thread …`, `worktree …`, `--version`; and, not listed in the
-/// help, `service`, the Jocasta service bare `jocasta` starts as its own process (0552), and `plugin
-/// today|ask|startup|action <id>`, what the `jocasta` herdr plugin runs (0553), and `push-hook <remote> <address>`, the
-/// `pre-push` hook git runs in every Jocasta pane (0613), and `pane-check`, what a project pane's omp extension runs
-/// when a turn ends (0617). `--help` and a word that is no command are not routes: [`route`] returns clap's error for
-/// them.
+/// `uninstall`, `diagnose`, `mcp [--boss]`, `project …`, `thread …`, `worktree leftover|remove <path>`, `--version`;
+/// and, not listed in the help, `service`, the Jocasta service bare `jocasta` starts as its own process (0552), and
+/// `plugin today|ask|startup|action <id>`, what the `jocasta` herdr plugin runs (0553), and `push-hook <remote>
+/// <address>`, the `pre-push` hook git runs in every Jocasta pane (0613), and `pane-check`, what a project pane's omp
+/// extension runs when a turn ends (0617). Every other word of herdr's (the fork built in, `crates/herdr`) is
+/// [`Route::Herdr`]: herdr's own entry reads the command line. `--help` and a word that is no command are not routes:
+/// [`route`] returns clap's error for them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Route {
 	Surface,
@@ -38,6 +39,57 @@ pub enum Route {
 	PushHook { args: Vec<String> },
 	PaneCheck,
 	Version,
+	Herdr,
+}
+
+/// herdr's words (`crates/herdr/src/cli.rs`'s `maybe_run` and `lib.rs`'s `main`); `worktree` and `plugin` are shared
+/// with Jocasta's and decided by [`herdrs`].
+const HERDR_WORDS: [&str; 15] = [
+	"server",
+	"client",
+	"api",
+	"status",
+	"completion",
+	"completions",
+	"config",
+	"workspace",
+	"tab",
+	"notification",
+	"agent",
+	"terminal",
+	"pane",
+	"integration",
+	"session",
+];
+
+/// herdr's flags that may come first. `--notification-activate` is how Windows starts the exe again when he clicks one
+/// of herdr's toasts (its `main` handles it before anything else).
+const HERDR_FLAGS: [&str; 5] = ["--session", "--default-config", "--skill", "-V", "--notification-activate"];
+
+/// Whether the command line is herdr's. `worktree leftover` and `worktree remove [<path>]` are Jocasta's leftover
+/// worktrees (0544); herdr's `worktree list|create|open|remove --workspace <id>` are its. `plugin today|ask|startup`
+/// and `plugin action <one of Jocasta's actions>` are what Jocasta's herdr plugin runs; every other `plugin` word
+/// (herdr's `plugin action list|invoke` among them) is herdr's.
+fn herdrs(args: &[String]) -> bool {
+	let word = |at: usize| args.get(at).map(String::as_str);
+	match word(0) {
+		None => false,
+		Some("worktree") => match word(1) {
+			Some("leftover") => false,
+			Some("remove") => word(2).is_some_and(|next| next.starts_with('-')),
+			_ => true,
+		},
+		Some("plugin") => match word(1) {
+			Some("today" | "ask" | "startup") => false,
+			Some("action") => !word(2).is_some_and(|action| ACTION_WORDS.contains(&action)),
+			_ => true,
+		},
+		Some(first) => {
+			HERDR_WORDS.contains(&first)
+				|| HERDR_FLAGS.contains(&first)
+				|| first.split_once('=').is_some_and(|(flag, _)| flag == "--session")
+		}
+	}
 }
 
 #[derive(Parser)]
@@ -47,7 +99,10 @@ pub enum Route {
 	override_usage = "jocasta [COMMAND]",
 	disable_help_subcommand = true,
 	disable_version_flag = true,
-	args_conflicts_with_subcommands = true
+	args_conflicts_with_subcommands = true,
+	after_help = "herdr's commands, built in (`jocasta <command> --help`): server, status, config, session, workspace, \
+	              worktree, tab, pane, agent, terminal, notification, plugin, integration, api, completion; and \
+	              `--session <name>`, `--default-config`, `--skill`, `-V` (herdr's version)."
 )]
 struct Cli {
 	/// Print the versions of Jocasta, omp and herdr
@@ -90,9 +145,10 @@ enum Word {
 		#[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "ARGS")]
 		args: Vec<String>,
 	},
-	/// Leftover worktrees through the running service; changes ask you first
+	/// Leftover worktrees through the running service; changes ask you first (herdr's own `worktree list|create|open|
+	/// remove --workspace <id>` stay herdr's)
 	///
-	/// list | remove <path>
+	/// leftover | remove <path>
 	#[command(disable_help_flag = true)]
 	Worktree {
 		#[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "ARGS")]
@@ -162,9 +218,13 @@ impl From<Word> for Route {
 	}
 }
 
-/// Routes argv, the program's name left out (0387). `Err` is clap's help (`--help`, `-h`: exit 0, to stdout) or its
-/// usage error (exit 2, to stderr, 0140); `error.print()` writes either and `error.exit_code()` is its code.
+/// Routes argv, the program's name left out (0387). herdr's words come first ([`Route::Herdr`]); `Err` is clap's help
+/// (`--help`, `-h`: exit 0, to stdout) or its usage error (exit 2, to stderr, 0140); `error.print()` writes either and
+/// `error.exit_code()` is its code.
 pub fn route(args: &[String]) -> Result<Route, clap::Error> {
+	if herdrs(args) {
+		return Ok(Route::Herdr);
+	}
 	let cli = Cli::try_parse_from(std::iter::once("jocasta").chain(args.iter().map(String::as_str)))?;
 	Ok(match (cli.version, cli.command) {
 		(true, _) => Route::Version,

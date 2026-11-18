@@ -394,8 +394,14 @@ async fn a_reopened_thread_whose_plan_isnt_awaiting_him_gets_nothing_typed_0494(
 	let j = temp_jocasta();
 	let r = reopened(j.root(), plan_mode_file, "").await;
 	finally(&r.server, |_| async {
-		// The reopened omp is idle in plan mode with no proposal: the tick looks at it and finds no plan to show.
-		r.look(10).await;
+		// The reopened omp is idle in plan mode with no proposal: the tick looks at it and finds no plan to show. Ten
+		// ticks were not always enough on a loaded runner (the thread wasn't adopted and idle yet, so a proposal written
+		// next still counted as one awaiting him at the reopen); wait for the look itself.
+		r.look_until(|| {
+			let threads = r.server.service.context().threads.all();
+			!threads.is_empty() && threads.iter().all(|t| t.with(|t| t.plan.as_ref().is_some_and(|p| !p.reopened)))
+		})
+		.await;
 		let status = call(&r.server, "thread_status", &json!({})).await.text;
 		assert!(status.starts_with("demo/Readme line [feature/readme-line] idle"), "{status}");
 		assert_eq!(busy(&r.server).awaiting, 0);
@@ -413,7 +419,7 @@ async fn a_reopened_thread_whose_plan_isnt_awaiting_him_gets_nothing_typed_0494(
 		r.herdr.set_state(&r.fresh, AgentState::Idle, None, true);
 		r.look_until(|| busy(&r.server).awaiting == 1).await;
 		r.look(10).await;
-		assert!(r.typed().is_empty());
+		assert!(r.typed().is_empty(), "typed: {:?}", r.typed());
 		assert!(r.herdr.of("screen").is_empty());
 	})
 	.await;

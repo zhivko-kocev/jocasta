@@ -15,17 +15,15 @@ use serde_json::{Value, json};
 const NOT_RUNNING: &str = "Jocasta isn't running; start it with jocasta.";
 const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 
-/// A folder of the test's own, removed when it ends.
+/// A folder of the test's own, removed when it ends. Under `/tmp` on Linux and macOS, with a short name: herdr's
+/// session sockets live in it, and a socket's path must stay under 104 bytes (macOS's temp dir alone is about 50).
 struct Sandbox(PathBuf);
 
 impl Sandbox {
 	fn new() -> Self {
 		static COUNTER: AtomicU32 = AtomicU32::new(0);
-		let dir = std::env::temp_dir().join(format!(
-			"jocasta-entry-{}-{}",
-			std::process::id(),
-			COUNTER.fetch_add(1, Ordering::SeqCst)
-		));
+		let base = if cfg!(unix) { PathBuf::from("/tmp") } else { std::env::temp_dir() };
+		let dir = base.join(format!("je-{}-{}", std::process::id(), COUNTER.fetch_add(1, Ordering::SeqCst)));
 		std::fs::create_dir_all(dir.join("bin")).expect("making the sandbox");
 		Self(dir)
 	}
@@ -60,6 +58,12 @@ impl Sandbox {
 			.env_remove("JOCASTA_HERDR_SESSION")
 			.env_remove("JOCASTA_PANE_KEY")
 			.env_remove("JOCASTA_CALENDAR_ICAL_SECRET")
+			// Inside one of herdr's panes these would point the fork at that herdr.
+			.env_remove("HERDR_SOCKET_PATH")
+			.env_remove("HERDR_CLIENT_SOCKET_PATH")
+			.env_remove("HERDR_SESSION")
+			.env_remove("HERDR_ENV")
+			.env_remove("HERDR_CONFIG_PATH")
 			.stdin(Stdio::null())
 			.stdout(Stdio::piped())
 			.stderr(Stdio::piped());
@@ -160,9 +164,11 @@ fn help_goes_to_stdout_and_exits_0_without_the_internal_words() {
 	for word in ["setup", "uninstall", "diagnose", "mcp", "project", "thread", "worktree", "--version"] {
 		assert!(out.stdout.contains(word), "{word} missing from {}", out.stdout);
 	}
-	for hidden in ["push-hook", "pane-check", "plugin"] {
+	for hidden in ["push-hook", "pane-check", "\n  plugin "] {
 		assert!(!out.stdout.contains(hidden), "{hidden} in {}", out.stdout);
 	}
+	// herdr's commands, built in, are named after Jocasta's own.
+	assert!(out.stdout.contains("herdr's commands, built in"), "{}", out.stdout);
 }
 
 #[test]
@@ -187,7 +193,7 @@ fn thread_and_worktree_bad_usage_exits_2_with_the_usage_without_the_service_exit
 		// A usage prints as it is: its continuation lines line up (0581).
 		assert!(out.stderr.starts_with(&format!("usage: jocasta {}", args[0])), "{}", out.stderr);
 	}
-	for args in [&["thread", "list"][..], &["worktree", "list"], &["thread", "stop", "x"]] {
+	for args in [&["thread", "list"][..], &["worktree", "leftover"], &["thread", "stop", "x"]] {
 		let out = run(&sandbox, args);
 		assert_eq!(out.code, Some(3), "{args:?}");
 		assert_eq!(out.stderr.trim(), format!("jocasta: {NOT_RUNNING}"));
@@ -259,4 +265,122 @@ fn jocasta_setup_ends_after_its_last_answer_while_its_console_stays_open_as_a_te
 	drop(stdin);
 	assert_eq!(ended.and_then(|status| status.code()), Some(0), "still running");
 	assert!(stdout.join().expect("stdout").contains("Nothing written."));
+}
+
+/// [`Sandbox::jocasta`] in herdr session `t` with the machine's PATH: a server's panes and plugins start shells.
+fn herdr_t(sandbox: &Sandbox, args: &[&str]) -> Command {
+	let mut command = sandbox.jocasta(&[&["--session", "t"][..], args].concat());
+	if let Some(path) = std::env::var_os("PATH") {
+		command.env("PATH", &path).env("Path", path);
+	}
+	command
+}
+
+/// A herdr server in session `t`, stopped (and waited for) when dropped.
+struct HerdrServer<'a> {
+	sandbox: &'a Sandbox,
+	child: Option<Child>,
+}
+
+impl<'a> HerdrServer<'a> {
+	/// Starts `jocasta --session t server` and waits until `pane list` answers.
+	fn start(sandbox: &'a Sandbox) -> Self {
+		let child = herdr_t(sandbox, &["server"])
+			.stdout(Stdio::null())
+			.stderr(Stdio::null())
+			.spawn()
+			.expect("starting jocasta server");
+		let server = Self { sandbox, child: Some(child) };
+		let deadline = Instant::now() + Duration::from_secs(30);
+		while finish(herdr_t(sandbox, &["pane", "list"]).spawn().expect("jocasta pane list"), 30).code != Some(0) {
+			assert!(Instant::now() < deadline, "the server never answered");
+			thread::sleep(Duration::from_millis(100));
+		}
+		server
+	}
+}
+
+impl Drop for HerdrServer<'_> {
+	/// Stops the server and waits up to 30 s for it, killing it after; never panics (it may run while a test unwinds).
+	fn drop(&mut self) {
+		if let Ok(stop) = herdr_t(self.sandbox, &["server", "stop"]).spawn() {
+			let _ = finish(stop, 30);
+		}
+		if let Some(mut child) = self.child.take() {
+			let deadline = Instant::now() + Duration::from_secs(30);
+			while matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {
+				thread::sleep(Duration::from_millis(50));
+			}
+			let _ = child.kill();
+			let _ = child.wait();
+		}
+	}
+}
+
+#[test]
+fn a_herdr_word_without_its_server_prints_herdrs_server_not_running_and_exits_1() {
+	let sandbox = Sandbox::new();
+	let out = run(&sandbox, &["pane", "list"]);
+	assert_eq!(out.code, Some(1), "{}{}", out.stdout, out.stderr);
+	assert!(format!("{}{}", out.stdout, out.stderr).contains("server_not_running"), "{}{}", out.stdout, out.stderr);
+	// herdr's files live in Jocasta's data dir, not herdr's own.
+	assert!(!sandbox.path().join(".config").join("herdr").exists());
+}
+
+#[test]
+fn herdrs_help_is_herdrs_and_its_version_flag_names_herdrs_version() {
+	let sandbox = Sandbox::new();
+	let help = run(&sandbox, &["workspace", "--help"]);
+	assert_eq!(help.code, Some(0), "{}", help.stderr);
+	assert!(help.stdout.contains("workspace"), "{}", help.stdout);
+	assert!(!help.stdout.contains("Usage: jocasta [COMMAND]"), "{}", help.stdout);
+	let version = run(&sandbox, &["-V"]);
+	assert_eq!(version.code, Some(0), "{}", version.stderr);
+	assert!(version.stdout.contains(&herdr::embed::version()), "{}", version.stdout);
+}
+
+#[test]
+fn a_herdr_server_in_a_named_session_answers_jocastas_pane_list_and_its_plugins_reach_it_through_herdr_bin_path() {
+	let sandbox = Sandbox::new();
+	let server = HerdrServer::start(&sandbox);
+	let panes = finish(herdr_t(&sandbox, &["pane", "list"]).spawn().expect("jocasta pane list"), 30);
+	let answer: Value = serde_json::from_str(&panes.stdout).expect("pane list's JSON");
+	assert!(answer.get("error").is_none(), "{answer}");
+
+	// A plugin whose action runs `$HERDR_BIN_PATH pane list`: herdr gives it the running `jocasta`.
+	let plugin = sandbox.path().join("plugin");
+	std::fs::create_dir_all(&plugin).expect("making the plugin");
+	let command: Vec<String> = if cfg!(windows) {
+		let shell = std::env::var("COMSPEC").unwrap_or_else(|_| "C:\\Windows\\System32\\cmd.exe".into());
+		vec![shell, "/d".into(), "/c".into(), "%HERDR_BIN_PATH% pane list > out.json".into()]
+	} else {
+		vec!["/bin/sh".into(), "-c".into(), "\"$HERDR_BIN_PATH\" pane list > out.json".into()]
+	};
+	let manifest = format!(
+		"id = \"example.entry\"\nname = \"Entry\"\nversion = \"0.1.0\"\nmin_herdr_version = \"0.6.10\"\n\
+		 platforms = [\"linux\", \"macos\", \"windows\"]\n\n[[actions]]\nid = \"panes\"\ntitle = \"Panes\"\ncommand = {}\n",
+		serde_json::to_string(&command).expect("the command as TOML")
+	);
+	std::fs::write(plugin.join("herdr-plugin.toml"), manifest).expect("writing the manifest");
+	let plugin_arg = plugin.to_string_lossy().into_owned();
+	let link = finish(herdr_t(&sandbox, &["plugin", "link", &plugin_arg]).spawn().expect("plugin link"), 30);
+	assert_eq!(link.code, Some(0), "{}{}", link.stdout, link.stderr);
+	let invoke = finish(
+		herdr_t(&sandbox, &["plugin", "action", "invoke", "panes", "--plugin", "example.entry"])
+			.spawn()
+			.expect("plugin action invoke"),
+		30,
+	);
+	assert_eq!(invoke.code, Some(0), "{}{}", invoke.stdout, invoke.stderr);
+	let deadline = Instant::now() + Duration::from_secs(30);
+	let seen = loop {
+		let text = std::fs::read_to_string(plugin.join("out.json")).unwrap_or_default();
+		if let Ok(seen) = serde_json::from_str::<Value>(&text) {
+			break seen;
+		}
+		assert!(Instant::now() < deadline, "the action never wrote pane list's answer: {text:?}");
+		thread::sleep(Duration::from_millis(100));
+	};
+	assert_eq!(seen, answer);
+	drop(server);
 }
