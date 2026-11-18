@@ -32,7 +32,9 @@ use crate::frontier::server::page_routes::{LaunchCodes, PageParts, PageResponder
 use crate::frontier::server::popups::{ALLOW, AnswerTaken, Popup, Popups, allow_question};
 use crate::frontier::server::relay::{Relay, start_relay};
 use crate::frontier::server::routes::{Route, Served, ServerHandle, listen};
-use crate::frontier::server::service::{FindReview, Heal, JocastaService, OpenReview, RelayUrlOf, ServiceOptions};
+use crate::frontier::server::service::{
+	Changed, FindReview, Heal, JocastaService, OpenReview, RelayUrlOf, ServiceOptions,
+};
 use crate::frontier::server::stop_sequence::{
 	StopBounds, StopParts, StopRun, StopService, StopStep, StopWhen, Stopper, stop_steps, stopper, undo_start,
 };
@@ -491,7 +493,7 @@ fn questions(options: &mut ServerOptions, shell: Option<&Arc<Native>>) -> Questi
 	Questions { popups, question }
 }
 
-/// The Agents view and the dock's workspace, healed on every refresh: the service's `plugin` hook.
+/// The Agents view and the dock's workspace, healed on every refresh: the service's `dock` hook.
 fn heal_of(herdr: &Arc<dyn Herdr>, shell: Arc<Native>) -> Heal {
 	let herdr = Arc::clone(herdr);
 	Arc::new(move |snapshot, boss| {
@@ -501,6 +503,11 @@ fn heal_of(herdr: &Arc<dyn Herdr>, shell: Arc<Native>) -> Heal {
 			Ok(())
 		})
 	})
+}
+
+/// herdr's changes, as the herdr server this service runs in reports them: the service's `herdr_changed` hook.
+fn changes_of(shell: Arc<Native>) -> Changed {
+	Arc::new(move || shell.herdr_changed())
 }
 
 /// The service over a new catalog, with the options that pass through and the server's own seams in place.
@@ -517,7 +524,8 @@ fn build_service(
 	let (find_review, open_review) = (options.find_review.take(), options.open_review.take());
 	let confirm = options.confirm.take();
 	options.pass_on(&mut service);
-	service.plugin = shell.map(|shell| heal_of(herdr, shell));
+	service.dock = shell.clone().map(|shell| heal_of(herdr, shell));
+	service.herdr_changed = shell.map(changes_of);
 	service.confirm = Some(confirm.unwrap_or_else(|| allow_box(Arc::clone(&asking.question))));
 	let row = whiteboard.cloned();
 	service.services =

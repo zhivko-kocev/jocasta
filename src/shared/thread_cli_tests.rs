@@ -163,7 +163,7 @@ async fn a_command_goes_to_the_service_with_its_token_exit_0_done_1_refused_3_wh
 		)]
 	);
 	assert_eq!(*deps.out.borrow(), ["Stopped Login's run."]);
-	assert_eq!(*deps.err.borrow(), ["jocasta: asking you first in herdr's popup (Allow with its code; 2 minutes)…"]);
+	assert_eq!(*deps.err.borrow(), ["jocasta: asking you first in your terminal (Allow with its code; 2 minutes)…"]);
 
 	let (port, _) = fake_service(|| {
 		Json(json!({ "text": "He chose Deny; nothing was stopped.", "isError": true })).into_response()

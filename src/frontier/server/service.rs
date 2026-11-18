@@ -58,8 +58,12 @@ use crate::shared::projects::Project;
 use crate::shared::push_hook::{PushAnswer, PushRequest};
 use crate::shared::settings::settings_problems;
 
-/// The herdr plugin's panes (0553), healed on every refresh with herdr's panes as read and the boss pane's id.
+/// The dock's workspace and the Agents view (0553), healed on every refresh with herdr's panes as read and the boss
+/// pane's id.
 pub type Heal = Arc<dyn Fn(HerdrSnapshot, Option<String>) -> BoxFuture<'static, Result<()>> + Send + Sync>;
+
+/// Resolves at herdr's next change the refresh reads (`ServerHost::herdr_changed`).
+pub type Changed = Arc<dyn Fn() -> BoxFuture<'static, ()> + Send + Sync>;
 
 /// A whiteboard review by id on whiteboard's server (`GET /reviews-api/<id>?full=true`): its title, or `None` when
 /// there is none; an error when the server doesn't answer.
@@ -79,8 +83,11 @@ pub struct ServiceOptions {
 	pub broadcast: Arc<dyn Fn(ServerMessage) + Send + Sync>,
 	/// Whether whiteboard answers (0429), for the dashboard; herdr's the service checks itself.
 	pub services: Option<Arc<dyn Fn() -> BoxFuture<'static, Vec<ServiceHealth>> + Send + Sync>>,
-	/// The herdr plugin's panes (0553): healed on every refresh. Absent in tests that don't need it.
-	pub plugin: Option<Heal>,
+	/// The dock's workspace and the Agents view (0553): healed on every refresh. Absent in tests that don't need it.
+	pub dock: Option<Heal>,
+	/// herdr's changes (fork plan finding 8): each refreshes herdr's facts, and the full refresh comes every minute.
+	/// Absent (a test's service, one beside a herdr of its own): everything every `refresh_ms`.
+	pub herdr_changed: Option<Changed>,
 	/// A whiteboard review by id (its `session_create` sessionId). Absent when whiteboard is off.
 	pub find_review: Option<FindReview>,
 	/// Opens a whiteboard review in his browser (the boss's `show`, 0552). Absent when whiteboard is off.
@@ -112,7 +119,7 @@ pub struct ServiceOptions {
 	/// How long `thread_start` waits for the pane to start working on the brief before sending one Enter;
 	/// `SUBMIT_WAIT_MS`, 5 s.
 	pub submit_wait_ms: Option<i64>,
-	/// How often panes, sidebar tokens and the HUD are refreshed; 5 s.
+	/// How often everything is refreshed; 5 s, or a minute with `herdr_changed` (test seam).
 	pub refresh_ms: Option<i64>,
 	/// How long the end of a thread pane's omp is waited for before its leftovers end (0490); 10 s (test seam).
 	pub leftover_wait_ms: Option<i64>,
@@ -162,7 +169,8 @@ impl ServiceOptions {
 			herdr,
 			broadcast,
 			services: None,
-			plugin: None,
+			dock: None,
+			herdr_changed: None,
 			find_review: None,
 			open_review: None,
 			day: None,
@@ -209,8 +217,13 @@ impl ServiceOptions {
 	}
 }
 
-/// How often panes, sidebar tokens and the HUD are refreshed.
+/// How often everything is refreshed while nothing reports herdr's changes.
 const REFRESH_MS: u64 = 5_000;
+/// How often everything is refreshed while herdr's changes refresh its facts: what herdr has no event for (plans a
+/// turn's end didn't show, catch-ups, hand commits, spend).
+const FULL_REFRESH_MS: u64 = 60_000;
+/// How long after herdr's change its facts are read: a burst (a workspace with its tab and pane) is one refresh.
+const CHANGE_SETTLE_MS: u64 = 150;
 /// How often the thread panes' omp hosts are asked for their state (0547, 0561); a pipe answers in 0–5 ms.
 const HOST_POLL_MS: u64 = 1_000;
 /// How long `stop` waits for tool calls in flight before closing the catalog under them (SVC-13).
@@ -508,11 +521,17 @@ impl JocastaService {
 		*locked(&self.watcher) = Some(watcher);
 	}
 
-	/// The refresh tick; and omp's own state for each thread pane (0547, 0561), between herdr's events and the refresh
-	/// tick, never with the host registry off (0576's `herdr` condition).
+	/// The full refresh tick, and herdr's facts refreshed on its changes when herdr reports them (fork plan finding 8);
+	/// and omp's own state for each thread pane (0547, 0561), between herdr's events and the refresh tick, never with
+	/// the host registry off (0576's `herdr` condition).
 	fn start_timers(&self, me: &Weak<Self>) {
-		let refresh_ms = self.ctx.options.refresh_ms.map_or(REFRESH_MS, |ms| ms.unsigned_abs().max(1));
+		let changes = self.ctx.options.herdr_changed.clone();
+		let full_ms = if changes.is_some() { FULL_REFRESH_MS } else { REFRESH_MS };
+		let refresh_ms = self.ctx.options.refresh_ms.map_or(full_ms, |ms| ms.unsigned_abs().max(1));
 		let mut timers = vec![every(refresh_ms, me.clone(), |service| async move { service.tick() }.boxed())];
+		if let Some(changed) = changes {
+			timers.push(on_changes(changed, me.clone()));
+		}
 		if self.ctx.hosts {
 			let poll_ms = self.ctx.options.host_poll_ms.map_or(HOST_POLL_MS, |ms| ms.unsigned_abs().max(1));
 			timers.push(every(poll_ms, me.clone(), |service| async move { service.ctx.omps.poll().await }.boxed()));
@@ -825,6 +844,20 @@ fn every(
 			timer.tick().await;
 			let Some(service) = me.upgrade() else { break };
 			work(service).await;
+		}
+	})
+}
+
+/// A task that reads herdr's facts again `CHANGE_SETTLE_MS` after each change herdr reports, until the service is
+/// gone. Notifications herdr couldn't show are sent again too (0584), as the tick does.
+fn on_changes(changed: Changed, me: Weak<JocastaService>) -> JoinHandle<()> {
+	tokio::spawn(async move {
+		loop {
+			changed().await;
+			tokio::time::sleep(Duration::from_millis(CHANGE_SETTLE_MS)).await;
+			let Some(service) = me.upgrade() else { break };
+			service.ctx.events.resend_unshown();
+			drop(service.refresher.facts());
 		}
 	})
 }

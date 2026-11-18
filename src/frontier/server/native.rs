@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
+use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use herdr::embed::{ServerHost, Target};
 use serde::Serialize;
@@ -131,6 +132,12 @@ impl Native {
 	/// The server, once it started; before that, a shell's answers and keys wait for nothing and are refused.
 	pub fn attach(&self, server: Arc<dyn NativeServer>) {
 		let _ = self.server.set(server);
+	}
+
+	/// Resolves at herdr's next change the refresh reads, as herdr's server reports it.
+	pub fn herdr_changed(&self) -> BoxFuture<'static, ()> {
+		let host = self.host.clone();
+		async move { host.herdr_changed().await }.boxed()
 	}
 
 	fn warn(&self, subject: &str, error: &dyn Display) {

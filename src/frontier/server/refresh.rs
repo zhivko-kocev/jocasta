@@ -1,11 +1,12 @@
-//! The refresh tick (0402, 0403, 0404, 0405, 0521, CR-09): every few seconds the boss pane, closed and new threads,
-//! panes to start omp in again, missed states, plans, catch-up reviews, hand commits, spend, the sidebar and the HUD.
-//! Each is its own step (SVC-3): one that throws is said once per reason and the rest still run.
+//! The refresh (0402, 0403, 0404, 0405, 0521, CR-09): the boss pane, closed and new threads, panes to start omp in
+//! again, missed states, plans, catch-up reviews, hand commits, spend, the sidebar and the HUD. herdr's facts are read
+//! again as herdr reports a change (fork plan finding 8); everything on the tick. Each is its own step (SVC-3): one that
+//! throws is said once per reason and the rest still run.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use futures_util::FutureExt;
@@ -26,8 +27,25 @@ use crate::shared::pathkey::same_dir;
 /// Thread panes relaunched at once after herdr restored them (PERF-5): herdr drops connections under bursts (0517).
 const RELAUNCH_POOL: usize = 3;
 
-/// The tick running now, as every caller of [`Refresher::refresh`] waits for it.
+/// The refresh running now, as every caller of [`Refresher::refresh`] waits for it.
 pub type Running = SharedFuture<BoxFuture<'static, ()>>;
+
+/// What a refresh reads: herdr's facts (after herdr reported a change), or everything (the tick).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Scope {
+	/// The boss pane, herdr's default workspace, closed and new threads, their panes and omps, missed states, the dock,
+	/// the sidebar and the HUD.
+	Facts,
+	/// Those, then plans, catch-up reviews, hand commits and spend.
+	Full,
+}
+
+/// The refresh under way: its number (so its end clears only itself), what it reads, and its wait.
+struct Underway {
+	number: u64,
+	scope: Scope,
+	running: Running,
+}
 
 /// What one tick works from: when herdr's list was read, the snapshot (read again after the tick changed the boss pane
 /// or closed herdr's default workspace), its panes by id, and the threads known before the list was read (SVC-2).
@@ -46,7 +64,9 @@ fn named(text: &Option<String>) -> bool {
 /// The tick's state and the running tick; [`Refresher`] shares it with the tasks it spawns.
 struct Inner {
 	ctx: Arc<ServiceContext>,
-	refreshing: Mutex<Option<Running>>,
+	refreshing: Mutex<Option<Underway>>,
+	/// The next refresh's number.
+	numbers: AtomicU64,
 	/// What each refresh step last warned of (SVC-3), so a failing step is said once per reason.
 	step_warned: Mutex<HashMap<String, String>>,
 	/// The panes `discover` last looked at, so an unchanged pane set isn't looked at again (CR-12).
@@ -68,6 +88,7 @@ impl Refresher {
 			inner: Arc::new(Inner {
 				ctx,
 				refreshing: Mutex::new(None),
+				numbers: AtomicU64::new(0),
 				step_warned: Mutex::new(HashMap::new()),
 				discovered_key: Mutex::new(String::new()),
 				herdr_default: AtomicBool::new(false),
@@ -91,40 +112,64 @@ impl Refresher {
 		self.inner.rediscover();
 	}
 
-	/// Every few seconds: the boss pane is there and runs omp (0404), threads closed in herdr are dropped with an
+	/// Everything, on the tick: the boss pane is there and runs omp (0404), threads closed in herdr are dropped with an
 	/// `[event]` (0405), new ones found, panes herdr restored as shells or whose omp ended while they stayed open (0521)
 	/// run omp again, as do idle panes started before panes had keys (0578), a state herdr's events missed is caught up
 	/// (CR-09), found threads' unreviewed commits get their review (0394), each thread's ledger is read (0582, and its
-	/// spend past $50 said once, 0541), and the sidebar tokens and the HUD are reported (0402, 0403). The tick reads
+	/// spend past $50 said once, 0541), and the sidebar tokens and the HUD are reported (0402, 0403). The refresh reads
 	/// herdr's snapshot (again after it changed the boss pane or closed herdr's default workspace) and asks herdr for
-	/// the panes' roots, screens and prompts as the steps need them. One tick at a time: a call meanwhile gets the
-	/// running one. The tick runs whether or not the caller waits.
+	/// the panes' roots, screens and prompts as the steps need them. One refresh at a time: a call meanwhile gets the
+	/// running one, or, while one reads only herdr's facts, a full one that runs after it. The refresh runs whether or
+	/// not the caller waits.
 	pub fn refresh(&self) -> Running {
+		self.run(Scope::Full)
+	}
+
+	/// herdr's facts only, after herdr reported a change: [`Refresher::refresh`] without plans, catch-up reviews, hand
+	/// commits and spend. A call while any refresh runs gets that one.
+	pub fn facts(&self) -> Running {
+		self.run(Scope::Facts)
+	}
+
+	fn run(&self, scope: Scope) -> Running {
 		let mut slot = self.inner.slot();
-		if let Some(running) = slot.as_ref() {
-			return running.clone();
-		}
+		let after = match slot.as_ref() {
+			Some(underway) if underway.scope == Scope::Full || scope == Scope::Facts => {
+				return underway.running.clone();
+			}
+			Some(underway) => Some(underway.running.clone()),
+			None => None,
+		};
+		let number = self.inner.numbers.fetch_add(1, Ordering::SeqCst);
 		let inner = Arc::clone(&self.inner);
 		let work = tokio::spawn({
 			let inner = Arc::clone(&inner);
-			async move { inner.tick().await }
+			async move {
+				if let Some(after) = after {
+					after.await;
+				}
+				inner.tick(scope).await;
+			}
 		});
 		let done = tokio::spawn(async move {
 			let _ = work.await;
-			*inner.slot() = None;
+			let mut slot = inner.slot();
+			if slot.as_ref().is_some_and(|underway| underway.number == number) {
+				*slot = None;
+			}
 		});
 		let running: Running = async move {
 			let _ = done.await;
 		}
 		.boxed()
 		.shared();
-		*slot = Some(running.clone());
+		*slot = Some(Underway { number, scope, running: running.clone() });
 		running
 	}
 
-	/// The tick still under way, for `stop` to wait for.
+	/// The refresh still under way (the last one asked, which ends after any it follows), for `stop` to wait for.
 	pub fn running(&self) -> Option<Running> {
-		self.inner.slot().clone()
+		self.inner.slot().as_ref().map(|underway| underway.running.clone())
 	}
 
 	/// Threads herdr runs that the service doesn't know yet: a pane in a linked worktree of a watched project that
@@ -136,7 +181,7 @@ impl Refresher {
 }
 
 impl Inner {
-	fn slot(&self) -> MutexGuard<'_, Option<Running>> {
+	fn slot(&self) -> MutexGuard<'_, Option<Underway>> {
 		self.refreshing.lock().unwrap_or_else(PoisonError::into_inner)
 	}
 
@@ -187,7 +232,7 @@ impl Inner {
 		Some(snapshot)
 	}
 
-	async fn tick(&self) {
+	async fn tick(&self, scope: Scope) {
 		let c = &self.ctx;
 		if c.stopping() {
 			return;
@@ -199,11 +244,11 @@ impl Inner {
 		let Some(snapshot) = self.read().await else { return };
 		let by_id = snapshot.panes.iter().map(|p| (p.pane_id.clone(), p.clone())).collect();
 		let tick = Tick { read_at, snapshot, by_id, known };
-		self.steps(&tick).await;
+		self.steps(&tick, scope).await;
 	}
 
-	/// What follows the snapshot, each step on its own.
-	async fn steps(&self, tick: &Tick) {
+	/// What follows the snapshot, each step on its own; plans, catch-ups, hand commits and spend on a full refresh only.
+	async fn steps(&self, tick: &Tick, scope: Scope) {
 		let c = &self.ctx;
 		let Tick { read_at, snapshot, by_id, .. } = tick;
 		c.status.set_workspaces(snapshot.workspaces.clone());
@@ -225,28 +270,31 @@ impl Inner {
 		self.step("thread panes", self.thread_panes(tick)).await;
 		self.step("the thread panes' omp", self.thread_omps(tick)).await;
 		self.step("project panes", self.project_panes(tick)).await;
-		// `today` beside the boss and the Agents view (0553), healed like the boss pane (0518, 0549).
-		if let Some(plugin) = c.options.plugin.clone() {
+		// The dock's workspace and the Agents view (0553), healed like the boss pane (0518, 0549).
+		if let Some(dock) = c.options.dock.clone() {
 			let boss_id = c.boss().map(|boss| boss.with(|boss| boss.pane_id.clone()));
-			self.step("the plugin's panes", plugin(snapshot.clone(), boss_id)).await;
+			self.step("the dock", dock(snapshot.clone(), boss_id)).await;
 		}
 		self.step("missed states", c.lifecycle.reconcile(by_id, *read_at)).await;
-		// A plan omp proposed that no idle event saw (B1), or one an omp resumed after a restart still holds (B3,
-		// counted unsaid, as `discover` does); before the catch-up, so no review prompt goes into it.
-		self.step("plans", self.plans()).await;
-		self.step("reopened plans", self.reopened_plans()).await;
-		self.step("catch-up reviews", self.catch_ups()).await;
-		self.step("approved plans", self.approved_plans()).await;
-		self.step("hand commits", c.lifecycle.hand_commits(by_id)).await;
-		self.step("spend", async {
-			c.status.spend_passed().await;
-			Ok::<_, Error>(())
-		})
-		.await;
+		if scope == Scope::Full {
+			// A plan omp proposed that no idle event saw (B1), or one an omp resumed after a restart still holds (B3,
+			// counted unsaid, as `discover` does); before the catch-up, so no review prompt goes into it.
+			self.step("plans", self.plans()).await;
+			self.step("reopened plans", self.reopened_plans()).await;
+			self.step("catch-up reviews", self.catch_ups()).await;
+			self.step("approved plans", self.approved_plans()).await;
+			self.step("hand commits", c.lifecycle.hand_commits(by_id)).await;
+			self.step("spend", async {
+				c.status.spend_passed().await;
+				Ok::<_, Error>(())
+			})
+			.await;
+		}
 		self.step("sidebar and HUD", c.status.report()).await;
 	}
 
-	/// The boss pane, ensured again when it is gone, its omp ended (0521) or it runs omp without this run's key (0484).
+	/// The boss pane, ensured again when it is gone (after 0521's doubling wait when it keeps closing), its omp ended
+	/// (0521) or it runs omp without this run's key (0484).
 	async fn boss_pane(&self, read: &HerdrSnapshot) -> Result<HerdrSnapshot> {
 		let c = &self.ctx;
 		let boss_id = c.boss().map(|boss| boss.with(|boss| boss.pane_id.clone()));
@@ -258,6 +306,9 @@ impl Inner {
 			&& !c.launched.restored(pane)
 			&& !c.panes.unkeyed_boss(pane)
 		{
+			return Ok(read.clone());
+		}
+		if current.is_none() && boss_id.is_some() && !self.backoff.boss_closed() {
 			return Ok(read.clone());
 		}
 		c.panes.ensure_boss(boss_ended).await?;

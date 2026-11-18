@@ -2,11 +2,13 @@
 //! herdr's own code reads these only where FORK.md lists a seam.
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+
+use crate::api::schema::EventKind;
 
 /// Where herdr keeps its files inside Jocasta, in place of `~/.config/herdr` and its kin.
 #[derive(Debug, Clone)]
@@ -87,6 +89,11 @@ impl ServerHost {
             data,
         });
     }
+
+    /// Resolves at herdr's next change Jocasta reads (see [`herdr_event`]); changes while nothing waits are one wake.
+    pub async fn herdr_changed(&self) {
+        CHANGED.notified().await;
+    }
 }
 
 impl std::fmt::Debug for ServerHost {
@@ -140,6 +147,30 @@ pub(crate) fn server_started(host: ServerHost) {
 
 pub(crate) fn last_client_left() {
     with_extension(|extension| extension.last_client_left());
+}
+
+/// Woken by herdr's events that change what Jocasta reads of it.
+static CHANGED: LazyLock<tokio::sync::Notify> = LazyLock::new(tokio::sync::Notify::new);
+
+/// One of herdr's events, as its event hub records it: a workspace, tab or pane created, closed or focused, a pane's
+/// process exiting, or its agent detected or changing state wakes [`ServerHost::herdr_changed`]. Output, layout, moves,
+/// renames and other updates don't.
+pub(crate) fn herdr_event(kind: EventKind) {
+    if matches!(
+        kind,
+        EventKind::WorkspaceCreated
+            | EventKind::WorkspaceClosed
+            | EventKind::WorkspaceFocused
+            | EventKind::TabFocused
+            | EventKind::PaneCreated
+            | EventKind::PaneClosed
+            | EventKind::PaneExited
+            | EventKind::PaneFocused
+            | EventKind::PaneAgentDetected
+            | EventKind::PaneAgentStatusChanged
+    ) {
+        CHANGED.notify_one();
+    }
 }
 
 /// Each shell's peer process, from its handshake until it attaches.

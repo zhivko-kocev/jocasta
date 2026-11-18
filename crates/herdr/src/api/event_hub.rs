@@ -19,6 +19,8 @@ impl EventHub {
     const MAX_EVENTS: usize = 512;
 
     pub fn push(&self, event: crate::api::schema::EventEnvelope) {
+        // Fork seam (FORK.md): Jocasta's refresh wakes on the events it reads.
+        crate::embed::herdr_event(event.event);
         let Ok(mut state) = self.inner.lock() else {
             return;
         };

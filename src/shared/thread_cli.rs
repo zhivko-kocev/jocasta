@@ -1,6 +1,6 @@
 //! `jocasta thread …` and `jocasta worktree …` (0544): doors to the running service's own thread functions (the ones the
 //! boss's tools use) that need no model, over its localhost API with its token (`POST /api/cli`). The changes (`thread
-//! send|stop|finish`, `worktree remove`) wait for his Allow in herdr's popup; the rest run at once.
+//! send|stop|finish`, `worktree remove`) wait for his Allow, asked in his terminal; the rest run at once.
 
 use serde_json::{Map, Value, json};
 
@@ -182,7 +182,7 @@ pub async fn run_cli_command(request: &CliRequest, deps: &impl CliDeps) -> i32 {
 		return EXIT.not_running;
 	};
 	if request.asks {
-		deps.print_error("jocasta: asking you first in herdr's popup (Allow with its code; 2 minutes)…");
+		deps.print_error("jocasta: asking you first in your terminal (Allow with its code; 2 minutes)…");
 	}
 	let Some(client) = client() else {
 		deps.print_error("jocasta: Jocasta's service failed: the HTTP client could not start");

@@ -431,18 +431,19 @@ fn has_jocastas_workspace(sandbox: &Sandbox, name: &str) -> bool {
 }
 
 /// A stand-in omp on the sandbox's PATH, built with the toolchain's own rustc (Windows runs a bare `omp` only as an
-/// .exe): it answers the service's relay check (`config get collab.relayUrl --json`) with a loopback relay, and
-/// otherwise waits, as the boss pane's omp would.
+/// .exe): it answers the service's relay check (`config get collab.relayUrl --json`) with a loopback relay and its spend
+/// step (`usage --json`) with no reports, and otherwise waits, as the boss pane's omp would. The spend step's run isn't
+/// ended with the service, so a waiting answer would outlive the test.
 fn fake_omp(sandbox: &Sandbox) {
 	let source = sandbox.path().join("fake_omp.rs");
 	std::fs::write(
 		&source,
 		r#"fn main() {
-	if std::env::args().nth(1).as_deref() == Some("config") {
-		println!("{{\"value\":\"ws://127.0.0.1:1\"}}");
-		return;
+	match std::env::args().nth(1).as_deref() {
+		Some("config") => println!("{{\"value\":\"ws://127.0.0.1:1\"}}"),
+		Some("usage") => println!("{{\"generatedAt\":0,\"reports\":[]}}"),
+		_ => std::thread::sleep(std::time::Duration::from_secs(3600)),
 	}
-	std::thread::sleep(std::time::Duration::from_secs(3600));
 }
 "#,
 	)
@@ -629,22 +630,27 @@ impl Terminal {
 			let shown = self.shown.lock().expect("the screen");
 			String::from_utf8_lossy(&shown[shown.len().saturating_sub(2_000)..]).into_owned()
 		};
-		let data = sandbox.path().join("data");
-		let logs: Vec<String> = [data.join("logs"), data.join("herdr").join("sessions").join(session)]
-			.iter()
-			.flat_map(|dir| std::fs::read_dir(dir).into_iter().flatten().flatten())
-			.filter(|entry| entry.path().extension().is_some_and(|ext| ext == "log"))
-			.map(|entry| {
-				format!("{}:\n{}", entry.path().display(), std::fs::read_to_string(entry.path()).unwrap_or_default())
-			})
-			.collect();
 		let drawn = self.screen().join("\n");
 		format!(
 			"client {:?}; the screen:\n{drawn}\nthe terminal: {screen:?}\n{}",
 			self.client.try_wait(),
-			logs.join("\n")
+			logs(sandbox, session)
 		)
 	}
+}
+
+/// The sandbox's Jocasta logs and herdr session `session`'s, for a failure's message.
+fn logs(sandbox: &Sandbox, session: &str) -> String {
+	let data = sandbox.path().join("data");
+	let logs: Vec<String> = [data.join("logs"), data.join("herdr").join("sessions").join(session)]
+		.iter()
+		.flat_map(|dir| std::fs::read_dir(dir).into_iter().flatten().flatten())
+		.filter(|entry| entry.path().extension().is_some_and(|ext| ext == "log"))
+		.map(|entry| {
+			format!("{}:\n{}", entry.path().display(), std::fs::read_to_string(entry.path()).unwrap_or_default())
+		})
+		.collect();
+	logs.join("\n")
 }
 
 /// One test, as the service's collab relay has one fixed port (0561): two services at once would refuse the second.
@@ -735,4 +741,91 @@ fn bare_jocasta_runs_the_service_in_herdrs_server_one_that_cant_start_ends_it_sa
 	assert_eq!(stop.code, Some(0), "{}{}", stop.stdout, stop.stderr);
 	wait_until(90, "the server process never ended", || matches!(server.try_wait(), Ok(Some(_))));
 	assert!(!service_file.exists(), "the service's file outlived it");
+}
+
+/// The value at `pointer` in herdr's answer, with or without its `result` envelope.
+fn answered<'a>(answer: &'a Value, pointer: &str) -> Option<&'a str> {
+	answer.pointer(&format!("/result{pointer}")).or_else(|| answer.pointer(pointer)).and_then(Value::as_str)
+}
+
+/// The opt-in smoke on a real server (`mise run smoke`, `JOCASTA_HERDR_SMOKE=1`; the relay's fixed port allows one
+/// service at a time): herdr's events reach the service, so an omp started in a project's worktree is a thread within
+/// seconds and its closed workspace drops it, long before the minute's full refresh (fork plan finding 8).
+#[test]
+fn live_smoke_an_omp_pane_in_a_worktree_is_found_and_dropped_on_herdrs_events() {
+	if std::env::var("JOCASTA_HERDR_SMOKE").as_deref() != Ok("1") {
+		return;
+	}
+	let sandbox = Sandbox::new();
+	let service_file = sandbox.path().join("data").join("jocasta-service.json");
+	fake_omp(&sandbox);
+	let git_dir = git_folder();
+	let path = std::env::join_paths([sandbox.path().join("bin").as_path(), &git_dir]).expect("a PATH");
+	let worktree = leftover_worktree(&sandbox);
+	let main = sandbox.path().join("code").join("demo");
+	let added = finish(
+		sandbox
+			.jocasta(&["project", "add", &main.display().to_string()])
+			.env("PATH", &path)
+			.spawn()
+			.expect("project add"),
+		30,
+	);
+	assert_eq!(added.code, Some(0), "{}{}", added.stdout, added.stderr);
+	let server = in_session(&sandbox, "l", &["server"])
+		.env("JOCASTA_SERVICE", "1")
+		.env("PATH", &path)
+		.env("Path", &path)
+		.stdout(Stdio::null())
+		.stderr(Stdio::null())
+		.spawn()
+		.expect("starting jocasta server");
+	let mut server = Ends(server);
+	wait_until(90, "the service never listened", || service_file.exists());
+	wait_until(90, "the service never made workspace Jocasta", || has_jocastas_workspace(&sandbox, "l"));
+	let threads = || finish(sandbox.jocasta(&["thread", "list"]).spawn().expect("thread list"), 30).stdout;
+	assert_eq!(threads().trim(), "No threads.");
+
+	let cwd = worktree.display().to_string();
+	let made = finish(
+		in_session(&sandbox, "l", &["workspace", "create", "--cwd", &cwd, "--label", "left"])
+			.spawn()
+			.expect("workspace create"),
+		30,
+	);
+	let made: Value =
+		serde_json::from_str(&made.stdout).unwrap_or_else(|_| panic!("herdr's answer: {}{}", made.stdout, made.stderr));
+	let pane = answered(&made, "/root_pane/pane_id").unwrap_or_else(|| panic!("no root pane in {made}")).to_owned();
+	let workspace =
+		answered(&made, "/workspace/workspace_id").unwrap_or_else(|| panic!("no workspace in {made}")).to_owned();
+	let omp = sandbox.path().join("bin").join(format!("omp{}", std::env::consts::EXE_SUFFIX)).display().to_string();
+	// `pane run` types the command into the pane's shell (PowerShell on Windows), and the sandbox path may hold spaces.
+	let omp = if cfg!(windows) { format!("& '{omp}'") } else { format!("'{omp}'") };
+	let ran = finish(in_session(&sandbox, "l", &["pane", "run", &pane, &omp]).spawn().expect("pane run"), 30);
+	assert_eq!(ran.code, Some(0), "{}{}", ran.stdout, ran.stderr);
+	let report = || {
+		let panes = finish(in_session(&sandbox, "l", &["pane", "list"]).spawn().expect("pane list"), 30).stdout;
+		format!("{}\nherdr's panes: {panes}\n{}", threads(), logs(&sandbox, "l"))
+	};
+	let found = waited(20, || threads().trim() != "No threads.");
+	assert!(found, "the omp pane in the worktree never became a thread: {}", report());
+
+	let closed =
+		finish(in_session(&sandbox, "l", &["workspace", "close", &workspace]).spawn().expect("workspace close"), 30);
+	assert_eq!(closed.code, Some(0), "{}{}", closed.stdout, closed.stderr);
+	let dropped = waited(20, || threads().trim() == "No threads.");
+	assert!(dropped, "the closed thread stayed: {}", report());
+
+	let stop = finish(in_session(&sandbox, "l", &["server", "stop"]).spawn().expect("server stop"), 30);
+	assert_eq!(stop.code, Some(0), "{}{}", stop.stdout, stop.stderr);
+	wait_until(90, "the server process never ended", || matches!(server.0.try_wait(), Ok(Some(_))));
+}
+
+/// A child process killed when the test ends, on a failure too.
+struct Ends(Child);
+
+impl Drop for Ends {
+	fn drop(&mut self) {
+		let _ = self.0.kill();
+	}
 }

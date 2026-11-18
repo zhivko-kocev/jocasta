@@ -10,6 +10,7 @@ use serde_json::json;
 
 use super::*;
 use crate::frontier::protocol::ToastPriority;
+use crate::frontier::server::herdr::WorkspaceInfo;
 use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
 use crate::shared::layer::HOSTS_ENV;
 use crate::shared::schema::open_catalog;
@@ -204,6 +205,30 @@ async fn the_refresh_tick_runs_every_refresh_ms_until_the_stop() {
 	let after = s.service.ticks();
 	tokio::time::sleep(Duration::from_millis(200)).await;
 	assert_eq!(s.service.ticks(), after, "no tick after the stop");
+}
+
+#[tokio::test]
+async fn a_change_herdr_reports_refreshes_its_facts_soon_while_the_full_tick_waits() {
+	let changes = Arc::new(tokio::sync::Notify::new());
+	let changed = Arc::clone(&changes);
+	let s = stand(move |_, options| {
+		options.herdr_changed = Some(Arc::new(move || {
+			let changed = Arc::clone(&changed);
+			async move { changed.notified().await }.boxed()
+		}));
+	});
+	within_a_second(s.service.start()).await.unwrap();
+	let ticks = s.service.ticks();
+	s.herdr.state().workspace_list.push(WorkspaceInfo { id: "w-new".to_owned(), label: "new".to_owned(), cwd: None });
+	changes.notify_one();
+	let seen = async {
+		while !s.service.context().status.workspaces().iter().any(|w| w.id == "w-new") {
+			tokio::time::sleep(Duration::from_millis(10)).await;
+		}
+	};
+	within_a_second(seen).await;
+	assert_eq!(s.service.ticks(), ticks, "herdr's facts, not the full tick");
+	within_a_second(s.service.stop()).await;
 }
 
 #[tokio::test]

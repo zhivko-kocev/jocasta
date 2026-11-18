@@ -509,6 +509,30 @@ async fn one_tick_runs_at_a_time_and_every_caller_gets_the_running_one() {
 }
 
 #[tokio::test]
+async fn a_facts_refresh_drops_a_closed_thread_but_catches_up_nothing_and_a_full_one_asked_meanwhile_follows_it() {
+	let w = world("none").await;
+	w.up();
+	w.r.discover(&w.snapshot().await).await.unwrap();
+	let thread = w.t.ctx.threads.get("p-thread").unwrap();
+	assert!(thread.with(|t| t.catch_up));
+	w.r.facts().await;
+	assert!(thread.with(|t| t.catch_up), "plans and catch-ups wait for the full refresh");
+	// A full refresh asked while a facts one runs comes after it; a facts one asked then gets the full one.
+	let facts = w.r.facts();
+	let full = w.r.refresh();
+	let again = w.r.facts();
+	full.await;
+	assert!(w.r.running().is_none(), "the full refresh ended last");
+	facts.await;
+	again.await;
+	w.t.ctx.calls.settled_within(2_000).await;
+	assert!(!thread.with(|t| t.catch_up));
+	w.close("w-thread").await;
+	w.r.facts().await;
+	assert_eq!(w.thread_count(), 0);
+}
+
+#[tokio::test]
 async fn a_step_that_fails_is_said_once_per_reason_and_the_rest_still_run() {
 	let w = world("none").await;
 	let inner = &w.r.inner;
@@ -619,4 +643,18 @@ async fn set_herdr_default_is_kept_until_the_default_workspace_is_closed_or_kept
 	w.tick().await;
 	w.r.set_herdr_default(false);
 	assert!(!w.r.herdr_default());
+}
+
+#[tokio::test]
+async fn a_boss_pane_that_keeps_closing_opens_again_at_once_then_waits() {
+	let w = world("none").await;
+	let boss_workspace = || w.t.ctx.boss().unwrap().with(|boss| boss.workspace_id.clone());
+	w.close(&boss_workspace()).await;
+	w.tick().await;
+	assert_eq!(w.t.herdr.of("ensureWorkspace").len(), 2, "the first close opens it at once");
+	assert!(w.snapshot().await.panes.iter().any(|pane| pane.pane_id == w.boss()));
+	w.close(&boss_workspace()).await;
+	w.tick().await;
+	w.tick().await;
+	assert_eq!(w.t.herdr.of("ensureWorkspace").len(), 2, "the second waits 10 s");
 }

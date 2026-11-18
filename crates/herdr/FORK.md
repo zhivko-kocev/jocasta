@@ -61,7 +61,8 @@ terminal is sent (no write over the wide tail) rather than the test backend's co
   `send` to the clients by `Target`: one client or every shell), `set_server_extension`, the hooks a server in
   Jocasta's process runs its service through (`started`, `client_joined` with the client's peer process,
   `client_left`, `last_client_left`, `client_message`, `action`, `stopped`); `peer_pid`, the process at the other end
-  of a client's connection as the OS reports it; `ShellExtension`, `Reply`,
+  of a client's connection as the OS reports it; `ServerHost::herdr_changed`, woken by the events Jocasta's refresh
+  reads (`herdr_event`); `ShellExtension`, `Reply`,
   `set_shell_extension`, `DOCK_COMMAND`, what herdr's client draws and takes keys for in Jocasta's process (the dock,
   a question over everything, the tab bar's status segment); `set_exit_hook`, run before herdr's client ends the
   process with a failure. Both sides talk in `EndpointControl {kind, data}` messages whose kind starts with
@@ -78,6 +79,8 @@ terminal is sent (no write over the wide tail) rather than the test backend's co
   `jocasta.*` before upstream's endpoint controls; a shell's peer process noted at its handshake.
 - `src/app/api/plugins/mod.rs`: a key bound to a `jocasta.<action>` plugin action goes to the extension with the
   focused pane, before the plugin registry is read (`plugin.action.invoke` over the socket is upstream's).
+- `src/api/event_hub.rs`: `EventHub::push` hands each event's kind to `embed::herdr_event` first.
+- `src/integration/mod.rs`: `OMP_EXTENSION_INSTALL_NAME` and `OMP_EXTENSION_ASSET` are `pub(crate)`, for `embed`.
 - `src/client/mod.rs`, `src/client/shell.rs`, `src/client/shell/{extension,actions,composition,config,input,mouse,
   state,tabs}.rs`: the client hands `jocasta.` messages to the shell extension and writes its replies back to the
   server; draws the dock beside the focused workspace's panes when the extension docks there, and a question over

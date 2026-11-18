@@ -408,6 +408,12 @@ async fn a_boss_without_its_jocasta_tools_is_noticed_once_and_a_boss_pane_ensure
 	assert_eq!((again.state, again.event_at, again.prompted_at), (AgentState::Working, Some(7), Some(8)));
 	// The boss's own start isn't repeated.
 	assert_eq!(t.herdr.of("ensureWorkspace").len(), 1);
+	// A boss that opens again, still without its tools, says nothing new.
+	let workspace = t.ctx.boss().expect("the boss").with(|boss| boss.workspace_id.clone());
+	t.ctx.herdr.close_workspace(&workspace).await.unwrap();
+	t.ctx.panes.ensure_boss(false).await.unwrap();
+	assert_eq!(t.herdr.of("ensureWorkspace").len(), 2);
+	assert_eq!(t.ctx.panes.boss_notice(), None);
 }
 
 #[tokio::test]
@@ -682,6 +688,20 @@ async fn an_omp_that_keeps_ending_in_a_pane_starts_again_at_once_then_after_a_do
 	assert!(!backoff.omp_ended_at(&PaneInfo { cwd: None, ..ended.clone() }, t0));
 	assert!(!backoff.omp_ended_at(&PaneInfo { cwd: Some(PathBuf::new()), ..ended }, t0));
 	assert!(!backoff.omp_ended(&running));
+}
+
+#[tokio::test]
+async fn a_boss_pane_that_keeps_closing_opens_again_at_once_then_after_the_doubling_wait_said_once() {
+	let t = world();
+	let backoff = OmpBackoff::new(t.ctx.panes.link.clone());
+	let t0 = 2_000_000;
+	assert!(backoff.boss_closed_at(t0));
+	assert!(!backoff.boss_closed_at(t0 + 1_000));
+	assert!(!backoff.boss_closed_at(t0 + 2_000));
+	assert_eq!(logged().matches("The boss pane closed 2 times in a row; it opens again in 9 s.").count(), 1);
+	assert!(backoff.boss_closed_at(t0 + 10_000));
+	assert!(!backoff.boss_closed_at(t0 + 29_000));
+	assert!(backoff.boss_closed_at(t0 + 30_000));
 }
 
 #[tokio::test]

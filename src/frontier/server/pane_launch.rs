@@ -47,6 +47,9 @@ mod tests;
 /// What every thread's omp starts with besides its pane's flags (0541, K10): a cost warning in its pane at $50.
 pub const THREAD_FLAGS: [&str; 2] = ["--warn-cost", "50"];
 
+/// The boss pane's place among the folders [`OmpBackoff`] counts: no folder's key is empty.
+const BOSS_AGAIN_KEY: &str = "";
+
 /// The first wait before an omp that ended again in a Jocasta pane starts again; doubled with each ending (0521).
 const OMP_AGAIN_MS: i64 = 10_000;
 /// The longest wait before an omp that keeps ending in a Jocasta pane starts again (0521).
@@ -212,6 +215,8 @@ struct State {
 	boss_keyed: Option<String>,
 	/// The boss's omp started without its `jocasta` tools (beta day P9), said once as a warning notification.
 	boss_notice: Option<String>,
+	/// The last missing-tools warning said: a boss started again without them says nothing new.
+	tools_said: Option<String>,
 	/// The hunk session daemon this service started (B4): Jocasta's close ends it.
 	hunk_daemon: Option<ProcessId>,
 }
@@ -319,9 +324,14 @@ impl PaneLauncher {
 		options.started = Some(Box::new(move |pane_id| {
 			let c = link.ctx();
 			c.panes.state().boss_keyed = Some(pane_id.to_owned());
-			if let Some(missing) = boss_tools_missing(None) {
-				log(LogLevel::Warn, "service", &missing, None);
-				c.panes.state().boss_notice = Some(missing);
+			let missing = boss_tools_missing(None);
+			let mut state = c.panes.state();
+			if state.tools_said != missing {
+				state.tools_said.clone_from(&missing);
+				if let Some(missing) = missing {
+					log(LogLevel::Warn, "service", &missing, None);
+					state.boss_notice = Some(missing);
+				}
 			}
 		}));
 		let pane = ensure_boss_pane(&*c.herdr, options).await?;
@@ -598,12 +608,35 @@ impl OmpBackoff {
 	}
 
 	fn omp_ended_at(&self, pane: &PaneInfo, now: i64) -> bool {
-		let c = self.link.ctx();
 		let Some(cwd) = pane.cwd.as_deref().filter(|cwd| !cwd.as_os_str().is_empty()) else { return false };
-		if !c.launched.ended(pane) {
+		if !self.link.ctx().launched.ended(pane) {
 			return false;
 		}
-		let key = path_key(&real_path(cwd));
+		self.again_at(path_key(&real_path(cwd)), now, |times, seconds| {
+			format!(
+				"omp ended in pane {} ({}) {times} times in a row; it starts again in {seconds} s.",
+				pane.pane_id,
+				cwd.display()
+			)
+		})
+	}
+
+	/// A boss pane that closed (his close, or an omp that ended and took the pane with it) opens again: at once the
+	/// first time, then after the same doubling wait as [`Self::omp_ended`], so a boss whose omp can't start doesn't
+	/// loop on the refreshes its own panes' events wake (0521).
+	pub fn boss_closed(&self) -> bool {
+		self.boss_closed_at(now_ms())
+	}
+
+	fn boss_closed_at(&self, now: i64) -> bool {
+		self.again_at(BOSS_AGAIN_KEY.to_owned(), now, |times, seconds| {
+			format!("The boss pane closed {times} times in a row; it opens again in {seconds} s.")
+		})
+	}
+
+	/// Whether what `key` names starts again now under 0521's doubling wait; a wait is said once, by `said` (the times
+	/// in a row, the seconds left).
+	fn again_at(&self, key: String, now: i64, said: impl FnOnce(u32, i64) -> String) -> bool {
 		let waiting = {
 			let mut state = self.state();
 			let last = state.omp_again.get_mut(&key);
@@ -614,14 +647,7 @@ impl OmpBackoff {
 				Some(last) => {
 					let first = !std::mem::replace(&mut last.said, true);
 					let seconds = (wait - (now - last.at) + 999) / 1000;
-					Some(first.then(|| {
-						format!(
-							"omp ended in pane {} ({}) {} times in a row; it starts again in {seconds} s.",
-							pane.pane_id,
-							cwd.display(),
-							count + 1
-						)
-					}))
+					Some(first.then(|| said(count + 1, seconds)))
 				}
 				None => {
 					state.omp_again.insert(key, Again { count: count + 1, at: now, said: false });
@@ -629,9 +655,9 @@ impl OmpBackoff {
 				}
 			}
 		};
-		let Some(said) = waiting else { return true };
-		if let Some(message) = said {
-			c.warn(message);
+		let Some(message) = waiting else { return true };
+		if let Some(message) = message {
+			self.link.ctx().warn(message);
 		}
 		false
 	}
