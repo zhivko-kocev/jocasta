@@ -3,14 +3,27 @@
 use crate::shared::env;
 use crate::shared::errors::{Error, Result};
 
+/// Jocasta's own session: herdr's default session, inside Jocasta's data folder (`<data>/herdr`).
+pub const DEFAULT_SESSION: &str = "jocasta";
+
 /// The herdr session Jocasta's work surface lives in (0392): `jocasta`, or `JOCASTA_HERDR_SESSION` for live checks in
 /// a throwaway session (0441).
 pub fn herdr_session() -> Result<String> {
-	let Some(value) = env::var_nonempty("JOCASTA_HERDR_SESSION") else { return Ok("jocasta".to_owned()) };
+	let Some(value) = env::var_nonempty("JOCASTA_HERDR_SESSION") else { return Ok(DEFAULT_SESSION.to_owned()) };
 	if !valid_name(&value) {
 		return Err(Error::user("JOCASTA_HERDR_SESSION must be letters, digits, '.', '_' or '-'"));
 	}
 	Ok(value)
+}
+
+/// herdr's words that pick `session`: none for Jocasta's own (herdr's default session), `--session <name>` for another.
+pub fn session_args(session: &str) -> Vec<String> {
+	if session == DEFAULT_SESSION { Vec::new() } else { vec!["--session".to_owned(), session.to_owned()] }
+}
+
+/// The program that runs herdr's words: this `jocasta`, which has herdr built in.
+pub fn herdr_program() -> Option<std::path::PathBuf> {
+	std::env::current_exe().ok()
 }
 
 /// `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`.

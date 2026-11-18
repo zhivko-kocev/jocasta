@@ -167,7 +167,6 @@ pub fn stop_steps(parts: StopParts) -> Vec<StopStep> {
 	let service_ms = bounds.service.unwrap_or(30_000);
 	let herdr_ms = bounds.herdr.unwrap_or(15_000);
 	let whiteboard_ms = bounds.whiteboard.unwrap_or(5_000);
-	let keep_down = Arc::clone(&herdr);
 	let stop_server = Arc::clone(&herdr);
 	let mut steps = vec![
 		// His open questions go unanswered: Cancel, Deny (0519).
@@ -179,12 +178,6 @@ pub fn stop_steps(parts: StopParts) -> Vec<StopStep> {
 			broadcast(ServerMessage::Bye);
 			Ok(())
 		}),
-		// herdr is never started again while Jocasta closes (0431's restart, 0434).
-		StopStep::sync("holding herdr down", move || {
-			keep_down.keep_down();
-			Ok(())
-		})
-		.when(StopWhen::All),
 		// Threads at work come back with `--restore` on the next start (0549).
 		StopStep::new("noting the threads at work", call!(&service, pause_working))
 			.bounded(herdr_ms)

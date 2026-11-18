@@ -232,10 +232,6 @@ impl Herdr for GatedHerdr {
 		self.inner.watch(pane_ids, on_change)
 	}
 
-	fn keep_down(&self) {
-		self.inner.keep_down();
-	}
-
 	fn stop_server(&self) -> BoxFuture<'_, HerdrResult<()>> {
 		self.inner.stop_server()
 	}

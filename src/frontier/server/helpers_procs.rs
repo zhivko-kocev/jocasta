@@ -168,9 +168,6 @@ impl Herdr for Hooked {
 	fn watch(&self, pane_ids: PaneIds, on_change: OnChange) -> StopWatch {
 		self.inner.watch(pane_ids, on_change)
 	}
-	fn keep_down(&self) {
-		self.inner.keep_down();
-	}
 	fn stop_server(&self) -> BoxFuture<'_, HerdrResult<()>> {
 		let hook = self.on_stop_server.lock().unwrap_or_else(PoisonError::into_inner).clone();
 		if let Some(hook) = hook {

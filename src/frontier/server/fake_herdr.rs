@@ -860,10 +860,6 @@ impl Herdr for FakeHerdr {
 		Box::new(move || locked(&state).watcher = None)
 	}
 
-	fn keep_down(&self) {
-		self.record("keepDown", Vec::new());
-	}
-
 	/// Its server stops with every pane (0434).
 	fn stop_server(&self) -> BoxFuture<'_, HerdrResult<()>> {
 		self.record("stopServer", Vec::new());

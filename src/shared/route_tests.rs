@@ -30,7 +30,6 @@ fn the_jocasta_commands_words_0387_0467_0468_0472_0544_anything_else_is_a_usage_
 	assert_eq!(go(&["setup"]), Route::Setup { refresh: None });
 	assert_eq!(go(&["setup", "--refresh", "herdr.toml"]), Route::Setup { refresh: Some("herdr.toml".to_owned()) });
 	assert_eq!(go(&["uninstall"]), Route::Uninstall);
-	assert_eq!(go(&["service"]), Route::Service);
 	assert_eq!(go(&["diagnose"]), Route::Diagnose);
 	assert_eq!(go(&["mcp"]), Route::Mcp { boss: false });
 	assert_eq!(go(&["mcp", "--boss"]), Route::Mcp { boss: true });
@@ -62,7 +61,7 @@ fn the_jocasta_commands_words_0387_0467_0468_0472_0544_anything_else_is_a_usage_
 		&["setup", "--refresh", ""],
 		&["uninstall", "--yes"],
 		&["diagnose", "now"],
-		&["service", "--x"],
+		&["service"],
 		&["plugin", "today", "now"],
 		&["plugin", "action", "stop", "x"],
 		&["--version", "setup"],

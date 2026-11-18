@@ -91,10 +91,13 @@ pub fn run_server() -> io::Result<()> {
         );
         print_ready_message(&api::socket_path(), &client_socket_path());
         server.app.run_plugin_startup_hooks();
+        // Fork seam (FORK.md): Jocasta's service starts beside the server.
+        crate::embed::server_started(api::socket_path(), server.stopper());
 
         server.run().await
     });
 
+    crate::embed::server_stopped();
     rt.shutdown_timeout(Duration::from_millis(100));
     crate::logging::shutdown("server");
     result

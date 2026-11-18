@@ -90,6 +90,8 @@ windows-sys = { version = "0.61.2", features = [
 
 [dev-dependencies]
 jocasta = { path = ".", features = ["test-support"] }
+# Bare `jocasta` in a terminal of its own for tests/entry.rs (fork plan phase 4): herdr's patched copy, already built.
+portable-pty = "=0.9.0"
 # Reads the Rust sources for tests/tree_checks.rs (0645); the lock's own version, parsing only.
 syn = { version = "3.0.10", default-features = false, features = ["full", "parsing", "visit"] }
 tokio = { version = "1.54.1", features = ["test-util"] }

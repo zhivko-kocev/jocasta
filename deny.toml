@@ -6,11 +6,16 @@ all-features = false
 [advisories]
 version = 2
 yanked = "deny"
-# Two "unmaintained" notices with no fixed version; rmcp and icalendar bring chrono in too (0647). Every other advisory
-# still fails the check.
+# "Unmaintained" notices with no fixed version: rmcp and icalendar bring chrono in too (0647); herdr's fork (fork plan
+# phase 1) brings bincode 2 (its wire protocol) and zbus 5's zvariant crates (Linux notifications), each moved into a
+# successor whose upgrade is herdr's to make. Every other advisory still fails the check.
 ignore = [
 	{ id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained, no fix; rmcp and icalendar depend on it (0647)" },
 	{ id = "RUSTSEC-2026-0555", reason = "chrono-tz is unmaintained, no fix; icalendar depends on it (0647)" },
+	{ id = "RUSTSEC-2025-0141", reason = "bincode is unmaintained, no fix; herdr's wire protocol depends on it" },
+	{ id = "RUSTSEC-2026-0370", reason = "zvariant is unmaintained (moved into zbus 6); herdr's zbus 5 depends on it" },
+	{ id = "RUSTSEC-2026-0371", reason = "zbus_names is unmaintained (moved into zbus 6); herdr's zbus 5 depends on it" },
+	{ id = "RUSTSEC-2026-0372", reason = "zvariant_derive is unmaintained (moved into zbus 6); herdr's zbus 5 depends on it" },
 ]
 
 [licenses]
@@ -29,11 +34,15 @@ allow = [
 	"MPL-2.0",
 	"BSL-1.0",
 	"CDLA-Permissive-2.0",
+	# interprocess's doctest-file and recvmsg (herdr's fork, its local sockets): public-domain-like, no conditions.
+	"0BSD",
 ]
 
 [bans]
 multiple-versions = "allow"
 wildcards = "deny"
+# The repo's own path crates (the herdr fork and its ghostty-vt, all `publish = false`) carry no version.
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"

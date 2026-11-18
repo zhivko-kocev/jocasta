@@ -7,7 +7,6 @@ use axum::response::Response;
 use serde_json::{Map, Value, json};
 use url::Url;
 
-use crate::frontier::server::herdr::herdr_revivals;
 use crate::frontier::server::routes::{BoxFuture, PageRoute, has_bearer};
 use crate::shared::layer::{hosts_on, layer_on};
 
@@ -18,8 +17,8 @@ pub struct HealthRoute {
 }
 
 /// `GET /health` with the bearer: `closing` while Jocasta is closing, so a `jocasta` started meanwhile waits instead of
-/// attaching to it (LC-3); `herdrRevivals`: a client that exited while it grew lost a crashed herdr server, not him
-/// (0534); `layer` and `hosts`: the test-only switches as this service has them, which the benchmarks check (0576).
+/// attaching to it (LC-3); `layer` and `hosts`: the test-only switches as this service has them, which the benchmarks
+/// check (0576).
 pub fn health_route(token: &str, closing: impl Fn() -> bool + Send + Sync + 'static) -> HealthRoute {
 	HealthRoute { token: token.to_owned(), closing: Box::new(closing) }
 }
@@ -38,7 +37,6 @@ impl HealthRoute {
 		}
 		let mut body = Map::new();
 		body.insert("pid".to_owned(), json!(std::process::id()));
-		body.insert("herdrRevivals".to_owned(), json!(herdr_revivals()));
 		body.insert("layer".to_owned(), json!(on_off(layer_on(None))));
 		body.insert("hosts".to_owned(), json!(on_off(hosts_on(None))));
 		if (self.closing)() {

@@ -27,7 +27,6 @@ pub enum PluginPart {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Route {
 	Surface,
-	Service,
 	Setup { refresh: Option<String> },
 	Uninstall,
 	Diagnose,
@@ -154,9 +153,6 @@ enum Word {
 		#[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "ARGS")]
 		args: Vec<String>,
 	},
-	/// The Jocasta service bare `jocasta` starts (0552)
-	#[command(hide = true)]
-	Service,
 	/// What the `jocasta` herdr plugin runs (0553)
 	#[command(hide = true, subcommand_required = true, arg_required_else_help = true)]
 	Plugin {
@@ -203,7 +199,6 @@ impl From<Word> for Route {
 			Word::Project { args } => Self::Project { args },
 			Word::Thread { args } => Self::Thread { args },
 			Word::Worktree { args } => Self::Worktree { args },
-			Word::Service => Self::Service,
 			Word::Plugin { part } => Self::Plugin {
 				part: match part {
 					Part::Today => PluginPart::Today,

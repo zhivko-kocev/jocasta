@@ -392,7 +392,7 @@ fn run_client_with_mode(
             return Ok(());
         }
 
-        std::process::exit(1);
+        crate::embed::exit(1);
     }
 
     rt.shutdown_timeout(Duration::from_millis(100));

@@ -142,9 +142,8 @@ async fn the_guard_asks_only_while_a_thread_is_working_or_awaiting_him_counting_
 	// The quit action asks where he is: no new terminal.
 	assert_eq!(reattached.load(Ordering::SeqCst), 0);
 
-	// Kept: herdr was neither held down nor stopped, no container stopped, the service still answers.
+	// Kept: herdr wasn't stopped, no container stopped, the service still answers.
 	let after = methods_after(&herdr, before);
-	assert!(!after.contains(&"keepDown".to_owned()));
 	assert!(!after.contains(&"stopServer".to_owned()));
 	assert!(lines(&steps).is_empty());
 	assert!(herdr.state().pane_list.iter().any(|p| p.pane_id == pane));
@@ -181,10 +180,7 @@ async fn stop_holds_herdr_down_keeps_mid_turn_threads_for_restore_stops_the_serv
 	server.stopped().await;
 	assert_eq!(lines(&asked), [WORKING]);
 	let methods = methods_after(&herdr, before);
-	// Held down first; the service's last word to herdr (clearing its tokens) comes before the server stops.
-	let at = |name: &str| methods.iter().position(|m| m == name);
-	assert!(at("keepDown").is_some());
-	assert!(at("keepDown") < at("stopServer"));
+	// The service's last word to herdr (clearing its tokens) comes before the server stops.
 	assert_eq!(methods.last().map(String::as_str), Some("stopServer"));
 	assert_eq!(methods.iter().filter(|m| *m == "stopServer").count(), 1);
 	assert_eq!(lines(&steps), [format!("stopped after {}", herdr.methods().join(",")), "relay".to_owned()]);

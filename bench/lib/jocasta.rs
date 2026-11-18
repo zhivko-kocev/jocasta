@@ -42,9 +42,9 @@ pub fn open_sandbox(herdr_timeout_ms: Option<i64>) -> Result<SandboxJocasta> {
 
 impl SandboxJocasta {
 	/// The product's client for the sandbox herdr session, connected on the first call that finds its server answering
-	/// and kept from then on. It never starts a server (`start: false`, so no request revives one either): the service
-	/// does, and H3's herdr fault depends on nobody else doing it. Fails while no client is connected and the server
-	/// doesn't answer; a connected client's requests fail while the server is down and work again once it is back.
+	/// and kept from then on. Connecting never starts a server: bare `jocasta` does, with the service inside it.
+	/// Fails while no client is connected and the server doesn't answer; a connected client's requests fail while the
+	/// server is down and work again once it is back.
 	pub async fn herdr(&self) -> Result<Arc<dyn Herdr>> {
 		// A failed connect is tried again on the next call, once the server may answer.
 		let client = self
@@ -52,7 +52,6 @@ impl SandboxJocasta {
 			.get_or_try_init(|| async {
 				connect_herdr(HerdrOptions {
 					session: self.sandbox.herdr_session.clone(),
-					start: Some(false),
 					timeout_ms: Some(self.herdr_timeout_ms),
 					..HerdrOptions::default()
 				})

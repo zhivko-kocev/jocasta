@@ -40,7 +40,7 @@ use crate::lib::temp::mkdtemp;
 use crate::lib::timing::{WaitOptions, wait_for};
 use jocasta::frontier::protocol::js_number_text;
 use jocasta::frontier::server::boss::{BOSS_WORKSPACE, is_today_pane};
-use jocasta::frontier::server::herdr::{HerdrOptions, PaneInfo, WorkspaceInfo, stop_herdr_session};
+use jocasta::frontier::server::herdr::{HerdrOptions, PaneInfo, WorkspaceInfo, connect_herdr};
 use jocasta::frontier::server::launch::{ServiceState, ask_shutdown};
 use jocasta::shared::errors::Result;
 use jocasta::shared::pathkey::resolve;
@@ -107,9 +107,11 @@ async fn stop_jocasta(jocasta: &SandboxJocasta, surface: Option<u32>) {
 	{
 		kill_tree(left.pid).await;
 	}
-	let _ =
-		stop_herdr_session(&HerdrOptions { session: jocasta.sandbox.herdr_session.clone(), ..HerdrOptions::default() })
-			.await;
+	let options = HerdrOptions { session: jocasta.sandbox.herdr_session.clone(), ..HerdrOptions::default() };
+	if let Ok(herdr) = connect_herdr(options).await {
+		let _ = herdr.stop_server().await;
+		herdr.close();
+	}
 }
 
 /// The boss pane in herdr's lists: the pane in workspace "Jocasta" that isn't the today pane.

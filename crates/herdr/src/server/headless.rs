@@ -400,6 +400,19 @@ impl HeadlessServer {
         })
     }
 
+    /// Stops the server as `server stop` does, from any thread of its process (fork seam, FORK.md: Jocasta's service
+    /// stops the server it couldn't start in).
+    pub(crate) fn stopper(&self) -> Arc<dyn Fn() + Send + Sync> {
+        let server_stop = self.server_stop.clone();
+        let quit_notify = self.server_event_tx.clone();
+        Arc::new(move || {
+            server_stop.request(ShutdownReason::ApiStop {
+                caller: Some("Jocasta's service".to_owned()),
+            });
+            let _ = quit_notify.try_send(ServerEvent::QuitSignal);
+        })
+    }
+
     /// Runs the headless server event loop until shutdown.
     ///
     /// This is the server's main runtime loop. It:
@@ -963,6 +976,19 @@ impl HeadlessServer {
         });
         let was_foreground = self.foreground_client_id == Some(client_id);
         let removed = self.clients.remove(&client_id);
+        // Fork seam (FORK.md): Jocasta is told when the last shell client of his left, unless the server is stopping.
+        let stopping = self.shutting_down || self.should_quit.load(Ordering::Acquire);
+        if !stopping
+            && removed
+                .as_ref()
+                .is_some_and(|client| client.is_shell_client())
+            && !self
+                .clients
+                .values()
+                .any(|client| client.is_shell_client())
+        {
+            crate::embed::last_client_left();
+        }
         self.tab_geometry_controllers
             .retain(|_, controller_id| *controller_id != client_id);
         if let Some(mut removed) = removed {

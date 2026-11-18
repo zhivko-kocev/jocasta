@@ -1,7 +1,7 @@
 //! Jocasta's mise machine file, `~/.config/mise/conf.d/jocasta.toml` (0476), written by `jocasta setup` when mise is
 //! installed. conf.d files load before his own `config.toml`, so his settings and pins win. Exact pins only, never
-//! `latest` or auto-update: a bump is an edit here plus `mise lock --global`, re-checked per 0383 (herdr and hunk also
-//! pinned in `package.json` and the herdr checks).
+//! `latest` or auto-update: a bump is an edit here plus `mise lock --global`, re-checked per 0383. herdr isn't among
+//! them: it is built into `jocasta` (fork plan phase 4).
 
 pub const MISE_FRAGMENT: &str =
 	"# Jocasta's mise pins and settings (0476), written by `jocasta setup`; your own config.toml wins on conflicts.
@@ -16,11 +16,10 @@ use_versions_host_track = false
 auto_install = false
 # No config is trusted without you, not even under omp's CI=true (0473).
 paranoid = [\"config\"]
-# A replaced version stays until you remove it: running herdr panes use it.
+# A replaced version stays until you remove it: running panes use it.
 upgrade.auto_prune = false
 
 [tools]
-herdr = \"0.9.5\"
 hunk = \"0.23.0\"
 gh = \"2.92.0\"
 ";
@@ -44,7 +43,6 @@ mod tests {
 				"paranoid = [\"config\"]",
 				"upgrade.auto_prune = false",
 				"[tools]",
-				"herdr = \"0.9.5\"",
 				"hunk = \"0.23.0\"",
 				"gh = \"2.92.0\"",
 			]

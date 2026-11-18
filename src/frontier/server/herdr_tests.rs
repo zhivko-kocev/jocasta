@@ -1,23 +1,21 @@
-//! `herdr.rs`'s tests, ported from `test/herdr/herdr.test.ts`. The two live smoke tests there (`live_smoke_*`) start a
-//! real herdr in a throwaway `jocasta-test-` session of their own, never his; they return early unless
-//! `JOCASTA_HERDR_SMOKE=1` (`mise run smoke`).
+//! `herdr.rs`'s tests, ported from `test/herdr/herdr.test.ts`. The live smoke tests there are gone: Jocasta no longer
+//! starts a herdr server of its own to talk to.
 
 use std::sync::atomic::AtomicUsize;
 
+use futures_util::FutureExt;
 use serde_json::{Value, json};
 
 use super::fake_herdr::{Answer, FakeHerdrServer};
 use super::*;
 use crate::shared::git::git;
-use crate::shared::pathkey::real_path;
-use crate::shared::proctree::tests::{SLEEPER_VAR, SleeperTree, pid_files, settles, sleeper_tree};
-use crate::shared::proctree::{pid_alive, processes_in};
+use crate::shared::proctree::pid_alive;
+use crate::shared::proctree::tests::{SleeperTree, settles, sleeper_tree};
 use crate::shared::testing::{TempDir, temp_dir, temp_jocasta};
 
 struct Setup {
 	fake: FakeHerdrServer,
 	herdr: Arc<dyn Herdr>,
-	warnings: Arc<Mutex<Vec<String>>>,
 }
 
 impl Drop for Setup {
@@ -27,27 +25,18 @@ impl Drop for Setup {
 	}
 }
 
-async fn setup_version(version: &str) -> Setup {
+async fn setup() -> Setup {
 	let fake = FakeHerdrServer::start(None).await;
-	let version = version.to_owned();
-	fake.set_handler("ping", move |_| Answer::result(json!({"type": "pong", "version": version, "protocol": 22})));
-	let warnings = Arc::new(Mutex::new(Vec::new()));
-	let sink = warnings.clone();
+	fake.set_handler("ping", move |_| Answer::result(json!({"type": "pong", "version": "0.9.4", "protocol": 22})));
 	let herdr = connect_herdr(HerdrOptions {
 		session: "unused".to_owned(),
 		socket_path: Some(fake.path.clone()),
-		herdr_bin: Some(PathBuf::from("no-such-herdr")),
-		on_warning: Some(Arc::new(move |message: &str| locked(&sink).push(message.to_owned()))),
 		watch_interval_ms: Some(20),
 		..HerdrOptions::default()
 	})
 	.await
 	.expect("connecting to the fake herdr");
-	Setup { fake, herdr, warnings }
-}
-
-async fn setup() -> Setup {
-	setup_version("0.9.4").await
+	Setup { fake, herdr }
 }
 
 async fn until(check: impl Fn() -> bool, what: &str) {
@@ -103,39 +92,32 @@ fn shape(requests: &[super::fake_herdr::FakeRequest]) -> Value {
 }
 
 #[test]
-fn herdr_socket_path_follows_herdrs_config_dir_xdg_config_home_else_appdata_as_a_named_pipe_on_windows() {
+fn herdr_socket_path_follows_jocastas_data_dir_the_default_session_is_herdrs_default_as_a_named_pipe_on_windows() {
 	let mut temp = temp_jocasta();
-	temp.set_var("XDG_CONFIG_HOME", None);
-	if cfg!(windows) {
-		temp.set_var("APPDATA", Some("C:\\Users\\someone\\AppData\\Roaming"));
-		assert_eq!(
-			herdr_socket_path("jocasta"),
-			"\\\\.\\pipe\\C:\\Users\\someone\\AppData\\Roaming\\herdr\\sessions\\jocasta\\herdr.sock"
-		);
-		temp.set_var("XDG_CONFIG_HOME", Some("C:\\cfg"));
-		assert_eq!(herdr_socket_path("s1"), "\\\\.\\pipe\\C:\\cfg\\herdr\\sessions\\s1\\herdr.sock");
-		// The socket file herdr hands its plugin commands (`HERDR_SOCKET_PATH`) is a pipe name too.
-		assert_eq!(herdr_pipe("C:\\cfg\\herdr\\sessions\\s1\\herdr.sock"), herdr_socket_path("s1"));
+	let data = temp.root().join("elsewhere").display().to_string();
+	temp.set_var("JOCASTA_DATA_DIR", Some(&data));
+	let data = crate::shared::paths::data_dir().display().to_string();
+	let (default, named) = if cfg!(windows) {
+		let data = data.replace('/', "\\");
+		(
+			format!("\\\\.\\pipe\\{data}\\herdr\\herdr.sock"),
+			format!("\\\\.\\pipe\\{data}\\herdr\\sessions\\s1\\herdr.sock"),
+		)
 	} else {
-		temp.set_var("XDG_CONFIG_HOME", Some("/cfg"));
-		assert_eq!(herdr_socket_path("s1"), "/cfg/herdr/sessions/s1/herdr.sock");
-		assert_eq!(herdr_pipe("/cfg/herdr/sessions/s1/herdr.sock"), herdr_socket_path("s1"));
-	}
+		(format!("{data}/herdr/herdr.sock"), format!("{data}/herdr/sessions/s1/herdr.sock"))
+	};
+	assert_eq!(herdr_socket_path("jocasta"), default);
+	assert_eq!(herdr_socket_path("s1"), named);
+	// The socket file herdr hands its plugin commands (`HERDR_SOCKET_PATH`) is a pipe name too.
+	let file = if cfg!(windows) { named.trim_start_matches("\\\\.\\pipe\\").to_owned() } else { named.clone() };
+	assert_eq!(herdr_pipe(&file), named);
 }
 
 #[tokio::test]
-async fn the_version_check_warns_only_off_0_9_x() {
-	assert_eq!(herdr_version_warning("0.9.4"), None);
-	assert_eq!(herdr_version_warning("0.9.12"), None);
-	assert!(herdr_version_warning("0.10.0").unwrap().contains("0.10.0"));
-	let ok = setup_version("0.9.4").await;
-	assert_eq!(ok.fake.methods(), ["ping"]);
-	assert!(locked(&ok.warnings).is_empty());
-	let off = setup_version("1.0.0").await;
-	assert_eq!(
-		*locked(&off.warnings),
-		["herdr 1.0.0 is running; Jocasta is built against herdr 0.9.x and may misbehave"]
-	);
+async fn connect_herdr_pings_once_and_reports_a_server_it_didnt_start() {
+	let setup = setup().await;
+	assert_eq!(setup.fake.methods(), ["ping"]);
+	assert!(setup.herdr.started_server());
 }
 
 #[tokio::test]
@@ -712,71 +694,33 @@ async fn stop_server_sends_server_stop_waits_for_the_socket_to_go_and_nothing_st
 	});
 	herdr.stop_server().await.unwrap();
 	assert!(fake.methods().contains(&"server.stop".to_owned()));
-	// A revive would try to start `no-such-herdr` (not_installed); the server stays down instead.
+	// The server stays down: nothing starts it again.
 	assert_eq!(herdr.workspaces().await.unwrap_err().code, "unreachable");
 	// Stopping again: nothing runs, nothing is sent.
 	herdr.stop_server().await.unwrap();
 }
 
 #[tokio::test]
-async fn keep_down_a_server_that_stops_later_isnt_started_again() {
+async fn stop_server_is_done_once_herdr_says_it_is_shutting_down_though_its_socket_still_answers() {
 	let Setup { fake, herdr, .. } = &setup().await;
-	herdr.keep_down();
-	fake.stop();
-	assert_eq!(herdr.panes().await.unwrap_err().code, "unreachable");
-}
-
-#[tokio::test]
-async fn a_stopped_server_is_started_again_on_its_socket_and_the_request_goes_through_a_second_stop_within_seconds_isnt()
- {
-	let fake = FakeHerdrServer::start(None).await;
-	let warnings = Arc::new(Mutex::new(Vec::<String>::new()));
-	let sink = warnings.clone();
-	let herdr = connect_herdr(HerdrOptions {
-		session: "unused".to_owned(),
-		socket_path: Some(fake.path.clone()),
-		// Something that runs and exits: the restarted fake below plays the server it would start.
-		herdr_bin: Some(std::env::current_exe().unwrap()),
-		on_warning: Some(Arc::new(move |message: &str| locked(&sink).push(message.to_owned()))),
-		watch_interval_ms: Some(20),
-		..HerdrOptions::default()
-	})
-	.await
-	.unwrap();
-	fake.stop();
-	let asking = herdr.clone();
-	let listed = tokio::spawn(async move { asking.panes().await });
-	// A real delay: the request's first failed connect (which triggers the revive) has no signal to await, and a server
-	// back before it would serve the request without any revive.
-	tokio::time::sleep(Duration::from_millis(300)).await;
-	let again = FakeHerdrServer::start(Some(&fake.path)).await;
-	again.set_handler("pane.list", reply(pane_list(vec![pane("w1:p1", "w1", "idle", json!({}))])));
-	let ids: Vec<String> = listed.await.unwrap().unwrap().into_iter().map(|p| p.pane_id).collect();
-	assert_eq!(ids, ["w1:p1"]);
-	assert_eq!(*locked(&warnings), ["herdr's server for session unused had stopped; Jocasta started it again"]);
-
-	again.stop();
-	let error = herdr.panes().await.unwrap_err();
-	assert!(error.message.contains("restarted moments ago"), "{error}");
-	herdr.close();
-}
-
-#[tokio::test]
-async fn stop_herdr_session_stops_one_sessions_server_and_never_starts_one() {
-	let fake = FakeHerdrServer::start(None).await;
-	let server = fake.clone();
+	// Jocasta's own server: its socket answers until the process ends, and every request but `ping` says it is going.
+	let going = Arc::new(AtomicBool::new(false));
+	let stopped = Arc::clone(&going);
 	fake.set_handler("server.stop", move |_| {
-		let server = server.clone();
-		tokio::spawn(async move { server.stop() });
+		stopped.store(true, Ordering::SeqCst);
 		Answer::ok()
 	});
-	let options =
-		HerdrOptions { session: "unused".to_owned(), socket_path: Some(fake.path.clone()), ..HerdrOptions::default() };
-	assert!(stop_herdr_session(&options).await.unwrap());
-	// Its panes' processes are listed first (0486); this fake has no `pane.list`, so none.
-	assert_eq!(fake.methods()[..3], ["ping", "pane.list", "server.stop"]);
-	assert!(!stop_herdr_session(&options).await.unwrap());
-	fake.stop();
+	let asked = Arc::clone(&going);
+	fake.set_handler("pane.list", move |_| {
+		if asked.load(Ordering::SeqCst) {
+			Answer::error("server_unavailable", "server is shutting down")
+		} else {
+			reply(pane_list(Vec::new()))(&json!({}))
+		}
+	});
+	let started = std::time::Instant::now();
+	herdr.stop_server().await.unwrap();
+	assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
 }
 
 /// A temp folder with a real sleeper tree working in it, killed after the test whatever happens.
@@ -936,19 +880,17 @@ async fn a_watch_stopped_while_herdr_answers_its_subscribe_leaves_no_subscriptio
 }
 
 #[tokio::test]
-async fn connecting_with_start_off_never_starts_a_server_no_answer_is_unreachable() {
+async fn connecting_never_starts_a_server_no_answer_is_unreachable() {
 	let name = format!("jocasta-herdr-none-{}", std::process::id());
 	let socket_path = if cfg!(windows) {
 		format!("\\\\.\\pipe\\{name}")
 	} else {
 		std::env::temp_dir().join(format!("{name}.sock")).display().to_string()
 	};
-	// `no-such-herdr` would fail as not_installed if a start were tried.
+	// Nothing listens there, and nothing starts a server.
 	let Err(error) = connect_herdr(HerdrOptions {
 		session: "unused".to_owned(),
 		socket_path: Some(socket_path),
-		herdr_bin: Some(PathBuf::from("no-such-herdr")),
-		start: Some(false),
 		..HerdrOptions::default()
 	})
 	.await
@@ -1121,244 +1063,4 @@ async fn the_in_memory_fake_respawns_in_the_same_tab_closes_workspaces_with_thei
 		fake.notify(&Note { title: "t".into(), body: None, sound: Sound::None }).await.unwrap(),
 		NotificationResult::Shown
 	);
-}
-
-/// A throwaway herdr session of a live smoke test: whatever way the test ends, its watches stop, its server stops, the
-/// session is deleted, the processes it started are killed and its folder goes (the TypeScript's `finally`).
-struct Smoke {
-	bin: PathBuf,
-	session: String,
-	root: TempDir,
-	herdr: Option<Arc<dyn Herdr>>,
-	started: Vec<u32>,
-	log: bool,
-}
-
-impl Smoke {
-	/// `None` (after saying so) unless `JOCASTA_HERDR_SMOKE=1`; fails when herdr isn't installed.
-	fn start(name: &str, prefix: &str) -> Option<Smoke> {
-		if std::env::var("JOCASTA_HERDR_SMOKE").as_deref() != Ok("1") {
-			println!("skipped {name}: JOCASTA_HERDR_SMOKE=1 starts a throwaway herdr session");
-			return None;
-		}
-		let bin = find_herdr().expect("herdr isn't installed");
-		let suffix = &uuid::Uuid::new_v4().simple().to_string()[..6];
-		Some(Smoke {
-			bin,
-			session: format!("jocasta-test-{suffix}"),
-			root: temp_dir(prefix),
-			herdr: None,
-			started: Vec::new(),
-			log: false,
-		})
-	}
-
-	async fn connect(&mut self, config: &str, warnings: Option<Arc<Mutex<Vec<String>>>>) -> Arc<dyn Herdr> {
-		let config_path = self.root.path().join("herdr.toml");
-		std::fs::write(&config_path, config).unwrap();
-		let on_warning: Option<OnWarning> =
-			warnings.map(|sink| Arc::new(move |m: &str| locked(&sink).push(m.to_owned())) as OnWarning);
-		let herdr = connect_herdr(HerdrOptions {
-			session: self.session.clone(),
-			config_path: Some(config_path),
-			herdr_bin: Some(self.bin.clone()),
-			on_warning,
-			..HerdrOptions::default()
-		})
-		.await
-		.expect("connecting to the throwaway herdr");
-		self.herdr = Some(herdr.clone());
-		herdr
-	}
-}
-
-impl Drop for Smoke {
-	fn drop(&mut self) {
-		if let Some(herdr) = &self.herdr {
-			herdr.close();
-		}
-		for pid in &self.started {
-			let _ = crate::shared::proctree::kill_process(*pid);
-		}
-		for args in
-			[vec!["--session", self.session.as_str(), "server", "stop"], vec!["session", "delete", &self.session]]
-		{
-			let run = std::process::Command::new(&self.bin).args(&args).output();
-			if self.log {
-				match run {
-					Ok(run) => println!(
-						"herdr {} -> exit {:?} {} {}",
-						args.join(" "),
-						run.status.code(),
-						String::from_utf8_lossy(&run.stdout).trim(),
-						String::from_utf8_lossy(&run.stderr).trim()
-					),
-					Err(error) => println!("herdr {} -> {error}", args.join(" ")),
-				}
-			}
-		}
-	}
-}
-
-/// The TypeScript's `sleeperCommand`: a command that is a three-process sleeper tree writing its pids under
-/// `<cwd>/pids` (`sleeper_main` run again from this test executable), with the env that tells it where.
-fn sleeper_command(cwd: &Path) -> (Vec<String>, Env) {
-	std::fs::create_dir_all(cwd.join("pids")).unwrap();
-	let exe = std::env::current_exe().unwrap().to_string_lossy().into_owned();
-	let command = [exe.as_str(), "--exact", "shared::proctree::tests::sleeper_main", "--nocapture", "--test-threads=1"]
-		.map(str::to_owned)
-		.to_vec();
-	let spec = format!("{}|0|attached", cwd.join("pids").display());
-	(command, vec![(SLEEPER_VAR.to_owned(), spec)])
-}
-
-fn live_smoke_git(cwd: &Path, args: &[&str]) {
-	let _ = std::process::Command::new("git")
-		.arg("-C")
-		.arg(cwd)
-		.args(args)
-		.stdout(std::process::Stdio::null())
-		.stderr(std::process::Stdio::null())
-		.status();
-}
-
-#[tokio::test]
-async fn live_smoke_a_throwaway_herdr_session_runs_commands_in_a_workspaces_tab_a_split_and_a_worktree() {
-	let Some(mut smoke) = Smoke::start("live_smoke_a_throwaway_herdr_session", "jocasta-herdr-smoke") else { return };
-	smoke.log = true;
-	let root = smoke.root.path().to_path_buf();
-	let cwd = root.join("demo");
-	std::fs::create_dir(&cwd).unwrap();
-	// The worktree lands at the path given (0445), else in the temp dir, never herdr's default ~/.herdr/worktrees; no
-	// toasts or sounds.
-	let config = format!(
-		"[worktrees]\ndirectory = \"{}\"\n\n[ui.toast]\ndelivery = \"off\"\n",
-		root.join("wt").to_string_lossy().replace('\\', "/")
-	);
-	live_smoke_git(&cwd, &["init", "-q", "-b", "main"]);
-	live_smoke_git(
-		&cwd,
-		&[
-			"-c",
-			"user.name=smoke",
-			"-c",
-			"user.email=smoke@example.invalid",
-			"commit",
-			"-q",
-			"--allow-empty",
-			"-m",
-			"init",
-		],
-	);
-	let warnings = Arc::new(Mutex::new(Vec::new()));
-	let herdr = smoke.connect(&config, Some(warnings.clone())).await;
-	let workspace_id = herdr.ensure_workspace("smoke", &cwd, None, None).await.unwrap();
-	assert_eq!(herdr.ensure_workspace("smoke", &cwd, None, None).await.unwrap(), workspace_id);
-	let command: Vec<String> = if cfg!(windows) {
-		["cmd", "/c", "echo hi & pause"].map(str::to_owned).to_vec()
-	} else {
-		["sh", "-c", "echo hi; sleep 30"].map(str::to_owned).to_vec()
-	};
-	let tab = herdr
-		.create_tab(
-			&workspace_id,
-			&TabSpec { title: "echo".into(), cwd: cwd.clone(), command: command.clone(), env: None },
-		)
-		.await
-		.unwrap();
-	let split = herdr
-		.split_beside(
-			&tab.pane_id,
-			&SplitOptions { command: command.clone(), cwd: cwd.clone(), ratio: Some(0.4), ..SplitOptions::default() },
-		)
-		.await
-		.unwrap();
-	let worktree_path = root.join("demo.wt").join("smoke-thread");
-	let worktree = herdr
-		.create_worktree(
-			&workspace_id,
-			WorktreeOptions {
-				repo: cwd.clone(),
-				branch: "smoke-thread".into(),
-				path: worktree_path.clone(),
-				title: "smoke thread".into(),
-				command,
-				..WorktreeOptions::default()
-			},
-		)
-		.await
-		.unwrap();
-	herdr
-		.report_pane_metadata(
-			&tab.pane_id,
-			&PaneMetadata {
-				tokens: Some(vec![("model".into(), Some("smoke".into()))]),
-				state_labels: Some(vec![(AgentState::Done, "review ready".into())]),
-				ttl_ms: None,
-			},
-		)
-		.await
-		.unwrap();
-	herdr.report_workspace_metadata(&workspace_id, &vec![("running".into(), Some("1".into()))], None).await.unwrap();
-	let seen = Arc::new(Mutex::new(Vec::<String>::new()));
-	let (sink, watched) = (seen.clone(), tab.pane_id.clone());
-	let stop = herdr.watch(
-		Box::new(move || vec![watched.clone()]),
-		Box::new(move |e| locked(&sink).push(format!("{}={:?}", e.pane_id, e.state))),
-	);
-	let got = settles(|| !locked(&seen).is_empty()).await;
-	stop();
-	assert!(got, "timed out waiting for the watched pane's state");
-	let panes = herdr.panes().await.unwrap();
-	let workspaces = herdr.workspaces().await.unwrap();
-	let (warned, seen) = (locked(&warnings).clone(), locked(&seen).clone());
-	println!(
-		"session {} warnings {warned:?} workspace {workspace_id} tab {tab:?} split {split} worktree {worktree:?} seen {seen:?} panes {panes:?} workspaces {workspaces:?}",
-		smoke.session
-	);
-	let pane = |id: &str| panes.iter().find(|p| p.pane_id == id);
-	assert_eq!(pane(&tab.pane_id).map(|p| p.tab_id.as_str()), Some(tab.tab_id.as_str()));
-	assert_eq!(pane(&split).map(|p| p.tab_id.as_str()), Some(tab.tab_id.as_str()));
-	assert_eq!(pane(&worktree.pane_id).map(|p| p.workspace_id.as_str()), Some(worktree.workspace_id.as_str()));
-	assert_eq!(panes.iter().filter(|p| p.workspace_id == worktree.workspace_id).count(), 1);
-	assert_eq!(real_path(&worktree.path), real_path(&worktree_path));
-}
-
-#[tokio::test]
-async fn live_smoke_closing_a_workspace_and_stopping_the_server_end_every_process_its_panes_ran_a_replaced_default_shell_too()
- {
-	let Some(mut smoke) = Smoke::start("live_smoke_closing_a_workspace", "jocasta-herdr-0486") else { return };
-	let root = smoke.root.path().to_path_buf();
-	let herdr = smoke.connect("[ui.toast]\ndelivery = \"off\"\n", None).await;
-	let mut trees: Vec<Vec<u32>> = Vec::new();
-	for name in ["closed", "stopped"] {
-		let cwd = root.join(name);
-		std::fs::create_dir(&cwd).unwrap();
-		let (command, env) = sleeper_command(&cwd);
-		if name == "closed" {
-			let workspace_id = herdr.ensure_workspace(name, &cwd, None, None).await.unwrap();
-			herdr
-				.create_tab(&workspace_id, &TabSpec { title: name.into(), cwd: cwd.clone(), command, env: Some(env) })
-				.await
-				.unwrap();
-		} else {
-			// Its command replaces the default shell, as the boss and project workspaces are made.
-			herdr.ensure_workspace(name, &cwd, Some(&command), Some(&env)).await.unwrap();
-		}
-		let pids = cwd.join("pids");
-		assert!(settles(|| pid_files(&pids, "").len() == 3).await, "the {name} tree didn't start");
-		let started = pid_files(&pids, "");
-		smoke.started.extend(&started);
-		trees.push(started);
-	}
-	let (closed, stopped) = (&trees[0], &trees[1]);
-	let closing =
-		herdr.workspaces().await.unwrap().into_iter().find(|w| w.label == "closed").expect("the closed workspace").id;
-	herdr.close_workspace(&closing).await.unwrap();
-	assert!(closed.iter().all(|pid| !pid_alive(*pid)));
-	assert!(settles(|| processes_in(&root.join("closed")).is_empty()).await);
-	assert!(stopped.iter().all(|pid| pid_alive(*pid)));
-	herdr.stop_server().await.unwrap();
-	assert!(stopped.iter().all(|pid| !pid_alive(*pid)));
-	assert!(settles(|| processes_in(&root.join("stopped")).is_empty()).await);
 }

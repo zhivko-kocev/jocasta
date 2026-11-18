@@ -40,9 +40,9 @@ While threads work, you keep talking to the boss. It tells you when one needs yo
 
 - **Windows 11.** Linux (x64) and macOS (Apple silicon) builds exist but are untested in daily use.
 - **[omp](https://github.com/can1357/oh-my-pi)** on your PATH and signed in to a model provider: run `omp`, then `/login`. This release is checked against omp 18.20.2. Jocasta names no model: the boss and threads use your omp model roles, and a `--heavy` thread uses your `slow` role.
-- **[herdr](https://herdr.dev)** 0.9.5 or a later 0.9.x, from its official installer.
+- **herdr** needs no install: it is built into `jocasta`.
 - **git**, version 2.54 or newer for the push check.
-- **[mise](https://mise.jdx.dev)** (optional). With it, setup pins herdr, hunk and gh, and each project can have its own check and test tasks.
+- **[mise](https://mise.jdx.dev)** (optional). With it, setup pins hunk and gh, and each project can have its own check and test tasks.
 - A browser, for whiteboard's diagrams.
 
 hunk, whiteboard and the Node.js runtime that whiteboard needs ship inside the release.

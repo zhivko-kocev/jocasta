@@ -14,7 +14,7 @@ use futures_util::future::{BoxFuture, Shared as SharedFuture, join_all};
 use crate::frontier::protocol::ThreadState;
 use crate::frontier::server::boss::{DefaultClosed, close_herdr_default};
 use crate::frontier::server::context::{Finishing, Link, ServiceContext, Shared};
-use crate::frontier::server::herdr::{AgentState, HerdrSnapshot, PaneInfo, last_revived_at};
+use crate::frontier::server::herdr::{AgentState, HerdrSnapshot, PaneInfo};
 use crate::frontier::server::pane_launch::{OmpBackoff, Respawn};
 use crate::frontier::server::task_file::find_task;
 use crate::frontier::server::thread::{Phase, ReviewResult, Thread, ThreadPlan, ThreadRef, ThreadReview, is_idle};
@@ -23,8 +23,6 @@ use crate::shared::clock::now_ms;
 use crate::shared::errors::{Error, Result};
 use crate::shared::pathkey::same_dir;
 
-/// After herdr was started again (0431), an empty pane list this soon is herdr still restoring, not panes gone.
-const REVIVE_SETTLE_MS: i64 = 10_000;
 /// Thread panes relaunched at once after herdr restored them (PERF-5): herdr drops connections under bursts (0517).
 const RELAUNCH_POOL: usize = 3;
 
@@ -171,15 +169,10 @@ impl Inner {
 		}
 	}
 
-	/// The snapshot a tick works from, or `None` when this tick ends (herdr didn't answer, or just restarted).
-	async fn read(&self, read_at: i64) -> Option<HerdrSnapshot> {
+	/// The snapshot a tick works from, or `None` when this tick ends (herdr didn't answer).
+	async fn read(&self) -> Option<HerdrSnapshot> {
 		let c = &self.ctx;
 		let read = self.step("reading herdr's panes", c.herdr.snapshot()).await?;
-		// A herdr just started again (0431) may list no panes while it restores them: not every thread closed (CO-20).
-		let revived = last_revived_at();
-		if read.panes.is_empty() && revived.is_some_and(|revived| read_at - revived < REVIVE_SETTLE_MS) {
-			return None;
-		}
 		if let Err(error) = c.launched.seen(&read.panes) {
 			self.step::<(), _>("reading herdr's panes", async { Err(error) }).await;
 			return None;
@@ -203,7 +196,7 @@ impl Inner {
 		c.places.expire(read_at);
 		// The threads known before herdr's list is read: one registered while the tick runs isn't in that list (SVC-2).
 		let known = c.threads.entries();
-		let Some(snapshot) = self.read(read_at).await else { return };
+		let Some(snapshot) = self.read().await else { return };
 		let by_id = snapshot.panes.iter().map(|p| (p.pane_id.clone(), p.clone())).collect();
 		let tick = Tick { read_at, snapshot, by_id, known };
 		self.steps(&tick).await;

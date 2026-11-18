@@ -22,7 +22,7 @@ use crate::frontier::server::day::{DayOptions, SharedCatalog};
 use crate::frontier::server::door_routes::{DoorParts, DoorService, door_routes};
 use crate::frontier::server::feed::{FeedService, Guard, feed_route, feed_socket, publish};
 use crate::frontier::server::health_route::health_route;
-use crate::frontier::server::herdr::{Herdr, HerdrOptions, OnServerStarted, connect_herdr};
+use crate::frontier::server::herdr::{Herdr, HerdrOptions, connect_herdr};
 use crate::frontier::server::page_routes::{LaunchCodes, PageParts, PageResponder, page_responder, whiteboard_reviews};
 use crate::frontier::server::plugin::{AskOptions, AskPopups, PluginPanes};
 use crate::frontier::server::popup_routes::{
@@ -44,7 +44,6 @@ use crate::shared::errors::Result;
 use crate::shared::herdr_session::herdr_session;
 use crate::shared::link::open_in_browser;
 use crate::shared::log::{LogLevel, log};
-use crate::shared::paths::config_dir;
 use crate::shared::process::AbortSignal;
 use crate::shared::schema::open_catalog;
 use crate::shared::service_file::{ServiceFile, remove_service_file, write_service_file};
@@ -129,12 +128,12 @@ pub struct ServerOptions {
 	/// The collab relay's port on 127.0.0.1 (test seam): `RELAY_PORT`; `Some(0)` a free one. Taken: the start fails
 	/// (0561).
 	pub relay_port: Option<u16>,
-	/// herdr (test seam): session `jocasta` by default, started with `~/.jocasta/agent/herdr.toml` when absent.
+	/// herdr (test seam): the server this service lives in by default.
 	pub herdr: Option<Arc<dyn Herdr>>,
-	/// The herdr session to connect to when `herdr` isn't given (smoke seam); `jocasta` by default.
+	/// herdr's session, for its name in the stop steps and the panes' commands (smoke seam); `jocasta` by default.
 	pub herdr_session: Option<String>,
-	/// Told each herdr server process this service starts (0582: a hung service's takeover spares it).
-	pub on_herdr_server: Option<OnServerStarted>,
+	/// The API socket of the herdr server this service lives in, as clients connect to it; the session's when absent.
+	pub herdr_socket: Option<String>,
 	/// Phase 8's pollers and clock (test seam); tests pass `pollers: Some(false)` so nothing calls the real gh or az.
 	pub day: Option<DayOptions>,
 	/// The port to try first (test seam): `service.port`, else 47400 (0358).
@@ -292,15 +291,9 @@ fn configured_port() -> u16 {
 		.unwrap_or(DEFAULT_PORT)
 }
 
-/// herdr's `session`, started with `~/.jocasta/agent/herdr.toml` when absent; `on_server_started` told its server.
-async fn connect_session(session: &str, on_server_started: Option<OnServerStarted>) -> Result<Arc<dyn Herdr>> {
-	let config = config_dir().join("herdr.toml");
-	let options = HerdrOptions {
-		session: session.to_owned(),
-		config_path: config.exists().then_some(config),
-		on_server_started,
-		..HerdrOptions::default()
-	};
+/// The herdr server of `session` this service lives in, at `socket` when given; it is never started from here.
+async fn connect_session(session: &str, socket: Option<String>) -> Result<Arc<dyn Herdr>> {
+	let options = HerdrOptions { session: session.to_owned(), socket_path: socket, ..HerdrOptions::default() };
 	Ok(connect_herdr(options).await?)
 }
 
@@ -720,7 +713,7 @@ async fn start_rest(
 	};
 	let herdr = match options.herdr.clone() {
 		Some(herdr) => herdr,
-		None => connect_session(&session, options.on_herdr_server.take()).await?,
+		None => connect_session(&session, options.herdr_socket.take()).await?,
 	};
 	undo.push(undo_herdr(&herdr));
 	let whiteboard = start_child_whiteboard(options.whiteboard.take(), undo);

@@ -23,7 +23,7 @@ async fn body_of(response: Response) -> Value {
 }
 
 #[tokio::test]
-async fn health_is_forbidden_without_the_bearer_and_answers_pid_revivals_and_switches_with_it() {
+async fn health_is_forbidden_without_the_bearer_and_answers_pid_and_switches_with_it() {
 	let closing = Arc::new(AtomicBool::new(false));
 	let flag = Arc::clone(&closing);
 	let route = health_route("secret", move || flag.load(Ordering::SeqCst));
@@ -39,7 +39,7 @@ async fn health_is_forbidden_without_the_bearer_and_answers_pid_revivals_and_swi
 	assert_eq!(answered.status(), StatusCode::OK);
 	let body = body_of(answered).await;
 	let keys: Vec<&String> = body.as_object().unwrap().keys().collect();
-	assert_eq!(keys, ["pid", "herdrRevivals", "layer", "hosts"]);
+	assert_eq!(keys, ["pid", "layer", "hosts"]);
 	assert_eq!(body["pid"], std::process::id());
 
 	closing.store(true, Ordering::SeqCst);

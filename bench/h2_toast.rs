@@ -425,8 +425,6 @@ async fn run(argv: Vec<String>) -> Result<()> {
 	require_service_switch(Switch::Hosts, if condition == "herdr" { OnOff::Off } else { OnOff::On }).await?;
 	let started = conditions(&["omp", "herdr", "jocasta"]);
 	let herdr = sandbox.herdr().await?;
-	// The service restarts herdr, not this recorder.
-	herdr.keep_down();
 	let mut recorder = Recorder {
 		herdr: herdr.clone(),
 		project,

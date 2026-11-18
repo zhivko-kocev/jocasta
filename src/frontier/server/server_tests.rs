@@ -72,7 +72,6 @@ async fn the_api_takes_the_token_as_a_bearer_only_a_pages_one_time_code_becomes_
 
 		let health: Value = get("/health").bearer_auth(&server.token).send().await.unwrap().json().await.unwrap();
 		assert_eq!(health["pid"], std::process::id());
-		assert!(health["herdrRevivals"].is_number());
 		assert_eq!(health["layer"], "on");
 		assert_eq!(health["hosts"], "on");
 

@@ -25,13 +25,13 @@ use futures_util::future::BoxFuture;
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
-use crate::frontier::server::herdr::find_herdr;
 use crate::frontier::server::whiteboard::{WhiteboardRuntime, whiteboard_runtime};
 use crate::frontier::tui::TOKYO_NIGHT;
 use crate::setup::markers::{Marker, Undo, read_marker, recorded_undo, write_marker};
 use crate::shared::credentials::{CALENDAR_CREDENTIAL, CALENDAR_ENV, read_credential, write_credential};
 use crate::shared::env;
 use crate::shared::errors::{Error, Result};
+use crate::shared::herdr_session::herdr_program;
 use crate::shared::install::{self_command, shipped_config_dir};
 use crate::shared::log::{LogLevel, log};
 use crate::shared::pathkey::{path_key, same_path};
@@ -722,7 +722,7 @@ pub struct SetupCheck {
 pub async fn setup_check() -> SetupCheck {
 	let read_only: RunProgram =
 		Arc::new(|_| Box::pin(async { Ok(RunOutput { code: 1, output: "read only".to_owned() }) }));
-	let mut deps = SetupDeps::new(find_herdr(), read_only);
+	let mut deps = SetupDeps::new(herdr_program(), read_only);
 	deps.mise = on_path("mise", None);
 	deps.calendar = default_calendar_store(None);
 	let paths = default_setup_paths(&shipped_config_dir(None), self_command(None));

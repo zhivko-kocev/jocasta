@@ -305,9 +305,6 @@ impl Herdr for Busy {
 	fn watch(&self, pane_ids: PaneIds, on_change: OnChange) -> StopWatch {
 		self.inner.watch(pane_ids, on_change)
 	}
-	fn keep_down(&self) {
-		self.inner.keep_down();
-	}
 	fn stop_server(&self) -> BoxFuture<'_, HerdrResult<()>> {
 		self.inner.stop_server()
 	}

@@ -186,7 +186,6 @@ fn the_sequence_stops_everything_in_its_order_with_the_extra_stops_after_the_hun
 		[
 			"his questions",
 			"goodbye",
-			"holding herdr down",
 			"noting the threads at work",
 			"the service",
 			"the turns at work",
@@ -220,7 +219,7 @@ fn the_bounds_can_be_changed_one_by_one() {
 }
 
 #[tokio::test]
-async fn stopping_everything_holds_herdr_down_stops_the_service_then_herdrs_server_then_the_rest() {
+async fn stopping_everything_stops_the_service_then_herdrs_server_then_the_rest() {
 	let _j = temp_jocasta();
 	let world = World::new();
 	world.popups.open(&crate::frontier::server::popups::allow_question("Allow?", "x", None), false);
@@ -241,10 +240,7 @@ async fn stopping_everything_holds_herdr_down_stops_the_service_then_herdrs_serv
 			"server",
 		]
 	);
-	// Held down first, then the server stops; each once.
-	let methods = world.herdr.methods();
-	let at = |name: &str| methods.iter().position(|method| method == name).unwrap();
-	assert!(at("keepDown") < at("stopServer"));
+	// The server stops once.
 	assert_eq!(world.herdr.of("stopServer").len(), 1);
 	assert_eq!(world.sent.lock().unwrap().as_slice(), [ServerMessage::Bye]);
 	assert!(world.popups.list().is_empty());
@@ -258,7 +254,6 @@ async fn a_failed_start_stops_the_service_the_relay_and_the_server_only() {
 	let steps = stop_steps(world.parts(Vec::new()));
 	run_stop_steps(&steps, false, &mut |name, error| panic!("{name}: {error}")).await;
 	assert_eq!(seen(&world.log), ["stop", "relay", "server"]);
-	assert!(world.herdr.of("keepDown").is_empty());
 	assert!(world.herdr.of("stopServer").is_empty());
 }
 

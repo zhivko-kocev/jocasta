@@ -120,7 +120,9 @@ pub fn ready_patterns(spec: Option<&str>) -> Result<BTreeMap<BenchTool, String>>
 }
 
 /// The bench herdr session's client, never his session (`jocasta`, `jarvis`) nor the sandbox Jocasta's
-/// (`JOCASTA_HERDR_SESSION`, from `environment` or the process's), whose service relaunches what runs there.
+/// (`JOCASTA_HERDR_SESSION`, from `environment` or the process's), whose service relaunches what runs there. A session
+/// with no server gets one: a plain `jocasta --session <name> server` (the `jocasta` beside this binary), which runs no
+/// Jocasta service.
 pub async fn bench_herdr(session: &str, environment: Option<&HashMap<String, String>>) -> Result<Arc<dyn Herdr>> {
 	refuse_his_session(session, "--pty-session")?;
 	let sandbox = match environment {
@@ -130,7 +132,27 @@ pub async fn bench_herdr(session: &str, environment: Option<&HashMap<String, Str
 	if sandbox.is_some_and(|sandbox| session.to_lowercase() == sandbox.to_lowercase()) {
 		return Err(BenchUsageError::err(format!("--pty-session can't be the sandbox's session {session}")));
 	}
-	Ok(connect_herdr(HerdrOptions { session: session.to_owned(), ..HerdrOptions::default() }).await?)
+	let options = HerdrOptions { session: session.to_owned(), ..HerdrOptions::default() };
+	if let Ok(herdr) = connect_herdr(options.clone()).await {
+		return Ok(herdr);
+	}
+	let jocasta = std::env::current_exe()?.with_file_name(format!("jocasta{}", std::env::consts::EXE_SUFFIX));
+	let mut server = std::process::Command::new(jocasta);
+	server
+		.args(["--session", session, "server"])
+		.env_remove("JOCASTA_SERVICE")
+		.stdin(std::process::Stdio::null())
+		.stdout(std::process::Stdio::null())
+		.stderr(std::process::Stdio::null());
+	server.spawn()?;
+	let deadline = Instant::now() + std::time::Duration::from_secs(10);
+	loop {
+		match connect_herdr(options.clone()).await {
+			Ok(herdr) => return Ok(herdr),
+			Err(error) if Instant::now() >= deadline => return Err(error.into()),
+			Err(_) => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
+		}
+	}
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -7,15 +7,14 @@ The full reference for using Jocasta. For what Jocasta is and a first run, start
 Jocasta is a work surface around your daily omp, in three parts (0386, 0392, 0552):
 
 - **the agent** is your own [omp](https://github.com/can1357/oh-my-pi), unforked and tuned in its `/settings`; Jocasta adds config, MCP tools and a search over past sessions, and no code inside omp except one small extension file a project pane's omp loads (0386, 0387, 0603, 0617);
-- **the work surface** is herdr session `jocasta`: workspace "Jocasta" with the boss pane first and the `today` pane beside it, then one workspace per project and a worktree workspace per thread (0392, 0412, 0553);
-- **the Jocasta service** is a plain Rust process (`jocasta service`, 0625) that `jocasta` starts beside herdr, with the `jocasta` herdr plugin it drives: the `today` pane, the `ask` popup for its questions, and keys for Finish, Stop, Review, New thread and Quit (0551–0554). It keeps the thread map, reviews finished tasks with hunk (0394), runs the threads' checks, indexes past sessions' summaries for `history_search` (0603), and opens whiteboard's diagrams and reviews in your browser (0393, 0552).
+- **the work surface** is herdr, built into `jocasta` (the fork at `crates/herdr`), in its default session inside Jocasta's data folder: workspace "Jocasta" with the boss pane first and the `today` pane beside it, then one workspace per project and a worktree workspace per thread (0392, 0412, 0553);
+- **the Jocasta service** runs inside herdr's server, one process (fork plan phase 4): bare `jocasta` launches the server, the server starts the service, and the `jocasta` herdr plugin it drives gives the `today` pane, the `ask` popup for its questions, and keys for Finish, Stop, Review, New thread and Quit (0551–0554). It keeps the thread map, reviews finished tasks with hunk (0394), runs the threads' checks, indexes past sessions' summaries for `history_search` (0603), and opens whiteboard's diagrams and reviews in your browser (0393, 0552). When your last terminal on it closes, Jocasta closes, asking first while threads are at work (0549).
 
 ## Prerequisites
 
 - Windows 11 (Linux and macOS builds exist; the test suite passes there, the builds themselves are untested; see below).
-- [herdr](https://herdr.dev) 0.9.5 or a later 0.9.x, from its official installer (0385, 0435); the plugin needs 0.9.5 (0553).
 - omp on PATH, signed in (`omp`, then `/login`; 0386). This build is checked against omp 18.20.2 (0535, 0623). Dictation is omp's own: omp downloads its speech model on first use or with `omp setup speech` (0556).
-- [mise](https://mise.jdx.dev), optional: with it, setup pins herdr, hunk and gh (0476, 0542).
+- [mise](https://mise.jdx.dev), optional: with it, setup pins hunk and gh (0476, 0542).
 
 ## Install
 
@@ -47,7 +46,7 @@ Setup's changes are numbered migrations (0466). Each one shows its diff and is w
 - `~/.jocasta/agent/herdr.toml` for session `jocasta`; setup then runs `herdr config check` on it and prints what it reports, and a failed check doesn't stop setup (0401, 0440, 0466, 0554, 0608);
 - `~/.jocasta/agent/jocasta.yaml`, with the `frontier` and `pollers` settings moved from an older Jocasta's settings file when there is one (0387);
 - the Windows Terminal scheme Tokyo Night, from Jocasta's palette (0401, 0474);
-- with mise on PATH, mise's machine file `~/.config/mise/conf.d/jocasta.toml` (pinned herdr, hunk and gh; your own `config.toml` wins); with or without mise, the mise skill in `~/.omp/agent/skills/mise/` (0476, 0562);
+- with mise on PATH, mise's machine file `~/.config/mise/conf.d/jocasta.toml` (pinned hunk and gh; your own `config.toml` wins); with or without mise, the mise skill in `~/.omp/agent/skills/mise/` (0476, 0562);
 - omp's `keybindings.yml`, `lsp.json`, `WATCHDOG.md` and `secrets.yml` (under Config below; 0451, 0479, 0556, 0594);
 - the logon Run value an earlier install's app wrote, removed: Jocasta no longer starts at logon; run `jocasta` yourself (0557);
 - the `jocasta` herdr plugin, written to `~/.jocasta/agent/herdr-plugin/` with how herdr starts this Jocasta, linked with `herdr plugin link`, and herdr's config reloaded so its keys find the plugin's actions (0553, 0558);

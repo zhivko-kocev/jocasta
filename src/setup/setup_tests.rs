@@ -503,7 +503,6 @@ async fn with_mise_installed_setup_writes_jocastas_mise_file_exact_pins_and_the_
 		"use_versions_host_track = false",
 		"auto_install = false",
 		"paranoid = [\"config\"]",
-		"herdr = \"0.9.5\"",
 		"hunk = \"0.23.0\"",
 		"gh = \"2.92.0\"",
 	] {
@@ -1638,34 +1637,4 @@ async fn setup_prints_one_note_when_git_is_older_than_2_54_or_missing_none_for_2
 	for current in ["git version 2.54.0.windows.1", "git version 2.60.1", "git version 3.0.0"] {
 		assert!(note_for(Some(current)).await.1.is_empty());
 	}
-}
-
-// test/config/herdr-config.test.ts: the shipped herdr.toml, checked by herdr itself (0608). Skipped where herdr isn't
-// installed.
-
-/// What `herdr config check` reports for `text` as a herdr.toml.
-async fn herdr_check(herdr: &Path, root: &Path, text: &str) -> String {
-	let path = root.join("herdr.toml");
-	fs::write(&path, text).unwrap();
-	let check = default_herdr_check(herdr, &path).await.unwrap();
-	check.output
-}
-
-#[tokio::test]
-async fn herdr_reads_the_config_at_herdr_config_path_a_made_up_key_is_named() {
-	let Some(herdr) = find_herdr() else { return };
-	let root = temp_dir("herdr-config");
-	let report =
-		herdr_check(&herdr, root.path(), "onboarding = false\nmade_up_key = 1\n[theme]\nname = \"tokyo-night\"\n")
-			.await;
-	assert!(report.contains("unknown config key made_up_key"));
-}
-
-#[tokio::test]
-async fn the_shipped_herdr_toml_filled_in_as_setup_fills_it_has_no_key_herdr_ignores() {
-	let Some(herdr) = find_herdr() else { return };
-	let root = temp_dir("herdr-config");
-	let template = read(&shipped_config_dir(None).join("herdr.toml"));
-	let report = herdr_check(&herdr, root.path(), &herdr_config(&template, &root.path().join("data"), None)).await;
-	assert!(!report.contains("unknown config key"));
 }

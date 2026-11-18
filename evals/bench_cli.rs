@@ -29,7 +29,6 @@ use crate::lib::args::{
 use crate::lib::launch::tool_command;
 use crate::lib::output::read_version;
 use crate::lib::sandbox::{BENCH_PTY_SESSION, VM_MACHINE, machine_name};
-use jocasta::frontier::server::herdr::find_herdr;
 use jocasta::shared::env;
 use jocasta::shared::errors::Result;
 use jocasta::shared::pathkey::{is_inside, resolve};
@@ -375,14 +374,6 @@ async fn run(argv: Vec<String>) -> Result<u8> {
 		let launcher = tool_command(bench_tool(variant.harness))?;
 		let version = read_version(&launcher).map_err(|error| BenchUsageError::err(format!("arm {name}: {error}")))?;
 		arms.push(Arm { name: name.clone(), variant, launcher, harness_version: version });
-	}
-	let interactive: Vec<String> =
-		plan.arm_names.iter().filter(|name| plan.variant(name).plan_review.is_some()).cloned().collect();
-	if !interactive.is_empty() && find_herdr().is_none() {
-		return Err(BenchUsageError::err(format!(
-			"{} answer omp's plan review in a herdr pane: herdr is not on PATH",
-			interactive.join(", ")
-		)));
 	}
 	let pauses: Arc<Mutex<Vec<Pause>>> = Arc::default();
 	let pacer = Arc::new(create_pacer(Arc::new(RealPacerDeps), pauses.clone()));

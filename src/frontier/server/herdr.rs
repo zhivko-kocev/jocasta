@@ -10,13 +10,13 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
-use futures_util::future::{BoxFuture, Shared};
+use futures_util::StreamExt;
+use futures_util::future::BoxFuture;
 use futures_util::stream::FuturesOrdered;
-use futures_util::{FutureExt, StreamExt};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -24,13 +24,10 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
 
-use crate::shared::clock::now_ms;
-use crate::shared::env;
 use crate::shared::errors::{Error, Result};
 use crate::shared::line_rpc::LineSplitter;
 use crate::shared::log::{LogLevel, log};
 use crate::shared::poll::wait_for;
-use crate::shared::process::on_path;
 use crate::shared::proctree::{ProcessId, end_processes, process_id_of};
 
 #[cfg(test)]
@@ -64,31 +61,20 @@ pub type Prepare = Box<dyn FnOnce(PathBuf) -> BoxFuture<'static, Result<Env>> + 
 /// Where warnings go.
 pub type OnWarning = Arc<dyn Fn(&str) + Send + Sync>;
 
-/// Told the server process each time this module starts one.
-pub type OnServerStarted = Arc<dyn Fn(ProcessId) + Send + Sync>;
-
 /// What [`connect_herdr`] and the session helpers are given.
 #[derive(Clone, Default)]
 pub struct HerdrOptions {
 	/// herdr session name; Jocasta's is `jocasta`.
 	pub session: String,
-	/// `HERDR_CONFIG_PATH` for a server this module starts (`~/.jocasta/agent/herdr.toml`).
-	pub config_path: Option<PathBuf>,
-	/// The herdr executable; [`find_herdr`] when omitted.
-	pub herdr_bin: Option<PathBuf>,
+
 	/// Socket (a pipe name on Windows) override (tests); [`herdr_socket_path`] when omitted.
 	pub socket_path: Option<String>,
-	/// Where warnings go (the version warning, a restarted server); Jocasta's log (`log.rs`) when omitted.
+	/// Where warnings go; Jocasta's log (`log.rs`) when omitted.
 	pub on_warning: Option<OnWarning>,
 	/// Per-request timeout; 30 s when omitted.
 	pub timeout_ms: Option<i64>,
 	/// How often `watch` re-reads its pane set; 1 s when omitted.
 	pub watch_interval_ms: Option<i64>,
-	/// Whether [`connect_herdr`] starts a server when none answers (and again after one stopped, 0431); true when
-	/// omitted. False connects to a running one only (the plugin's startup hook): no answer fails with `unreachable`.
-	pub start: Option<bool>,
-	/// Told the server process each time this module starts one (0582: a hung service's takeover spares it).
-	pub on_server_started: Option<OnServerStarted>,
 }
 
 /// What herdr's agent detection says about a pane.
@@ -330,7 +316,7 @@ pub struct PaneMetadata {
 
 /// herdr as the rest of Jocasta uses it.
 pub trait Herdr: Send + Sync {
-	/// `connect_herdr` started this session's server itself (none answered): Jocasta created the session (0495).
+	/// Always true: the server is Jocasta's own process (0495).
 	fn started_server(&self) -> bool;
 	/// herdr's server version (`ping`); fails when the server doesn't answer.
 	fn ping(&self) -> BoxFuture<'_, HerdrResult<Option<String>>>;
@@ -410,12 +396,8 @@ pub trait Herdr: Send + Sync {
 	/// set is re-read from `pane_ids` every interval; the subscription is reopened when it changes or drops
 	/// (`events_lost`, herdr restarted). Returns the function that stops watching. Needs a running tokio runtime.
 	fn watch(&self, pane_ids: PaneIds, on_change: OnChange) -> StopWatch;
-	/// From now on a stopped server stays stopped: no request starts it again (0431's restart never runs during a
-	/// stop, 0434). Requests to a running server still work.
-	fn keep_down(&self);
 	/// Stops this session's server with its panes (`server.stop`; only this session, 0434) and waits for it to go;
-	/// never starts it again; then ends every process the panes ran, with all they started (0486). Does nothing when
-	/// it isn't running.
+	/// then ends every process the panes ran, with all they started (0486). Does nothing when it isn't running.
 	fn stop_server(&self) -> BoxFuture<'_, HerdrResult<()>>;
 	/// Stops every watch. Requests hold no connection between calls.
 	fn close(&self);
@@ -432,11 +414,6 @@ pub struct HerdrError {
 impl HerdrError {
 	pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
 		Self { code: code.into(), message: message.into() }
-	}
-
-	/// What the TypeScript's `String(error)` gives: `HerdrError: <message>`.
-	fn shown(&self) -> String {
-		format!("HerdrError: {}", self.message)
 	}
 }
 
@@ -469,11 +446,14 @@ fn is_transport(error: &HerdrError) -> bool {
 	error.code == "transport"
 }
 
+/// herdr's answer while its server is on its way out (`server_unavailable`): its panes are going, and the server with
+/// them, so a stop has nothing left to do. The embedded server answers so between its loop's end and the process's.
+fn is_shutting_down(error: &HerdrError) -> bool {
+	error.code == "server_unavailable"
+}
+
 /// Shown in herdr's metadata as the reporter (`source` must match `[A-Za-z0-9:._-]{1,80}`).
 const SOURCE: &str = "jocasta";
-const SERVER_START_MS: i64 = 10_000;
-/// Fewest milliseconds between two restarts of a stopped server (0431).
-const RESTART_GAP_MS: i64 = 5_000;
 /// How long a stopped server may take to close its socket (0434).
 const SERVER_STOP_MS: i64 = 10_000;
 /// A ping while stopping: a server on its way out answers at once or not at all.
@@ -495,23 +475,16 @@ fn millis(ms: i64) -> Duration {
 	Duration::from_millis(ms.max(0).unsigned_abs())
 }
 
-fn home_dir() -> PathBuf {
-	std::env::home_dir().unwrap_or_default()
-}
-
-/// herdr's socket for `session`. herdr's config dir is `$XDG_CONFIG_HOME/herdr`, else `%APPDATA%\herdr` on Windows and
-/// `~/.config/herdr` elsewhere (herdr `src/config/io.rs:30-66`); a named session's socket is
-/// `<config dir>/sessions/<name>/herdr.sock` (`src/session.rs:163-173`).
+/// herdr's socket for `session`. The server runs inside Jocasta's process, whose herdr config dir is
+/// `<data dir>/herdr` (`embed::set_dirs`): Jocasta's default session `jocasta` is herdr's default session, socket
+/// `<data dir>/herdr/herdr.sock`; any other name is `<data dir>/herdr/sessions/<name>/herdr.sock`.
 pub fn herdr_socket_path(session: &str) -> String {
-	let config_dir = match env::var_nonempty("XDG_CONFIG_HOME") {
-		Some(xdg) => PathBuf::from(xdg).join("herdr"),
-		None if cfg!(windows) => {
-			let appdata = env::var("APPDATA").map_or_else(|| home_dir().join("AppData").join("Roaming"), PathBuf::from);
-			appdata.join("herdr")
-		}
-		None => home_dir().join(".config").join("herdr"),
+	let config_dir = crate::shared::paths::data_dir().join("herdr");
+	let file = if session == "jocasta" {
+		config_dir.join("herdr.sock")
+	} else {
+		config_dir.join("sessions").join(session).join("herdr.sock")
 	};
-	let file = config_dir.join("sessions").join(session).join("herdr.sock");
 	let mut file = file.display().to_string();
 	if cfg!(windows) {
 		file = file.replace('/', "\\");
@@ -526,139 +499,13 @@ pub fn herdr_pipe(file: &str) -> String {
 	if cfg!(windows) { format!("\\\\.\\pipe\\{file}") } else { file.to_owned() }
 }
 
-/// `herdr` on PATH, else the newest `~/.herdr/packages/standalone/releases/<version>-<target>/herdr[.exe]`.
-pub fn find_herdr() -> Option<PathBuf> {
-	if let Some(found) = on_path("herdr", None) {
-		return Some(found);
-	}
-	let releases = home_dir().join(".herdr").join("packages").join("standalone").join("releases");
-	let exe = if cfg!(windows) { "herdr.exe" } else { "herdr" };
-	let mut versions: Vec<String> = std::fs::read_dir(&releases)
-		.ok()?
-		.flatten()
-		.filter_map(|entry| entry.file_name().into_string().ok())
-		.filter(|name| releases.join(name).join(exe).exists())
-		.collect();
-	versions.sort_by(|a, b| compare_versions(b, a));
-	versions.first().map(|newest| releases.join(newest).join(exe))
-}
-
-fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
-	let parts = |name: &str| -> Vec<i64> {
-		name.split('-').next().unwrap_or("").split('.').map(|n| leading_int(n).unwrap_or(0)).collect()
-	};
-	let (x, y) = (parts(a), parts(b));
-	for i in 0..x.len().max(y.len()) {
-		let diff = x.get(i).copied().unwrap_or(0).cmp(&y.get(i).copied().unwrap_or(0));
-		if diff.is_ne() {
-			return diff;
-		}
-	}
-	std::cmp::Ordering::Equal
-}
-
-/// `Number.parseInt(text, 10)`: the leading digits, with an optional sign.
-fn leading_int(text: &str) -> Option<i64> {
-	let text = text.trim_start();
-	let (sign, digits) = match text.strip_prefix('-') {
-		Some(rest) => (-1, rest),
-		None => (1, text.strip_prefix('+').unwrap_or(text)),
-	};
-	let end = digits.find(|c: char| !c.is_ascii_digit()).unwrap_or(digits.len());
-	digits[..end].parse::<i64>().ok().map(|n| sign * n)
-}
-
-/// The warning for a herdr server version other than 0.9.x, or `None`.
-pub fn herdr_version_warning(version: &str) -> Option<String> {
-	if version.starts_with("0.9.") {
-		return None;
-	}
-	Some(format!("herdr {version} is running; Jocasta is built against herdr 0.9.x and may misbehave"))
-}
-
-/// Connects to herdr's session `options.session`, starting `herdr --session <session> server` detached with
-/// `HERDR_CONFIG_PATH` when its socket is absent and waiting up to 10 s for it (unless `start` is false). Warns if the
-/// server's version (from `ping`, checked once here) is not 0.9.x. When the server stops later, the next request starts
-/// it again the same way (0431), at most once every few seconds; herdr restores its panes as shells, which the service
-/// relaunches.
+/// Connects to herdr's session `options.session`: one `ping`. The server is Jocasta's own process, so none is started
+/// or revived here; one that doesn't answer fails with `unreachable`.
 pub async fn connect_herdr(options: HerdrOptions) -> HerdrResult<Arc<dyn Herdr>> {
 	let path = options.socket_path.clone().unwrap_or_else(|| herdr_socket_path(&options.session));
-	// Into Jocasta's log (0431), which a source run also prints.
-	let warn: OnWarning = options
-		.on_warning
-		.clone()
-		.unwrap_or_else(|| Arc::new(|message: &str| log(LogLevel::Warn, "herdr", message, None)));
-	let timeout_ms = options.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
-	let client = Arc::new(Client::new(path.clone(), timeout_ms));
-	let start = options.start.unwrap_or(true);
-	let mut started = false;
-	let version = match client.ping().await {
-		Ok(version) => version,
-		Err(error) if start && is_unreachable(&error) => {
-			started = true;
-			start_and_wait(&path, timeout_ms, &options).await?
-		}
-		Err(error) => return Err(error),
-	};
-	if let Some(warning) = version.as_deref().and_then(herdr_version_warning) {
-		warn(&warning);
-	}
-	if start {
-		*locked(&client.revive) = Some(reviver(path, timeout_ms, options.clone(), warn));
-	}
-	Ok(Arc::new(HerdrClient::new(client, options.watch_interval_ms.unwrap_or(1000), started)))
-}
-
-/// What starts a stopped server again (0431), at most once every [`RESTART_GAP_MS`].
-fn reviver(path: String, timeout_ms: i64, options: HerdrOptions, warn: OnWarning) -> Reviver {
-	let last_start = Arc::new(AtomicI64::new(0));
-	Arc::new(move || {
-		let (path, options, warn, last_start) = (path.clone(), options.clone(), warn.clone(), last_start.clone());
-		async move {
-			if now_ms() - last_start.load(Ordering::SeqCst) < RESTART_GAP_MS {
-				return Err(HerdrError::new(
-					"unreachable",
-					format!("herdr session {} is down; it was restarted moments ago", options.session),
-				));
-			}
-			last_start.store(now_ms(), Ordering::SeqCst);
-			start_and_wait(&path, timeout_ms, &options).await?;
-			*locked(&REVIVED_AT) = Some(now_ms());
-			REVIVALS.fetch_add(1, Ordering::SeqCst);
-			warn(&format!("herdr's server for session {} had stopped; Jocasta started it again", options.session));
-			Ok(())
-		}
-		.boxed()
-	})
-}
-
-static REVIVED_AT: Mutex<Option<i64>> = Mutex::new(None);
-static REVIVALS: AtomicU64 = AtomicU64::new(0);
-
-/// When this process last started a stopped herdr server again (0431), or `None`: right after it, herdr may list no
-/// panes yet while it restores them.
-pub fn last_revived_at() -> Option<i64> {
-	*locked(&REVIVED_AT)
-}
-
-/// How many times this process started a stopped herdr server again (0431). Bare `jocasta` compares it across its
-/// client's run (`/health`'s `herdrRevivals`, 0534): a client that exited while it grew lost a crashed server, not him.
-pub fn herdr_revivals() -> u64 {
-	REVIVALS.load(Ordering::SeqCst)
-}
-
-/// Stops session `session`'s server with its panes (bare `jocasta` closing while no service runs, 0434); never starts
-/// one. Resolves true when one was running. Only `session`, `socket_path` and `timeout_ms` of `options` are read.
-pub async fn stop_herdr_session(options: &HerdrOptions) -> HerdrResult<bool> {
-	let path = options.socket_path.clone().unwrap_or_else(|| herdr_socket_path(&options.session));
-	Client::new(path, options.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS)).stop_server().await
-}
-
-/// Whether session `session`'s server answers a `ping`; never starts one. Bare `jocasta` polls it while the service
-/// starts a dead server again (0518). Only `session`, `socket_path` and `timeout_ms` of `options` are read.
-pub async fn herdr_session_answers(options: &HerdrOptions) -> bool {
-	let path = options.socket_path.clone().unwrap_or_else(|| herdr_socket_path(&options.session));
-	Client::new(path, options.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS)).ping().await.is_ok()
+	let client = Arc::new(Client::new(path, options.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS)));
+	client.ping().await?;
+	Ok(Arc::new(HerdrClient::new(client, options.watch_interval_ms.unwrap_or(1000))))
 }
 
 /// One request to session `session`'s server, as the service's client sends it (a read herdr dropped is asked again
@@ -673,81 +520,8 @@ pub async fn herdr_request_once<T: DeserializeOwned>(
 	Client::new(herdr_socket_path(session), ms).request(method, params, Some(ms)).await
 }
 
-/// Starts the session's server and waits up to 10 s for its `ping`.
-async fn start_and_wait(path: &str, timeout_ms: i64, options: &HerdrOptions) -> HerdrResult<Option<String>> {
-	if let Some(server) = start_server(options)?
-		&& let Some(told) = &options.on_server_started
-	{
-		told(server);
-	}
-	let probe = Client::new(path.to_owned(), timeout_ms);
-	let answer: Mutex<Option<Option<String>>> = Mutex::new(None);
-	let last: Mutex<Option<HerdrError>> = Mutex::new(None);
-	let started = wait_for(
-		|| async {
-			match probe.ping().await {
-				Ok(version) => {
-					*locked(&answer) = Some(version);
-					Ok(true)
-				}
-				Err(retry) => {
-					*locked(&last) = Some(retry);
-					Ok(false)
-				}
-			}
-		},
-		SERVER_START_MS,
-		100,
-	)
-	.await;
-	let answered = locked(&answer).take();
-	match answered {
-		Some(version) if matches!(started, Ok(true)) => Ok(version),
-		_ => {
-			let last = locked(&last).as_ref().map_or_else(|| "undefined".to_owned(), HerdrError::shown);
-			Err(HerdrError::new("unreachable", format!("herdr session {} didn't start: {last}", options.session)))
-		}
-	}
-}
-
-/// Starts the session's server; returns its process as it runs now, when that can be read.
-fn start_server(options: &HerdrOptions) -> HerdrResult<Option<ProcessId>> {
-	let bin = options
-		.herdr_bin
-		.clone()
-		.or_else(find_herdr)
-		.ok_or_else(|| HerdrError::new("not_installed", "herdr isn't installed (not on PATH, not in ~/.herdr)"))?;
-	let mut command = std::process::Command::new(bin);
-	// `herdr server` runs the headless server (cli-reference.mdx "Server"); `--session` picks the socket. It outlives
-	// the service, so it starts in the home dir: inheriting the launcher's cwd would lock the install folder.
-	command
-		.args(["--session", &options.session, "server"])
-		.current_dir(home_dir())
-		.stdin(std::process::Stdio::null())
-		.stdout(std::process::Stdio::null())
-		.stderr(std::process::Stdio::null());
-	env::apply_to(&mut command);
-	if let Some(config) = &options.config_path {
-		command.env("HERDR_CONFIG_PATH", config);
-	}
-	#[cfg(windows)]
-	{
-		use std::os::windows::process::CommandExt;
-		// DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP, as Node's `detached` starts it (no console window either).
-		command.creation_flags(0x0000_0208);
-	}
-	#[cfg(unix)]
-	{
-		use std::os::unix::process::CommandExt;
-		command.process_group(0);
-	}
-	// A program that can't start leaves no server; the wait for its socket then reports it.
-	Ok(command.spawn().ok().and_then(|child| process_id_of(child.id())))
-}
-
 /// A connect error as herdr's state: no socket or pipe (ENOENT) or nothing listening (ECONNREFUSED) is no server
-/// (`unreachable`, which may start one); anything else (a busy pipe, EMFILE, EACCES) is a `transport` failure, so a
-/// live session never gets a second server (SRV-A-10).
+/// (`unreachable`); anything else (a busy pipe, EMFILE, EACCES) is a `transport` failure.
 fn connect_error(path: &str, error: &std::io::Error) -> HerdrError {
 	let code = match error.kind() {
 		std::io::ErrorKind::NotFound => Some("ENOENT"),
@@ -881,29 +655,20 @@ fn next_id() -> String {
 /// change never is: herdr may have made it.
 const READS: [&str; 6] = ["ping", "workspace.list", "pane.list", "pane.get", "pane.read", "pane.process_info"];
 
-/// Starts the stopped server (`connect_herdr`).
-type Reviver = Arc<dyn Fn() -> BoxFuture<'static, HerdrResult<()>> + Send + Sync>;
-
-type Reviving = Shared<BoxFuture<'static, HerdrResult<()>>>;
-
 /// Requests. herdr's API server reads one request line per connection, answers it and closes the connection (herdr
 /// `src/api/server.rs:328-376`, `read_initial_request_line`); only `events.subscribe` keeps it open. So every request
-/// opens its own connection. When no server listens and `revive` is set, it is called once (concurrent callers share
-/// it) and the request tried again.
+/// opens its own connection.
 struct Client {
 	path: String,
 	timeout_ms: i64,
-	/// Starts the stopped server (`connect_herdr`); unset while connecting.
-	revive: Mutex<Option<Reviver>>,
-	reviving: Arc<Mutex<Option<Reviving>>>,
 }
 
 impl Client {
 	fn new(path: String, timeout_ms: i64) -> Self {
-		Self { path, timeout_ms, revive: Mutex::new(None), reviving: Arc::new(Mutex::new(None)) }
+		Self { path, timeout_ms }
 	}
 
-	/// ping → `{type: "pong", version, protocol}` (socket-api.mdx "Socket transport"); never revives.
+	/// ping → `{type: "pong", version, protocol}` (socket-api.mdx "Socket transport").
 	async fn ping(&self) -> HerdrResult<Option<String>> {
 		let answer = self.attempt("ping", &json!({}), self.timeout_ms).await?;
 		Ok(answer.get("version").and_then(Value::as_str).map(str::to_owned))
@@ -922,39 +687,15 @@ impl Client {
 	}
 
 	async fn request_value(&self, method: &str, params: &Value, timeout_ms: Option<i64>) -> HerdrResult<Value> {
-		let timeout_ms = timeout_ms.unwrap_or(self.timeout_ms);
-		match self.attempt(method, params, timeout_ms).await {
-			Err(error) if is_unreachable(&error) => {
-				let Some(revive) = locked(&self.revive).clone() else { return Err(error) };
-				let reviving = {
-					let mut slot = locked(&self.reviving);
-					let cleared = self.reviving.clone();
-					slot.get_or_insert_with(|| {
-						async move {
-							let revived = revive().await;
-							*locked(&cleared) = None;
-							revived
-						}
-						.boxed()
-						.shared()
-					})
-					.clone()
-				};
-				reviving.await?;
-				self.attempt(method, params, timeout_ms).await
-			}
-			other => other,
-		}
+		self.attempt(method, params, timeout_ms.unwrap_or(self.timeout_ms)).await
 	}
 
-	/// `server.stop` (schema `EmptyParams`; what `herdr server stop` sends), then waits for the socket to go. Unsets
-	/// `revive` first, so nothing starts the server again. Every process its panes ran, with all they started, is
-	/// listed before and ended after (0486): omp's workers outlived the server and held a worktree. False when no
-	/// server was running.
+	/// `server.stop` (schema `EmptyParams`; what `herdr server stop` sends), then waits for the socket to go. Every
+	/// process its panes ran, with all they started, is listed before and ended after (0486): omp's workers outlived
+	/// the server and held a worktree. False when no server was running.
 	async fn stop_server(&self) -> HerdrResult<bool> {
-		*locked(&self.revive) = None;
 		match self.attempt("ping", &json!({}), STOP_PING_MS).await {
-			Err(error) if is_unreachable(&error) => return Ok(false),
+			Err(error) if is_unreachable(&error) || is_shutting_down(&error) => return Ok(false),
 			Err(error) => return Err(error),
 			Ok(_) => {}
 		}
@@ -967,15 +708,17 @@ impl Client {
 	async fn stop_and_wait(&self) -> HerdrResult<()> {
 		if let Err(error) = self.attempt("server.stop", &json!({}), self.timeout_ms).await {
 			// A server on its way out may close the connection before it answers.
-			if !is_unreachable(&error) && !is_transport(&error) {
+			if !is_unreachable(&error) && !is_transport(&error) && !is_shutting_down(&error) {
 				return Err(error);
 			}
 		}
+		// `ping` answers until the socket goes, which in Jocasta's own process is only at its end; any other request
+		// answers `server_unavailable` from the stop on, and that is enough: the server is going.
 		let stopped = wait_for(
 			|| async {
-				Ok(match self.attempt("ping", &json!({}), STOP_PING_MS).await {
+				Ok(match self.attempt("pane.list", &json!({}), STOP_PING_MS).await {
 					Ok(_) => false,
-					Err(error) => is_unreachable(&error),
+					Err(error) => is_unreachable(&error) || is_shutting_down(&error),
 				})
 			},
 			SERVER_STOP_MS,
@@ -1056,7 +799,7 @@ impl Client {
 		(pane_id, self.process_info(pane_id, None).await)
 	}
 
-	/// `pane.list {}` → `{type: "pane_list", panes}` across all workspaces; never revives.
+	/// `pane.list {}` → `{type: "pane_list", panes}` across all workspaces.
 	async fn request_listed_panes(&self) -> HerdrResult<Vec<WirePane>> {
 		let answer = self.attempt("pane.list", &json!({}), self.timeout_ms).await?;
 		decode::<PaneList>("pane.list", answer).map(|list| list.panes)
@@ -1368,20 +1111,13 @@ type Watches = Mutex<HashMap<u64, Arc<WatchCore>>>;
 struct HerdrClient {
 	client: Arc<Client>,
 	watch_interval_ms: i64,
-	started_server: bool,
 	watches: Arc<Watches>,
 	next_watch: AtomicU64,
 }
 
 impl HerdrClient {
-	fn new(client: Arc<Client>, watch_interval_ms: i64, started_server: bool) -> Self {
-		Self {
-			client,
-			watch_interval_ms,
-			started_server,
-			watches: Arc::new(Mutex::new(HashMap::new())),
-			next_watch: AtomicU64::new(0),
-		}
+	fn new(client: Arc<Client>, watch_interval_ms: i64) -> Self {
+		Self { client, watch_interval_ms, watches: Arc::new(Mutex::new(HashMap::new())), next_watch: AtomicU64::new(0) }
 	}
 
 	async fn wire_panes(&self) -> HerdrResult<Vec<WirePane>> {
@@ -1677,7 +1413,7 @@ async fn wire_panes(client: &Client) -> HerdrResult<Vec<WirePane>> {
 
 impl Herdr for HerdrClient {
 	fn started_server(&self) -> bool {
-		self.started_server
+		true
 	}
 
 	fn ping(&self) -> BoxFuture<'_, HerdrResult<Option<String>>> {
@@ -1854,10 +1590,6 @@ impl Herdr for HerdrClient {
 
 	fn watch(&self, pane_ids: PaneIds, on_change: OnChange) -> StopWatch {
 		HerdrClient::watch(self, pane_ids, on_change)
-	}
-
-	fn keep_down(&self) {
-		*locked(&self.client.revive) = None;
 	}
 
 	fn stop_server(&self) -> BoxFuture<'_, HerdrResult<()>> {

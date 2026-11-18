@@ -1612,6 +1612,7 @@ dependencies = [
  "herdr",
  "icalendar",
  "jocasta",
+ "portable-pty",
  "process-wrap",
  "ratatui",
  "regex",

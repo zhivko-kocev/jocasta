@@ -26,6 +26,7 @@ use crate::setup::setup::{McpUndo, RunProgram, SetupIo, SetupUndo, answered_yes}
 use crate::shared::env;
 use crate::shared::errors::{Error, Result};
 use crate::shared::fsx::{read_json_object, remove_tree, write_atomically};
+use crate::shared::herdr_session::{DEFAULT_SESSION, session_args};
 use crate::shared::install::INSTALL_MARKER;
 use crate::shared::pathkey::{is_inside, resolve, same_path};
 
@@ -652,7 +653,11 @@ async fn unlink_plugin(id: &str, deps: &UninstallDeps) -> Result<String> {
 		LazyLock::new(|| Regex::new(r"(?i)not.running|unreachable").expect("a fixed pattern"));
 	static NOT_REMOVED: LazyLock<Regex> =
 		LazyLock::new(|| Regex::new(r#""removed":\s*false"#).expect("a fixed pattern"));
-	let unlink = || (deps.run)(argv(herdr, &["--session", &deps.session, "plugin", "unlink", id]));
+	let unlink = || {
+		let words: Vec<String> =
+			session_args(&deps.session).into_iter().chain(["plugin", "unlink", id].map(str::to_owned)).collect();
+		(deps.run)(argv(herdr, &words.iter().map(String::as_str).collect::<Vec<_>>()))
+	};
 	let mut out = unlink().await?;
 	// Unlinking needs a running server (0558): a headless one for the session, which its own step stops.
 	if out.code != 0
@@ -693,6 +698,14 @@ async fn perform(action: &Action, deps: &UninstallDeps) -> Result<String> {
 		Action::HerdrPlugin(id) => unlink_plugin(id, deps).await,
 		Action::HerdrSession => {
 			let herdr = deps.herdr.as_deref().unwrap_or(Path::new("herdr"));
+			// Jocasta's own session is herdr's default one in Jocasta's data folder: its server stops, and its files go
+			// with that folder.
+			if deps.session == DEFAULT_SESSION {
+				let out = (deps.run)(argv(herdr, &["server", "stop"])).await?;
+				return Ok(
+					if out.code == 0 { "stopped herdr's server" } else { "herdr's server wasn't running" }.to_owned()
+				);
+			}
 			(deps.run)(argv(herdr, &["session", "stop", &deps.session])).await?;
 			let out = (deps.run)(argv(herdr, &["session", "delete", &deps.session])).await?;
 			if out.code != 0 {
@@ -772,7 +785,11 @@ fn plan(paths: &UninstallPaths, deps: &UninstallDeps) -> Result<Vec<Removal>> {
 	}
 	if deps.herdr.is_some() {
 		removals.push(Removal {
-			what: format!("herdr session `{}` (stopped, its panes closed, then deleted)", deps.session),
+			what: if deps.session == DEFAULT_SESSION {
+				"herdr's server (stopped, its panes closed)".to_owned()
+			} else {
+				format!("herdr session `{}` (stopped, its panes closed, then deleted)", deps.session)
+			},
 			action: Action::HerdrSession,
 		});
 	}

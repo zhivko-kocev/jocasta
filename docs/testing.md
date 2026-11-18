@@ -333,5 +333,14 @@ Every decided slice of 0599–0624 is built. The 0617 build's second review (062
 | 0610's three syntax-tree checks on `syn` (0645) | `tests/tree_checks.rs` with `tests/tree-baseline.txt` | none | pass (automated) |
 | The load check: the e2e tests looped beside a release build (0628) | the e2e tests | none | pass after two race fixes; B1's test 600 of 600 |
 | The installed release: setup, diagnose, the service, the boss's tools, the CLI on a throwaway project and thread, the pages, Stop everything | none | `install.ps1` from the local build into a sandbox, its own herdr session and port | pass; open: Stop everything counted an idle thread as working (0434's rule, as the TypeScript) |
-| The herdr live smokes | `live_smoke_*` in `herdr_tests.rs` (`mise run smoke`) | a throwaway herdr session | not run in the 2026-11-18 gate |
+| The herdr live smokes | `live_smoke_*` in `herdr_tests.rs` (`mise run smoke`) | a throwaway herdr session | removed in the fork's phase 4 (they started a separate herdr); rebuilt against the fork's own server in phase 5 |
 | The Linux suite (0643) | the same suite in his WSL Ubuntu | none | pass: 1467 of 1467 with `--no-fail-fast` on the CI fixes (2026-11-18) |
+
+## The herdr fork (2026-11-18, building; `docs/research/fork-plan.md`, `docs/research/fork-build.md`)
+
+| Surface | Automated test | Live check | Verdict |
+|---|---|---|---|
+| Phase 0's baseline: herdr v0.9.5's own suite on his PC before any trim | `crates/herdr/TESTS-BASELINE.md` | none | recorded |
+| Phases 1–2: the subtree, the trim, herdr still plain | herdr's suite (`cargo nextest run -p herdr -p ghostty-vt`) on Windows and WSL Ubuntu, CI on three OSes | none | pass: no new failures against the baseline |
+| Phase 3: one `jocasta` binary with herdr's words, Jocasta's dirs | `tests/entry.rs`, `src/shared/route_tests.rs`, herdr's suite | none | pass (automated); CI's phase-3 run failed on cargo-deny and one e2e race, both fixed in phase 4 |
+| Phase 4: the service inside herdr's server (`JOCASTA_SERVICE=1`), its stop and failed start (0582) through herdr's own stop | `src/frontier/server/embedded_tests.rs`, `src/shared/surface_tests.rs`, `herdr_tests.rs`'s stop cases, the PTY test `bare_jocasta_runs_the_service_in_herdrs_server_…` in `tests/entry.rs` | none yet | pass (automated): 1457 of 1457 on Windows (2026-11-18), cargo-deny clean |

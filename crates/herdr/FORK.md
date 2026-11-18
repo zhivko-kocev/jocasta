@@ -37,7 +37,8 @@ Kept whole: plugins, kitty graphics, live handoff, worktrees, notifications and 
 ### Trim edits
 
 The removals above reached into these kept files; each edit only deletes a dropped feature's code path, help line,
-event, field or test: `Cargo.toml` (no `[workspace]`, `[patch.crates-io]` or `build`; the root's workspace lists this
+event, field or test: `Cargo.toml` (no `[workspace]`, `[patch.crates-io]` or `build`, and `publish = false` for
+cargo-deny's path-crate rule; the root's workspace lists this
 crate and `crates/ghostty-vt` and patches `portable-pty`; the MSVC static C runtime is in the root's
 `.cargo/config.toml`), `api/client.rs`, `api/server.rs`, `app/{actions,api,mod,runtime,state}.rs`,
 `app/api/worktrees.rs`, `cli.rs`, `cli/{integration,plugin,server,spec,status,target,worktree}.rs`,
@@ -56,9 +57,17 @@ terminal is sent (no write over the wide tail) rather than the test backend's co
 
 - `src/lib.rs` (new; upstream's `src/main.rs` with `pub mod embed` and a `pub fn main`) and a thin `src/main.rs`, the
   `herdr` bin herdr's integration tests spawn.
-- `src/embed.rs` (new): `Dirs`, `set_dirs`, `version`.
+- `src/embed.rs` (new): `Dirs`, `set_dirs`, `version`; `ServerExtension`, `ServerHost` (with an in-process `stop`),
+  `set_server_extension`, the hooks a server in Jocasta's process runs its service through; `set_exit_hook`, run
+  before herdr's client ends the process with a failure.
 - `src/config/io.rs`: `config_dir`, `state_dir` and `config_path` take `embed`'s dirs first (`HERDR_CONFIG_PATH` still
   wins for the config file).
+- `src/server/headless/bootstrap.rs`: `run_server` tells the extension the server listens (after the plugins' startup
+  hooks), with the server's stopper, and that it stopped (after its loop's runtime returns).
+- `src/server/headless.rs`: `stopper` (what `server stop` does, callable in-process); `remove_client` tells the
+  extension when the last shell client left, unless the server is stopping.
+- `src/client/mod.rs` (the client's failure exit) and `src/lib.rs` (a launch that failed) end the process through
+  `embed::exit`, which runs the exit hook first.
 
 ## Taking an upstream release
 

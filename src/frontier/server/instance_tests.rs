@@ -34,11 +34,6 @@ async fn a_free_lock_is_taken_and_given_back_a_dead_holders_lock_is_taken_at_onc
 	let own = this_process();
 	let mine = take_instance(InstanceOptions::new(&file, down, nothing_killed)).await.unwrap().expect("the lock");
 	assert_eq!(read_json(&file), id_json(own));
-	// The herdr server it starts is noted beside it (0582).
-	mine.note_herdr(ProcessId { pid: 4242, start: 7.0 }).unwrap();
-	let mut expected = id_json(own);
-	expected["herdr"] = json!({ "pid": 4242, "start": 7 });
-	assert_eq!(read_json(&file), expected);
 	mine.release().unwrap();
 	assert!(!file.exists());
 	// A crashed holder (its pid runs no more, or another program reuses it with another start time).

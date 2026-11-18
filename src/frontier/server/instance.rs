@@ -1,8 +1,8 @@
 //! One Jocasta service at a time (0362, 0549): `<data>/service.lock` names the service that holds it by pid and start
-//! time, and the herdr server that service started, if any (0582). A start that finds it held by a live service that
-//! answers leaves; one that is closing is waited for; one that doesn't answer within a bound is hung: its process tree,
-//! all but herdr's server and what runs under it, is ended and the lock taken over (0534, 0582), so a hung service never
-//! blocks every later start, as a hung service did (0530), and the threads keep working.
+//! time; a lock an older plain service wrote also names the herdr server it started (0582). A start that finds it held
+//! by a live service that answers leaves; one that is closing is waited for; one that doesn't answer within a bound is
+//! hung: its process tree, all but that herdr server and what runs under it, is ended and the lock taken over (0534,
+//! 0582), so a hung service never blocks every later start, as a hung service did (0530).
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
@@ -77,16 +77,6 @@ impl Instance {
 		Ok(())
 	}
 
-	/// Records the herdr server this service started beside the lock (0582), while the lock names this process.
-	pub fn note_herdr(&self, server: ProcessId) -> Result<()> {
-		if self.mine() {
-			let mut value = id_json(self.id);
-			value["herdr"] = id_json(server);
-			write_private(&self.file, &format!("{value}\n"))?;
-		}
-		Ok(())
-	}
-
 	fn mine(&self) -> bool {
 		matches!(read_holder(&self.file), Read::Held(holder) if holder.id.pid == self.id.pid && holder.id.start == self.id.start)
 	}
@@ -146,12 +136,6 @@ fn private_options() -> OpenOptions {
 	#[cfg(unix)]
 	std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
 	options
-}
-
-fn write_private(file: &Path, text: &str) -> Result<()> {
-	let mut file = private_options().create(true).truncate(true).open(file)?;
-	file.write_all(text.as_bytes())?;
-	Ok(())
 }
 
 /// The lock, created only when there is none (`wx`); false when another holds it.

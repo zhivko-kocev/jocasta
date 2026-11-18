@@ -33,9 +33,6 @@ pub enum OnOff {
 #[serde(rename_all = "camelCase")]
 pub struct ServiceHealth {
 	pub state: ServiceState,
-	/// How many times the service started a stopped herdr server again (0431), while it answers (0534).
-	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub herdr_revivals: Option<u64>,
 	/// The test-only switches as the service has them (0576), while it answers: `JOCASTA_LAYER`, `JOCASTA_HOSTS`.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub layer: Option<OnOff>,
@@ -45,7 +42,7 @@ pub struct ServiceHealth {
 
 impl ServiceHealth {
 	fn of(state: ServiceState) -> Self {
-		Self { state, herdr_revivals: None, layer: None, hosts: None }
+		Self { state, layer: None, hosts: None }
 	}
 }
 
@@ -103,7 +100,6 @@ fn health_of(body: &Value, file: &ServiceFile) -> ServiceHealth {
 	}
 	ServiceHealth {
 		state: if body.get("closing") == Some(&Value::Bool(true)) { ServiceState::Closing } else { ServiceState::Up },
-		herdr_revivals: body.get("herdrRevivals").and_then(Value::as_u64),
 		layer: on_off(body.get("layer")),
 		hosts: on_off(body.get("hosts")),
 	}
@@ -186,12 +182,12 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn the_service_answers_up_with_its_herdr_restarts_and_switches_or_closing_while_it_closes_jocasta() {
+	async fn the_service_answers_up_with_its_switches_or_closing_while_it_closes_jocasta() {
 		let pid = std::process::id();
 		let closing = Arc::new(Mutex::new(false));
 		let flag = Arc::clone(&closing);
 		let port = service(Some(Arc::new(move |_| {
-			let mut body = json!({ "pid": pid, "herdrRevivals": 2, "layer": "off", "hosts": "on" });
+			let mut body = json!({ "pid": pid, "layer": "off", "hosts": "on" });
 			if *flag.lock().unwrap() {
 				body["closing"] = json!(true);
 			}
@@ -208,12 +204,7 @@ mod tests {
 		.await;
 		assert_eq!(
 			service_health(Some(&file(port, pid)), None).await,
-			ServiceHealth {
-				state: ServiceState::Up,
-				herdr_revivals: Some(2),
-				layer: Some(OnOff::Off),
-				hosts: Some(OnOff::On)
-			}
+			ServiceHealth { state: ServiceState::Up, layer: Some(OnOff::Off), hosts: Some(OnOff::On) }
 		);
 		*closing.lock().unwrap() = true;
 		assert_eq!(service_state(Some(&file(port, pid)), None).await, ServiceState::Closing);

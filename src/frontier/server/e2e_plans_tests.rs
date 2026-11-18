@@ -488,6 +488,7 @@ async fn b4_the_hunk_session_daemon_the_service_started_ends_with_stop_everythin
 		assert!(up().await);
 		// The review turn runs: he is asked, keeps it running, and the daemon stays.
 		server.herdr.set_state(&started.pane_id, AgentState::Working, None, true);
+		until(|| server.service.busy_threads().unwrap().working == 1).await;
 		assert_eq!(server.shutdown(true).await, CloseOutcome::Kept);
 		assert!(up().await);
 		// Later he stops everything: the daemon goes too.

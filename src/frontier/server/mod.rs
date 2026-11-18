@@ -31,6 +31,7 @@ mod e2e_relaunch_tests;
 mod e2e_thread_start_tests;
 #[cfg(test)]
 mod e2e_tools_tests;
+pub mod embedded;
 pub mod events;
 pub mod feed;
 pub mod finish;
@@ -68,7 +69,6 @@ pub mod relay;
 pub mod report;
 pub mod review_flow;
 pub mod routes;
-pub mod run;
 #[allow(clippy::module_inception)]
 pub mod server;
 pub mod service;
