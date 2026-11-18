@@ -94,7 +94,7 @@ terminal is sent (no write over the wide tail) rather than the test backend's co
 ### Vendored build dependency
 
 - `vendor/translate-c/` (new): Zig's `translate-c` package (MIT, commit `4e879eb8aba615de112eabd1231ea6e01920cead`,
-  17 files as Zig fetched them), and `vendor/libghostty-vt/build.zig.zon` names it by `.path` instead of its
+  17 files as Zig fetched them), and `vendor/libghostty-vt/build.zig.zon` and its `pkg/gtk4-layer-shell`, `pkg/harfbuzz`, `pkg/macos` and `pkg/wuffs` name it by `.path` instead of its
   codeberg.org URL, so a build fetches nothing from codeberg. Its own dependency `aro` still comes from github.com.
 
 ## Taking an upstream release
