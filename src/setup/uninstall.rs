@@ -143,8 +143,8 @@ type ProcessesUnder = Arc<dyn Fn(&Path) -> Vec<InstallProcess> + Send + Sync>;
 #[derive(Clone)]
 pub struct UninstallDeps {
 	pub service_state: Arc<dyn Fn() -> BoxFuture<'static, Result<ServiceState>> + Send + Sync>,
-	/// The herdr binary, or `None` when herdr isn't installed.
-	pub herdr: Option<PathBuf>,
+	/// The program that runs herdr's words: this `jocasta`.
+	pub herdr: PathBuf,
 	/// herdr's session, `jocasta` (`JOCASTA_HERDR_SESSION` for checks).
 	pub session: String,
 	pub run: RunProgram,
@@ -616,7 +616,7 @@ async fn perform(action: &Action, deps: &UninstallDeps) -> Result<String> {
 		Action::Mcp(item) => remove_mcp_servers(item),
 		Action::Restore(path, backup, expected) => restore_file(path, backup.as_deref(), expected),
 		Action::HerdrSession => {
-			let herdr = deps.herdr.as_deref().unwrap_or(Path::new("herdr"));
+			let herdr = &deps.herdr;
 			// Jocasta's own session is herdr's default one in Jocasta's data folder: its server stops, and its files go
 			// with that folder.
 			if deps.session == DEFAULT_SESSION {
@@ -694,17 +694,14 @@ fn install_removals(install: &InstallRecord) -> Vec<Removal> {
 
 /// Everything to remove, in order.
 fn plan(paths: &UninstallPaths, deps: &UninstallDeps) -> Result<Vec<Removal>> {
-	let mut removals = Vec::new();
-	if deps.herdr.is_some() {
-		removals.push(Removal {
-			what: if deps.session == DEFAULT_SESSION {
-				"herdr's server (stopped, its panes closed)".to_owned()
-			} else {
-				format!("herdr session `{}` (stopped, its panes closed, then deleted)", deps.session)
-			},
-			action: Action::HerdrSession,
-		});
-	}
+	let mut removals = vec![Removal {
+		what: if deps.session == DEFAULT_SESSION {
+			"herdr's server (stopped, its panes closed)".to_owned()
+		} else {
+			format!("herdr session `{}` (stopped, its panes closed, then deleted)", deps.session)
+		},
+		action: Action::HerdrSession,
+	}];
 	for item in &deps.setup_undo {
 		removals.push(undo_removal(item)?);
 	}

@@ -91,7 +91,9 @@ pub(crate) fn spawn_handoff_import(
         .arg(token)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+        .stderr(std::process::Stdio::null())
+        // Fork seam (FORK.md): what Jocasta's service asks the next server to start with.
+        .envs(crate::embed::handoff_env());
     if crate::session::explicit_session_requested() {
         // The import child no longer has the original `--session` argument, so
         // stale socket overrides must not mask the inherited HERDR_SESSION.

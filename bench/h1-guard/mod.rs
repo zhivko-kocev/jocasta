@@ -23,7 +23,7 @@ pub enum H1Guard {
 	/// The guard's verdicts on a labelled command corpus, scored per group and per way of writing.
 	#[command(disable_help_flag = true)]
 	Evaluate(ScriptArgs),
-	/// omp 18.20.2's own verdict on every corpus line, compared with the reimplementation (nothing runs).
+	/// omp 19.1.0's own verdict on every corpus line, compared with the reimplementation (nothing runs).
 	#[command(name = "omp-verdicts", disable_help_flag = true)]
 	OmpVerdicts(ScriptArgs),
 	/// Measures omp's git guard on the VM's fixture (`--run`) or prints the plan (`--dry-run`).

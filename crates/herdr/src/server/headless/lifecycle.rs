@@ -54,6 +54,9 @@ impl HeadlessServer {
             }
         }
 
+        // Fork seam (FORK.md): Jocasta's service lets go before the clients leave; it starts again if this fails.
+        crate::embed::before_handoff();
+
         self.handoff_in_progress = true;
         self.disconnect_all_clients_for_handoff();
         let _ = reject_pending_client_connections(&self.client_listener);
@@ -285,6 +288,8 @@ impl HeadlessServer {
         }
         self.handoff_in_progress = false;
         let _ = std::fs::remove_file(socket_path);
+        // Fork seam (FORK.md): this server stays, so Jocasta's service starts again.
+        crate::embed::handoff_failed();
     }
 
     #[cfg(unix)]

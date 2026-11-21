@@ -119,6 +119,8 @@ pub(crate) fn test_context(options: impl FnOnce(&mut ServiceOptions)) -> TestCon
 	service.sessions_dir = Some(jocasta.root().join("sessions"));
 	// Never his disk: a nearly full one raises an urgent line for the boss (as `with_test_defaults`).
 	service.day = Some(DayOptions { pollers: Some(false), disk_free: Some(Arc::new(|| 0.5)), ..DayOptions::default() });
+	// Never his omp's path: panes run `omp` by name, as where none is on PATH (`pane_omp_program` names the one found).
+	service.omp = Some(vec!["omp".to_owned()]);
 	// Every pane's relay is loopback, as the TypeScript's `relayTestOptions`: a relaunch never runs a real `omp`.
 	service.relay_url_of =
 		Some(Arc::new(|_, _, _| futures_util::FutureExt::boxed(async { Ok("ws://127.0.0.1:47499".to_owned()) })));

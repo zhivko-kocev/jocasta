@@ -1,4 +1,4 @@
-//! H1 (0482, 0501, 0535, 0623): measures omp 18.20.2's git guard instead of trusting `git_guard`'s reimplementation.
+//! H1 (0482, 0501, 0535, 0623): measures omp 19.1.0's git guard instead of trusting `git_guard`'s reimplementation.
 //! For the VM (a throwaway Windows 11 machine named JOCASTA-CLEAN); it RUNS corpus commands, so it refuses anywhere
 //! else.
 //!
@@ -10,7 +10,7 @@
 //! Lines: every corpus line made only of git (any spelling the corpus uses: `git`, `git.exe`, the full path, `git -C …`,
 //! also inside `pwsh -c`/`cmd /c`), `cd …` and `echo …`, split with omp's own tokenizer. For each line, twice, on a
 //! fresh fixture at C:\work\demo (the corpus's path; recipe below): omp's own `executeBash` from
-//! `exec/bash-executor.ts`, the call the bash tool makes (`tools/bash.ts:1242-1259,2034-2048`), in C:\work\demo (a main
+//! `exec/bash-executor.ts`, the call the bash tool makes (`tools/bash.ts:1604-1626,2518-2537`), in C:\work\demo (a main
 //! checkout, where the guard applies its shared-checkout rules) with `gitGuard: true`, then `gitGuard: false` as the
 //! control. The tool also passes `ovnfs`, which only fills the refusal's guidance text. git's config is isolated for
 //! the fixture and the runs (`GIT_CONFIG_GLOBAL` to a temp file, `GIT_CONFIG_NOSYSTEM=1`, a temp HOME and USERPROFILE),

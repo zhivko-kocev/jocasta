@@ -25,6 +25,10 @@ use crate::shared::jsonl::{parse_line, read_lines};
 /// Scratch copies `omp gc --compress` leaves beside transcripts; never transcripts of their own (omp-stats).
 const COMPRESS_SCRATCH: &str = ".omp-gc-compress-";
 
+/// omp 19's journal of the session's file changes (`commit/selective/journal.ts`), beside the transcripts in the
+/// artifacts dir: `{"type":"change",…}` lines, not a transcript.
+const CHANGE_JOURNAL: &str = "changes.jsonl";
+
 /// A session file's header.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionHeader {
@@ -157,7 +161,8 @@ pub(crate) fn artifacts_dir(session_file: &Path) -> PathBuf {
 	PathBuf::from(text.strip_suffix(".jsonl").unwrap_or(&text))
 }
 
-/// Every `*.jsonl` anywhere under `dir`, leaving out the `omp gc --compress` scratch files and folders.
+/// Every `*.jsonl` anywhere under `dir`, leaving out the `omp gc --compress` scratch files and folders and omp's change
+/// journal.
 fn collect_transcripts(dir: &Path, found: &mut Vec<PathBuf>) {
 	let Ok(entries) = fs::read_dir(dir) else { return };
 	for entry in entries.flatten() {
@@ -168,7 +173,7 @@ fn collect_transcripts(dir: &Path, found: &mut Vec<PathBuf>) {
 		let Ok(kind) = entry.file_type() else { continue };
 		if kind.is_dir() {
 			collect_transcripts(&entry.path(), found);
-		} else if kind.is_file() && name.ends_with(".jsonl") {
+		} else if kind.is_file() && name.ends_with(".jsonl") && name != CHANGE_JOURNAL {
 			found.push(entry.path());
 		}
 	}
@@ -473,12 +478,18 @@ mod tests {
 	}
 
 	#[test]
-	fn transcripts_of_lists_a_sessions_nested_transcripts_sorted_gc_compress_scratch_left_out() {
+	fn transcripts_of_lists_a_sessions_nested_transcripts_sorted_gc_compress_scratch_and_the_change_journal_left_out() {
 		let dir = temp_dir("omp-session");
 		let root = dir.path();
 		let session = write(&root.join("s.jsonl"), &[plain_header()]);
 		let artifacts = root.join("s");
-		for name in ["1-Task.jsonl", "0-Explore.jsonl", "__advisor.jsonl", "0-Explore.omp-gc-compress-123.jsonl"] {
+		for name in [
+			"1-Task.jsonl",
+			"0-Explore.jsonl",
+			"__advisor.jsonl",
+			"0-Explore.omp-gc-compress-123.jsonl",
+			"changes.jsonl",
+		] {
 			write(&artifacts.join(name), &[plain_header()]);
 		}
 		write(&artifacts.join("0-Explore").join("0-Deep.jsonl"), &[plain_header()]);

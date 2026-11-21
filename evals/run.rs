@@ -129,7 +129,7 @@ fn dry_run(settings: &RunSettings, variant: &Variant) -> Result<()> {
 }
 
 /// What a real run needs besides the settings: the checked environment and the harness's launcher.
-fn launcher_of(variant: &Variant) -> Result<Vec<String>> {
+pub fn launcher_of(variant: &Variant) -> Result<Vec<String>> {
 	if env::var_nonempty("JOCASTA_EVALS_REAL").is_none() {
 		return Err(Error::user(
 			"evals run omp against real models and bill usage; set JOCASTA_EVALS_REAL=1 to run them",

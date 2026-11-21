@@ -34,7 +34,7 @@ fn quoted(value: &str) -> String {
 /// whatever his global config says (0478): no Auto QA
 /// reports, no Claude Code plugins, web search on DuckDuckGo (an overlay's `modelRoles.web` leaves his other roles
 /// alone; its `disabledProviders` replaces his list); every session hosted in Jocasta's relay on `relay_port` and
-/// `/share` kept on this machine (0536, 0561). Keys checked against omp 18.20.2's source (`memory-backend/settings.ts`,
+/// `/share` kept on this machine (0536, 0561). Keys checked against omp 19.1.0's source (`memory-backend/settings.ts`,
 /// `task/settings.ts`, `tools/settings.ts`). Paths are JSON strings, valid YAML.
 pub fn overlay_text(project_id: &str, relay_port: Option<u16>) -> String {
 	let skills = lessons_dir(project_id).parent().map(Path::to_path_buf).unwrap_or_default();

@@ -308,7 +308,7 @@ const PLAN_REVIEW: &str = "Plan: readme-line\n> Approve and execute\n  Approve a
 const QUESTION: &str =
 	"Which file?\n> README.md\n  docs/intro.md\n  Other (type your own)\n↑↓ navigate  enter select  esc cancel";
 
-/// omp 18.20.2's `ask` form as its TUI draws it (pi-tui `html-form/dialog.ts`, 0589), cut so each test screen shows only
+/// omp 18.22.0's `ask` form as its TUI draws it (pi-tui `html-form/dialog.ts`, 0589), cut so each test screen shows only
 /// one of the two lines that tell a form: its Other row, or its footer.
 const FORM_OTHER_ROW: &str = "╭─ Ask ──────────────────────────────────────────╮\n│ Session store                                  │\n│   ◉ SQLite: one file, no new service           │\n│   ○ Redis: shared across instances, needs ops  │\n│   ○ Other: type your own                       │";
 const FORM_FOOTER: &str = "│   Submit                                       │\n├────────────────────────────────────────────────┤\n│ ⏎ choose · ↑/↓ move · ⇥ next field · ⎋ cancel  │\n╰────────────────────────────────────────────────╯";

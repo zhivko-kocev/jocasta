@@ -43,6 +43,46 @@ pub struct ProcessEntry {
 /// How long ended processes may take to go before [`end_processes`] stops waiting.
 const KILL_WAIT_MS: u64 = 5_000;
 
+/// The argument omp 19.1.0 starts its per-user daemon with (`DAEMON_WORKER_ARG`, `daemon/protocol.ts:19` in
+/// `target/omp-src/19.1.0`).
+const DAEMON_ARG: &str = "__omp_worker_daemon";
+
+/// Whether `argv` is omp's per-user daemon: one of its arguments after the program is exactly [`DAEMON_ARG`] (a path or
+/// a prompt that merely holds the text doesn't count).
+fn is_daemon_argv(argv: &[String]) -> bool {
+	argv.iter().skip(1).any(|arg| arg == DAEMON_ARG)
+}
+
+/// Which of `pids` are omp's daemon, by the command line the OS keeps for each (0490).
+fn daemons_among(pids: &[u32]) -> HashSet<u32> {
+	if pids.is_empty() {
+		return HashSet::new();
+	}
+	os::args(pids).into_iter().filter(|(_, argv)| is_daemon_argv(argv)).map(|(pid, _)| pid).collect()
+}
+
+/// Takes omp's daemon and everything under it out of `near`, the candidates of a tree walk, and returns the daemons
+/// (`find` says which of the candidates they are). omp 19.1.0's first omp spawns the one per-user daemon detached
+/// (`daemon/client.ts:180-191`, `subprocess/worker-client.ts:228-233`), so on Windows it is a child of that omp and a
+/// pane's tree holds it with the workers every other omp on the machine shares: a closed pane ends its own leftovers,
+/// never those (0490). The walk never enters `own`.
+fn spare_daemons(
+	near: &mut BTreeSet<u32>,
+	parents: &BTreeMap<u32, u32>,
+	own: &HashSet<u32>,
+	find: impl FnOnce(&[u32]) -> HashSet<u32>,
+) -> HashSet<u32> {
+	let candidates: Vec<u32> = near.iter().copied().collect();
+	let daemons = find(&candidates);
+	for daemon in &daemons {
+		near.remove(daemon);
+		for under in descendants(*daemon, parents, own) {
+			near.remove(&under);
+		}
+	}
+	daemons
+}
+
 /// This process and its ancestors in `parents`: never in a tree, and never walked through.
 fn own_line(parents: &BTreeMap<u32, u32>) -> HashSet<u32> {
 	let mut own = HashSet::from([std::process::id()]);
@@ -151,6 +191,8 @@ struct Snapshot {
 	own: HashSet<u32>,
 	parents: BTreeMap<u32, u32>,
 	groups: HashMap<u32, u32>,
+	/// omp's daemons among the candidates ([`spare_daemons`]); they and what runs under them are not in `processes`.
+	daemons: HashSet<u32>,
 }
 
 /// One snapshot of the running processes at and under `roots`' pids, each with its start (an ended one left out), this
@@ -185,6 +227,7 @@ fn snapshot_under(roots: &[ProcessId]) -> Snapshot {
 		}
 		near.extend(descendants(root.pid, &parents, &own));
 	}
+	let daemons = spare_daemons(&mut near, &parents, &own, daemons_among);
 	let wanted: Vec<u32> = near.iter().copied().collect();
 	let starts = process_starts(&wanted);
 	let mut processes = BTreeMap::new();
@@ -196,7 +239,7 @@ fn snapshot_under(roots: &[ProcessId]) -> Snapshot {
 			}
 		}
 	}
-	Snapshot { processes, own, parents, groups }
+	Snapshot { processes, own, parents, groups, daemons }
 }
 
 /// [`leftovers`] of all of `roots` together, from one snapshot of the running processes.
@@ -321,12 +364,13 @@ pub async fn end_processes(roots: &[ProcessId], spare: &[ProcessId]) -> Vec<u32>
 	let mut found: Vec<u32> = Vec::new();
 	let end = Instant::now() + Duration::from_millis(KILL_WAIT_MS);
 	loop {
-		let Snapshot { processes, own, parents, groups } = snapshot_under(&all);
+		let Snapshot { processes, own, parents, groups, daemons } = snapshot_under(&all);
 		let skip: HashSet<u32> = own.iter().chain(&spared).copied().collect();
-		// The groups a spared process or one under it is in: their leaders are ended by pid alone, so a spared process
-		// that shares a found leader's group (a child of it that never started its own) lives on.
+		// The groups a spared process, omp's daemon or one under them is in: their leaders are ended by pid alone, so a
+		// spared process that shares a found leader's group (a child of it that never started its own) lives on.
 		let kept: HashSet<u32> = spared
 			.iter()
+			.chain(&daemons)
 			.flat_map(|pid| std::iter::once(*pid).chain(descendants(*pid, &parents, &own)))
 			.filter_map(|pid| groups.get(&pid).copied())
 			.collect();
@@ -392,7 +436,10 @@ pub fn descendants(root: u32, parents: &BTreeMap<u32, u32>, skip: &HashSet<u32>)
 /// directory is read from its PEB (`NtQueryInformationProcess` + `ReadProcessMemory`); a process this user can't open
 /// (another user's, an elevated one) is skipped, and a folder recorded with an 8.3 short name (`C:\Users\ZHIVKO~1\…`,
 /// what a short `%TEMP%` gives a child) is expanded to its long one before comparing. Linux: `/proc/<pid>/cwd`. macOS:
-/// `lsof -d cwd`.
+/// `lsof -d cwd`. omp's daemon is found here like any process, unlike in a tree walk ([`spare_daemons`]): when its
+/// working folder (the folder of the omp that spawned it) is inside a worktree about to be removed, ending it is the
+/// only way to free the folder on Windows, and omp starts it again when a client needs it (0490; omp 19.1.0
+/// `daemon/client.ts:694-696`).
 pub fn processes_in(folder: &Path) -> Vec<FolderProcess> {
 	let mut roots = vec![folder.to_path_buf()];
 	let real = real_path(folder);

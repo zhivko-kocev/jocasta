@@ -16,19 +16,20 @@
 //!
 //! The scan is polling (an interval, 30 s by default), as the TypeScript's: nothing watches the folder.
 //!
-//! The omp shapes this relies on (checked against omp 18.20.2's `pi-coding-agent/src/session/`, 0623):
-//! - layout: a session is `<sessions>/<cwd dir>/<stem>.jsonl` (`session-paths.ts:222` `sessionDirForCwd`); its subagents
+//! The omp shapes this relies on (checked against omp 19.1.0's `pi-coding-agent/src/session/`, 0623, 19.1.0 re-check):
+//! - layout: a session is `<sessions>/<cwd dir>/<stem>.jsonl` (`session-paths.ts:223` `sessionDirForCwd`); its subagents
 //!   live in `<sessions>/<cwd dir>/<stem>/<AgentId>.jsonl` beside `__advisor*.jsonl` (`sub-sessions.ts:4-7`), so only
 //!   files directly in a cwd dir are sessions.
-//! - header: `{type: "session", version, id, timestamp, cwd, …}` (`session-entries.ts:42-75`); since the title slot
+//! - header: `{type: "session", version, id, timestamp, cwd, …}` (`session-entries.ts:65-99`); since the title slot
 //!   (`{type: "title", v: 1, …}`, `session-entries.ts:27-35`) it is the file's second line, not its first.
 //! - compaction: `{type: "compaction", id, parentId, timestamp, summary, shortSummary?, firstKeptEntryId, tokensBefore,
-//!   method?, …}` (`session-entries.ts:163-187`); the text is `summary`. `method` is one of `remote`, `snapcompact`,
+//!   method?, …}` (`session-entries.ts:235-259`); the text is `summary`. `method` is one of `remote`, `snapcompact`,
 //!   `handoff`, `soft`, `shake` (`compaction-methods.ts:11-39`), absent on legacy and extension compactions; `/handoff`
-//!   writes one with `method: "handoff"` into the same session (`session-maintenance.ts:2269-2280`).
-//! - message: `{type: "message", id, parentId, timestamp, message}` (`session-entries.ts:113-116`); an assistant message
+//!   writes one with `method: "handoff"` into the same session (`compact(focus, {mode: "handoff"})`, `compact-modes.ts:62`,
+//!   `session-maintenance.ts:1785`; 19.1.0 replaced `session.handoff`).
+//! - message: `{type: "message", id, parentId, timestamp, message}` (`session-entries.ts:137-140`); an assistant message
 //!   has `role: "assistant"`, `content` parts (`text` / `thinking` / `toolCall`) and `stopReason` `stop | length |
-//!   toolUse | error | aborted` (pi-ai `types.ts:1085`), and is written once, at `message_end` (`agent-session.ts:4469`
+//!   toolUse | error | aborted` (pi-ai `types.ts:1113`), and is written once, at `message_end` (`agent-session.ts:4700`
 //!   `#persistMessageEnd`).
 //! - moved session (18.12.6, 0464): when another process wrote a session first, omp goes on in a sibling file whose
 //!   header names the old session as `parentSession` and publishes the whole transcript there once

@@ -227,15 +227,15 @@ fn plan_mode_entry(id: &str) -> Value {
 	json!({"type": "mode_change", "id": id, "mode": "plan", "data": {"planFilePath": "local://readme-line-plan.md"}})
 }
 
-/// omp's proposal of a plan through `xd://propose`, its turn silently aborted (omp 18.10's shape).
+/// omp's proposal of a plan through the `propose` command, its turn silently aborted (omp 19.1.0's shape).
 fn append_proposal(file: &Path) {
 	append(
 		file,
 		&[
-			json!({"type": "message", "id": "t1", "message": {"role": "toolResult", "toolCallId": "c9", "toolName": "write",
+			json!({"type": "message", "id": "t1", "message": {"role": "toolResult", "toolCallId": "c9", "toolName": "bash",
 				"content": [{"type": "text", "text": "Plan ready for review."}],
-				"details": {"xdev": {"tool": "propose", "mode": "execute", "args": {"title": "readme-line"},
-					"inner": {"planFilePath": "local://readme-line-plan.md", "title": "readme-line", "planExists": true}}},
+				"details": {"toolCommands": [{"tool": "propose", "mode": "execute", "exitCode": 0, "args": {"title": "readme-line"},
+					"inner": {"planFilePath": "local://readme-line-plan.md", "title": "readme-line", "planExists": true}}]},
 				"isError": false}}),
 			json!({"type": "message", "id": "a9", "message": {"role": "assistant", "content": [], "stopReason": "aborted"}}),
 			plan_mode_entry("m2"),
@@ -930,8 +930,8 @@ async fn a_plan_he_sent_back_reaches_the_boss_once_with_the_lesson_offer() {
 	append(
 		&file,
 		&[
-			json!({"type": "message", "id": "t1", "message": {"role": "toolResult", "toolName": "write", "timestamp": now(),
-				"details": {"xdev": {"tool": "propose", "mode": "execute", "inner": {"title": "Plan", "planFilePath": "p.md"}}}}}),
+			json!({"type": "message", "id": "t1", "message": {"role": "toolResult", "toolName": "bash", "timestamp": now(),
+				"details": {"toolCommands": [{"tool": "propose", "mode": "execute", "exitCode": 0, "inner": {"title": "Plan", "planFilePath": "p.md"}}]}}}),
 			json!({"type": "message", "id": "u1", "message": {"role": "user", "timestamp": now() + 1, "content": "Smaller."}}),
 		],
 	);

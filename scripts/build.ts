@@ -345,7 +345,7 @@ function shipHunk(target: Target, dest: string): void {
 }
 
 /**
- * Empties `dist/<target>`. A file there held open (a `jocasta.exe` or the service run from it, or omp's `jocasta mcp`
+ * Empties `dist/<target>`. A file there held open (a `jocasta.exe` or its server run from it, or omp's `jocasta mcp`
  * started from it) fails with the file and, on Windows, the processes running from the folder, instead of a raw EBUSY.
  */
 function clearOut(out: string): void {
@@ -360,7 +360,7 @@ function clearOut(out: string): void {
 			holders = spawnSync("powershell", ["-NoProfile", "-Command", script], { encoding: "utf8" }).stdout.trim();
 		}
 		fail(
-			`${path ?? out} is in use (${code}), so ${out} can't be replaced.${holders ? ` Running from it:\n${holders}\n` : " "}Close what runs from there (the Jocasta service, \`jocasta\`, or an omp session's \`jocasta mcp\`), or build a copy elsewhere, then build again.`,
+			`${path ?? out} is in use (${code}), so ${out} can't be replaced.${holders ? ` Running from it:\n${holders}\n` : " "}Close what runs from there (\`jocasta\` and its server, or an omp session's \`jocasta mcp\`), or build a copy elsewhere, then build again.`,
 		);
 	}
 }

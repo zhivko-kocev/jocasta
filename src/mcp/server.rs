@@ -8,14 +8,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use rmcp::model::{
-	CallToolRequestParams, CallToolResponse, CallToolResult, CompleteRequestMethod, CompleteRequestParams,
-	CompleteResult, ContentBlock, ErrorData, Implementation, InitializeResult, JsonObject, ListPromptsRequestMethod,
-	ListPromptsResult, ListResourceTemplatesRequestMethod, ListResourceTemplatesResult, ListResourcesRequestMethod,
-	ListResourcesResult, ListToolsResult, PaginatedRequestParams, ProtocolVersion, ServerCapabilities, ServerConfig,
-	Tool, ToolsCapability,
+	CallToolRequestParams, CallToolResponse, CallToolResult, ClientNotification, ClientRequest, CompleteRequestMethod,
+	CompleteRequestParams, CompleteResult, ContentBlock, DiscoverRequestMethod, ErrorData, Implementation,
+	InitializeResult, JsonObject, ListPromptsRequestMethod, ListPromptsResult, ListResourceTemplatesRequestMethod,
+	ListResourceTemplatesResult, ListResourcesRequestMethod, ListResourcesResult, ListToolsResult,
+	PaginatedRequestParams, ProtocolVersion, ServerCapabilities, ServerConfig, ServerResult, Tool, ToolsCapability,
 };
-use rmcp::service::RequestContext;
-use rmcp::{RoleServer, ServerHandler, ServiceExt};
+use rmcp::service::{NotificationContext, RequestContext};
+use rmcp::{RoleServer, ServerHandler, Service, ServiceExt};
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -27,7 +27,8 @@ use crate::shared::layer::layer_on;
 use crate::shared::log::{LogLevel, log};
 use crate::shared::service_file::{NOT_RUNNING, RunningService, connection_refused, running_service};
 
-/// omp 18.10.3's client sends this in `initialize` (`packages/coding-agent/src/mcp/types.ts:175`).
+/// omp 19.1.0 sends this only to a legacy server's `initialize` (`mcp/protocol.ts:21` `MCP_LEGACY_PROTOCOL_VERSION`,
+/// `mcp/host/legacy-session.ts:16`).
 pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 
 /// Where the service listens, or `None` when it isn't running.
@@ -90,8 +91,8 @@ fn history_limit() -> Value {
 	json!({ "type": "integer", "minimum": 1, "maximum": 50, "description": "Most lines to return (default 10)" })
 }
 
-/// A tool as `tools/list` gives it. Each description is a first line of at most 80 bytes, which omp's `xd://` catalog
-/// shows, then a newline and the details, which reading the device returns (0583).
+/// A tool as `tools/list` gives it. Each description is a first line of at most 80 bytes, which omp's tool-command
+/// catalog shows, then a newline and the details, which `--help` on the command returns (0583).
 fn tool(name: &str, description: impl Into<String>, input: JsonObject) -> Tool {
 	Tool::new(name.to_owned(), description.into(), Arc::new(input))
 }
@@ -517,6 +518,43 @@ impl ServerHandler for Server {
 	}
 }
 
+/// The server as a handshake-era one (omp 19.0 and later, `mcp/host/peers.ts` `probeStdio`): omp's host sends
+/// `server/discover` ahead of `initialize` and takes any answer but a plain error for a 2026-07-28 server, whose
+/// process every omp session then shares and whose later requests carry that revision. rmcp answers the probe with
+/// `-32022` (unsupported version), which omp reads as "modern", and every request after it fails. Jocasta's per-pane
+/// key and thread arrive in the process's environment (0578), so one process per pane is the contract: the probe gets
+/// "method not found", as it did from the TypeScript server, and omp falls back to `initialize` and a unit of its own.
+struct HandshakeEra(Server);
+
+impl Service<RoleServer> for HandshakeEra {
+	async fn handle_request(
+		&self,
+		request: ClientRequest,
+		context: RequestContext<RoleServer>,
+	) -> Result<ServerResult, ErrorData> {
+		if matches!(request, ClientRequest::DiscoverRequest(_)) {
+			return Err(ErrorData::method_not_found::<DiscoverRequestMethod>());
+		}
+		Service::handle_request(&self.0, request, context).await
+	}
+
+	async fn handle_notification(
+		&self,
+		notification: ClientNotification,
+		context: NotificationContext<RoleServer>,
+	) -> Result<(), ErrorData> {
+		Service::handle_notification(&self.0, notification, context).await
+	}
+
+	fn get_info(&self) -> ServerConfig {
+		Service::get_info(&self.0)
+	}
+
+	fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+		Service::supported_protocol_versions(&self.0)
+	}
+}
+
 /// Serves MCP on `input` and `output` with rmcp until the input ends and the calls in flight have answered (rmcp waits
 /// up to 5 s for them).
 pub async fn run_mcp_server<R, W>(opts: McpServerOptions, input: R, output: W)
@@ -525,12 +563,12 @@ where
 	W: AsyncWrite + Send + Unpin + 'static,
 {
 	let service: ServiceLookup = opts.service.unwrap_or_else(|| Arc::new(running_service));
-	let server = Server {
+	let server = HandshakeEra(Server {
 		tools: mcp_tools(opts.boss, opts.env.as_ref()),
 		service,
 		pane_key: opts.pane_key,
 		boss_key: opts.boss_key,
-	};
+	});
 	// A client that closes before it initializes leaves nothing to serve.
 	if let Ok(running) = server.serve((input, output)).await {
 		let _ = running.waiting().await;

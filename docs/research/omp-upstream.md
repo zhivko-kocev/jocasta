@@ -82,6 +82,10 @@ Eight pull requests merged, three open, one issue closed. All eight merged befor
 - `commit.enabled` (new in 18.20.1, on) adds 151 fixed tokens to a session, subagents included: 96 in the system prompt and 55 in the eval tool's text (Opus 5 tokenizer; 11,022 against 10,871 in a Jocasta pane).
 - Ask: load it on first use, as the other eval namespaces' docs are. Jocasta keeps it on (0623). No related issue found.
 
+**U11. omp's per-user daemon starts in the folder of whichever omp spawned it.**
+- omp 19.1.0 starts `__omp_worker_daemon` detached from the first omp that needs it, with no `cwd` for a compiled binary (`daemon/client.ts:180-191`, `subprocess/worker-client.ts:228-233`), so it inherits that omp's working folder and, on Windows, stays a child of it. Seen live: the daemon's parent was an interactive omp. It then holds a project folder (a git worktree cannot be removed while it does) and a launcher that ends a closed pane's process tree takes the machine-wide daemon with it (Jocasta spares it by its command line, choice 100).
+- Ask: spawn the daemon with a neutral `cwd` (the home directory or omp's agent directory), so it never holds a project folder. Observed on 19.1.0 only; no related issue found.
+
 ### C. Data points, no ask
 
 - **`shellMinimizer`** rewrote 101 of 7,153 bash results (850 KB down to 514 KB); the raw output was fetched back for 13 of them, 8 under the `chain` filter.

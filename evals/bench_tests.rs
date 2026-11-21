@@ -71,31 +71,23 @@ fn the_main_run_is_30_tasks_x_3_reps_x_7_arms_eq_630_trials_0543() {
 }
 
 #[test]
-fn _0587_the_omp_arms_refuse_an_omp_folder_whose_mcp_files_give_them_a_server_or_hide_a_layered_arms_own() {
+fn _0587_0652_a_layered_arm_refuses_an_omp_folder_that_hides_its_own_server_and_his_other_servers_load_in_every_arm() {
 	let held = temp_dir("jocasta-arms");
 	let dir = held.path();
 	let write = |name: &str, config: Value| fs::write(dir.join(name), config.to_string()).unwrap();
 	let file = |name: &str| dir.join(name).display().to_string();
-	let loads = |places: &str| {
-		format!(
-			"the omp arms would load MCP servers from {places}. Remove them (jocasta uninstall removes Jocasta's) or use a --profile without them; no trial ran."
-		)
-	};
 	let layered = |names: &[&str]| names.iter().map(|name| (*name).to_owned()).collect::<Vec<_>>();
 	assert_eq!(mcp_problem(dir, &layered(&["a6"])), None);
+	// His servers, Jocasta's among them, reach every omp arm alike (0652): no arm without a layer refuses them.
 	write(
 		"mcp.json",
-		json!({ "mcpServers": { "jocasta": { "command": "jocasta" }, "whiteboard": { "command": "node", "enabled": "false" } } }),
+		json!({ "mcpServers": { "jocasta": { "command": "jocasta" }, "whiteboard": { "command": "node" } } }),
 	);
 	write(".mcp.json", json!({ "mcpServers": { "acme": { "command": "acme" } } }));
-	assert_eq!(
-		mcp_problem(dir, &[]),
-		Some(loads(&format!("{}: jocasta; {}: acme", file("mcp.json"), file(".mcp.json"))))
-	);
-	// Turned off, a server reaches no arm, yet a "jocasta" entry still hides the layer's own server from A6.
+	assert_eq!(mcp_problem(dir, &[]), None);
+	// A "jocasta" entry, even turned off, hides the layer's own server from A6.
 	write("mcp.json", json!({ "mcpServers": { "jocasta": { "command": "jocasta", "enabled": false } } }));
 	fs::write(dir.join(".mcp.json"), "not json").unwrap();
-	assert_eq!(mcp_problem(dir, &[]), None);
 	assert_eq!(
 		mcp_problem(dir, &layered(&["a6", "f-keep-context"])),
 		Some(format!(
@@ -103,17 +95,11 @@ fn _0587_the_omp_arms_refuse_an_omp_folder_whose_mcp_files_give_them_a_server_or
 			file("mcp.json")
 		))
 	);
-	// enabledServers turns a server back on; disabledServers keeps one off, and hides the layer's of the same name.
-	write(
-		"mcp.json",
-		json!({ "mcpServers": { "acme": { "command": "acme", "enabled": "0" } }, "enabledServers": ["acme"] }),
-	);
-	assert_eq!(mcp_problem(dir, &[]), Some(loads(&format!("{}: acme", file("mcp.json")))));
+	// disabledServers hides the layer's of the same name too.
 	write(
 		"mcp.json",
 		json!({ "mcpServers": { "acme": { "command": "acme" } }, "disabledServers": ["acme", "jocasta"] }),
 	);
-	assert_eq!(mcp_problem(dir, &[]), None);
 	let problem = mcp_problem(dir, &layered(&["a6"])).unwrap();
 	assert!(problem.contains(&format!("{} names \"jocasta\" in disabledServers", file("mcp.json"))), "{problem}");
 }

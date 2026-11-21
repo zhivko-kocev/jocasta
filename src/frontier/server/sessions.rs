@@ -5,14 +5,15 @@
 //! for a subagent's own): they are not sessions, but their cost is the session's (CR-04; `omp stats` counts them the
 //! same way, `@oh-my-pi/omp-stats` `parser.ts` `classifyAgentType`, `listSessionFiles`).
 //!
-//! omp's entry kinds (0464; checked against omp 18.20.2, 0623): `model_usage` entries (side calls: memory extraction,
-//! cache warming, advisor, judges, session titles; `session-entries.ts:119` `ModelUsageEntry`) count toward spend like
+//! omp's entry kinds (0464; checked against omp 19.1.0, 0623 and the 19.1.0 re-check): `model_usage` entries (side
+//! calls: memory extraction, cache warming, advisor, judges, session titles; `session-entries.ts:180` `ModelUsageEntry`)
+//! count toward spend like
 //! assistant turns (0452); an assistant turn marked `retryRecovery` (an attempt a retry superseded, pi-ai
-//! `types.ts:1361`) still costs, but never gives the last line, the question or the test result; `memory_recall`
+//! `types.ts:1389`) still costs, but never gives the last line, the question or the test result; `memory_recall`
 //! entries are ignored; a session moved to a sibling file (its header's `parentSession` names the old one,
 //! `session-manager.ts` `#moveOffSessionFile`) is followed there ([`SessionIndex::moved`]), and the entries it copied
 //! from the old file aren't counted twice. Entries a file holds without ids are given ids when omp next loads it, and
-//! the file is rewritten (18.20.2 `session-migrations.ts:64-77`); the spend ledger keys a call by its ISO time, not its
+//! the file is rewritten (`session-migrations.ts:64-77`); the spend ledger keys a call by its ISO time, not its
 //! id.
 //!
 //! A session is a tree (0509): each entry names its `parentId`, and a rewind (`session-manager.ts` `branch`,
@@ -151,11 +152,12 @@ pub struct SessionStats {
 	/// Every message's time, epoch ms, in file order.
 	pub message_times: Vec<i64>,
 	/// The title of a plan waiting for his approval in omp's Plan Review, or `None`. omp records the proposal as a
-	/// successful `write` to `xd://propose` (a `toolResult` whose `details.xdev` is `{tool: "propose", mode: "execute",
-	/// inner: {title, planFilePath}}`; omp 18.20.2 `event-controller.ts:2371-2411`), then aborts the turn silently (an
-	/// empty assistant message). Approving leaves plan mode (`mode_change` to `none`, `interactive-mode.ts:6276`, and
-	/// a second one with `data.approvedPlanFilePath`, `:6932`); refining sends a user message; either, or any later
-	/// assistant output, ends the wait.
+	/// successful `propose` command (omp 19.1.0: a bash run whose `toolResult` has `details.toolCommands` with an
+	/// entry `{tool: "propose", mode: "execute", exitCode: 0, inner: {title, planFilePath, planExists}}`, or a direct
+	/// `propose` tool result whose `details` are that `inner`; `tools/resolve.ts:107-120`, `event-controller.ts:2430-2438`),
+	/// then aborts the turn silently (an empty assistant message). Approving leaves plan mode (`mode_change` to `none`,
+	/// `interactive-mode.ts:6459`, and a second one with `data.approvedPlanFilePath`); refining sends a user message;
+	/// either, or any later assistant output, ends the wait.
 	pub plan_awaiting: Option<String>,
 	/// Whether the session is in plan mode: its last `mode_change` was to `plan` (omp writes one on entering it).
 	pub plan_mode: bool,
@@ -225,38 +227,53 @@ fn trimmed(value: Option<&Value>) -> Option<String> {
 	value.and_then(Value::as_str).map(str::trim).filter(|text| !text.is_empty()).map(str::to_owned)
 }
 
-/// The plan title of an `xd://propose` dispatch result, or `None` for any other tool result.
+/// What a successful `propose` left in a tool result (omp 19.1.0 `proposeDispatchDetails`, `tools/resolve.ts:107-120`).
+struct Proposal<'a> {
+	/// The plan's details as the command returned them (`title`, `planFilePath`, `planExists`).
+	inner: Option<&'a Map<String, Value>>,
+	/// The command's arguments (`title`), the title when the details have none.
+	args: Option<&'a Map<String, Value>>,
+}
+
+/// The proposal a tool result holds, or `None` for any other result. A direct `propose` call carries its details on
+/// the result (an error submitted nothing); a bash run carries one record per tool command it ran in
+/// `details.toolCommands`, the last successful `propose` execution counting, each judged by its own exit code.
+fn proposal(message: &Map<String, Value>) -> Option<Proposal<'_>> {
+	let details = message.get("details").and_then(as_object);
+	match message.get("toolName").and_then(Value::as_str) {
+		Some("propose") if message.get("isError") != Some(&Value::Bool(true)) => {
+			Some(Proposal { inner: details, args: None })
+		}
+		Some("bash") => {
+			let record =
+				details?.get("toolCommands")?.as_array()?.iter().rev().filter_map(as_object).find(|record| {
+					record.get("tool").and_then(Value::as_str) == Some("propose")
+						&& record.get("mode").and_then(Value::as_str) == Some("execute")
+						&& record.get("exitCode").and_then(Value::as_f64) == Some(0.0)
+				})?;
+			Some(Proposal {
+				inner: record.get("inner").and_then(as_object),
+				args: record.get("args").and_then(as_object),
+			})
+		}
+		_ => None,
+	}
+}
+
+/// The plan title of a `propose` result, or `None` for any other tool result.
 fn proposed_plan(message: &Map<String, Value>) -> Option<String> {
-	if message.get("toolName").and_then(Value::as_str) != Some("write")
-		|| message.get("isError") == Some(&Value::Bool(true))
-	{
-		return None;
-	}
-	let xdev = message.get("details").and_then(as_object)?.get("xdev").and_then(as_object)?;
-	if xdev.get("tool").and_then(Value::as_str) != Some("propose")
-		|| xdev.get("mode").and_then(Value::as_str) != Some("execute")
-	{
-		return None;
-	}
-	let title = xdev
-		.get("inner")
-		.and_then(as_object)
+	let proposal = proposal(message)?;
+	let title = proposal
+		.inner
 		.and_then(|inner| inner.get("title"))
 		.filter(|title| !title.is_null())
-		.or_else(|| xdev.get("args").and_then(as_object).and_then(|args| args.get("title")));
+		.or_else(|| proposal.args.and_then(|args| args.get("title")));
 	Some(trimmed(title).unwrap_or_else(|| "plan".to_owned()))
 }
 
 /// A plan proposal's file (`inner.planFilePath`), or `None`.
 fn proposed_plan_file(message: &Map<String, Value>) -> Option<String> {
-	let inner = message
-		.get("details")
-		.and_then(as_object)?
-		.get("xdev")
-		.and_then(as_object)?
-		.get("inner")
-		.and_then(as_object)?;
-	trimmed(inner.get("planFilePath"))
+	trimmed(proposal(message)?.inner?.get("planFilePath"))
 }
 
 /// A time from a message's own `timestamp`, else the entry's ISO time; `None` when neither.
@@ -503,7 +520,7 @@ struct Effect {
 	mode: Option<String>,
 	/// A `/handoff` compaction's time.
 	handoff_at: Option<i64>,
-	/// An `xd://propose` result: the plan's title and file.
+	/// A `propose` result: the plan's title and file.
 	plan: Option<(String, Option<String>)>,
 	result: Option<ResultEffect>,
 	/// A user message; the flag is `synthetic` when omp wrote it.

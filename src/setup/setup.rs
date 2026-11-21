@@ -44,7 +44,7 @@ mod snapshot;
 #[path = "setup_steps.rs"]
 mod steps;
 
-use migrations::{HERDR_MISSING, MIGRATIONS, Migration, marker_name};
+use migrations::{MIGRATIONS, Migration, marker_name};
 use steps::{SetupChange, Step};
 
 /// Where setup reads and writes; every path injectable so tests never touch his homes.
@@ -97,8 +97,8 @@ pub trait CalendarStore: Send + Sync {
 }
 
 pub struct SetupDeps {
-	/// The herdr binary, or `None` when herdr isn't installed.
-	pub herdr: Option<PathBuf>,
+	/// The program that runs herdr's words: this `jocasta`.
+	pub herdr: PathBuf,
 	/// The mise binary, or `None` when mise isn't installed: then setup writes no mise file (0476).
 	pub mise: Option<PathBuf>,
 	/// The calendar secret's store; `None` where there is none (off Windows).
@@ -111,10 +111,12 @@ pub struct SetupDeps {
 	/// `git --version`'s output, or `None` when git can't run (0613); no function here skips the check.
 	#[allow(clippy::type_complexity)]
 	pub git_version: Option<Arc<dyn Fn() -> BoxFuture<'static, Option<String>> + Send + Sync>>,
-	/// `herdr server reload-config` for Jocasta's session, after a herdr.toml refresh (0467).
-	#[allow(clippy::type_complexity)]
-	pub reload_herdr: Option<Arc<dyn Fn() -> BoxFuture<'static, Result<RunOutput>> + Send + Sync>>,
+	/// `herdr server reload-config` for Jocasta's session, after a herdr.toml refresh (0467); `None` reloads nothing.
+	pub reload_herdr: Option<ReloadHerdr>,
 }
+
+/// How setup asks herdr's server to read its config again.
+pub type ReloadHerdr = Arc<dyn Fn() -> BoxFuture<'static, Result<RunOutput>> + Send + Sync>;
 
 impl Clone for SetupDeps {
 	fn clone(&self) -> Self {
@@ -131,7 +133,7 @@ impl Clone for SetupDeps {
 
 impl SetupDeps {
 	/// Deps with herdr and nothing else.
-	pub fn new(herdr: Option<PathBuf>) -> Self {
+	pub fn new(herdr: PathBuf) -> Self {
 		Self { herdr, mise: None, calendar: None, check_herdr_config: None, git_version: None, reload_herdr: None }
 	}
 }
@@ -480,11 +482,8 @@ async fn apply_in_order(paths: &SetupPaths, changes: Vec<PlannedChange>, io: &dy
 }
 
 /// herdr's config reloaded after a herdr.toml change (0467, 0584), or what to do when it can't be.
-async fn reload_herdr_saying(deps: &SetupDeps, io: &dyn SetupIo) -> Result<()> {
-	let reload = match &deps.reload_herdr {
-		Some(reload) => reload().await?,
-		None => RunOutput { code: 1, output: "herdr isn't installed".to_owned() },
-	};
+async fn reload_herdr_saying(reload: &ReloadHerdr, io: &dyn SetupIo) -> Result<()> {
+	let reload = reload().await?;
 	if reload.code == 0 {
 		io.print("herdr reloaded its config.");
 		return Ok(());
@@ -530,14 +529,11 @@ pub async fn run_setup(paths: &SetupPaths, deps: &SetupDeps, io: &dyn SetupIo) -
 	{
 		io.print(&note);
 	}
-	let herdr_missing = notes.iter().any(|note| note == HERDR_MISSING);
 	if changes.is_empty() {
 		for planned in &settled {
 			mark(paths, planned)?;
 		}
-		if !herdr_missing {
-			io.print("Nothing to set up: everything Jocasta adds is in place.");
-		}
+		io.print("Nothing to set up: everything Jocasta adds is in place.");
 	} else {
 		io.print("jocasta setup will make these changes:");
 		for planned in &changes {
@@ -557,10 +553,10 @@ pub async fn run_setup(paths: &SetupPaths, deps: &SetupDeps, io: &dyn SetupIo) -
 		for planned in &settled {
 			mark(paths, planned)?;
 		}
-		if deps.reload_herdr.is_some() && wrote_config {
-			reload_herdr_saying(deps, io).await?;
+		if wrote_config && let Some(reload) = &deps.reload_herdr {
+			reload_herdr_saying(reload, io).await?;
 		}
-		io.print(if herdr_missing { HERDR_MISSING } else { "Done: run `jocasta` to open Jocasta." });
+		io.print("Done: run `jocasta` to open Jocasta.");
 	}
 	ask_calendar(paths, deps.calendar.as_deref(), io).await?;
 	Ok(0)
@@ -654,8 +650,8 @@ pub async fn refresh_setup(
 	if !apply_in_order(paths, changes, io).await? {
 		return Ok(1);
 	}
-	if wrote_config {
-		reload_herdr_saying(deps, io).await?;
+	if wrote_config && let Some(reload) = &deps.reload_herdr {
+		reload_herdr_saying(reload, io).await?;
 	}
 	Ok(0)
 }
@@ -671,7 +667,11 @@ pub struct SetupCheck {
 
 /// Setup's pending changes on this machine, read only (0466); a failure is returned, never thrown (SET-14).
 pub async fn setup_check() -> SetupCheck {
-	let mut deps = SetupDeps::new(herdr_program());
+	let herdr = match herdr_program() {
+		Ok(herdr) => herdr,
+		Err(error) => return SetupCheck { waiting: None, failed: Some(error.to_string()) },
+	};
+	let mut deps = SetupDeps::new(herdr);
 	deps.mise = on_path("mise", None);
 	deps.calendar = default_calendar_store(None);
 	let paths = default_setup_paths(&shipped_config_dir(None), self_command(None));

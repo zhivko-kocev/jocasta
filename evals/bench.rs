@@ -35,6 +35,7 @@ use super::tasks::{
 	pending_trials, plan_trials, prepare_task, read_resume_state, scan_leaks, task_case, trial_key,
 };
 use super::variants::{Harness, Variant};
+use super::watch::wait_while_paused;
 use crate::lib::args::BenchUsageError;
 use crate::lib::ledger::{bench_pricing, ledger_of_dir};
 use crate::lib::output::{append_row, conditions, iso_now, json_text};
@@ -746,6 +747,7 @@ impl Context<'_> {
 				continue;
 			};
 			let outcome: Result<()> = async {
+				wait_while_paused(&self.options.out_dir).await;
 				if let Some(pace) = &self.options.pace {
 					pace().await;
 				}

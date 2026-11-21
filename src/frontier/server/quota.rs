@@ -1,4 +1,4 @@
-//! The subscription windows (0456): `omp usage --json` (omp 18.20.2, `cli/usage-cli.ts`) reports each account's limits
+//! The subscription windows (0456): `omp usage --json` (omp 19.1.0, `cli/usage-cli.ts`) reports each account's limits
 //! with `window.id` ("5h", "7d"), `amount` and `window.resetsAt`. The HUD and the rail show the most used of each window
 //! across his accounts; one toast goes out when a window passes `QUOTA_WARN`.
 
@@ -158,7 +158,7 @@ mod tests {
 		Local.with_ymd_and_hms(2026, 10, 23, 16, 30, 0).unwrap().timestamp_millis()
 	}
 
-	/// `omp usage --json` as omp 18.20.2 prints it (`cli/usage-cli.ts`), trimmed to what matters here.
+	/// `omp usage --json` as omp 19.1.0 prints it (`cli/usage-cli.ts`), trimmed to what matters here.
 	fn usage() -> Value {
 		json!({
 			"generatedAt": 1,

@@ -41,10 +41,6 @@ pub(super) fn marker_name(migration: &Migration) -> String {
 	format!("{:04}-{}", migration.id, migration.slug)
 }
 
-/// Said before the diff and in place of "Done" while herdr is missing (0558, 0584).
-pub(super) const HERDR_MISSING: &str =
-	"herdr isn't installed: install it from https://herdr.dev, then run `jocasta setup` again.";
-
 /// omp's request timeout for the thread's MCP server (0577): a thread's `check` may run for 30 minutes, plus a minute;
 /// omp's own default of 30 s would cut it.
 pub(super) const MCP_TIMEOUT_MS: u64 = 1_860_000;
@@ -177,10 +173,10 @@ fn plan_boss_mcp(c: &mut PlanContext) -> Result<Option<Step>> {
 
 /// Runs `herdr config check` on `path` (`HERDR_CONFIG_PATH`) and prints what it reports, each unknown-key line (0608).
 /// A check that can't run, or finds issues, never stops setup: the file is already written.
-async fn print_herdr_check(deps: &SetupDeps, herdr: &Path, path: &Path, io: &dyn SetupIo) {
+async fn print_herdr_check(deps: &SetupDeps, path: &Path, io: &dyn SetupIo) {
 	let result: Result<HerdrCheck> = match &deps.check_herdr_config {
-		Some(check) => check(herdr.to_path_buf(), path.to_path_buf()).await,
-		None => default_herdr_check(herdr, path).await,
+		Some(check) => check(deps.herdr.clone(), path.to_path_buf()).await,
+		None => default_herdr_check(&deps.herdr, path).await,
 	};
 	let result = match result {
 		Ok(result) => result,
@@ -210,11 +206,6 @@ fn plan_herdr_config(c: &mut PlanContext) -> Result<Option<Step>> {
 	let wanted = asset(c.paths, &["herdr.toml"])?;
 	let mut step = owned_step(title, &path, &wanted, vec![Undo::File { path: shown(&path) }])?;
 	let Some(change) = step.change.take() else { return Ok(Some(step)) };
-	let Some(herdr) = c.deps.herdr.clone() else {
-		c.notes.push(HERDR_MISSING.to_owned());
-		step.change = Some(change);
-		return Ok(Some(step));
-	};
 	let deps = c.deps.clone();
 	let SetupChange { title, path: shown_path, diff, kept, apply } = change;
 	step.change = Some(SetupChange {
@@ -225,7 +216,7 @@ fn plan_herdr_config(c: &mut PlanContext) -> Result<Option<Step>> {
 		apply: Box::new(move |io: &dyn SetupIo| {
 			Box::pin(async move {
 				apply(io).await?;
-				print_herdr_check(&deps, &herdr, &path, io).await;
+				print_herdr_check(&deps, &path, io).await;
 				Ok(())
 			})
 		}),

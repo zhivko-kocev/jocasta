@@ -532,8 +532,8 @@ async fn e2e_0471_a_commit_by_hand_on_an_idle_thread_s_branch_and_a_plan_he_sent
 			json!({
 				"type": "message",
 				"message": {
-					"role": "toolResult", "toolName": "write", "timestamp": now,
-					"details": { "xdev": { "tool": "propose", "mode": "execute", "inner": { "title": "Plan", "planFilePath": "p.md" } } },
+					"role": "toolResult", "toolName": "bash", "timestamp": now,
+					"details": { "toolCommands": [{ "tool": "propose", "mode": "execute", "exitCode": 0, "inner": { "title": "Plan", "planFilePath": "p.md" } }] },
 				},
 			}),
 			json!({ "type": "message", "message": { "role": "user", "timestamp": now + 1, "content": "Smaller." } }),

@@ -7,7 +7,7 @@
 //! ```
 //!
 //! Corpus lines: `{"id", "command", "expected": "deny"|"prompt"|"allow", "group", "variant", "base", ...}`. With
-//! `--verdicts`, it scores omp 18.20.2's own verdicts (0535, 0623), written by `omp-verdicts.ts` (the matcher of
+//! `--verdicts`, it scores omp 19.1.0's own verdicts (0535, 0623), written by `omp-verdicts.ts` (the matcher of
 //! record). Without it, it scores its own reimplementation below, which reads `guard.yml`'s rules only and misses omp's
 //! quote-aware segmenting, the git guard, the critical patterns and the allow-rule compound rule (0501); it stays for
 //! the unit tests and as the comparison column. Prints per group and per way of writing (0501): deny recall, must-deny

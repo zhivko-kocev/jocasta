@@ -15,7 +15,8 @@ use serde_json::{Map, Value};
 use crate::evals::harness::{OMP_KEYS, OmpKey, adapter};
 use crate::evals::plan_review::PlanReviewChoice;
 
-type Settings = Map<String, Value>;
+/// omp settings as a config overlay holds them: dotted keys nested as objects.
+pub type Settings = Map<String, Value>;
 
 /// Deep-merges `delta` over `base` as omp merges config overlays: objects merge, everything else replaces.
 pub fn deep_merge(base: &Settings, delta: &Settings) -> Settings {

@@ -1,9 +1,9 @@
 # A heavy thread's omp (0590): the boss started it with `heavy` for ambitious or open-ended work, so it runs on his
 # `slow` role, his strongest model, from its plan through its execution and across restarts. Jocasta loads this file
-# after the project's overlay, only in a heavy thread's pane. `--model @slow` alone isn't enough: omp 18.20.2's plan
+# after the project's overlay, only in a heavy thread's pane. `--model @slow` alone isn't enough: omp 19.1.0's plan
 # review starts its "continue with" slider on the `default` tier whatever model planned
-# (`modes/interactive-mode.ts:7829-7837`), so the approved plan would run on `default`. Here `default` names his
-# `slow` role (a role may name another, `config/model-resolver.ts:1215-1247`), so the slider starts there. Jocasta
+# (`modes/interactive-mode.ts:8023-8032`), so the approved plan would run on `default`. Here `default` names his
+# `slow` role (a role may name another, `config/model-resolver.ts:1232-1264`), so the slider starts there. Jocasta
 # names no model. `@` can't start a plain YAML scalar, hence the quotes.
 modelRoles:
   default: "@slow"

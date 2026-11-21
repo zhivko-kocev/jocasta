@@ -97,6 +97,18 @@ fn u64_at(bytes: &[u8], at: usize) -> u64 {
 
 /// A process's current directory from its PEB (x64 layouts), or `None` when it can't be read.
 fn cwd_of(pid: u32) -> Option<String> {
+	// RTL_USER_PROCESS_PARAMETERS.CurrentDirectory.DosPath (UNICODE_STRING) @0x38.
+	parameter_string(pid, 0x38)
+}
+
+/// A process's command line from its PEB (x64 layouts), or `None` when it can't be read.
+fn command_line_of(pid: u32) -> Option<String> {
+	// RTL_USER_PROCESS_PARAMETERS.CommandLine (UNICODE_STRING) @0x70.
+	parameter_string(pid, 0x70)
+}
+
+/// The UNICODE_STRING at `offset` of the process's RTL_USER_PROCESS_PARAMETERS, read from its PEB (x64 layouts).
+fn parameter_string(pid: u32, offset: u64) -> Option<String> {
 	let handle = Handle::open(pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ)?;
 	// PROCESS_BASIC_INFORMATION (48 bytes): PebBaseAddress @8.
 	let mut basic = [0u64; 6];
@@ -105,11 +117,11 @@ fn cwd_of(pid: u32) -> Option<String> {
 	if status != 0 || basic[1] == 0 {
 		return None;
 	}
-	// PEB.ProcessParameters @0x20; RTL_USER_PROCESS_PARAMETERS.CurrentDirectory.DosPath (UNICODE_STRING) @0x38.
+	// PEB.ProcessParameters @0x20; a UNICODE_STRING is Length (u16) @0, Buffer @8.
 	let params = u64_at(&read(&handle, basic[1] + 0x20, 8)?, 0);
-	let dos = read(&handle, params + 0x38, 16)?;
-	let length = usize::from(u16::from_le_bytes([dos[0], dos[1]]));
-	let buffer = u64_at(&dos, 8);
+	let string = read(&handle, params + offset, 16)?;
+	let length = usize::from(u16::from_le_bytes([string[0], string[1]]));
+	let buffer = u64_at(&string, 8);
 	if length == 0 || buffer == 0 {
 		return None;
 	}
@@ -118,8 +130,64 @@ fn cwd_of(pid: u32) -> Option<String> {
 	Some(String::from_utf16_lossy(&units))
 }
 
+/// A Windows command line as the arguments the C runtime (and Bun) read from it: whitespace separates them outside
+/// double quotes, `\"` is a quote, `2n` backslashes before a quote are `n` and open or close one, `2n+1` are `n` and a
+/// quote.
+pub fn split_command_line(line: &str) -> Vec<String> {
+	let mut args = Vec::new();
+	let mut current = String::new();
+	let mut started = false;
+	let mut quoted = false;
+	let mut chars = line.chars().peekable();
+	while let Some(c) = chars.next() {
+		match c {
+			'\\' => {
+				let mut slashes = 1;
+				while chars.next_if_eq(&'\\').is_some() {
+					slashes += 1;
+				}
+				started = true;
+				if chars.next_if_eq(&'"').is_some() {
+					current.extend(std::iter::repeat_n('\\', slashes / 2));
+					if slashes % 2 == 1 {
+						current.push('"');
+					} else {
+						quoted = !quoted;
+					}
+				} else {
+					current.extend(std::iter::repeat_n('\\', slashes));
+				}
+			}
+			'"' => {
+				started = true;
+				quoted = !quoted;
+			}
+			c if c.is_whitespace() && !quoted => {
+				if started {
+					args.push(std::mem::take(&mut current));
+					started = false;
+				}
+			}
+			c => {
+				started = true;
+				current.push(c);
+			}
+		}
+	}
+	if started {
+		args.push(current);
+	}
+	args
+}
+
 pub fn parents(_groups: Option<&mut HashMap<u32, u32>>) -> BTreeMap<u32, u32> {
 	snapshot().into_iter().map(|(pid, ppid, _)| (pid, ppid)).collect()
+}
+
+/// The arguments of each of `pids` from its command line (the first is the program); one this user can't read is left
+/// out.
+pub fn args(pids: &[u32]) -> HashMap<u32, Vec<String>> {
+	pids.iter().filter_map(|pid| Some((*pid, split_command_line(&command_line_of(*pid)?)))).collect()
 }
 
 pub fn cwds() -> Vec<FolderProcess> {

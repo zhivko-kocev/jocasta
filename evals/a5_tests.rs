@@ -35,7 +35,7 @@ fn plan_ready(at: f64) -> String {
 	json!({
 		"type": "message",
 		"timestamp": iso(at),
-		"message": { "role": "toolResult", "toolName": "write", "details": { "xdev": { "tool": "propose", "mode": "execute" } } },
+		"message": { "role": "toolResult", "toolName": "bash", "details": { "toolCommands": [{ "tool": "propose", "mode": "execute", "exitCode": 0 }] } },
 	})
 	.to_string()
 }
@@ -118,7 +118,7 @@ fn interventions_attention_minutes_and_batch_time_from_the_feed_and_the_sessions
 #[test]
 fn an_approval_that_keeps_the_context_counts_once_though_omp_18_20_2_writes_two_mode_changes_to_none_0589() {
 	// "Approve and keep context": omp leaves plan mode (`none`), then records the approved plan with a second `none`
-	// (`interactive-mode.ts:6932`), both in the planning session.
+	// (`interactive-mode.ts:7137`), both in the planning session.
 	let plan = json!({ "planFilePath": "local://PLAN.md" });
 	let approved = json!({ "approvedPlanFilePath": "local://PLAN.md" });
 	let session = [

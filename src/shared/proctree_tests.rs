@@ -19,13 +19,21 @@ pub(crate) async fn settles(check: impl Fn() -> bool) -> bool {
 	wait_for(|| std::future::ready(Ok(check())), 10_000, 50).await.unwrap_or(false)
 }
 
-/// Starts this test executable on `test` with `var` set to `value`: a stand-in process. `detached` makes it outlive
-/// its parent on Windows (and lead its own group on POSIX); a stand-in never starts hidden, whose console host
-/// (`conhost.exe`) would join the trees the tests compare.
-fn spawn_self(test: &str, var: &str, value: &str, cwd: Option<&Path>, detached: bool) -> std::io::Result<Child> {
+/// Starts this test executable on `test` with `var` set to `value`: a stand-in process, with `extra` after the
+/// test's own arguments (the test run reads it as a filter and ignores it). `detached` makes it outlive its parent on
+/// Windows (and lead its own group on POSIX); a stand-in never starts hidden, whose console host (`conhost.exe`)
+/// would join the trees the tests compare.
+fn spawn_self(
+	test: &str,
+	(var, value): (&str, &str),
+	cwd: Option<&Path>,
+	detached: bool,
+	extra: &[&str],
+) -> std::io::Result<Child> {
 	let mut command = Command::new(std::env::current_exe()?);
 	command
 		.args(["--exact", test, "--nocapture", "--test-threads=1"])
+		.args(extra)
 		.env(var, value)
 		.stdin(Stdio::null())
 		.stdout(Stdio::null())
@@ -76,12 +84,14 @@ fn sleeper_main() {
 	std::fs::write(Path::new(pids).join(std::process::id().to_string()), depth.to_string()).unwrap();
 	if depth < 2 {
 		let detached = depth == 1 || (outlive && cfg!(windows));
+		// Only the root's child is omp's daemon, when the spec says so (a fourth part).
+		let extra: &[&str] = if depth == 0 && parts.get(3) == Some(&"daemon") { &[DAEMON_ARG] } else { &[] };
 		let _ = spawn_self(
 			"shared::proctree::tests::sleeper_main",
-			SLEEPER_VAR,
-			&format!("{pids}|{}|{}", depth + 1, parts[2]),
+			(SLEEPER_VAR, &format!("{pids}|{}|{}", depth + 1, parts[2])),
 			None,
 			detached,
+			extra,
 		);
 	}
 	sleep_on();
@@ -122,11 +132,23 @@ impl Drop for SleeperTree {
 /// A sleeper tree working in `folder` once all three run. On POSIX its root leads its own process group, as a herdr
 /// pane's process does.
 pub(crate) async fn sleeper_tree(folder: &Path, outlive: bool) -> SleeperTree {
+	started_tree(folder, outlive, false).await
+}
+
+/// [`sleeper_tree`], with `daemon` making the root's child (and so the grandchild under it) omp's daemon by its
+/// arguments.
+async fn started_tree(folder: &Path, outlive: bool, daemon: bool) -> SleeperTree {
 	let pids = folder.join("pids");
 	std::fs::create_dir_all(&pids).unwrap();
-	let spec = format!("{}|0|{}", pids.display(), if outlive { "outlive" } else { "attached" });
-	let root = spawn_self("shared::proctree::tests::sleeper_main", SLEEPER_VAR, &spec, Some(folder), !cfg!(windows))
-		.expect("starting the sleeper tree");
+	let spec = format!(
+		"{}|0|{}{}",
+		pids.display(),
+		if outlive { "outlive" } else { "attached" },
+		if daemon { "|daemon" } else { "" }
+	);
+	let root =
+		spawn_self("shared::proctree::tests::sleeper_main", (SLEEPER_VAR, &spec), Some(folder), !cfg!(windows), &[])
+			.expect("starting the sleeper tree");
 	let mut tree = SleeperTree { root: root.id(), all: vec![root.id()], rootless: Some(root) };
 	assert!(settles(|| pid_files(&pids, "").len() == 3).await, "the sleeper tree didn't start");
 	tree.all = pid_files(&pids, "");
@@ -157,7 +179,7 @@ fn shim_main() {
 	std::fs::write(pids.join(format!("{role}-{}", std::process::id())), "").unwrap();
 	let start = |role: &str| {
 		let spec = format!("{role}|{}|{}|{}", pids.display(), go.display(), exit.display());
-		let _ = spawn_self("shared::proctree::tests::shim_main", SHIM_VAR, &spec, None, cfg!(windows));
+		let _ = spawn_self("shared::proctree::tests::shim_main", (SHIM_VAR, &spec), None, cfg!(windows), &[]);
 	};
 	let wait = |what: &dyn Fn() -> bool| {
 		while !what() {
@@ -225,7 +247,7 @@ async fn shim_tree(folder: &Path) -> ShimTree {
 	std::fs::create_dir_all(&pids).unwrap();
 	std::fs::write(&go_file, "").unwrap();
 	let spec = format!("shim|{}|{}|{}", pids.display(), go_file.display(), exit_file.display());
-	let child = spawn_self("shared::proctree::tests::shim_main", SHIM_VAR, &spec, Some(folder), !cfg!(windows))
+	let child = spawn_self("shared::proctree::tests::shim_main", (SHIM_VAR, &spec), Some(folder), !cfg!(windows), &[])
 		.expect("starting the shim tree");
 	let tree = ShimTree { shim: child.id(), shim_child: Some(child), pids: pids.clone(), exit_file };
 	let up = settles(|| pid_files(&pids, "shim-").len() == 1 && pid_files(&pids, "omp-").len() == 1).await;
@@ -256,6 +278,92 @@ fn snapshot(rows: &[(u32, u32, Option<f64>)]) -> BTreeMap<u32, ProcessEntry> {
 
 fn id(pid: u32, start: f64) -> ProcessId {
 	ProcessId { pid, start }
+}
+
+fn strings(items: &[&str]) -> Vec<String> {
+	items.iter().map(|item| (*item).to_owned()).collect()
+}
+
+#[test]
+fn omps_daemon_is_the_process_with_the_exact_argument_after_the_program_never_a_path_or_a_prompt_holding_it_0490() {
+	assert!(is_daemon_argv(&strings(&["omp.exe", "__omp_worker_daemon"])));
+	assert!(is_daemon_argv(&strings(&["bun", "src/cli.ts", "__omp_worker_daemon"])));
+	assert!(!is_daemon_argv(&strings(&["omp.exe"])));
+	assert!(!is_daemon_argv(&strings(&["__omp_worker_daemon"])));
+	assert!(!is_daemon_argv(&strings(&["omp.exe", "-p", "what is __omp_worker_daemon"])));
+	assert!(!is_daemon_argv(&strings(&["omp.exe", "D:/x/__omp_worker_daemon/y", "__omp_worker_daemon2"])));
+	assert!(!is_daemon_argv(&[]));
+}
+
+#[cfg(windows)]
+#[test]
+fn a_windows_command_line_splits_into_the_arguments_the_c_runtime_reads() {
+	use super::os::split_command_line;
+	assert_eq!(
+		split_command_line(r"C:\omp\omp.exe __omp_worker_daemon"),
+		strings(&[r"C:\omp\omp.exe", "__omp_worker_daemon"])
+	);
+	assert_eq!(
+		split_command_line(r#""C:\Program Files\omp\omp.exe"  -p "run __omp_worker_daemon" "" x\\y "a\"b" "c\\" d"#),
+		strings(&[r"C:\Program Files\omp\omp.exe", "-p", "run __omp_worker_daemon", "", r"x\\y", r#"a"b"#, r"c\", "d"])
+	);
+	assert_eq!(split_command_line("  "), Vec::<String>::new());
+}
+
+/// One tree under pid 10: 11 is omp's daemon with 12 and 13 under it, 14 under 13; 15 a sibling of the daemon.
+fn daemon_rows() -> BTreeMap<u32, u32> {
+	parents(&[(10, 1), (11, 10), (12, 11), (13, 11), (14, 13), (15, 10)])
+}
+
+#[test]
+fn spare_daemons_takes_the_daemon_and_everything_under_it_out_of_the_candidates_and_nothing_else() {
+	let map = daemon_rows();
+	let mut near: BTreeSet<u32> = BTreeSet::from([10, 11, 12, 13, 14, 15]);
+	let daemons = spare_daemons(&mut near, &map, &none(), |pids| {
+		assert_eq!(pids, [10, 11, 12, 13, 14, 15]);
+		HashSet::from([11])
+	});
+	assert_eq!(daemons, HashSet::from([11]));
+	assert_eq!(near, BTreeSet::from([10, 15]));
+	// Without a daemon the candidates stay whole.
+	let mut near: BTreeSet<u32> = BTreeSet::from([10, 11, 15]);
+	assert!(spare_daemons(&mut near, &map, &none(), |_| HashSet::new()).is_empty());
+	assert_eq!(near, BTreeSet::from([10, 11, 15]));
+}
+
+#[test]
+fn a_walk_over_the_candidates_left_after_sparing_the_daemon_leaves_its_subtree_out_of_the_pane_leftovers_0490() {
+	let map = daemon_rows();
+	let mut near: BTreeSet<u32> = BTreeSet::from([10, 11, 12, 13, 14, 15]);
+	spare_daemons(&mut near, &map, &none(), |_| HashSet::from([11]));
+	let processes = snapshot(&near.iter().map(|pid| (*pid, map[pid], Some(f64::from(*pid)))).collect::<Vec<_>>());
+	assert_eq!(sorted(leftovers(id(10, 10.0), &processes, &none())), vec![10, 15]);
+	// A daemon that is itself a root: nothing of it is left to end.
+	let mut near: BTreeSet<u32> = BTreeSet::from([11, 12, 13, 14]);
+	spare_daemons(&mut near, &map, &none(), |_| HashSet::from([11]));
+	assert!(near.is_empty());
+}
+
+#[tokio::test]
+async fn end_processes_ends_a_pane_and_spares_omps_daemon_under_it_with_its_workers_read_from_the_command_line_0490() {
+	let dir = temp_dir("proctree-daemon");
+	let folder = dir.path().join("wt");
+	std::fs::create_dir_all(&folder).unwrap();
+	let tree = started_tree(&folder, true, true).await;
+	let root = process_id_of(tree.root).expect("the root runs");
+	let under: Vec<u32> = tree.all.iter().copied().filter(|pid| *pid != tree.root).collect();
+	let ended = end_processes(&[root], &[]).await;
+	assert!(ended.contains(&tree.root));
+	assert!(under.iter().all(|pid| !ended.contains(pid)), "ended {ended:?} of the daemon's {under:?}");
+	assert!(under.iter().all(|pid| pid_alive(*pid)));
+	// The daemon as a root of its own: nothing is ended either.
+	let daemon = under
+		.iter()
+		.copied()
+		.find(|pid| std::fs::read_to_string(folder.join("pids").join(pid.to_string())).is_ok_and(|depth| depth == "1"))
+		.expect("the daemon's pid file");
+	assert!(kill_tree(daemon).await.is_empty());
+	assert!(pid_alive(daemon));
 }
 
 #[test]

@@ -257,9 +257,9 @@ fn the_proposed_plan_s_file_stays_known_after_approval_a_plan_sent_back_is_count
 		"type": "message",
 		"message": {
 			"role": "toolResult",
-			"toolName": "write",
+			"toolName": "bash",
 			"timestamp": 5,
-			"details": {"xdev": {"tool": "propose", "mode": "execute", "inner": {"title": "Plan", "planFilePath": "/plans/p.md"}}},
+			"details": {"toolCommands": [{"tool": "propose", "mode": "execute", "exitCode": 0, "inner": {"title": "Plan", "planFilePath": "/plans/p.md"}}]},
 		},
 	})
 	.to_string();
@@ -273,6 +273,30 @@ fn the_proposed_plan_s_file_stays_known_after_approval_a_plan_sent_back_is_count
 	assert_eq!(ok.plan_sent_back, 0);
 	assert_eq!(ok.plan_awaiting, None);
 	assert_eq!(ok.plan_file.as_deref(), Some("/plans/p.md"));
+}
+
+#[test]
+fn a_plan_is_proposed_by_a_direct_propose_result_or_a_propose_record_that_exited_0_and_by_nothing_else() {
+	let result = |tool_name: &str, is_error: bool, details: Value| {
+		json!({"type": "message", "message": {"role": "toolResult", "toolName": tool_name, "isError": is_error, "timestamp": 5, "details": details}})
+			.to_string()
+	};
+	let inner = json!({"title": "Plan", "planFilePath": "/plans/p.md", "planExists": true});
+	let record = |tool: &str, mode: &str, exit_code: i64| json!({"toolCommands": [{"tool": tool, "mode": mode, "exitCode": exit_code, "inner": inner}]});
+	let direct = read_stats(&result("propose", false, inner.clone()));
+	assert_eq!(direct.plan_awaiting.as_deref(), Some("Plan"));
+	assert_eq!(direct.plan_file.as_deref(), Some("/plans/p.md"));
+	let in_bash = read_stats(&result("bash", false, record("propose", "execute", 0)));
+	assert_eq!(in_bash.plan_awaiting.as_deref(), Some("Plan"));
+	for nothing in [
+		result("propose", true, inner.clone()),
+		result("bash", false, record("propose", "execute", 1)),
+		result("bash", false, record("propose", "help", 0)),
+		result("bash", false, record("resolve", "execute", 0)),
+		result("write", false, json!({"xdev": {"tool": "propose", "mode": "execute", "inner": inner}})),
+	] {
+		assert_eq!(read_stats(&nothing).plan_awaiting, None, "{nothing}");
+	}
 }
 
 #[test]
@@ -738,9 +762,9 @@ fn proposal(title: &str, file: &str, at: i64) -> Value {
 		"type": "message",
 		"message": {
 			"role": "toolResult",
-			"toolName": "write",
+			"toolName": "bash",
 			"timestamp": at,
-			"details": {"xdev": {"tool": "propose", "mode": "execute", "inner": {"title": title, "planFilePath": file}}},
+			"details": {"toolCommands": [{"tool": "propose", "mode": "execute", "exitCode": 0, "inner": {"title": title, "planFilePath": file}}]},
 		},
 	})
 }

@@ -12,17 +12,21 @@ pub mod followup;
 pub mod grading;
 pub mod harness;
 pub mod keep;
+pub mod ladder;
 pub mod layer;
 pub mod pacer;
 pub mod plan_review;
+pub mod replay;
 pub mod report;
 pub mod run;
 pub mod runner;
+pub mod settings;
 #[cfg(feature = "test-support")]
 pub mod stand_in;
 pub mod tasks;
 pub mod terminal;
 pub mod variants;
+pub mod watch;
 
 #[cfg(test)]
 mod a5_tests;
@@ -37,10 +41,16 @@ mod compare_tests;
 #[cfg(test)]
 mod keep_tests;
 #[cfg(test)]
+mod ladder_tests;
+#[cfg(test)]
 mod pacer_tests;
 #[cfg(test)]
 mod plan_review_tests;
 #[cfg(test)]
+mod replay_tests;
+#[cfg(test)]
 mod runner_tests;
+#[cfg(test)]
+mod settings_tests;
 #[cfg(test)]
 mod tasks_tests;

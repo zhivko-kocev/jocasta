@@ -55,9 +55,10 @@ description = "the eval runner (jocasta-bench evals; 0636)"
 run = "cargo run --locked --release --bin jocasta-bench -- evals"
 
 [tasks.smoke]
-description = "the opt-in smoke on this machine: a throwaway herdr session"
+# One test at a time: the service's collab relay has one fixed port (0561), so two services at once would refuse the second.
+description = "the opt-in smoke on this machine: throwaway herdr sessions, one at a time"
 env = { JOCASTA_HERDR_SMOKE = "1" }
-run = "cargo nextest run --locked -E 'test(/live_smoke/)'"
+run = "cargo nextest run --locked -j 1 -E 'test(/live_smoke/)'"
 
 # What Jocasta's weekly review runs for a project that has this task (0616); here clippy's counts, jscpd's duplicated
 # share of `src` and cargo-deny's advisories line (0610, 0614, 0645). It prints and fails nothing.

@@ -2,8 +2,8 @@
 //! code, until `git-guard-check` has measured the real guard in the VM (its lines then replace this for the lines it
 //! ran).
 //!
-//! omp 18.20.2 enforces the git guard inside its embedded shell, not in the bash tool's approval: with
-//! `bash.gitGuard: true` the tool passes `PI_GIT_GUARD=1` to the native shell (`exec/bash-executor.ts:833-835`) and that
+//! omp 19.1.0 enforces the git guard inside its embedded shell, not in the bash tool's approval: with
+//! `bash.gitGuard: true` the tool passes `PI_GIT_GUARD=1` to the native shell (`exec/bash-executor.ts:867-869`) and that
 //! shell's `git` builtin refuses the command when it runs (`exec/settings.ts:155-166`). The builtin lives in
 //! pi-natives' Rust binary and exports no check that doesn't run the command, so H1 reads its rules from the setting's
 //! description and the refusal messages in `pi_natives.win32-x64-baseline.node`. It first tells whose checkout git is

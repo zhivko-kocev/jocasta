@@ -181,14 +181,14 @@ fn without_workspace_jocasta_diagnose_makes_it_first_a_herdr_that_cant_start_is_
 	assert_eq!(fixture.herdr.of("createTab").len(), 1);
 
 	let mut failing = fixture.deps();
-	failing.connect = Box::new(|| Box::pin(async { Err(Error::other("herdr isn't installed")) }));
+	failing.connect = Box::new(|| Box::pin(async { Err(Error::other("the server exited at once")) }));
 	let (code, _) = run(&failing);
 	let error = code.unwrap_err();
 	assert!(error.is_user());
 	assert!(
 		error
 			.to_string()
-			.starts_with("herdr session `jocasta-test` doesn't answer and couldn't start (herdr isn't installed)")
+			.starts_with("herdr session `jocasta-test` doesn't answer and couldn't start (the server exited at once)")
 	);
 }
 

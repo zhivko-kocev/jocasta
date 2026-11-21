@@ -139,8 +139,8 @@ impl Harness {
 		Self { root, paths, mise: None, check: Some(ok_check()), reload: None, git_version: None }
 	}
 
-	fn deps(&self, herdr: Option<&str>) -> SetupDeps {
-		let mut deps = SetupDeps::new(herdr.map(PathBuf::from));
+	fn deps(&self) -> SetupDeps {
+		let mut deps = SetupDeps::new(PathBuf::from("herdr.exe"));
 		deps.mise = self.mise.clone();
 		deps.check_herdr_config = self.check.clone();
 		deps.reload_herdr = self.reload.clone();
@@ -148,24 +148,20 @@ impl Harness {
 		deps
 	}
 
-	async fn setup_with(&self, herdr: Option<&str>, answer: Option<&str>) -> Result<Out> {
+	async fn setup_with(&self, answer: Option<&str>) -> Result<Out> {
 		let io = TestIo::new(&[answer]);
-		let code = run_setup(&self.paths, &self.deps(herdr), &io).await?;
+		let code = run_setup(&self.paths, &self.deps(), &io).await?;
 		Ok(Out { code, text: io.text(), asked: io.asked() })
 	}
 
 	async fn setup(&self, answer: Option<&str>) -> Out {
-		self.setup_with(Some("herdr.exe"), answer).await.unwrap()
-	}
-
-	async fn setup_without_herdr(&self, answer: Option<&str>) -> Out {
-		self.setup_with(None, answer).await.unwrap()
+		self.setup_with(answer).await.unwrap()
 	}
 
 	async fn refresh(&self, file: &str, answer: Option<&str>) -> Result<Out> {
 		let io = TestIo::new(&[answer]);
 		let now = chrono::Local.with_ymd_and_hms(2026, 10, 23, 9, 5, 7).unwrap();
-		let code = refresh_setup(&self.paths, &self.deps(Some("herdr.exe")), &io, file, Some(now)).await?;
+		let code = refresh_setup(&self.paths, &self.deps(), &io, file, Some(now)).await?;
 		Ok(Out { code, text: io.text(), asked: io.asked() })
 	}
 
@@ -325,7 +321,6 @@ fn strings(argv: &[&str]) -> Vec<String> {
 }
 
 const IN_PLACE: &str = "Nothing to set up: everything Jocasta adds is in place.";
-const HERDR_LINE: &str = "herdr isn't installed: install it from https://herdr.dev, then run `jocasta setup` again.";
 
 fn other(undo: Undo) -> SetupUndo {
 	SetupUndo::Other(undo)
@@ -672,7 +667,7 @@ async fn a_failed_migration_stops_the_rest_and_says_why_the_ones_before_it_are_m
 	// herdr.toml appears while the diff that named it new waits for his answer.
 	let herdr_toml = h.herdr_toml();
 	io.on_ask = Some(Box::new(move || put(&herdr_toml, "# his\n")));
-	let code = run_setup(&h.paths, &h.deps(Some("herdr.exe")), &io).await.unwrap();
+	let code = run_setup(&h.paths, &h.deps(), &io).await.unwrap();
 	assert_eq!(code, 1);
 	let text = io.text();
 	assert!(
@@ -691,16 +686,10 @@ async fn a_failed_migration_stops_the_rest_and_says_why_the_ones_before_it_are_m
 }
 
 #[tokio::test]
-async fn without_herdr_setup_says_so_and_does_the_rest_a_broken_mcp_json_is_refused_before_anything_is_written() {
+async fn a_broken_mcp_json_is_refused_before_anything_is_written() {
 	let h = Harness::new();
-	let Out { text, .. } = h.setup_without_herdr(Some("y")).await;
-	assert!(text.starts_with("herdr isn't installed: install it from https://herdr.dev"));
-	assert!(h.global_mcp().exists());
-	assert!(h.hook().exists());
-
-	remove_tree(h.root.path()).unwrap();
 	put(&h.boss_mcp(), "{ not json");
-	let error = h.setup_with(Some("herdr.exe"), Some("y")).await.err().expect("a broken mcp.json is refused");
+	let error = h.setup_with(Some("y")).await.err().expect("a broken mcp.json is refused");
 	assert!(error.to_string().contains(&format!("{} is not JSON", s(&h.boss_mcp()))));
 	assert!(!h.global_mcp().exists());
 }
@@ -944,7 +933,7 @@ async fn a_snapshot_file_changed_after_the_diff_is_refused_and_no_file_of_the_sn
 	// omp saves a setting while the diff waits for his answer.
 	let config = h.omp_config();
 	io.on_ask = Some(Box::new(move || put(&config, "modelRoles:\n  default: anthropic/model-b\n")));
-	let code = run_setup(&h.paths, &h.deps(Some("herdr.exe")), &io).await.unwrap();
+	let code = run_setup(&h.paths, &h.deps(), &io).await.unwrap();
 	assert_eq!(code, 1);
 	let failed =
 		io.out.lock().unwrap().iter().find(|l| l.starts_with("jocasta setup: 0019-omp-snapshot")).cloned().unwrap();
@@ -968,18 +957,6 @@ async fn refresh_herdr_toml_works_beside_a_malformed_mcp_json_it_doesnt_reset() 
 	assert_eq!(code, 0);
 	assert!(text.contains(&format!("kept {}.bak.20261023-090507", s(&h.herdr_toml()))));
 	assert_ne!(read(&h.herdr_toml()), "# his\n");
-}
-
-#[tokio::test]
-async fn without_herdr_setup_ends_by_saying_so_never_done_even_with_its_integration_already_there() {
-	let h = Harness::new();
-	let Out { text, .. } = h.setup_without_herdr(Some("y")).await;
-	assert!(text.starts_with(HERDR_LINE));
-	assert!(text.ends_with(HERDR_LINE));
-	assert!(!text.contains("Done: run `jocasta`"));
-	assert_eq!(text.split(HERDR_LINE).count(), 3);
-	// Nothing else waits on herdr: the herdr config is written without it, and nothing is said done.
-	assert_eq!(h.setup_without_herdr(Some("y")).await.text, "Nothing to set up: everything Jocasta adds is in place.");
 }
 
 #[tokio::test]
@@ -1033,7 +1010,7 @@ impl CalendarStore for Calendar {
 
 async fn setup_with_calendar(h: &Harness, calendar: &Arc<Calendar>, answers: &[Option<&str>]) -> (String, Vec<String>) {
 	let io = TestIo::new(answers);
-	let mut deps = SetupDeps::new(Some(PathBuf::from("herdr.exe")));
+	let mut deps = SetupDeps::new(PathBuf::from("herdr.exe"));
 	deps.calendar = Some(calendar.clone());
 	run_setup(&h.paths, &deps, &io).await.unwrap();
 	(io.text(), io.asked())
@@ -1061,7 +1038,7 @@ async fn the_calendars_secret_address_is_asked_for_as_a_secret_off_the_screen_wh
 	let calendar = Calendar::new(None);
 	let mut io = TestIo::new(&[Some("y")]);
 	io.secret_answer = Some("https://calendar.example/secret.ics".to_owned());
-	let mut deps = SetupDeps::new(Some(PathBuf::from("herdr.exe")));
+	let mut deps = SetupDeps::new(PathBuf::from("herdr.exe"));
 	deps.calendar = Some(calendar.clone());
 	run_setup(&h.paths, &deps, &io).await.unwrap();
 	assert_eq!(
@@ -1122,20 +1099,6 @@ async fn a_herdr_config_check_that_cant_run_is_said_and_doesnt_stop_setup() {
 	let Out { code, text, .. } = h.setup(Some("y")).await;
 	assert_eq!(code, 0);
 	assert!(text.contains("herdr config check didn't run: spawn failed"));
-}
-
-#[tokio::test]
-async fn with_herdr_missing_setup_runs_no_herdr_config_check_and_says_herdr_is_missing() {
-	let mut h = Harness::new();
-	let checks = Arc::new(Mutex::new(0));
-	let seen = checks.clone();
-	h.check = Some(Arc::new(move |_, _| {
-		*seen.lock().unwrap() += 1;
-		Box::pin(async { Ok(HerdrCheck { code: Some(0), output: String::new() }) })
-	}));
-	let Out { text, .. } = h.setup_without_herdr(Some("y")).await;
-	assert_eq!(*checks.lock().unwrap(), 0);
-	assert!(text.contains("herdr isn't installed"));
 }
 
 #[tokio::test]

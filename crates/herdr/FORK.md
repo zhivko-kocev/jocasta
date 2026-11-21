@@ -66,15 +66,21 @@ terminal is sent (no write over the wide tail) rather than the test backend's co
   reads (`herdr_event`); `ShellExtension`, `Reply`,
   `set_shell_extension`, `DOCK_COMMAND`, what herdr's client draws and takes keys for in Jocasta's process (the dock,
   a question over everything, the tab bar's status segment); `set_exit_hook`, run before herdr's client ends the
-  process with a failure. Both sides talk in `EndpointControl {kind, data}` messages whose kind starts with
-  `jocasta.` (`KIND_PREFIX`), so the wire protocol and its version are upstream's.
+  process with a failure; `before_handoff`, `handoff_env` and `handoff_failed` (Unix), a live handoff's turns: the
+  extension stops its service before the old server's clients leave and names the env the import server starts with,
+  and starts it again when the handoff fails. Both sides talk in `EndpointControl {kind, data}` messages whose kind
+  starts with `jocasta.` (`KIND_PREFIX`), so the wire protocol and its version are upstream's.
 - `src/config/io.rs`: `config_dir`, `state_dir` and `config_path` take `embed`'s dirs first (`HERDR_CONFIG_PATH` still
   wins for the config file).
-- `src/server/headless/bootstrap.rs`: `run_server` tells the extension the server listens (after the plugins' startup
-  hooks), with its `ServerHost`, and that it stopped (after its loop's runtime returns).
+- `src/server/headless/bootstrap.rs`: `run_server` and `run_handoff_import_server` tell the extension the server
+  listens (after the plugins' startup hooks), with its `ServerHost`, and that it stopped (after its loop's runtime
+  returns).
+- `src/server/headless/lifecycle.rs`: a live handoff calls `embed::before_handoff` once its panes are listed and before
+  it marks itself in progress; `rollback_handoff_before_commit` calls `embed::handoff_failed`.
+- `src/server/handoff.rs`: `spawn_handoff_import` adds `embed::handoff_env()` to the import server's env.
 - `src/server/headless.rs`: `extension_host` (the stop `server stop` does, callable in-process, and the outbound
   channel the loop drains into `EndpointControl` messages); a shell client's attach and leave reach the extension, and
-  the last one's leave unless the server is stopping; a client's `jocasta.` message reaches it as
+  the last one's leave unless the server is stopping or handing off; a client's `jocasta.` message reaches it as
   `ServerEvent::ExtensionMessage`.
 - `src/server/client_transport.rs`: `ServerEvent::ExtensionMessage`, read from a client's `EndpointControl` of kind
   `jocasta.*` before upstream's endpoint controls; a shell's peer process noted at its handshake.

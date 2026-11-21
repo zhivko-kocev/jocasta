@@ -28,6 +28,12 @@ pub fn total_memory_bytes() -> Option<u64> {
 	platform::ram().ok().map(|(total, _)| total)
 }
 
+/// The machine's memory available to programs now, in bytes (Windows' `ullAvailPhys`, Linux's `MemAvailable`); `None`
+/// where the platform doesn't tell. The settings trials keep a floor on it (fork plan section 4).
+pub fn available_memory_bytes() -> Option<u64> {
+	platform::ram().ok().map(|(_, available)| available)
+}
+
 /// JavaScript's `Math.round`: halves go up.
 fn js_round(x: f64) -> f64 {
 	(x + 0.5).floor()

@@ -101,7 +101,7 @@ fn call(id: i64, name: &str, arguments: Value) -> String {
 	request(id, "tools/call", Some(json!({ "name": name, "arguments": arguments })))
 }
 
-/// omp's handshake (`packages/coding-agent/src/mcp/client.ts:99-125`).
+/// omp's handshake (`mcp/host/legacy-session.ts:10-34`, after the `server/discover` probe of `mcp/host/peers.ts`).
 fn handshake() -> Vec<String> {
 	vec![
 		request(
@@ -176,6 +176,32 @@ async fn initialize_answers_omps_protocol_version_and_a_tools_capability_the_not
 	assert_eq!(replies[0]["id"], 1);
 	assert_eq!(replies[1]["result"], json!({}));
 	assert_eq!(replies[1]["id"], 2);
+}
+
+/// omp 19's host probes a server's era with `server/discover` written right ahead of `initialize` (`mcp/host/peers.ts`
+/// `probeStdio`); an unsupported-version error would make it a 2026-07-28 server shared by every pane, so the probe
+/// gets "method not found" and the handshake goes on as in omp 18.
+#[tokio::test]
+async fn omps_era_probe_gets_method_not_found_and_the_handshake_after_it_works() {
+	let discover = request(
+		1,
+		"server/discover",
+		Some(json!({ "_meta": {
+			"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+			"io.modelcontextprotocol/clientCapabilities": {},
+			"io.modelcontextprotocol/clientInfo": { "name": "omp", "version": "19.1.0" },
+		} })),
+	);
+	let mut lines = vec![discover, request(2, "initialize", Some(initialize_params(MCP_PROTOCOL_VERSION)))];
+	lines.push(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }).to_string());
+	lines.push(request(3, "tools/list", Some(json!({}))));
+	let replies = raw_session(&lines, Options::default()).await;
+	assert_eq!(replies.len(), 3);
+	assert_eq!(replies[0]["id"], 1);
+	assert_eq!(replies[0]["error"]["code"], -32601);
+	assert_eq!(replies[1]["id"], 2);
+	assert_eq!(replies[1]["result"]["protocolVersion"], MCP_PROTOCOL_VERSION);
+	assert!(replies[2]["result"]["tools"].as_array().is_some_and(|tools| !tools.is_empty()));
 }
 
 /// What the server offers a client that asks for `version`.

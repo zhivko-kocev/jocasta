@@ -1,12 +1,12 @@
-//! H1's live recorder on omp 18.20.2 (0585, 0623): an ACP client that gives omp a terminal and records what omp sends to
+//! H1's live recorder on omp 19.1.0 (0585, 0623): an ACP client that gives omp a terminal and records what omp sends to
 //! it.
 //!
 //! omp's ACP mode (`omp --mode acp`, `modes/acp/acp-mode.ts`) talks JSON-RPC 2.0 over stdio, one JSON object per line.
 //! A client that advertises the `terminal` capability at `initialize` gets every bash call that passed omp's approval
-//! routed to `terminal/create` instead of omp's own shell (`tools/bash.ts:1603-1605,1706-1985`): the approval gate runs
-//! first, in the ACP permission proxy (`session/session-tools.ts:1198-1250`, `resolveApproval` with the configured
+//! routed to `terminal/create` instead of omp's own shell (`tools/bash.ts:2073-2075,2202-2482`): the approval gate runs
+//! first, in the ACP permission proxy (`session/session-tools.ts:1223-1275`, `resolveApproval` with the configured
 //! mode; with `tools.approvalMode: yolo` set explicitly a deny throws, an allow runs, a prompt asks the client with
-//! `session/request_permission`) and in the tool wrapper (`extensibility/extensions/wrapper.ts:357-374`). So the client
+//! `session/request_permission`) and in the tool wrapper (`extensibility/extensions/wrapper.ts:359-376`). So the client
 //! sees exactly what omp let through: a `terminal/create` is "ran", a permission request is "asked" (the recorder
 //! rejects it once), and a call that ends `failed` with omp's policy text and neither is "refused". The terminal this
 //! client creates runs nothing: it answers `terminal/output` and `terminal/wait_for_exit` with the recorder's marker and
@@ -15,7 +15,7 @@
 //! and an async job, plus a working folder that is an internal URL (`skill://…`), as a `cwd` or a leading `cd`. The
 //! recorder extension ([`RECORDER_EXTENSION`], loaded with `-e`) closes them on the `tool_call` event, which omp emits
 //! before the approval gate and whose returned `input` replaces the call's arguments (`session/agent-session.ts:
-//! 5826-5866`): it drops `pty`, `name`, `ready` and `async` (none of them changes the approval of the command) and
+//! 5871-5911`): it drops `pty`, `name`, `ready` and `async` (none of them changes the approval of the command) and
 //! blocks a call whose working folder is a URL. The overlay also turns service launch and async jobs off.
 
 use std::collections::HashMap;

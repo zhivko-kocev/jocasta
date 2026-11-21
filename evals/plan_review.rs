@@ -1,10 +1,10 @@
-//! Answering omp's plan review for A6 and its follow-up arms (0567). omp 18.20.2 offers "Approve and execute" and
-//! "Approve and keep context" only in its interactive plan review (`modes/interactive-mode.ts:7771`
+//! Answering omp's plan review for A6 and its follow-up arms (0567). omp 19.1.0 offers "Approve and execute" and
+//! "Approve and keep context" only in its interactive plan review (`modes/interactive-mode.ts:7976`
 //! `handlePlanApproval`; "execute" clears the session before the plan-approved prompt, `#approvePlan`'s
-//! `preserveContext: false`, `:6872`). Print mode has only `--plan-yolo`, which approves inside the planning session,
+//! `preserveContext: false`, `:7071`). Print mode has only `--plan-yolo`, which approves inside the planning session,
 //! and ACP's approval keeps the context too, so neither is "execute". The interactive review is answerable without
 //! keys: it emits `plan_review_requested` to extensions, and `ctx.resolvePlanReview(reviewId, "execute" | "keep")`
-//! answers it "as if the operator picked" (`extensibility/extensions/types.ts:825-838`). So such a trial's first turn
+//! answers it "as if the operator picked" (`extensibility/extensions/types.ts:833-846`). So such a trial's first turn
 //! runs omp interactive in a terminal (a bench herdr pane: interactive mode needs a TTY on stdin, `main.ts`), starting
 //! in plan mode (`plan.defaultOnStartup`), with a per-trial extension (this file's [`plan_review_extension`]) that
 //! answers the review with the arm's choice, logs what it saw, and shuts omp down once the approved plan's execution

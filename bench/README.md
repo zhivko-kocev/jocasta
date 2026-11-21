@@ -15,8 +15,8 @@ runs, how often and what is measured is fixed there, as amended for the harness-
   ("results are never overwritten"), so a rerun never mixes rows of two runs; tokscale parity rewrites its own rows.
 - Medians, p95 and percentile-bootstrap 95% CIs (10,000 resamples, seed 482) come from `lib/stats.rs`.
 - Cost is priced with one table for every arm and benchmark (0538): LiteLLM's `model_prices_and_context_window.json`,
-  fetched once and committed in `prices/` with `prices/source.json` (its URL at commit `e58354f0…398f` of
-  2026-11-08, fetched 2026-11-09, and its SHA-256, which `lib/prices.rs` checks on every load). Cache read and cache
+  fetched once and committed in `prices/` with `prices/source.json` (its URL at commit `8fb9f2f0…759d` of
+  2026-11-11, fetched 2026-11-18, and its SHA-256, which `lib/prices.rs` checks on every load). Cache read and cache
   write are priced apart, a 1-hour cache write at its own rate. The ledger (`lib/ledger.rs` on the product's
   `src/shared/ledger.rs`, which owns the rows, waste and peak) reads omp's session files,
   Claude Code's transcripts and opencode's `opencode export` JSON into rows per model request (time, model, uncached
@@ -33,7 +33,7 @@ runs, how often and what is measured is fixed there, as amended for the harness-
 
 | Script | Model calls | Where |
 |---|---|---|
-| `h1-guard omp-verdicts`, `h1-guard evaluate` | none | anywhere with omp 18.20.2 installed (no command runs) |
+| `h1-guard omp-verdicts`, `h1-guard evaluate` | none | anywhere with omp 19.1.0 installed (no command runs) |
 | `h1-guard live-check` | 31 cheap-model turns (30 picks and a canary; a few cents) | 0481's VM (an ACP client records omp's calls, 0585) |
 | `h1-guard git-guard-check` | none, but it runs the corpus's git lines (`--run`) | the VM `JOCASTA-CLEAN` only |
 | `h7-longpath` | none | anywhere (git only, temp folders) |
@@ -52,26 +52,25 @@ start their threads as `jocasta thread new` does (`POST /api/cli`: no Allow, no 
 threads still open in plan mode and wait for the operator's approval of their plan in their pane. The bench never
 closes threads or removes worktrees: those ask him first (0484), so H6 and H8 wait for Enter between runs.
 
-First of all, the VM's omp moves to 18.20.2 (0623), the way 0497 installed it:
-`bun install -g @oh-my-pi/pi-coding-agent@18.20.2`; then `omp --version` must print 18.20.2. The release rebuilt for
-this commit goes there too, so every row runs on that omp and that build.
+Since 0652 the benchmarks run on his PC, on his own omp (19.1.0) and the Jocasta release built for the commit, and
+the VM is removed; its results are in `D:/thesis/data/vm-results/`. The scripts the table above ties to the VM have
+no machine until he decides where they run (`docs/research/fork-build.md`, For him 20).
 
-Before the full runs (0588), each script runs once in the VM's sandbox, each into its own throwaway `--out` (checks,
-not results): every script's `--dry-run`, then `h3-recovery --runs 1`, `h5-startup --runs 1`,
-`h6-memory --threads 0,1` and `h8-parallel --threads 2`; anything broken is fixed before the long runs. These
-runs need setup's files in tester's omp folder (`restore-setup-files.ps1`); the task benchmark needs them out
-(`fullrun-prep.ps1`) and refuses to start while that folder gives its omp arms an MCP server (0587).
+Before the full runs (0588), each script runs once in a sandbox Jocasta, each into its own throwaway `--out` (checks,
+not results): every script's `--dry-run`, then `h3-recovery --runs 1` and `h5-startup --runs 1`; anything broken is
+fixed before the long runs. The task benchmark refuses only an omp folder that would hide a layered arm's own
+`jocasta` server (0587, 0652).
 
 ## The scripts
 
 - **H1 (0482, 0500, 0501, 0535, 0600, 0623).** Four scripts; the corpus is a separate file and this folder holds no command list.
-  H1 runs on the build's omp, 18.20.2 (0535, 0623); `--any-version` is the exploration override.
+  H1 runs on the build's omp, 19.1.0 (0535, 0623); `--any-version` is the exploration override.
   - `jocasta-bench h1-guard omp-verdicts --corpus <corpus.jsonl> --guard <guard.yml> --out <dir>
     [--git-guard <git-guard-check.jsonl>] [--omp <package dir>] [--any-version]` starts `bun
     bench/h1-guard/omp-verdicts.ts`, the oracle (0636: the one TypeScript file of the bench, because omp loads only on
     Bun), which imports omp's own `config/settings.ts`, `tools/bash.ts` and `tools/approval.ts` from the install (found
     from `omp` on PATH or Bun's
-    global install; anything but 18.20.2 is refused), loads the guard as `--config` over omp's defaults, builds the
+    global install; anything but 19.1.0 is refused), loads the guard as `--config` over omp's defaults, builds the
     real `BashTool` on a session stub that throws if execution is reached, and asks omp's `resolveApproval` for each
     line, as a pane's tool wrapper does. Nothing runs. omp's git guard refuses only when the embedded shell runs `git`:
     with `--git-guard` the refusals `h1-guard git-guard-check` measured decide for the lines it ran, and the
@@ -101,11 +100,13 @@ runs need setup's files in tester's omp folder (`restore-setup-files.ps1`); the 
     corpus's SHA-256, the matcher and the as-written note) and one verdict per line in `h1-guard.jsonl`. The
     reimplementation's results of 2026-10-24 are in
     `D:/thesis/data/bench/h1/{pre-0485,0485,campaign}/`, omp 18.13.1's in `D:/thesis/data/bench/h1/omp-18.13.1/`;
-    the build's runs on omp 18.20.2 go in a folder of their own (`D:/thesis/data/bench/h1/omp-18.20.2/`). omp
+    the build's runs on omp 19.1.0 go in a folder of their own (`D:/thesis/data/bench/h1/omp-19.1.0/`). omp
     18.18.1 changed how its pattern rules combine (a deny matching any part of a compound line beats any prompt;
-    critical patterns come before prompt rules), so `h1-guard omp-verdicts` is run again on the build's omp, 18.20.2 (on the
+    critical patterns come before prompt rules), so `h1-guard omp-verdicts` is run again on the build's omp, 19.1.0 (on the
     0580 corpus 18.18.6's verdicts matched 18.18.2's line for line before 0589's move, and 18.20.2's matched 18.20.0's
-    before 0623's, though 18.20.1 also matches a segment without its leading `NAME=value` words); and 18.14.0 rewrote
+    before 0623's, though 18.20.1 also matches a segment without its leading `NAME=value` words; 18.22.0 and 18.22.2 left the code
+    that decides a verdict as 18.20.2 had it; 19.1.0 changed only how an allow rule treats leading `NAME=value` words, and the guard has no allow
+    rule, and its oracle's session stub must now answer `toolCommands` with nothing; checked from source, not yet by a run); and 18.14.0 rewrote
     the git guard (whose checkout git is in first; refusals for a failed save of uncommitted changes and for
     submodule recursion), so `h1-guard git-guard-check --run` is run again in the VM before H1 reports measured refusals.
   - **The 0580 lines.** The guard's 0580 rules (combined force flags, trunk pushes, restore, update-ref and git's
@@ -135,8 +136,8 @@ runs need setup's files in tester's omp folder (`restore-setup-files.ps1`); the 
     line, the turn's stop reason and any failure) and `live-check.json`. Run it on the frozen corpus (1,285 lines),
     as 0501 sampled it: the 0580 corpus has more lines, so seed 482 picks other lines there. In the VM: `--dry-run`
     first, then the run (a few cents), e.g. `--corpus D:/thesis/data/bench/h1-corpus.jsonl --out
-    D:/thesis/data/bench/h1/omp-18.20.2/live`; check that the canary reached the recorder's terminal ("canary reached
-    the recorder's terminal … nothing written"), that `live-check.json` names omp 18.20.2 and the recorder `ACP client
+    D:/thesis/data/bench/h1/omp-19.1.0/live`; check that the canary reached the recorder's terminal ("canary reached
+    the recorder's terminal … nothing written"), that `live-check.json` names omp 19.1.0 and the recorder `ACP client
     terminal (0585)`, that the outcomes agree with the in-process verdicts, and that no `h1-live-canary.txt` is left.
     The 18.13.1 run (24/24) used omp's bash interceptor as the recorder, which 18.15.0 moved into the bash tool's
     approval.
@@ -367,6 +368,9 @@ stopped its trials. The fixed choices:
   otherwise. A rerun with the same `--out` skips trials already in `results.jsonl`; a different plan (seed, arms, reps
   or tasks) in the same folder is refused, and so is a resume with another `--timeout`, profile or harness version
   (`<runDir> ran with --timeout 90, …; this resume has …; resume with the same flags or use a new --out`, 0574).
+- **Pausing (0652):** while a file named `PAUSE` is in the run's `--out` folder, no trial starts; trials already
+  running finish. Deleting the file goes on. The settings trials (`evals settings`) do the same with their `--dir`.
+  A trial also starts only with 4 GB of memory available, as the settings trials' do.
 - **Trial roots:** each trial's root (overlay, `repo/`, `venv/`, `gvenv/`, the grading clone) is a short folder, `t`
   and 6 characters, in `--work` (default the OS temp folder); in the VM a short root such as `C:\t` keeps pnpm/yarn
   trees and Python under 260 characters. A layered arm's layer data is the exception: it goes in `%TEMP%\jl…` (see
@@ -398,12 +402,12 @@ stopped its trials. The fixed choices:
 - **Dry run:** the trial count and limit, the first 15 trials of the order, each arm's harness command line, whether
   A6's layer can run here, A7's key, machine and limit, the pacer's rule, the ledger's
   files, and the cache, trial-root and results paths; the main run's dry run also names the follow-up study's size.
-- **omp's own MCP servers (0587):** before any trial and in the dry run (not `--validate`), a run with an omp arm
-  reads `mcp.json` and `.mcp.json` in the omp folder it uses (the `--profile`'s, else `PI_CODING_AGENT_DIR` or
-  `~/.omp/agent`) as omp reads them, and refuses (exit 2) while a server there is on, naming each file and server.
-  With a layered arm, a `jocasta` entry, even one turned off, or `jocasta` in `disabledServers` refuses too: omp keeps
-  its folder's `jocasta` over the layer's own, so A6 would lose `report_result` and `check`. Servers omp imports from
-  other tools' configs aren't checked.
+- **omp's own MCP servers (0587, 0652):** before any trial and in the dry run (not `--validate`), a run with a
+  layered arm reads `mcp.json` and `.mcp.json` in the omp folder it uses (the `--profile`'s, else
+  `PI_CODING_AGENT_DIR` or `~/.omp/agent`) as omp reads them, and refuses (exit 2) while a `jocasta` entry, even one
+  turned off, or `jocasta` in `disabledServers` is there: omp keeps its folder's `jocasta` over the layer's own, so A6
+  would lose `report_result` and `check`. Since 0652 the benchmarks run on his own omp folder, and the servers it
+  turns on load in every omp arm alike, as his skills do.
 - **Smoke run in the VM (EVL-15; about 12 paid trials):** a dry run with `--only` one Python, one TypeScript/JavaScript
   and one Go task, `--arms a4,a6,a7,f-keep-context --reps 1 --work C:\t --timeout 90`, then the same for real
   (`JOCASTA_EVALS_REAL=1`, A7's key set). Check: `errors.jsonl` is empty; A6's and `f-keep-context`'s rows have

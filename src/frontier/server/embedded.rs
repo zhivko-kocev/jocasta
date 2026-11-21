@@ -32,6 +32,10 @@ const STOP_WAIT: Duration = Duration::from_secs(60);
 #[derive(Default)]
 pub struct EmbeddedService {
 	running: Option<Running>,
+	/// herdr's host, kept to start again when a live handoff fails.
+	host: Option<ServerHost>,
+	/// Services a live handoff is ending, each on a thread of its own; joined before the process ends.
+	ending: Vec<std::thread::JoinHandle<()>>,
 }
 
 struct Running {
@@ -56,6 +60,7 @@ impl ServerExtension for EmbeddedService {
 			Ok(runtime) => runtime,
 			Err(error) => return failed(&error.to_string(), &stop),
 		};
+		self.host = Some(host.clone());
 		let shell = Native::new(host, runtime.handle().clone());
 		let server = Arc::new(OnceLock::new());
 		let task = runtime.spawn(run(session, socket, stop, Arc::clone(&server), Arc::clone(&shell)));
@@ -71,18 +76,35 @@ impl ServerExtension for EmbeddedService {
 	}
 
 	fn stopped(&mut self) {
-		let Some(Running { runtime, server, task, .. }) = self.running.take() else { return };
-		runtime.block_on(async move {
-			// herdr's server is gone: Jocasta closes as one, unasked (a stop already under way is joined).
-			if let Some(server) = server.get() {
-				let server = server.clone();
-				tokio::spawn(async move { server.shutdown(false).await });
-			}
-			if tokio::time::timeout(STOP_WAIT, task).await.is_err() {
-				log(LogLevel::Warn, "service", "didn't stop within a minute of herdr's server; ending", None);
-			}
-		});
-		runtime.shutdown_timeout(Duration::from_secs(1));
+		// A service a handoff let go of ends first; then herdr's server is gone: Jocasta closes as one, unasked (a stop
+		// already under way is joined).
+		for ending in self.ending.drain(..) {
+			let _ = ending.join();
+		}
+		if let Some(running) = self.running.take() {
+			end(running, Ending::Everything);
+		}
+	}
+
+	fn before_handoff(&mut self) -> Vec<(String, String)> {
+		// The service's lock, ports and service file go; herdr's panes and their processes stay for the next server,
+		// whose service adopts them as a restarted service does (0392). It ends on a thread of its own: its stop asks
+		// herdr, whose loop runs this handoff. The next service's lock waits while this one says it is closing (0534).
+		log(LogLevel::Info, "service", "a live handoff: handing over to the next server", None);
+		if let Some(running) = self.running.take() {
+			self.ending.push(std::thread::spawn(move || end(running, Ending::ServiceOnly)));
+		}
+		vec![(SERVICE_ENV.to_owned(), "1".to_owned())]
+	}
+
+	fn handoff_failed(&mut self) {
+		// This server stays: a service starts again, its lock waiting out the one still ending.
+		log(LogLevel::Warn, "service", "the live handoff failed: starting again", None);
+		if self.running.is_none()
+			&& let Some(host) = self.host.clone()
+		{
+			self.started(host);
+		}
 	}
 
 	fn client_joined(&mut self, client: u64, pid: Option<u32>) {
@@ -106,6 +128,34 @@ impl ServerExtension for EmbeddedService {
 	fn action(&mut self, action: &str, pane_id: Option<&str>) -> bool {
 		self.running.as_ref().is_some_and(|running| running.shell.action(action, pane_id))
 	}
+}
+
+/// How the service ends.
+enum Ending {
+	/// Jocasta closes as one (0434, 0549).
+	Everything,
+	/// Only the service stops, as after a failed start; herdr's panes keep running.
+	ServiceOnly,
+}
+
+/// Ends the service as `how` says and waits for it (bounded).
+fn end(running: Running, how: Ending) {
+	let Running { runtime, server, task, .. } = running;
+	runtime.block_on(async move {
+		if let Some(server) = server.get() {
+			let server = server.clone();
+			match how {
+				Ending::Everything => tokio::spawn(async move {
+					server.shutdown(false).await;
+				}),
+				Ending::ServiceOnly => tokio::spawn(async move { server.stop().await }),
+			};
+		}
+		if tokio::time::timeout(STOP_WAIT, task).await.is_err() {
+			log(LogLevel::Warn, "service", "didn't stop within a minute; ending", None);
+		}
+	});
+	runtime.shutdown_timeout(Duration::from_secs(1));
 }
 
 /// Takes the single-instance lock: the lock this service holds, or `None` when another service holds it and answers.
@@ -195,7 +245,8 @@ fn release(instance: &Instance) {
 pub const SERVICE_ENV: &str = "JOCASTA_SERVICE";
 
 /// Whether `jocasta <herdr words>` runs the service: a server run (its words are `server` alone, after
-/// `--session <name>` if any) that bare `jocasta` launched (`service_env` is `JOCASTA_SERVICE`'s value).
+/// `--session <name>` if any, or the server a live handoff starts, `server --handoff-import <socket> <token>`) that
+/// bare `jocasta` launched or a serving server handed over to (`service_env` is `JOCASTA_SERVICE`'s value).
 pub fn serves(args: &[String], service_env: Option<&str>) -> bool {
 	let mut words = args.iter().map(String::as_str);
 	let mut rest = Vec::new();
@@ -206,7 +257,8 @@ pub fn serves(args: &[String], service_env: Option<&str>) -> bool {
 			rest.push(word);
 		}
 	}
-	service_env == Some("1") && rest == ["server"]
+	let server = matches!(rest.as_slice(), ["server"] | ["server", "--handoff-import", _, _]);
+	service_env == Some("1") && server
 }
 
 /// Registers the service with herdr's server for this process.

@@ -107,8 +107,8 @@ struct Machine {
 const HIS_KEYS: &str = "# mine\r\napp.model.cycle: [ctrl+k] # cycle\r\n";
 
 /// `jocasta setup`, answering `y`, with herdr's config check standing in.
-async fn setup_run(paths: &SetupPaths, herdr: Option<&str>, mise: Option<&str>, calendar: bool) {
-	let mut deps = SetupDeps::new(herdr.map(PathBuf::from));
+async fn setup_run(paths: &SetupPaths, mise: Option<&str>, calendar: bool) {
+	let mut deps = SetupDeps::new(PathBuf::from("herdr.exe"));
 	deps.mise = mise.map(PathBuf::from);
 	deps.check_herdr_config =
 		Some(Arc::new(|_, _| Box::pin(async { Ok(HerdrCheck { code: Some(0), output: "config: ok\n".to_owned() }) })));
@@ -147,7 +147,7 @@ impl Machine {
 			&json!({ "mcpServers": { "github": { "command": "gh-mcp" } } }).to_string(),
 		);
 		put(&setup.omp_agent_dir.join("keybindings.yml"), HIS_KEYS);
-		setup_run(&setup, Some("herdr.exe"), Some("mise.exe"), true).await;
+		setup_run(&setup, Some("mise.exe"), true).await;
 		put(&setup.data_dir.join("catalog.db"), "db");
 		put(&setup.mise_config_dir.join("config.jocasta-p1.override.toml"), "[tools]\n");
 		put(&setup.mise_config_dir.join("config.toml"), "# his\n");
@@ -191,7 +191,7 @@ impl Machine {
 			(self.calls.clone(), self.calls.clone(), self.calls.clone(), self.calls.clone());
 		UninstallDeps {
 			service_state: Arc::new(move || Box::pin(async move { Ok(state) })),
-			herdr: Some(PathBuf::from("herdr.exe")),
+			herdr: PathBuf::from("herdr.exe"),
 			session: "jocasta-test".to_owned(),
 			run,
 			setup_undo: setup_undo(&self.setup, true),
@@ -723,7 +723,7 @@ async fn a_folder_setup_didnt_make_stays_only_setups_file_in_it_goes() {
 	let skill = m.setup.omp_agent_dir.join("skills").join("mise");
 	fs::remove_dir_all(&skill).unwrap();
 	put(&skill.join("notes.md"), "his");
-	setup_run(&m.setup, None, Some("mise.exe"), false).await;
+	setup_run(&m.setup, Some("mise.exe"), false).await;
 	let undo = setup_undo(&m.setup, false);
 	let file = skill.join("SKILL.md").to_string_lossy().into_owned();
 	assert!(

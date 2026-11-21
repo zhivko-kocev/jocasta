@@ -346,11 +346,12 @@ fn read_omp_sessions_response(dir: &Path) -> Result<HarnessResponse> {
 }
 
 /// Whether omp's prewalk switched the trial's model (0608): the trial's own session files in `dir` hold a `model_change`
-/// entry with the role `prewalk`. omp 18.20.2 writes that entry only when the hand-off fires: `PrewalkCoordinator.
+/// entry with the role `prewalk`. omp 18.22.0 writes that entry only when the hand-off fires: `PrewalkCoordinator.
 /// advanceAtTurnEnd` (`session/prewalk.ts`) calls `setModelTemporary` after the first `edit`/`write` once the plan's
 /// todo list exists, and the session's host passes `{ prewalk: true }` (`session/agent-session.ts`), so
 /// `ModelControls.setModelTemporary` (`session/model-controls.ts`) appends it with `PREWALK_MODEL_CHANGE_ROLE`
 /// (`session/session-entries.ts`). A noop (the target is already the active model) or a never-armed prewalk writes none.
+/// Since 18.22.0 it is written only when the model switch landed.
 pub fn read_prewalk_switch(dir: &Path) -> Result<bool> {
 	for file in omp_session_files(dir).iter().filter(|file| file.main) {
 		let switched = json_lines::<Value>(&read_text(&file.path)?).iter().any(|entry| {

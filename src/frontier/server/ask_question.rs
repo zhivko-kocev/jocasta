@@ -1,7 +1,7 @@
 //! The question an omp `ask` call puts to him, as one line (0589). Since omp 18.18.3 the call's arguments are one HTML
-//! form, `{html}` (`tools/ask.ts:62-64`); before, `{questions: [{question, …}]}`. For a form the question is the first
-//! named control's, worded as omp words it for its own blocked status (`modes/controllers/extension-ui-controller.ts:897-898`,
-//! pi-tui `html-form/data.ts:133-157` `fieldQuestions`): the control's own label (a text field, number, select or
+//! form, `{html}` (`tools/ask.ts:70-72`); before, `{questions: [{question, …}]}`. For a form the question is the first
+//! named control's, worded as omp words it for its own blocked status (`modes/controllers/extension-ui-controller.ts:970-971`,
+//! pi-tui `html-form/data.ts:134-158` `fieldQuestions`): the control's own label (a text field, number, select or
 //! textarea wrapped in `<label>`, a `<label for>`, its `aria-label` or `title`; a radio or checkbox group has none),
 //! else the text block just before it (`<p>`, a heading, …), else its fieldset's `<legend>`, else a lone checkbox's
 //! label, else its name. Read with a tag scanner, not a DOM: the form is the model's plain semantic HTML
@@ -342,7 +342,7 @@ mod tests {
 
 	use super::*;
 
-	// Each expectation is what omp 18.20.2's own `fieldQuestions` (pi-tui `html-form/data.ts:133-157`) gives for the
+	// Each expectation is what omp 18.22.0's own `fieldQuestions` (pi-tui `html-form/data.ts:141-165`) gives for the
 	// form's first named field, checked against omp's parser when these cases were written (0589).
 
 	fn question(html: &str) -> Option<String> {
@@ -351,7 +351,7 @@ mod tests {
 
 	#[test]
 	fn omps_own_example_form_the_radio_groups_fieldset_legend_not_the_context_before_it() {
-		// omp 18.20.2 `prompts/tools/ask.md:29-37`, the example form.
+		// omp 18.22.0 `prompts/tools/ask.md:29-37`, the example form.
 		let html = r#"<form>
   <p>Sessions live in memory and are lost on restart.</p>
   <fieldset>
@@ -440,7 +440,7 @@ mod tests {
 	fn an_ask_calls_arguments_omp_18_20_2s_form_or_an_older_sessions_questions() {
 		let html = r#"<form><p>CSV or JSON?</p><label><input type="radio" name="f" value="csv" checked> CSV</label><label><input type="radio" name="f" value="json"> JSON</label></form>"#;
 		assert_eq!(ask_question(&json!({ "html": html })).as_deref(), Some("CSV or JSON?"));
-		// omp 18.18.2's shape (`tools/ask.ts:86-87`).
+		// omp 18.18.2's shape (`tools/ask.ts:127-128`, which 19.1.0 still reads: `legacyQuestionsHtml`).
 		let older = json!({ "questions": [{ "question": "CSV or JSON?", "options": [{ "label": "CSV" }] }, { "question": "Later" }] });
 		assert_eq!(ask_question(&older).as_deref(), Some("CSV or JSON?"));
 		assert_eq!(ask_question(&json!({ "questions": [] })), None);

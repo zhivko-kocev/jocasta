@@ -207,9 +207,12 @@ fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> 
         info!("handoff import server started");
         print_ready_message(&api::socket_path(), &client_socket_path());
         server.app.run_plugin_startup_hooks();
+        // Fork seam (FORK.md): Jocasta's service starts again beside the server that took the panes over.
+        crate::embed::server_started(server.extension_host(api::socket_path()));
         server.run().await
     });
 
+    crate::embed::server_stopped();
     rt.shutdown_timeout(Duration::from_millis(100));
     crate::logging::shutdown("server");
     result

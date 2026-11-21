@@ -1,7 +1,6 @@
 //! The task benchmark's command line (`evals/bench.ts`'s `main`): its flags, the plan they make, the dry run and the
 //! checks of the omp folder before a run (0587).
 
-use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -23,6 +22,7 @@ use super::run::{bench_tool, quote, variants_dir};
 use super::runner::trial_args;
 use super::tasks::{BenchTask, TaskSet, load_tasks, pick_pilot, plan_trials};
 use super::variants::{Harness, Variant, load_variants};
+use super::watch::wait_for_start_floor;
 use crate::lib::args::{
 	ArgSpec, BenchArgs, BenchUsageError, FlagValue, REPO_ROOT, flag, flag_or, list_flag, parse_bench_args, run_script,
 };
@@ -49,15 +49,6 @@ fn whole_number(text: Option<&str>, name: &str, fallback: u64, min: u64) -> Resu
 /// The layer's own MCP server's name in a layered arm's extension root (`src/frontier/layer/bench.rs`).
 const LAYER_SERVER: &str = "jocasta";
 
-/// omp's `enabled` as it reads it (`discovery/builtin.ts`): false, or the strings "false" and "0", turn a server off.
-fn turned_off(config: &Value) -> bool {
-	match config.as_object().and_then(|object| object.get("enabled")) {
-		Some(Value::Bool(false)) => true,
-		Some(Value::String(text)) => matches!(text.to_lowercase().as_str(), "false" | "0"),
-		_ => false,
-	}
-}
-
 fn strings(value: Option<&Value>) -> Vec<String> {
 	match value {
 		Some(Value::Array(items)) => items.iter().filter_map(|item| item.as_str().map(str::to_owned)).collect(),
@@ -69,15 +60,17 @@ struct McpFile {
 	file: PathBuf,
 	servers: Map<String, Value>,
 	disabled: Vec<String>,
-	forced: Vec<String>,
 }
 
-/// 0587: why the omp arms can't run with omp's folder `agent_dir` (the profile's with `--profile`) as it is, or
-/// `None`. omp starts every server its `mcp.json` and `.mcp.json` list that's on (`enabled` not false, or named in
-/// `enabledServers`; not named in `disabledServers`) in every trial. For the `layered` arms, a `jocasta` entry there,
-/// even one turned off, or `jocasta` in `disabledServers` hides the layer's own server: omp keeps its folder's over an
-/// extension's (`discovery/omp-plugins.ts`). A file that's missing or isn't JSON gives omp nothing.
+/// 0587 as 0652 left it: why the layered arms can't run with omp's folder `agent_dir` (the profile's with `--profile`)
+/// as it is, or `None`. The servers his `mcp.json` turns on load in every omp arm alike, as his skills do (0652). For the
+/// `layered` arms, a `jocasta` entry there, even one turned off, or `jocasta` in `disabledServers` hides the layer's own
+/// server: omp keeps its folder's over an extension's (`discovery/omp-plugins.ts`). A file that's missing or isn't JSON
+/// gives omp nothing.
 pub fn mcp_problem(agent_dir: &Path, layered: &[String]) -> Option<String> {
+	if layered.is_empty() {
+		return None;
+	}
 	let files: Vec<McpFile> = ["mcp.json", ".mcp.json"]
 		.iter()
 		.filter_map(|name| {
@@ -88,41 +81,9 @@ pub fn mcp_problem(agent_dir: &Path, layered: &[String]) -> Option<String> {
 				file,
 				servers: config.get("mcpServers").and_then(Value::as_object).cloned().unwrap_or_default(),
 				disabled: strings(config.get("disabledServers")),
-				forced: strings(config.get("enabledServers")),
 			})
 		})
 		.collect();
-	let disabled: HashSet<&String> = files.iter().flat_map(|each| &each.disabled).collect();
-	let forced: HashSet<&String> = files.iter().flat_map(|each| &each.forced).collect();
-	let loaded: Vec<(&Path, Vec<&String>)> = files
-		.iter()
-		.map(|each| {
-			let names: Vec<&String> = each
-				.servers
-				.iter()
-				.filter(|(name, config)| !disabled.contains(name) && (!turned_off(config) || forced.contains(name)))
-				.map(|(name, _)| name)
-				.collect();
-			(each.file.as_path(), names)
-		})
-		.filter(|(_, names)| !names.is_empty())
-		.collect();
-	if !loaded.is_empty() {
-		let r#where = loaded
-			.iter()
-			.map(|(file, names)| {
-				format!("{}: {}", file.display(), names.iter().map(|name| name.as_str()).collect::<Vec<_>>().join(", "))
-			})
-			.collect::<Vec<_>>()
-			.join("; ");
-		return Some(format!(
-			"the omp arms would load MCP servers from {}. Remove them (jocasta uninstall removes Jocasta's) or use a --profile without them; no trial ran.",
-			r#where
-		));
-	}
-	if layered.is_empty() {
-		return None;
-	}
 	let entry = files.iter().find(|each| each.servers.contains_key(LAYER_SERVER));
 	let denied = files.iter().find(|each| each.disabled.iter().any(|name| name == LAYER_SERVER));
 	let why = if let Some(entry) = entry {
@@ -322,7 +283,7 @@ fn plan_of(argv: &[String]) -> Result<(Plan, BenchArgs)> {
 
 async fn run(argv: Vec<String>) -> Result<u8> {
 	let (plan, args) = plan_of(&argv)?;
-	// 0587: omp's folder gives the omp arms no MCP server of its own and doesn't hide a layered arm's (dry run too).
+	// 0587 as 0652 left it: omp's folder doesn't hide a layered arm's own MCP server (dry run too).
 	let omp_arms: Vec<String> =
 		plan.arm_names.iter().filter(|name| plan.variant(name).harness == Harness::Omp).cloned().collect();
 	if !plan.validate && !omp_arms.is_empty() {
@@ -387,9 +348,13 @@ async fn run(argv: Vec<String>) -> Result<u8> {
 	options.pilot = plan.pilot;
 	options.work_dir = plan.work_dir.clone();
 	options.pty_session = Some(plan.pty_session.clone());
+	// The start floor rides with the pacer so the tests' runs never wait on the machine's memory.
 	options.pace = Some(Arc::new(move || {
 		let pacer = pacer.clone();
-		Box::pin(async move { pacer.pace().await })
+		Box::pin(async move {
+			pacer.pace().await;
+			wait_for_start_floor().await;
+		})
 	}));
 	options.account_full = Some(Arc::new(move || full.account_full()));
 	options.pauses = Some(pauses);

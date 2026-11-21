@@ -4,7 +4,7 @@ Jocasta runs several coding agents for you at once, and you steer them all from 
 
 It is built on [omp](https://github.com/can1357/oh-my-pi) (oh-my-pi, the coding agent) and [herdr](https://herdr.dev) (a terminal workspace for agents). You talk to one omp, **the boss**, by typing or by holding a key and speaking. The boss turns each request into a **thread**: a separate omp working on its own git branch, in its own worktree and its own herdr tab. Each thread plans first, waits for you to approve the plan, does the work, runs your project's checks and is reviewed. Nothing is merged or pushed without your say.
 
-Jocasta adds no code inside omp. It adds configuration, a few MCP tools and a small background service, so omp's own features (plan mode, subagents, LSP, compaction, dictation) work as they always do.
+Jocasta adds no code inside omp. It adds configuration, a few MCP tools and a background service that runs inside its terminal server, so omp's own features (plan mode, subagents, LSP, compaction, dictation) work as they always do.
 
 > Status: v1 beta. It is used daily on Windows 11. The Linux and macOS builds pass the test suite in CI, but nobody has used them yet.
 
@@ -39,7 +39,7 @@ While threads work, you keep talking to the boss. It tells you when one needs yo
 ## Requirements
 
 - **Windows 11.** Linux (x64) and macOS (Apple silicon) builds exist but are untested in daily use.
-- **[omp](https://github.com/can1357/oh-my-pi)** on your PATH and signed in to a model provider: run `omp`, then `/login`. This release is checked against omp 18.20.2. Jocasta names no model: the boss and threads use your omp model roles, and a `--heavy` thread uses your `slow` role.
+- **[omp](https://github.com/can1357/oh-my-pi)** on your PATH and signed in to a model provider: run `omp`, then `/login`. This release is checked against omp 19.1.0. Jocasta names no model: the boss and threads use your omp model roles, and a `--heavy` thread uses your `slow` role.
 - **herdr** needs no install: it is built into `jocasta`.
 - **git**, version 2.54 or newer for the push check.
 - **[mise](https://mise.jdx.dev)** (optional). With it, setup pins hunk and gh, and each project can have its own check and test tasks.
@@ -55,7 +55,7 @@ In PowerShell:
 irm https://raw.githubusercontent.com/zhivko-kocev/jocasta/main/scripts/install.ps1 | iex
 ```
 
-This installs to `%LOCALAPPDATA%\Programs\jocasta\` and adds that folder to your user PATH. The download is checked against a checksum committed in this repository. To upgrade, run the same command again. On Linux and macOS, use `scripts/install.sh`, which installs to `~/.local/share/jocasta/`.
+This installs to `%LOCALAPPDATA%\Programs\jocasta\` and adds that folder to your user PATH. The download is checked against a checksum committed in this repository. To upgrade, run the same command again, then close Jocasta and open it again. On Linux and macOS, use `scripts/install.sh`, which installs to `~/.local/share/jocasta/`; on Linux an upgrade hands a running Jocasta to the new build without closing its panes.
 
 ## First run
 
@@ -65,7 +65,7 @@ This installs to `%LOCALAPPDATA%\Programs\jocasta\` and adds that folder to your
 jocasta setup
 ```
 
-Setup connects Jocasta to omp and herdr. It registers Jocasta's MCP server with omp, merges recommended omp settings into yours, installs herdr's omp integration, and adds a Windows Terminal colour scheme. **Each change is shown as a diff and written only after you type `y`.** Settings you already chose are kept and listed. Run it again after each upgrade. Anything it writes, `jocasta uninstall` takes back out.
+Setup connects Jocasta to omp. It writes Jocasta's tuned omp files (settings, keys, language servers, a skill, Jocasta's MCP server and herdr's omp hook) over yours in `~/.omp/agent`, keeping a copy of each file it replaces; your logins, sessions and memory aren't touched. It also writes herdr's config and adds a Windows Terminal colour scheme. **Each change is shown as a diff and written only after you type `y`.** Run it again after each upgrade. Anything it writes, `jocasta uninstall` takes back out, and your own files come back.
 
 **2. Add your projects.** A project is a git repository. Add one at a time:
 
@@ -91,7 +91,7 @@ To check what Jocasta found, run `jocasta project list`.
 jocasta
 ```
 
-This opens herdr's session `jocasta`. The boss is on the left, and `today` is on the right. Each project and each thread gets its own workspace (Alt+1…9 switch between them).
+This opens Jocasta's session. The boss is on the left, and `today` is docked on the right. Each project and each thread gets its own workspace (Alt+1…9 switch between them).
 
 **4. Start a thread.** Tell the boss what you want, for example "in acme-api, add retries to the HTTP client". You can also press **Ctrl+B, then Alt+N**, pick the project and write a brief. Either way:
 
@@ -112,7 +112,7 @@ This opens herdr's session `jocasta`. The boss is on the left, and `today` is on
 | Alt+1 … Alt+9 | Switch workspaces (Alt+1 is the boss) |
 | Alt+[ and Alt+] | Move between agents |
 | Hold Right Ctrl | Talk to the boss from anywhere in Windows. omp transcribes your speech on your machine, and the text is sent when you let go |
-| In `today`: ↑↓, Enter, f, s, r, n | Pick a row, go to it, Finish, Stop, Review, New |
+| Ctrl+B, then Alt+T, or a click in `today` | Give `today` the keys: ↑↓ pick a row, Enter goes to it, f, s, r, n Finish, Stop, Review, New; Esc gives them back |
 
 Questions that need your permission appear in front of whatever you're doing, drawn over your terminal. To allow, type the code it shows. Esc denies, and so does no answer within 2 minutes.
 
@@ -120,8 +120,8 @@ Questions that need your permission appear in front of whatever you're doing, dr
 
 | Command | What it does |
 |---|---|
-| `jocasta` | Open the work surface, starting the background service if needed |
-| `jocasta setup` | Show and apply Jocasta's changes to omp, herdr, Windows Terminal and mise |
+| `jocasta` | Open the work surface, starting Jocasta's server if needed |
+| `jocasta setup` | Show and apply Jocasta's changes to omp, herdr's config, Windows Terminal and mise |
 | `jocasta setup --refresh <file>` | Put `herdr.toml`, `jocasta.json` or `mcp.json` back to the shipped version, keeping a backup |
 | `jocasta project list \| add <path> \| remove <name or id>` | Manage projects |
 | `jocasta thread new <project> "<brief>" [--done-when "<cmd>"] [--heavy]` | Start a thread from the command line |

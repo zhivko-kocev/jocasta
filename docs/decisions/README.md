@@ -393,16 +393,16 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0384](0384-program-on-upstreams.md) | The program on upstreams | process | decided | program | 2026-10-13 |  |
 | [0385](0385-installs-for-upstreams.md) | Installs for the upstreams | process | decided | program | 2026-10-13 | 0435 |
 | [0386](0386-harness-is-omp-plus-config.md) | The harness is omp plus config | product | decided | program | 2026-10-13 | 0617 |
-| [0387](0387-config-home-daily-omp.md) | The config home is his daily omp | product | decided | program | 2026-10-13 | 0491, 0584 |
+| [0387](0387-config-home-daily-omp.md) | The config home is his daily omp | product | decided | program | 2026-10-13 | 0491, 0584, 0650 |
 | [0388](0388-threads-are-herdr-worktrees.md) | Threads are herdr worktrees | product | decided | program | 2026-10-13 | 0412 |
 | [0389](0389-memory-omp-backend-plus-graphiti.md) | Memory: omp's backend plus Graphiti | product | decided | program | 2026-10-13 | 0400, 0440, 0603, 0604, 0606 |
 | [0390](0390-graphiti-proxy-in-companion.md) | The Graphiti proxy in the companion | product | decided | program | 2026-10-13 | 0463, 0603 |
 | [0391](0391-guard-is-omp-approvals.md) | The guard is omp's approvals | product | decided | program | 2026-10-13 | 0450, 0484 |
-| [0392](0392-herdr-work-surface-and-companion.md) | herdr is the work surface, with a companion | product | decided | program | 2026-10-13 | 0405, 0409, 0412, 0434, 0495, 0552, 0584 |
+| [0392](0392-herdr-work-surface-and-companion.md) | herdr is the work surface, with a companion | product | decided | program | 2026-10-13 | 0405, 0409, 0412, 0434, 0495, 0552, 0584, 0649 |
 | [0393](0393-whiteboard-canvas-merged.md) | whiteboard's canvas, merged | product | decided | program | 2026-10-13 | 0552, 0607, 0615 |
 | [0394](0394-hunk-review-after-every-task.md) | hunk review after every task | feature | v1 | program | 2026-10-13 | 0425 |
 | [0395](0395-ux-pass.md) | The UX pass | process | decided | program | 2026-10-13 |  |
-| [0396](0396-omp-settings-walkthrough.md) | The omp settings walkthrough | process | decided | program | 2026-10-13 |  |
+| [0396](0396-omp-settings-walkthrough.md) | The omp settings walkthrough | process | decided | program | 2026-10-13 | 0650 |
 | [0397](0397-suggestions-register.md) | The suggestions register | process | decided | program | 2026-10-13 |  |
 | [0398](0398-omp-settings-values.md) | omp settings for Jarvis | product | decided | program | 2026-10-13 | 0450, 0451, 0593, 0598 |
 | [0399](0399-one-continuous-thread.md) | One continuous thread per worktree | product | decided | program | 2026-10-13 | 0412, 0448, 0592 |
@@ -487,7 +487,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0478](0478-privacy-settings-in-every-pane.md) | The privacy settings ride in every Jarvis pane | product | decided | program | 2026-10-23 |  |
 | [0479](0479-setup-writes-three-omp-files.md) | Setup writes the three omp files after his y | product | decided | program | 2026-10-23 | 0584, 0594 |
 | [0480](0480-the-product-is-jocasta.md) | The product is Jocasta | product | decided | program | 2026-10-24 | 0564, 0584 |
-| [0481](0481-v1-tested-on-every-surface.md) | v1 is tested on every surface before it is called done | process | decided | program | 2026-10-24 | 0595 |
+| [0481](0481-v1-tested-on-every-surface.md) | v1 is tested on every surface before it is called done | process | decided | program | 2026-10-24 | 0595, 0652 |
 | [0482](0482-benchmarks-pre-registered.md) | The benchmarks, pre-registered | process | decided | program | 2026-10-24 | 0488, 0500, 0501, 0508, 0516, 0517, 0520, 0522, 0523, 0528, 0529, 0530, 0533, 0537, 0543, 0574, 0576, 0619 |
 | [0483](0483-thesis-macedonian-outside-repo.md) | The thesis: Macedonian, outside the repo, written by him | process | decided | program | 2026-10-24 | 0507 |
 | [0484](0484-security-review-fixes.md) | The security review's fixes | product | decided | program | 2026-10-24 | 0489, 0492, 0519, 0577, 0578, 0579, 0604 |
@@ -503,7 +503,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0494](0494-plan-review-reopened-after-restart.md) | A plan that awaited him is shown again after a restart | product | decided | program | 2026-10-24 |  |
 | [0495](0495-fresh-session-closes-herdrs-default-workspace.md) | A fresh session closes herdr's default workspace | product | decided | program | 2026-10-24 |  |
 | [0496](0496-webview2-sign-on-peer-listed.md) | WebView2's account sign-on peer is listed, and looked at again after v1 | product | decided | program | 2026-10-24 |  |
-| [0497](0497-installs-inside-the-vm.md) | What the agent installs inside the VM | process | decided | program | 2026-10-27 | 0505 |
+| [0497](0497-installs-inside-the-vm.md) | What the agent installs inside the VM | process | decided | program | 2026-10-27 | 0505, 0652 |
 | [0498](0498-sign-ins-copied-into-the-vm.md) | His sign-ins are copied into the VM | process | decided | program | 2026-10-27 | 0504 |
 | [0499](0499-the-vm-run-and-the-evidence.md) | Everything runs for real, with an evidence pack per chapter | process | decided | program | 2026-10-27 |  |
 | [0500](0500-benchmarks-on-omp-18-13-1.md) | The benchmarks run on omp 18.13.1 | process | decided | program | 2026-10-27 | 0535, 0574, 0585 |
@@ -524,7 +524,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0515](0515-playbook-principle-with-omp2.md) | The playbook's five rules become a principle with the omp² move | process | after v1 | after v1 | 2026-11-01 | 0626 |
 | [0516](0516-agent-operates-vm-bench-steps.md) | The agent operates the VM benchmarks' manual steps, logged; H8's plans are approved unread | process | decided | program | 2026-11-01 | 0525, 0576 |
 | [0517](0517-benchmarks-on-the-fixed-build.md) | Jocasta's benchmarks run on a build with herdr's dropped reads retried, and the done ones run again | process | decided | program | 2026-11-01 | 0520, 0576 |
-| [0518](0518-dead-herdr-server-heals.md) | A herdr server that dies under `jocasta`'s terminal is started again and its client attached again | product | decided | program | 2026-11-02 | 0565, 0566 |
+| [0518](0518-dead-herdr-server-heals.md) | A herdr server that dies under `jocasta`'s terminal is started again and its client attached again | product | decided | program | 2026-11-02 | 0565, 0566, 0649 |
 | [0519](0519-jocasta-own-windows-for-questions-and-toasts.md) | The close question, the Allow box and the toasts become Jocasta's own windows | product | decided | program | 2026-11-02 | 0524, 0552 |
 | [0520](0520-all-jocasta-rows-on-the-0518-0519-build.md) | Every Jocasta row runs again on the build with 0518 and 0519 | process | decided | program | 2026-11-02 | 0576 |
 | [0521](0521-omp-ended-in-open-pane-starts-again.md) | An omp that ends in an open Jocasta pane is started again | product | decided | program | 2026-11-02 |  |
@@ -539,7 +539,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0530](0530-bugs-after-benchmarks-h3-restarts.md) | The reruns' three product bugs are fixed after the benchmarks, H3 starts a Jocasta that closed itself again, and H3 and H8 run attended | process | decided | program | 2026-11-02 | 0531, 0534 |
 | [0531](0531-h8-eight-threads-rerun-once-clean.md) | H8's 8-thread run runs once more on a clean sandbox, and running out of memory again is its result | process | decided | program | 2026-11-02 |  |
 | [0532](0532-harness-os-in-v1-before-benchmarks.md) | The harness-OS layer is v1, built before the benchmarks | product | v1 | program | 2026-11-08 |  |
-| [0533](0533-all-benchmarks-rerun-on-new-build.md) | Every benchmark runs again on the harness-OS build | process | decided | program | 2026-11-08 | 0625 |
+| [0533](0533-all-benchmarks-rerun-on-new-build.md) | Every benchmark runs again on the harness-OS build | process | decided | program | 2026-11-08 | 0625, 0652 |
 | [0534](0534-0530-bugs-fixed-in-new-build.md) | The reruns' three product bugs are fixed in the harness-OS build | process | decided | program | 2026-11-08 |  |
 | [0535](0535-omp-latest-at-build-time.md) | The harness-OS build pins the omp that is latest when its build starts | process | decided | program | 2026-11-08 | 0589 |
 | [0536](0536-omp-threads-driven-through-local-collab-relay.md) | Jocasta runs a local collab relay for thread state; it joins as a full guest only if a spike shows it's worth keeping | product | v1 | program | 2026-11-08 |  |
@@ -550,7 +550,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0541](0541-k7-k10-omp-covers-tools-models-and-budgets.md) | K7–K10: omp already covers tool lists and models per phase; prewalk and keep-alive pings are measured; each thread warns at $50 | product | v1 | program | 2026-11-08 | 0575, 0583, 0586 |
 | [0542](0542-k5-index-and-k6-checks-and-dev-servers.md) | K5 and K6: a shared code index behind graph_search, cached service-side checks, and dev servers, each tried and kept if it measures better | product | v1 | program | 2026-11-08 | 0546, 0571, 0577, 0582, 0604, 0605, 0610 |
 | [0543](0543-benchmark-design-for-harness-os-rerun.md) | The rerun's design: seven arms, a follow-up study of the layer's parts, H8 extended with four threads, a keep rule, and a pacer that waits for every account | process | decided | program | 2026-11-08 | 0545, 0567, 0571, 0574, 0575, 0576, 0577, 0587, 0605, 0620 |
-| [0544](0544-deterministic-thread-commands-and-buttons.md) | Thread work without a model turn: `jocasta thread` and `worktree` commands, and Finish and Stop buttons | product | v1 | program | 2026-11-08 | 0552, 0568, 0580, 0581 |
+| [0544](0544-deterministic-thread-commands-and-buttons.md) | Thread work without a model turn: `jocasta thread` and `worktree` commands, and Finish and Stop buttons | product | v1 | program | 2026-11-08 | 0552, 0568, 0580, 0581, 0649 |
 | [0545](0545-fresh-context-and-ponytail-if-measured.md) | Fresh context after the plan and Ponytail's conditional test block are measured in the follow-up study | process | decided | program | 2026-11-08 | 0575 |
 | [0546](0546-peak-context-and-gate-replies.md) | The ledger shows peak context, and checks answer as gates with a rerun command | product | v1 | program | 2026-11-08 | 0577, 0582, 0583 |
 | [0547](0547-thread-state-from-omp-first.md) | A thread's state comes from omp first, and the unused thread_runtime table is dropped | product | v1 | program | 2026-11-08 |  |
@@ -558,8 +558,8 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0549](0549-nothing-runs-without-jocasta.md) | Nothing runs without Jocasta: no Keep in the background, autostart off by default, paused work resumes on the next start | product | v1 | program | 2026-11-08 | 0552, 0557, 0563 |
 | [0550](0550-omp-updates-off-and-setup-files-now.md) | omp stops updating itself until the benchmarks end, and setup's omp files are written on his PC now | process | decided | program | 2026-11-08 |  |
 | [0551](0551-jocasta-pane-drawn-with-opentui.md) | The `jocasta` pane is drawn with OpenTUI and holds today, the thread keys and his answers | product | v1 | program | 2026-11-09 | 0581, 0625, 0634 |
-| [0552](0552-no-companion-app.md) | No companion app: the service is a plain Bun process, diagrams open in the browser, dictation stays without spoken replies, and questions are answered in herdr | product | v1 | program | 2026-11-09 | 0553, 0556, 0563, 0578, 0583, 0584 |
-| [0553](0553-jocasta-is-a-herdr-plugin.md) | Jocasta is a herdr plugin: `today` beside the boss, questions in a popup, after a spike | product | v1 | program | 2026-11-09 | 0558, 0578 |
+| [0552](0552-no-companion-app.md) | No companion app: the service is a plain Bun process, diagrams open in the browser, dictation stays without spoken replies, and questions are answered in herdr | product | v1 | program | 2026-11-09 | 0553, 0556, 0563, 0578, 0583, 0584, 0649 |
+| [0553](0553-jocasta-is-a-herdr-plugin.md) | Jocasta is a herdr plugin: `today` beside the boss, questions in a popup, after a spike | product | v1 | program | 2026-11-09 | 0558, 0578, 0649 |
 | [0554](0554-herdr-keys-pings-and-settings.md) | herdr's keys, pings and settings for Jocasta | product | v1 | program | 2026-11-09 | 0569, 0578, 0581 |
 | [0555](0555-today-pane-contents.md) | The `today` pane's contents: what needs him first, no greeting or Presence, the extras where they fit, no screen hotkeys | product | v1 | program | 2026-11-09 | 0581 |
 | [0556](0556-dictation-through-omp-stt.md) | Dictation goes through omp's own speech-to-text in the boss pane, started from anywhere with Right Ctrl | product | v1 | program | 2026-11-09 |  |
@@ -588,12 +588,12 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0579](0579-install-folder-is-jocastas-alone.md) | The install folder is Jocasta's alone | product | v1 | program | 2026-11-09 |  |
 | [0580](0580-guard-covers-more-shapes.md) | The guard covers more shapes, and done_when goes through it | product, security | v1 | program | 2026-11-09 | 0613 |
 | [0581](0581-today-keys-wording-and-canvas.md) | today, the keys, the wording and the canvas | product, ux | v1 | program | 2026-11-09 |  |
-| [0582](0582-starting-recovering-and-counting-cost.md) | Starting, recovering and counting cost | product | v1 | program | 2026-11-09 |  |
+| [0582](0582-starting-recovering-and-counting-cost.md) | Starting, recovering and counting cost | product | v1 | program | 2026-11-09 | 0649 |
 | [0583](0583-boss-manual-and-shipped-prompt-texts.md) | The boss manual and shipped prompt texts | product, prompts | v1 | program | 2026-11-09 | 0608, 0611, 0616, 0619, 0621 |
 | [0584](0584-setup-settings-tests-names-and-stale-files.md) | Setup, settings, tests, names and stale files | product, process | v1 | program | 2026-11-09 |  |
 | [0585](0585-h1-live-check-gets-a-new-recorder.md) | H1's live check gets a new recorder on omp 18.18.2 | benchmark | v1 | program | 2026-11-09 |  |
 | [0586](0586-keep-alive-pings-are-not-measured.md) | Keep-alive pings are not measured | benchmark | v1 | program | 2026-11-09 |  |
-| [0587](0587-bench-refuses-omp-folder-mcp-servers.md) | The task benchmark refuses an omp folder that gives its omp arms MCP servers | benchmark | v1 | program | 2026-11-09 |  |
+| [0587](0587-bench-refuses-omp-folder-mcp-servers.md) | The task benchmark refuses an omp folder that gives its omp arms MCP servers | benchmark | v1 | program | 2026-11-09 | 0652 |
 | [0588](0588-benchmark-scripts-run-once-first.md) | Each benchmark script runs once before the full runs | benchmark | v1 | program | 2026-11-09 |  |
 | [0589](0589-omp-18-18-6.md) | Jocasta moves to omp 18.18.6 | product, benchmark | v1 | program | 2026-11-10 | 0600 |
 | [0590](0590-models-per-role-after-fable-5-2.md) | Models per role after Fable 5.2: the boss on Fable, heavy threads on his slow role | product, benchmark | v1 | program | 2026-11-10 |  |
@@ -624,11 +624,11 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0616](0616-tuning-program-small-calls-2.md) | Tuning program: four more small calls | product, process | v1 | program | 2026-11-14 |  |
 | [0617](0617-project-pane-check-through-omps-turn-end-event.md) | A failed check reaches a project pane's agent through omp's turn-end event | product | v1 | program | 2026-11-15 |  |
 | [0618](0618-settings-decided-by-trials-builds-wait.md) | Settings are decided by trials; the builds wait until everything is settled | process | v1 | program | 2026-11-15 |  |
-| [0619](0619-omp-settings-decided-by-the-trials.md) | The omp settings the trials decided | product, benchmark | v1 | program | 2026-11-15 |  |
+| [0619](0619-omp-settings-decided-by-the-trials.md) | The omp settings the trials decided | product, benchmark | v1 | program | 2026-11-15 | 0651 |
 | [0620](0620-advisor-stays-follow-up-study-gains-two-arms.md) | The advisor stays; the follow-up study gains an advisor arm and a thinking arm | product, benchmark | v1 | program | 2026-11-15 |  |
 | [0621](0621-finished-threads-record-their-close-and-commit.md) | A finished thread records when it closed and its commit; the weekly review gets production numbers | product | v1 | program | 2026-11-15 |  |
 | [0622](0622-tuning-program-small-calls-3.md) | Tuning program: two small calls from the factory view | process | v1 | program | 2026-11-15 |  |
-| [0623](0623-omp-18-20-2-everywhere.md) | omp 18.20.2 everywhere; its selective-commit text stays on | product, benchmark | v1 | program | 2026-11-15 | 0624 |
+| [0623](0623-omp-18-20-2-everywhere.md) | omp 18.20.2 everywhere; its selective-commit text stays on | product, benchmark | v1 | program | 2026-11-15 | 0624, 0651 |
 | [0624](0624-omp-installed-at-any-age-0617-reviewed-again.md) | omp's install is outside the package-age rule; 0617 is reviewed again | process | v1 | program | 2026-11-15 |  |
 | [0625](0625-rust-rewrite-before-the-benchmarks.md) | Everything Jocasta owns is rewritten in Rust, before the benchmarks | product | v1 | program | 2026-11-15 | 0636 |
 | [0626](0626-thesis-writing-starts-now.md) | The thesis is written now, in FINKI's shape with two more chapters; the craft becomes a principle | process, product | v1 | program | 2026-11-15 |  |
@@ -654,3 +654,8 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0646](0646-readme-for-newcomers.md) | A README for newcomers, the reference in the manual | product | v1 | program | 2026-11-17 |  |
 | [0647](0647-deny-ignores-chrono-unmaintained.md) | cargo-deny ignores chrono's two "unmaintained" notices by ID | process | v1 | program | 2026-11-18 |  |
 | [0648](0648-audit-ignores-picomatch-redos.md) | CI's `bun audit` ignores picomatch's ReDoS advisory by ID | process | v1 | program | 2026-11-18 |  |
+| [0649](0649-herdr-fork-one-binary-one-server.md) | The herdr fork: one binary, one server | product | v1 | fork build | 2026-11-18 |  |
+| [0650](0650-omp-snapshot-replaces-his-omp-files.md) | The omp snapshot: setup writes Jocasta's omp files over his | product | v1 | fork build | 2026-11-18 |  |
+| [0651](0651-snapshot-settings-from-trials-on-omp-18-22-2.md) | The snapshot's settings come from trials on omp 18.22.2 | product, benchmark | v1 | fork build | 2026-11-19 | 0653 |
+| [0652](0652-benchmarks-on-his-pc-vm-removed.md) | The benchmarks run on his PC on his own omp; the VM is removed | process | v1 | fork build | 2026-11-18 |  |
+| [0653](0653-omp-19-1-0-pinned.md) | omp 19.1.0 is the pinned omp | product, benchmark | v1 | fork build | 2026-11-21 |  |

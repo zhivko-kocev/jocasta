@@ -132,6 +132,14 @@ pub trait ServerExtension: Send {
     fn action(&mut self, _action: &str, _pane_id: Option<&str>) -> bool {
         false
     }
+    /// A live handoff is starting (Unix): the extension lets go of what the next process takes over (its ports, its
+    /// lock) and leaves the panes running; that process's server runs the extension again. Blocks until it has, and
+    /// returns the env vars the next process starts with beside this one's.
+    fn before_handoff(&mut self) -> Vec<(String, String)> {
+        Vec::new()
+    }
+    /// The handoff failed after [`ServerExtension::before_handoff`]: this server stays, so the extension starts again.
+    fn handoff_failed(&mut self) {}
 }
 
 static EXTENSION: Mutex<Option<Box<dyn ServerExtension>>> = Mutex::new(None);
@@ -154,6 +162,32 @@ pub(crate) fn server_started(host: ServerHost) {
 
 pub(crate) fn last_client_left() {
     with_extension(|extension| extension.last_client_left());
+}
+
+/// What the extension asked the next server's process to start with, from [`before_handoff`].
+#[cfg(unix)]
+static HANDOFF_ENV: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+#[cfg(unix)]
+pub(crate) fn before_handoff() {
+    let env = with_extension(|extension| extension.before_handoff()).unwrap_or_default();
+    if let Ok(mut slot) = HANDOFF_ENV.lock() {
+        *slot = env;
+    }
+}
+
+/// The env vars the handoff's import server starts with beside this process's.
+#[cfg(unix)]
+pub(crate) fn handoff_env() -> Vec<(String, String)> {
+    HANDOFF_ENV
+        .lock()
+        .map(|env| env.clone())
+        .unwrap_or_default()
+}
+
+#[cfg(unix)]
+pub(crate) fn handoff_failed() {
+    with_extension(|extension| extension.handoff_failed());
 }
 
 /// Woken by herdr's events that change what Jocasta reads of it.

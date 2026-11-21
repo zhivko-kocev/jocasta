@@ -9,7 +9,7 @@ const COMMAND_ENV = "JOCASTA_PANE_CHECK";
 /** Under omp's 30 s limit for a handler (`PANE_CHECK_ASK_MS` is shorter than this). */
 export const LIMIT_MS = 27_000;
 
-/** What this file uses of omp's extension API (omp 18.20.2): `SessionStopEvent.signal` ends when the settle is aborted. */
+/** What this file uses of omp's extension API (omp 19.1.0): `SessionStopEvent.signal` ends when the settle is aborted. */
 interface TurnEndApi {
 	on(
 		event: "session_stop",

@@ -291,6 +291,8 @@ pub(crate) fn with_test_defaults(mut options: ServerOptions, herdr: &Arc<FakeHer
 	options.mise.get_or_insert(None);
 	// Never his omp: the minute tick starts no weekly review (0470); a review would spawn a real `omp -p`.
 	options.weekly_reviews.get_or_insert(false);
+	// Never his omp's path: panes run `omp` by name, as where none is on PATH (`pane_omp_program` names the one found).
+	options.omp.get_or_insert_with(|| vec!["omp".to_owned()]);
 	options.ask_report.get_or_insert(false);
 	options.boss_key.get_or_insert_with(|| TEST_BOSS_KEY.to_owned());
 	options
@@ -635,7 +637,7 @@ impl<'a> Msg<'a> {
 fn message_entries(stem: &str, at: i64, index: usize, message: &Msg<'_>) -> Vec<Value> {
 	let mut content = vec![json!({"type": "text", "text": message.text})];
 	if let Some(question) = message.ask {
-		// omp 18.20.2's `ask` call: one HTML form, its question the text before the group (0589).
+		// omp 18.22.0's `ask` call: one HTML form, its question the text before the group (0589).
 		let html = format!(
 			"<form><p>{}</p><label><input type=\"radio\" name=\"answer\" value=\"yes\" checked> Yes</label><label><input type=\"radio\" name=\"answer\" value=\"no\"> No</label></form>",
 			question.replace('&', "&amp;").replace('<', "&lt;")
@@ -688,15 +690,15 @@ fn plan_mode_entry(id: &str) -> Value {
 	json!({"type": "mode_change", "id": id, "mode": "plan", "data": {"planFilePath": "local://readme-line-plan.md"}})
 }
 
-/// omp's proposal of a plan through `xd://propose`, its turn silently aborted (omp 18.10's shape), appended to `file`.
+/// omp's proposal of a plan through the `propose` command, its turn silently aborted (omp 19.1.0's shape), appended to `file`.
 pub(crate) fn append_proposal(file: &Path) {
 	append(
 		file,
 		&[
-			json!({"type": "message", "id": "t1", "message": {"role": "toolResult", "toolCallId": "c9", "toolName": "write",
+			json!({"type": "message", "id": "t1", "message": {"role": "toolResult", "toolCallId": "c9", "toolName": "bash",
 				"content": [{"type": "text", "text": "Plan ready for review."}],
-				"details": {"xdev": {"tool": "propose", "mode": "execute", "args": {"title": "readme-line"},
-					"inner": {"planFilePath": "local://readme-line-plan.md", "title": "readme-line", "planExists": true}}},
+				"details": {"toolCommands": [{"tool": "propose", "mode": "execute", "exitCode": 0, "args": {"title": "readme-line"},
+					"inner": {"planFilePath": "local://readme-line-plan.md", "title": "readme-line", "planExists": true}}]},
 				"isError": false}}),
 			json!({"type": "message", "id": "a9", "message": {"role": "assistant", "content": [], "stopReason": "aborted"}}),
 			plan_mode_entry("m2"),
@@ -711,7 +713,7 @@ pub(crate) fn plan_mode_file(cwd: &Path) -> PathBuf {
 	file
 }
 
-/// A plan-mode session in omp 18.10's shape, its plan proposed through `xd://propose` and the turn silently aborted.
+/// A plan-mode session in omp 19.1.0's shape, its plan proposed through the `propose` command and the turn silently aborted.
 pub(crate) fn proposed_plan_file(cwd: &Path) -> PathBuf {
 	let file = plan_mode_file(cwd);
 	append_proposal(&file);

@@ -997,8 +997,10 @@ impl HeadlessServer {
         let was_foreground = self.foreground_client_id == Some(client_id);
         let removed = self.clients.remove(&client_id);
         // Fork seam (FORK.md): Jocasta is told of each shell client that left, and when the last one of his left, unless
-        // the server is stopping.
-        let stopping = self.shutting_down || self.should_quit.load(Ordering::Acquire);
+        // the server is stopping or handing its panes to a new one.
+        let stopping = self.shutting_down
+            || self.handoff_in_progress
+            || self.should_quit.load(Ordering::Acquire);
         if removed
             .as_ref()
             .is_some_and(|client| client.is_shell_client())

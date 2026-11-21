@@ -26,7 +26,7 @@ use crate::frontier::server::worktrees::git_out;
 use crate::shared::clock::now_ms;
 use crate::shared::errors::Result;
 
-/// How long a plan-mode turn's end waits for the session to show a proposed plan: omp writes the `xd://propose` result
+/// How long a plan-mode turn's end waits for the session to show a proposed plan: omp writes the `propose` result
 /// through a buffered writer, so herdr's idle event can come before it is in the file.
 const PLAN_SETTLE_MS: i64 = 2_000;
 /// How often a plan-mode turn's end reads the session again meanwhile.
@@ -34,15 +34,16 @@ const PLAN_POLL_MS: u64 = 100;
 /// After a line goes into the boss pane, its idle pane state is herdr's lag, not the end of the turn it started.
 const BOSS_PROMPT_GRACE_MS: i64 = 10_000;
 
-/// omp's Plan Review on a pane's screen (0494): "Approve and keep context", "Refine plan" (omp 18.20.2
-/// `interactive-mode.ts:6573`, `:7825`).
+/// omp's Plan Review on a pane's screen (0494): "Approve and keep context", "Refine plan" (omp 19.1.0
+/// `interactive-mode.ts:6790` builds the label, pi-tui `plan-review-overlay.ts:1650-1665` draws it; "Refine plan"
+/// (`:8062`) shows only while the plan has comments).
 static PLAN_REVIEW_SCREEN: LazyLock<Regex> =
 	LazyLock::new(|| Regex::new(r"Approve and keep context|Refine plan").expect("the Plan Review pattern"));
 
 /// Any other omp picker on a pane's screen (0494, 0589): a select's footer reads "… navigate … select … cancel"
 /// (pi-tui `overlays/hook-selector.ts:323`); an `ask` form (omp ≥ 18.18.3, pi-tui `html-form/dialog.ts`) ends each
-/// choice group with `○ Other: type your own` (`:1306-1313`) and its footer reads "⏎ choose · ↑/↓ move · ⇥ next field ·
-/// ⎋ cancel" (`:1161-1180`); older omps' question picker ended with "Other (type your own)". `\b` is ASCII, as
+/// choice group with `○ Other: type your own` (`:1719`) and its footer reads "⏎ choose · ↑/↓ move · ⇥ next field ·
+/// ⎋ cancel" (`:1575-1581`); older omps' question picker ended with "Other (type your own)". `\b` is ASCII, as
 /// JavaScript's is.
 static PICKER_SCREEN: LazyLock<Regex> = LazyLock::new(|| {
 	Regex::new(r"Other \(type your own\)|(?-u:\b)Other: |(?-u:\b)navigate(?-u:\b).*(?-u:\b)cancel(?-u:\b)|(?-u:\b)next field(?-u:\b).*(?-u:\b)cancel(?-u:\b)")
@@ -572,7 +573,7 @@ impl ThreadLifecycle {
 	}
 
 	/// A plan-mode turn ended with no proposal in the session yet: the file is read again for a while, as omp's buffered
-	/// writer may not have put the `xd://propose` result in it when herdr said idle (B1). The pane's next state change
+	/// writer may not have put the `propose` result in it when herdr said idle (B1). The pane's next state change
 	/// waits meanwhile (its queue). The plan's title, or `None` when none came or the service stops.
 	async fn settled_plan(&self, thread: &ThreadRef) -> Option<String> {
 		let ctx = self.link.ctx();

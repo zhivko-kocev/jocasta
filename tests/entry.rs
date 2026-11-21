@@ -748,77 +748,143 @@ fn answered<'a>(answer: &'a Value, pointer: &str) -> Option<&'a str> {
 	answer.pointer(&format!("/result{pointer}")).or_else(|| answer.pointer(pointer)).and_then(Value::as_str)
 }
 
-/// The opt-in smoke on a real server (`mise run smoke`, `JOCASTA_HERDR_SMOKE=1`; the relay's fixed port allows one
-/// service at a time): herdr's events reach the service, so an omp started in a project's worktree is a thread within
-/// seconds and its closed workspace drops it, long before the minute's full refresh (fork plan finding 8).
+/// A served session with a project whose worktree runs a stand-in omp, found as a thread: the server, the omp's pane
+/// and its workspace. The relay's fixed port allows one service at a time, so `mise run smoke` runs one test at once.
+struct Smoke<'a> {
+	sandbox: &'a Sandbox,
+	session: &'static str,
+	server: Ends,
+	pane: String,
+	workspace: String,
+}
+
+impl<'a> Smoke<'a> {
+	fn start(sandbox: &'a Sandbox, session: &'static str) -> Self {
+		let service_file = sandbox.path().join("data").join("jocasta-service.json");
+		fake_omp(sandbox);
+		let git_dir = git_folder();
+		let path = std::env::join_paths([sandbox.path().join("bin").as_path(), &git_dir]).expect("a PATH");
+		let worktree = leftover_worktree(sandbox);
+		let main = sandbox.path().join("code").join("demo");
+		let added = finish(
+			sandbox
+				.jocasta(&["project", "add", &main.display().to_string()])
+				.env("PATH", &path)
+				.spawn()
+				.expect("project add"),
+			30,
+		);
+		assert_eq!(added.code, Some(0), "{}{}", added.stdout, added.stderr);
+		let server = in_session(sandbox, session, &["server"])
+			.env("JOCASTA_SERVICE", "1")
+			.env("PATH", &path)
+			.env("Path", &path)
+			.stdout(Stdio::null())
+			.stderr(Stdio::null())
+			.spawn()
+			.expect("starting jocasta server");
+		let server = Ends(server);
+		wait_until(90, "the service never listened", || service_file.exists());
+		wait_until(90, "the service never made workspace Jocasta", || has_jocastas_workspace(sandbox, session));
+		let mut smoke = Self { sandbox, session, server, pane: String::new(), workspace: String::new() };
+		assert_eq!(smoke.threads().trim(), "No threads.");
+
+		let cwd = worktree.display().to_string();
+		let made = smoke.herdr(&["workspace", "create", "--cwd", &cwd, "--label", "left"]);
+		let made: Value = serde_json::from_str(&made.stdout)
+			.unwrap_or_else(|_| panic!("herdr's answer: {}{}", made.stdout, made.stderr));
+		smoke.pane =
+			answered(&made, "/root_pane/pane_id").unwrap_or_else(|| panic!("no root pane in {made}")).to_owned();
+		smoke.workspace =
+			answered(&made, "/workspace/workspace_id").unwrap_or_else(|| panic!("no workspace in {made}")).to_owned();
+		let omp = sandbox.path().join("bin").join(format!("omp{}", std::env::consts::EXE_SUFFIX)).display().to_string();
+		// `pane run` types the command into the pane's shell (PowerShell on Windows), and the sandbox path may hold spaces.
+		let omp = if cfg!(windows) { format!("& '{omp}'") } else { format!("'{omp}'") };
+		let pane = smoke.pane.clone();
+		let ran = smoke.herdr(&["pane", "run", &pane, &omp]);
+		assert_eq!(ran.code, Some(0), "{}{}", ran.stdout, ran.stderr);
+		let found = waited(20, || smoke.thread().is_some());
+		assert!(found, "the omp pane in the worktree never became a thread: {}", smoke.report());
+		smoke
+	}
+
+	/// A herdr word in the smoke's session.
+	fn herdr(&self, args: &[&str]) -> Out {
+		finish(in_session(self.sandbox, self.session, args).spawn().expect("a herdr word"), 30)
+	}
+
+	fn threads(&self) -> String {
+		finish(self.sandbox.jocasta(&["thread", "list"]).spawn().expect("thread list"), 30).stdout
+	}
+
+	/// The first thread's name in a `thread list` that answered (exit 0), or `None` while it lists none or doesn't
+	/// answer; the rest of its line (time, spend) changes from one call to the next.
+	fn thread(&self) -> Option<String> {
+		let listed = finish(self.sandbox.jocasta(&["thread", "list"]).spawn().expect("thread list"), 30);
+		let name = listed.stdout.split_whitespace().next()?;
+		(listed.code == Some(0) && listed.stdout.trim() != "No threads.").then(|| name.to_owned())
+	}
+
+	fn report(&self) -> String {
+		let panes = self.herdr(&["pane", "list"]).stdout;
+		format!("{}\nherdr's panes: {panes}\n{}", self.threads(), logs(self.sandbox, self.session))
+	}
+
+	/// `server stop`; the server process it started has ended (at once after a handoff), and so has the service.
+	fn stop(&mut self) {
+		let stop = self.herdr(&["server", "stop"]);
+		assert_eq!(stop.code, Some(0), "{}{}", stop.stdout, stop.stderr);
+		let service_file = self.sandbox.path().join("data").join("jocasta-service.json");
+		let server = &mut self.server.0;
+		wait_until(90, "the server never ended", || matches!(server.try_wait(), Ok(Some(_))) && !service_file.exists());
+	}
+}
+
+/// The opt-in smoke on a real server (`mise run smoke`, `JOCASTA_HERDR_SMOKE=1`): herdr's events reach the service, so
+/// an omp started in a project's worktree is a thread within seconds and its closed workspace drops it, long before the
+/// minute's full refresh (fork plan finding 8).
 #[test]
 fn live_smoke_an_omp_pane_in_a_worktree_is_found_and_dropped_on_herdrs_events() {
 	if std::env::var("JOCASTA_HERDR_SMOKE").as_deref() != Ok("1") {
 		return;
 	}
 	let sandbox = Sandbox::new();
-	let service_file = sandbox.path().join("data").join("jocasta-service.json");
-	fake_omp(&sandbox);
-	let git_dir = git_folder();
-	let path = std::env::join_paths([sandbox.path().join("bin").as_path(), &git_dir]).expect("a PATH");
-	let worktree = leftover_worktree(&sandbox);
-	let main = sandbox.path().join("code").join("demo");
-	let added = finish(
-		sandbox
-			.jocasta(&["project", "add", &main.display().to_string()])
-			.env("PATH", &path)
-			.spawn()
-			.expect("project add"),
-		30,
-	);
-	assert_eq!(added.code, Some(0), "{}{}", added.stdout, added.stderr);
-	let server = in_session(&sandbox, "l", &["server"])
-		.env("JOCASTA_SERVICE", "1")
-		.env("PATH", &path)
-		.env("Path", &path)
-		.stdout(Stdio::null())
-		.stderr(Stdio::null())
-		.spawn()
-		.expect("starting jocasta server");
-	let mut server = Ends(server);
-	wait_until(90, "the service never listened", || service_file.exists());
-	wait_until(90, "the service never made workspace Jocasta", || has_jocastas_workspace(&sandbox, "l"));
-	let threads = || finish(sandbox.jocasta(&["thread", "list"]).spawn().expect("thread list"), 30).stdout;
-	assert_eq!(threads().trim(), "No threads.");
-
-	let cwd = worktree.display().to_string();
-	let made = finish(
-		in_session(&sandbox, "l", &["workspace", "create", "--cwd", &cwd, "--label", "left"])
-			.spawn()
-			.expect("workspace create"),
-		30,
-	);
-	let made: Value =
-		serde_json::from_str(&made.stdout).unwrap_or_else(|_| panic!("herdr's answer: {}{}", made.stdout, made.stderr));
-	let pane = answered(&made, "/root_pane/pane_id").unwrap_or_else(|| panic!("no root pane in {made}")).to_owned();
-	let workspace =
-		answered(&made, "/workspace/workspace_id").unwrap_or_else(|| panic!("no workspace in {made}")).to_owned();
-	let omp = sandbox.path().join("bin").join(format!("omp{}", std::env::consts::EXE_SUFFIX)).display().to_string();
-	// `pane run` types the command into the pane's shell (PowerShell on Windows), and the sandbox path may hold spaces.
-	let omp = if cfg!(windows) { format!("& '{omp}'") } else { format!("'{omp}'") };
-	let ran = finish(in_session(&sandbox, "l", &["pane", "run", &pane, &omp]).spawn().expect("pane run"), 30);
-	assert_eq!(ran.code, Some(0), "{}{}", ran.stdout, ran.stderr);
-	let report = || {
-		let panes = finish(in_session(&sandbox, "l", &["pane", "list"]).spawn().expect("pane list"), 30).stdout;
-		format!("{}\nherdr's panes: {panes}\n{}", threads(), logs(&sandbox, "l"))
-	};
-	let found = waited(20, || threads().trim() != "No threads.");
-	assert!(found, "the omp pane in the worktree never became a thread: {}", report());
-
-	let closed =
-		finish(in_session(&sandbox, "l", &["workspace", "close", &workspace]).spawn().expect("workspace close"), 30);
+	let mut smoke = Smoke::start(&sandbox, "l");
+	let workspace = smoke.workspace.clone();
+	let closed = smoke.herdr(&["workspace", "close", &workspace]);
 	assert_eq!(closed.code, Some(0), "{}{}", closed.stdout, closed.stderr);
-	let dropped = waited(20, || threads().trim() == "No threads.");
-	assert!(dropped, "the closed thread stayed: {}", report());
+	let dropped = waited(20, || smoke.threads().trim() == "No threads.");
+	assert!(dropped, "the closed thread stayed: {}", smoke.report());
+	smoke.stop();
+}
 
-	let stop = finish(in_session(&sandbox, "l", &["server", "stop"]).spawn().expect("server stop"), 30);
-	assert_eq!(stop.code, Some(0), "{}{}", stop.stdout, stop.stderr);
-	wait_until(90, "the server process never ended", || matches!(server.0.try_wait(), Ok(Some(_))));
+/// The opt-in smoke of an upgrade on Linux and macOS (0649): herdr's live handoff moves the panes to a new server
+/// process, the old one ends, and the service starts again in the new one and finds the same thread there, its omp
+/// never stopped.
+#[cfg(unix)]
+#[test]
+fn live_smoke_a_live_handoff_keeps_a_threads_pane_and_the_service_starts_again_in_the_new_server() {
+	if std::env::var("JOCASTA_HERDR_SMOKE").as_deref() != Ok("1") {
+		return;
+	}
+	let sandbox = Sandbox::new();
+	let service_file = sandbox.path().join("data").join("jocasta-service.json");
+	let mut smoke = Smoke::start(&sandbox, "h");
+	let thread = smoke.thread().expect("the thread before the handoff");
+	let before = std::fs::read_to_string(&service_file).expect("the service file");
+	let handoff = smoke.herdr(&["server", "live-handoff"]);
+	assert_eq!(handoff.code, Some(0), "{}{}; {}", handoff.stdout, handoff.stderr, smoke.report());
+	assert!(handoff.stderr.contains("live handoff complete"), "{}", handoff.stderr);
+	let server = &mut smoke.server.0;
+	// The old server ends once its service has (its stop waits on herdr calls the handoff's loop answers late).
+	wait_until(90, "the old server outlived its handoff", || matches!(server.try_wait(), Ok(Some(_))));
+	let restarted = waited(90, || std::fs::read_to_string(&service_file).is_ok_and(|now| now != before));
+	assert!(restarted, "the service never started in the new server: {}", smoke.report());
+	let panes = smoke.herdr(&["pane", "list"]).stdout;
+	assert!(panes.contains(&smoke.pane), "the thread's pane didn't survive the handoff: {}", smoke.report());
+	let found = waited(60, || smoke.thread().as_ref() == Some(&thread));
+	assert!(found, "the new service never found thread {thread}: {}", smoke.report());
+	smoke.stop();
 }
 
 /// A child process killed when the test ends, on a failure too.

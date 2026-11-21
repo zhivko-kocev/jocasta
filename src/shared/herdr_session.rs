@@ -1,7 +1,7 @@
 //! The herdr session Jocasta's work surface lives in.
 
 use crate::shared::env;
-use crate::shared::errors::{Error, Result};
+use crate::shared::errors::{Context, Error, Result};
 
 /// Jocasta's own session: herdr's default session, inside Jocasta's data folder (`<data>/herdr`).
 pub const DEFAULT_SESSION: &str = "jocasta";
@@ -22,8 +22,8 @@ pub fn session_args(session: &str) -> Vec<String> {
 }
 
 /// The program that runs herdr's words: this `jocasta`, which has herdr built in.
-pub fn herdr_program() -> Option<std::path::PathBuf> {
-	std::env::current_exe().ok()
+pub fn herdr_program() -> Result<std::path::PathBuf> {
+	std::env::current_exe().context("this jocasta's own path")
 }
 
 /// `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`.

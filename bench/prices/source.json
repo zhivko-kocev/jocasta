@@ -3,9 +3,9 @@
 	"file": "model_prices_and_context_window.json",
 	"repository": "https://github.com/BerriAI/litellm",
 	"license": "MIT",
-	"url": "https://raw.githubusercontent.com/BerriAI/litellm/e58354f0554cb11b0ce2f042ff625957cded398f/model_prices_and_context_window.json",
-	"commit": "e58354f0554cb11b0ce2f042ff625957cded398f",
-	"commitDate": "2026-11-08T04:32:42Z",
-	"fetchedAt": "2026-11-09",
-	"sha256": "faa400408127c27aa323d29544389f85a06ab77660aa910b6d6e30dc46f33aa2"
+	"url": "https://raw.githubusercontent.com/BerriAI/litellm/8fb9f2f0907596e689808c76b746494d93cc759d/model_prices_and_context_window.json",
+	"commit": "8fb9f2f0907596e689808c76b746494d93cc759d",
+	"commitDate": "2026-11-11T18:52:17Z",
+	"fetchedAt": "2026-11-18",
+	"sha256": "4d9f67ab0593c98c989b222d5290508e58299c01faa746517037dfa5b8794088"
 }

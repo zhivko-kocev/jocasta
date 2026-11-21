@@ -4,7 +4,7 @@ use serde_json::{Map, Value, json};
 
 use super::*;
 use crate::lib::prices::{
-	ModelPrice, RequestTokens, candidate_keys, load_price_table, pinned_source, price_request, price_table_from,
+	ModelPrice, RequestTokens, candidate_keys, load_price_table, price_request, price_table_from,
 };
 use jocasta::shared::ledger::{
 	CACHE_MISS_WRITE_TOKENS, OVERSIZED_RESULT_BYTES, PeakContext, Waste, arg_hash, normalize_path, paths_of,
@@ -54,7 +54,10 @@ fn prices() -> PriceTable {
 #[test]
 fn the_committed_price_table_matches_its_pinned_sha_256_and_prices_the_arms_model_0538() {
 	let table = load_price_table().unwrap();
-	assert_eq!(pinned_source().unwrap().commit, "e58354f0554cb11b0ce2f042ff625957cded398f");
+	// Every model the model study runs has a price (0652), Fable 5.2 among them.
+	for model in ["claude-fable-5-2", "claude-sonnet-5-5"] {
+		assert_eq!(table.lookup(Some("anthropic"), model).unwrap().key, model);
+	}
 	let opus = table.lookup(Some("anthropic"), "claude-opus-5-5").unwrap();
 	assert_eq!(opus.key, "claude-opus-5-5");
 	assert_eq!((opus.input, opus.output, opus.cache_read, opus.cache_write), (4e-6, 2e-5, 2e-7, 5e-6));

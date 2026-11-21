@@ -100,6 +100,10 @@ enum EvalsCommand {
 	Keep(ScriptArgs),
 	/// A5, his case study: `record` or `report`.
 	A5(ScriptArgs),
+	/// The settings trials (fork plan section 4): `enumerate`, `replay`, `screen`, `confirm` or `report`, each with
+	/// `--dir <run>`.
+	#[command(disable_help_flag = true)]
+	Settings(ScriptArgs),
 }
 
 #[tokio::main]
@@ -129,6 +133,7 @@ async fn main() -> ExitCode {
 			Some(EvalsCommand::Bench(script)) => evals::bench_cli::main(script.args).await,
 			Some(EvalsCommand::Keep(script)) => run_script(evals::keep::run(&script.args)).await,
 			Some(EvalsCommand::A5(script)) => evals::a5::main(script.args).await,
+			Some(EvalsCommand::Settings(script)) => evals::settings::main(script.args).await,
 			None => evals::run::main(evals.run).await,
 		},
 		None => {

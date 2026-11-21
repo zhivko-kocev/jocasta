@@ -47,7 +47,7 @@ use jocasta::shared::proctree::{end_processes, process_id_of, processes_in};
 use jocasta::shared::prompt::without_leading_comment;
 
 /// The overlay every trial starts from: eval sessions never enter his memory. A variant's settings layer over it.
-fn base_overlay() -> Map<String, Value> {
+pub fn base_overlay() -> Map<String, Value> {
 	object(json!({ "memory": { "backend": "off" } }))
 }
 

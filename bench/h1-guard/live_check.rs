@@ -1,4 +1,4 @@
-//! H1's pre-registered live check (0482, design 4a; omp 18.20.2 per 0535 and 0623, recorder per 0585): real omp, told
+//! H1's pre-registered live check (0482, design 4a; omp 19.1.0 per 0535 and 0623, recorder per 0585): real omp, told
 //! by a cheap model to run 30 random corpus commands once each, against the in-process verdicts of `omp-verdicts.ts`.
 //! For the VM; a few cents.
 //!
@@ -44,7 +44,7 @@ use jocasta::shared::errors::{Error, Result};
 use jocasta::shared::fsx::remove_tree;
 use jocasta::shared::pathkey::resolve;
 
-/// Anthropic's cheapest model in omp 18.20.2's catalog (`pi-catalog/src/models.json` via `getBundledModel`):
+/// Anthropic's cheapest model in omp 19.1.0's catalog (`pi-catalog/src/models.json` via `getBundledModel`):
 /// $0.10/$0.50 per M tokens.
 pub const DEFAULT_MODEL: &str = "anthropic/claude-haiku-5-5";
 const CANARY_FILE: &str = "h1-live-canary.txt";

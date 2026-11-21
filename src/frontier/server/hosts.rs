@@ -1,7 +1,7 @@
 //! omp's local host registry (0547, 0561): every omp hosting a collab room (Jocasta's panes, through its relay) has
 //! `<home>/.omp/run/collab-hosts/<entry>.json` (`{version, instanceId, pid, endpoint, createdAt, token}`) and answers
 //! one JSON line on that endpoint, a named pipe on Windows: `{"v":1,"token":…,"op":"snapshot"}` →
-//! `{ok, v, snapshot: {pid, cwd, busy, inputRequired, relayConnected, …}}` (omp 18.20.2 `src/collab/registry.ts`,
+//! `{ok, v, snapshot: {pid, cwd, busy, inputRequired, relayConnected, …}}` (omp 19.1.0 `src/collab/registry.ts`,
 //! protocol v1, documented for dashboards). Read directly: `omp collab list` takes about 0.7 s a call, a pipe 0–5 ms.
 
 use std::collections::HashSet;
@@ -191,7 +191,7 @@ pub fn remove_host_entries(pids: &HashSet<u32>, dir: Option<&Path>) -> usize {
 	removed
 }
 
-/// A stand-in for one omp host in omp's local registry (omp 18.20.2 `src/collab/registry.ts`, protocol v1): a metadata
+/// A stand-in for one omp host in omp's local registry (omp 18.22.0 `src/collab/registry.ts`, protocol v1): a metadata
 /// file in `dir` and an endpoint (a named pipe on Windows, a socket elsewhere) answering one `snapshot` line for its
 /// bearer token, with the state a test sets. It runs in-process on tokio.
 #[cfg(test)]

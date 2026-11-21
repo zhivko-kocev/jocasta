@@ -142,7 +142,7 @@ impl SetupIo for ConsoleIo {
 }
 
 async fn run_setup_route(refresh: Option<String>, calendar_env: Option<String>) -> Result<i32> {
-	let herdr = herdr_program();
+	let herdr = herdr_program()?;
 	let paths = default_setup_paths(&shipped_config_dir(None), self_command(None));
 	let mut deps = SetupDeps::new(herdr.clone());
 	deps.mise = on_path("mise", None);
@@ -153,16 +153,14 @@ async fn run_setup_route(refresh: Option<String>, calendar_env: Option<String>) 
 			(out.code == 0).then_some(out.output)
 		})
 	}));
-	if let Some(herdr) = herdr {
-		let session = herdr_session()?;
-		deps.reload_herdr = Some(Arc::new(move || {
-			let argv = std::iter::once(herdr.display().to_string())
-				.chain(session_args(&session))
-				.chain(["server".to_owned(), "reload-config".to_owned()])
-				.collect();
-			Box::pin(run(argv))
-		}));
-	}
+	let session = herdr_session()?;
+	deps.reload_herdr = Some(Arc::new(move || {
+		let argv = std::iter::once(herdr.display().to_string())
+			.chain(session_args(&session))
+			.chain(["server".to_owned(), "reload-config".to_owned()])
+			.collect();
+		Box::pin(run(argv))
+	}));
 	let io = ConsoleIo::new();
 	match refresh {
 		None => run_setup(&paths, &deps, &io).await,
@@ -188,7 +186,7 @@ async fn run_uninstall_route() -> Result<i32> {
 	let setup = default_setup_paths(&shipped_config_dir(None), self_command(None));
 	let deps = UninstallDeps {
 		service_state: Arc::new(|| Box::pin(async { Ok(service_state(read_service_file().as_ref(), None).await) })),
-		herdr: herdr_program(),
+		herdr: herdr_program()?,
 		session,
 		run: run_program_dep(),
 		setup_undo: setup_undo(&setup, read_credential(CALENDAR_CREDENTIAL).is_some()),

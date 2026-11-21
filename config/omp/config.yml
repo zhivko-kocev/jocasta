@@ -1,7 +1,7 @@
 # Jocasta's omp snapshot (fork plan phase 6): `jocasta setup` writes this file over ~/.omp/agent/config.yml after
 # showing the diff and his `y`, keeping the file it replaces in ~/.jocasta/agent/setup/omp-backup/<UTC time>/; keys of
 # his that aren't here go with it (they stay in the backup). Deltas from omp's defaults (principle 3), pins where a
-# later default would send data out, and his model roles (0590, 0591, 0618). Keys checked against omp 18.20.2's source.
+# later default would send data out or cost tokens, and his model roles (0590, 0591, 0618). Keys checked against omp 19.1.0's source.
 # Per-pane values are not here: every project and thread pane gets `--config <config>/guard.yml` (the guard, 0450) and
 # `--config <data>/projects/<pid>/omp.yml` (memory off, no completion probe, no job widgets, compaction, plan mode,
 # AGENTS.local.md, lessons, and the privacy settings `dev.autoqa`, `disabledProviders`, `modelRoles.web`; 0447–0449,
@@ -46,6 +46,17 @@ advisor:
 tools:
   restrictedFolders: ["~/.ssh", "~/.aws", "~/.azure", "~/.docker"]
 
+# The settings trials on omp 18.22.2 (0651; still in force on 19.1.0): a todo list suggested on the first message cut a trial's cost by 21% at
+# the same pass rate. `edit.mode` stays omp's hashline: removing the edit tool was faster on the 12 small cases, but
+# it would turn edits on real code into bash rewrites.
+todo:
+  eager: preferred
+
+# omp 19.0.0 turned composer predictions on: after each turn the active model writes a suggested next message, a model
+# call he didn't ask for. Pinned off, as it was before (19.1.0 re-check).
+composer:
+  predictions: false
+
 # Nothing leaves the machine that doesn't have to (0398, 0451, 0593).
 telemetry:
   otlpExportEnabled: false
@@ -58,6 +69,10 @@ startup:
   # Onboarding scenes and changelog chrome stay out of panes.
   setupWizard: false
   changelogMode: hidden
+# Pictures and pages the agent embeds in a reply aren't drawn: omp (since 18.22) fetches them from their remote
+# addresses to draw them.
+tui:
+  renderEmbeds: false
 marketplace:
   autoUpdate: "off"
 recap:
@@ -80,7 +95,7 @@ modelRoles:
   commit: anthropic/claude-haiku-5-5:low
   judge: anthropic/claude-haiku-5-5
   tiny: local/lfm2.5-350m
-  speech: local/kokoro
+  speech: local/phonon-31m
   dictation: local/parakeet-tdt-0.6b-v3
   web: web/duckduckgo
 # His fallbacks per role (0590): `plan` and `slow` on Opus 5.5 then Opus 5 at max, `vision` Opus 5.5 low first; web

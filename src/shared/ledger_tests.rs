@@ -439,6 +439,7 @@ fn nested_fork_counts_its_inherited_history_once(file: &str, header: Value) {
 	let before = trial_ledger(&thread_session_records(std::slice::from_ref(&main), &PerToken), &PerToken);
 	close(before.totals.cost, 0.13725);
 	// omp 18.20.2 writes the fork beside the parent's subagents: the parent's history again, cost zeroed, tokens kept.
+	// omp 18.21 removed seance, so only older session files hold such a fork.
 	let mut fork_header = json!({ "type": "session", "timestamp": iso(5) });
 	fork_header.as_object_mut().unwrap().extend(header.as_object().unwrap().clone());
 	let mut fork = vec![fork_header];

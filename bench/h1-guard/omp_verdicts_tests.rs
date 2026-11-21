@@ -1,5 +1,5 @@
 //! `test/bench/h1-guard.test.ts`'s cases for `omp-verdicts.ts`'s script half (`disagreements`, `judgeCorpus`), and one
-//! case through the real oracle (Bun and omp 18.20.2), skipped with its reason where either is missing, as the
+//! case through the real oracle (Bun and omp 19.1.0), skipped with its reason where either is missing, as the
 //! TypeScript's omp-dependent cases were.
 
 use super::*;

@@ -250,17 +250,21 @@ fn a_run_folder_with_nothing_to_compare_exits_2_instead_of_passing() {
 
 #[test]
 fn omp_verdicts_writes_omp_s_verdict_for_each_line_with_the_git_guard_on_top_byte_for_byte() {
-	// omp's own code loads only on Bun (the oracle, `omp-verdicts.ts`): without Bun or omp 18.20.2 the case says why.
+	// omp's own code loads only on Bun (the oracle, `omp-verdicts.ts`), and only the pinned version: without Bun or
+	// omp's package at that version the case says why, as `test/config/guard.test.ts` does.
 	let found = Command::new("bun").args(["-e", "process.exit(0)"]).output().is_ok();
 	let omp = std::process::Command::new("bun")
 		.args([
 			"-e",
-			"import { findOmpDir } from './bench/h1-guard/omp-verdicts.ts'; process.exit(findOmpDir() === undefined ? 1 : 0);",
+			"import { readFileSync } from 'node:fs'; \
+			 import { PINNED_OMP, findOmpDir } from './bench/h1-guard/omp-verdicts.ts'; \
+			 const dir = findOmpDir(); \
+			 process.exit(dir && JSON.parse(readFileSync(`${dir}/package.json`, 'utf8')).version === PINNED_OMP ? 0 : 1);",
 		])
 		.current_dir(env!("CARGO_MANIFEST_DIR"))
 		.output();
 	if !found || !omp.is_ok_and(|run| run.status.success()) {
-		println!("omp-verdicts: skipped, Bun or omp isn't installed");
+		println!("omp-verdicts: skipped, Bun or omp's pinned package isn't installed");
 		return;
 	}
 	let dir = temp_dir("jocasta-h1-");

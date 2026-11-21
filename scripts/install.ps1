@@ -12,16 +12,16 @@
 # Layout: <dir>\jocasta.exe, <dir>\config\, <dir>\node\, <dir>\whiteboard\, <dir>\whiteboard-canvas\,
 # <dir>\editor.worker.js, <dir>\hunk\, and <dir>\install.json naming <dir>, the release's top-level entries (what
 # `jocasta uninstall` removes, 0579) and what this install adds beyond the folder (0468): its user PATH entry.
-# Upgrade (CR-06): omp sessions keep `jocasta.exe mcp` and whiteboard's node.exe running from the install, and hunk
-# panes hunk.exe, so neither those files nor the folder can be replaced (a running program's file can't be
-# overwritten, and its folder can't be renamed). A running program's file can be renamed, though: the release is
-# staged complete beside the install, the Jocasta service (`jocasta.exe service`), whiteboard's desktop server and an
-# older install's companion (`app\`, gone with 0552) stop (herdr's panes keep running, 0392; `jocasta` starts the
-# service again, 0552), the old install is copied aside, every
-# file still in use (.exe, .dll, .node) is renamed in place to `<name>.old-<stamp>`, and robocopy mirrors the staged
-# release over the install, leaving those `.old-*` files alone. Running programs keep their old files until
-# they exit; `.old-*` files no longer in use are removed now and by every later install. If the renames or the copy
-# fail, the install is mirrored back from the copy aside, so there is never half an install.
+# Upgrade (CR-06): Jocasta's server (`jocasta.exe server`, herdr's server with the service in it, fork plan phase 4),
+# omp sessions' `jocasta.exe mcp`, whiteboard's node.exe and hunk panes' hunk.exe run from the install, so neither
+# those files nor the folder can be replaced (a running program's file can't be overwritten, and its folder can't be
+# renamed). A running program's file can be renamed, though: the release is staged complete beside the install, an
+# older install's companion (`app\`, gone with 0552) stops, the old install is copied aside, every file still in use
+# (.exe, .dll, .node) is renamed in place to `<name>.old-<stamp>`, and robocopy mirrors the staged release over the
+# install, leaving those `.old-*` files alone. Running programs keep their old files until they exit; `.old-*` files
+# no longer in use are removed now and by every later install. A running Jocasta keeps its panes and the old build
+# until he restarts it: Windows has no live handoff (fork plan finding 20). If the renames or the copy fail, the
+# install is mirrored back from the copy aside, so there is never half an install.
 # Everything runs in its own scope, so `irm … | iex` leaves his shell's preferences as they were.
 & {
 	$ErrorActionPreference = 'Stop'
@@ -123,29 +123,21 @@
 		[IO.File]::WriteAllText((Join-Path $stage 'install.json'), (ConvertTo-Json -Compress $record))
 
 		$upgrading = Test-Path $dir
+		$running = @()
 		if ($upgrading) {
-			# The Jocasta service (0552) stops first, with whiteboard's desktop server, which would otherwise keep the old
-			# node.exe busy and be reused by the next service, and an older install's companion (launcher.exe and its
-			# bun.exe under app\), which would keep its old service's port; `jocasta` starts the service again on the new
-			# build.
+			# An older install's companion (launcher.exe and its bun.exe under app\) stops: it would keep its old
+			# service's port. A running Jocasta stays: stopping its server would close his panes.
 			$companion = @(Get-CimInstance Win32_Process |
 				Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith("$dir\app\", [StringComparison]::OrdinalIgnoreCase) })
 			if ($companion.Count -gt 0) {
 				Write-Host "jocasta install: stopping the companion app an earlier install left running."
 				$companion | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+				Start-Sleep -Milliseconds 500
 			}
-			Get-CimInstance Win32_Process -Filter "Name = 'jocasta.exe'" |
+			$running = @(Get-CimInstance Win32_Process -Filter "Name = 'jocasta.exe'" |
 				Where-Object {
-					$_.ExecutablePath -and $_.ExecutablePath -ieq "$dir\jocasta.exe" -and $_.CommandLine -match '\sservice\s*$'
-				} |
-				ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-			Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" |
-				Where-Object {
-					$_.ExecutablePath -and $_.ExecutablePath.StartsWith("$dir\node\", [StringComparison]::OrdinalIgnoreCase) -and
-					$_.CommandLine -like '*desktop-host.js*'
-				} |
-				ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-			Start-Sleep -Milliseconds 500
+					$_.ExecutablePath -and $_.ExecutablePath -ieq "$dir\jocasta.exe" -and $_.CommandLine -match '\sserver\s*$'
+				})
 			# The install as it is, to put back if the copy fails (running programs' files can be read).
 			try { Sync-Folder $dir $aside } catch {
 				Remove-Item -Recurse -Force $aside -ErrorAction SilentlyContinue
@@ -196,7 +188,9 @@ public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint msg, UIntPtr wP
 				$key.Close()
 			}
 		}
-		if (Get-ChildItem -Path $dir -Recurse -File -Filter '*.old-*' -ErrorAction SilentlyContinue) {
+		if ($running.Count -gt 0) {
+			Write-Host "jocasta install: Jocasta is running on the old build; close it and run jocasta again to use the new one (Windows can't hand its panes over live)."
+		} elseif (Get-ChildItem -Path $dir -Recurse -File -Filter '*.old-*' -ErrorAction SilentlyContinue) {
 			Write-Host "jocasta install: omp sessions and hunk panes started before the upgrade run the old build until they restart."
 		}
 		& (Join-Path $dir 'jocasta.exe') --version

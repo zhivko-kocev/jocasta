@@ -101,6 +101,34 @@ pub fn parents(groups: Option<&mut HashMap<u32, u32>>) -> BTreeMap<u32, u32> {
 	parents
 }
 
+/// The arguments of each of `pids` (the first is the program); one that can't be read is left out. Linux reads
+/// `/proc/<pid>/cmdline`, whose arguments are NUL-separated. macOS asks `ps` once for the arguments as one text and
+/// splits it at whitespace, as `ps` keeps no boundaries: an argument holding a space shows as several.
+pub fn args(pids: &[u32]) -> HashMap<u32, Vec<String>> {
+	if cfg!(target_os = "linux") {
+		return pids
+			.iter()
+			.filter_map(|pid| {
+				let raw = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+				let argv: Vec<String> = raw
+					.split(|byte| *byte == 0)
+					.filter(|arg| !arg.is_empty())
+					.map(|arg| String::from_utf8_lossy(arg).into_owned())
+					.collect();
+				Some((*pid, argv))
+			})
+			.collect();
+	}
+	let list = pids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+	let mut found = HashMap::new();
+	for line in output_of(PS, &["-ww", "-o", "pid=,args=", "-p", &list], true).lines() {
+		let mut parts = line.split_whitespace();
+		let Some(pid) = parts.next().and_then(|pid| pid.parse::<u32>().ok()) else { continue };
+		found.insert(pid, parts.map(str::to_owned).collect());
+	}
+	found
+}
+
 pub fn cwds() -> Vec<FolderProcess> {
 	if cfg!(target_os = "linux") { linux_cwds() } else { lsof_cwds() }
 }

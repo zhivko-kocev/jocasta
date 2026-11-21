@@ -1,0 +1,5 @@
+# Model study on the tasks (0652, fork-build.md choice 88): A1 on claude-opus-5-5 at `medium` thinking, against A1
+# (Opus 5.5 at high). The last `--thinking` wins over A0's `high`.
+extends: [a1]
+model: anthropic/claude-opus-5-5
+args: [--thinking, medium]
