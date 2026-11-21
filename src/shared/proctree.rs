@@ -436,10 +436,10 @@ pub fn descendants(root: u32, parents: &BTreeMap<u32, u32>, skip: &HashSet<u32>)
 /// directory is read from its PEB (`NtQueryInformationProcess` + `ReadProcessMemory`); a process this user can't open
 /// (another user's, an elevated one) is skipped, and a folder recorded with an 8.3 short name (`C:\Users\ZHIVKO~1\…`,
 /// what a short `%TEMP%` gives a child) is expanded to its long one before comparing. Linux: `/proc/<pid>/cwd`. macOS:
-/// `lsof -d cwd`. omp's daemon is found here like any process, unlike in a tree walk ([`spare_daemons`]): when its
-/// working folder (the folder of the omp that spawned it) is inside a worktree about to be removed, ending it is the
-/// only way to free the folder on Windows, and omp starts it again when a client needs it (0490; omp 19.1.0
-/// `daemon/client.ts:694-696`).
+/// `lsof -d cwd`. omp's daemon is found here like any process: when its working folder (the folder of the omp that
+/// spawned it) is inside a worktree about to be removed, worktree removal names it as a holder and leaves the folder;
+/// a caller that ends what it finds through [`end_processes`] still spares it (0490; omp 19.1.0
+/// `daemon/client.ts:180-191`).
 pub fn processes_in(folder: &Path) -> Vec<FolderProcess> {
 	let mut roots = vec![folder.to_path_buf()];
 	let real = real_path(folder);
