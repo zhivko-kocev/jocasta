@@ -168,7 +168,9 @@ pub(crate) struct Page {
 }
 
 impl Page {
-	/// Opens `/ws<query>` with the token as the bearer; panics when refused.
+	/// Opens `/ws<query>` with the token as the bearer and waits for the service's snapshot, its first frame: the
+	/// server subscribes to its messages before sending it, so nothing published after `open` returns is missed. Panics
+	/// when refused.
 	pub(crate) async fn open(server: &JocastaServer, query: &str) -> Page {
 		let mut request = format!("ws://127.0.0.1:{}/ws{query}", server.port).into_client_request().unwrap();
 		request.headers_mut().insert("authorization", format!("Bearer {}", server.token).parse().unwrap());
@@ -196,7 +198,9 @@ impl Page {
 				}
 			}
 		});
-		Page { received, changed, outgoing, tasks: vec![reader, writer] }
+		let page = Page { received, changed, outgoing, tasks: vec![reader, writer] };
+		page.wait_for(|_| true).await;
+		page
 	}
 
 	pub(crate) fn send(&self, message: &ClientMessage) {
