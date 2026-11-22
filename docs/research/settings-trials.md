@@ -80,22 +80,25 @@ bench's ledger. A pass is the hidden tests passing on the arm's change.
 | Sonnet 5.5 high | 21 | $2.60 | $0.087 | $0.124 | 0.6 | 103,310 |
 | Sonnet 5.5 medium | 19 | $1.59 | $0.053 | $0.084 | 0.3 | 76,666 |
 
-Paired with A1 task by task (95% bootstrap intervals over the 30 tasks):
+Paired with A1 task by task: the tasks only one of the two passed, with an exact two-sided sign test on them, and 95%
+percentile bootstrap intervals over the 30 tasks for the differences:
 
-| Arm | Only the arm passed | Only A1 passed | Δ passes | Δ cost per task | Δ minutes per task |
-|---|---|---|---|---|---|
-| Opus 5.5 medium | 1 | 1 | +0.00 (−0.10, +0.10) | −$0.100 (−0.215, −0.028) | −0.1 (−0.5, +0.5) |
-| Opus 5.5 xhigh | 1 | 1 | +0.00 (−0.10, +0.10) | +$0.189 (+0.052, +0.388) | +1.1 (+0.1, +2.8) |
-| Fable 5.2 high | 2 | 1 | +0.03 (−0.07, +0.17) | +$0.464 (+0.267, +0.779) | −0.0 (−0.5, +0.5) |
-| Fable 5.2 xhigh | 4 | 0 | +0.13 (+0.03, +0.27) | +$1.061 (+0.606, +1.808) | +1.2 (+0.4, +2.4) |
-| Sonnet 5.5 high | 0 | 1 | −0.03 (−0.10, +0.00) | −$0.316 (−0.555, −0.177) | −1.6 (−2.5, −0.9) |
-| Sonnet 5.5 medium | 0 | 3 | −0.10 (−0.23, +0.00) | −$0.350 (−0.605, −0.199) | −2.0 (−3.4, −1.2) |
+| Arm | Only the arm passed | Only A1 passed | Sign test p | Δ passes | Δ cost per task | Δ minutes per task |
+|---|---|---|---|---|---|---|
+| Opus 5.5 medium | 1 | 1 | 1.0 | +0.00 (−0.10, +0.10) | −$0.100 (−0.215, −0.028) | −0.1 (−0.5, +0.5) |
+| Opus 5.5 xhigh | 1 | 1 | 1.0 | +0.00 (−0.10, +0.10) | +$0.189 (+0.052, +0.388) | +1.1 (+0.1, +2.8) |
+| Fable 5.2 high | 2 | 1 | 1.0 | +0.03 (−0.07, +0.17) | +$0.464 (+0.267, +0.779) | −0.0 (−0.5, +0.5) |
+| Fable 5.2 xhigh | 4 | 0 | 0.125 | +0.13 (+0.03, +0.27) | +$1.061 (+0.606, +1.808) | +1.2 (+0.4, +2.4) |
+| Sonnet 5.5 high | 0 | 1 | 1.0 | −0.03 (−0.10, +0.00) | −$0.316 (−0.555, −0.177) | −1.6 (−2.5, −0.9) |
+| Sonnet 5.5 medium | 0 | 3 | 0.25 | −0.10 (−0.23, +0.00) | −$0.350 (−0.605, −0.199) | −2.0 (−3.4, −1.2) |
 
 19 tasks passed in every arm and 4 in none (`tox-dev__tox-4104`, `prettier__prettier-20211`, `mvdan__sh-1409`,
-`eslint__eslint-21373`); the arms differ on the other 7. Fable 5.2 at xhigh is the only arm whose gain over A1 clears its
-interval: four more tasks (two of them, `cli__cli-14215` and `conan-io__conan-20371`, no other arm solved), at 3.6 times
-A1's cost and nearly twice its time. Opus at medium matches A1's passes for a quarter less money. Sonnet at high misses one
-task of A1's for a fifth of the cost and under half the time; at medium it misses three. One run per task and arm, so a
-single task moves an arm by 0.03; the intervals carry that.
+`eslint__eslint-21373`); the arms differ on the other 7. No difference in passes is established at this size: the
+bootstrap interval for Fable 5.2 at xhigh stays above zero only because its four discordant tasks all go its way, and
+the exact test on 4 to 0 gives p = 0.125, before any allowance for six arms; Sonnet at medium's 0 to 3 gives 0.25. The
+cost and time differences are the firm findings. Fable 5.2 at xhigh passed four tasks A1 missed (two of them,
+`cli__cli-14215` and `conan-io__conan-20371`, no other arm solved) at 3.6 times A1's cost and nearly twice its time.
+Opus at medium passed as many as A1 (one task each the other missed) for a quarter less money. Sonnet at high missed one
+task of A1's for a fifth of the cost and under half the time; at medium it missed three. One run per task and arm.
 
 Nothing is adopted: the roles stay records 0590 and 0591 until he decides (`fork-build.md` For him 17).
