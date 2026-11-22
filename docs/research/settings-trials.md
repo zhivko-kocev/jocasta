@@ -61,3 +61,41 @@ Interleaved with the base, 3 runs per case; every arm passed 36 of 36. Means per
 
 Nothing here is adopted: the roles are records 0590 and 0591, and which model does real work better is the 30-task study's
 question (`fork-build.md` For him 17). The two subagent arms land within 3% of the base on cost and time.
+
+## The model study on the 30 tasks (2026-11-22, omp 19.1.0)
+
+The task bench's 30 main tasks (10 Go, 10 Python, 5 TypeScript, 5 JavaScript), each run once per arm on his PC, two
+trials at a time (`jocasta-bench evals bench --set main --reps 1`, results in the thesis kit at
+`data/bench/tasks/runs/models-2026-11`). A1 is Jocasta's pane config on Opus 5.5 at high; each other arm is A1 with
+another model and a last `--thinking` (fork-build choice 88). 210 trials, none lost to the harness; $113.06 in all, by the
+bench's ledger. A pass is the hidden tests passing on the arm's change.
+
+| Arm | Passed | Cost | Cost per trial | Cost per pass | Median minutes | Median tokens |
+|---|---|---|---|---|---|---|
+| A1: Opus 5.5 high | 22 | $12.09 | $0.403 | $0.550 | 1.4 | 287,663 |
+| Opus 5.5 medium | 22 | $9.08 | $0.303 | $0.413 | 1.1 | 206,741 |
+| Opus 5.5 xhigh | 22 | $17.76 | $0.592 | $0.807 | 1.9 | 392,244 |
+| Fable 5.2 high | 23 | $26.01 | $0.867 | $1.131 | 1.7 | 301,558 |
+| Fable 5.2 xhigh | 26 | $43.93 | $1.464 | $1.690 | 2.6 | 493,382 |
+| Sonnet 5.5 high | 21 | $2.60 | $0.087 | $0.124 | 0.6 | 103,310 |
+| Sonnet 5.5 medium | 19 | $1.59 | $0.053 | $0.084 | 0.3 | 76,666 |
+
+Paired with A1 task by task (95% bootstrap intervals over the 30 tasks):
+
+| Arm | Only the arm passed | Only A1 passed | Δ passes | Δ cost per task | Δ minutes per task |
+|---|---|---|---|---|---|
+| Opus 5.5 medium | 1 | 1 | +0.00 (−0.10, +0.10) | −$0.100 (−0.215, −0.028) | −0.1 (−0.5, +0.5) |
+| Opus 5.5 xhigh | 1 | 1 | +0.00 (−0.10, +0.10) | +$0.189 (+0.052, +0.388) | +1.1 (+0.1, +2.8) |
+| Fable 5.2 high | 2 | 1 | +0.03 (−0.07, +0.17) | +$0.464 (+0.267, +0.779) | −0.0 (−0.5, +0.5) |
+| Fable 5.2 xhigh | 4 | 0 | +0.13 (+0.03, +0.27) | +$1.061 (+0.606, +1.808) | +1.2 (+0.4, +2.4) |
+| Sonnet 5.5 high | 0 | 1 | −0.03 (−0.10, +0.00) | −$0.316 (−0.555, −0.177) | −1.6 (−2.5, −0.9) |
+| Sonnet 5.5 medium | 0 | 3 | −0.10 (−0.23, +0.00) | −$0.350 (−0.605, −0.199) | −2.0 (−3.4, −1.2) |
+
+19 tasks passed in every arm and 4 in none (`tox-dev__tox-4104`, `prettier__prettier-20211`, `mvdan__sh-1409`,
+`eslint__eslint-21373`); the arms differ on the other 7. Fable 5.2 at xhigh is the only arm whose gain over A1 clears its
+interval: four more tasks (two of them, `cli__cli-14215` and `conan-io__conan-20371`, no other arm solved), at 3.6 times
+A1's cost and nearly twice its time. Opus at medium matches A1's passes for a quarter less money. Sonnet at high misses one
+task of A1's for a fifth of the cost and under half the time; at medium it misses three. One run per task and arm, so a
+single task moves an arm by 0.03; the intervals carry that.
+
+Nothing is adopted: the roles stay records 0590 and 0591 until he decides (`fork-build.md` For him 17).
