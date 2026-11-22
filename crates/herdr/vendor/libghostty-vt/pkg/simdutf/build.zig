@@ -69,6 +69,8 @@ pub fn build(b: *std.Build) !void {
         // On MSVC we skip linkLibCpp (see above), so the C++ standard is
         // not set implicitly. simdutf requires C++17, so set it explicitly.
         try flags.append(b.allocator, "-std=c++17");
+        // MSVC's STL refuses a Clang older than the one it ships with (STL1000); Zig 0.16's is 21 (Jocasta's fork).
+        try flags.append(b.allocator, "-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH");
     }
 
     if (target.result.os.tag == .freebsd or

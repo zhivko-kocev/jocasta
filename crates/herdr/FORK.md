@@ -102,6 +102,10 @@ terminal is sent (no write over the wide tail) rather than the test backend's co
 - `vendor/translate-c/` (new): Zig's `translate-c` package (MIT, commit `4e879eb8aba615de112eabd1231ea6e01920cead`,
   17 files as Zig fetched them), and `vendor/libghostty-vt/build.zig.zon` and its `pkg/gtk4-layer-shell`, `pkg/harfbuzz`, `pkg/macos` and `pkg/wuffs` name it by `.path` instead of its
   codeberg.org URL, so a build fetches nothing from codeberg. Its own dependency `aro` still comes from github.com.
+- `vendor/libghostty-vt/pkg/simdutf/build.zig`, `pkg/highway/build.zig` and `src/build/SharedDeps.zig` (the `src/simd`
+  C++ files) define `_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH` for the MSVC ABI: MSVC 14.52's STL refuses a Clang older
+  than its own (STL1000), and Zig 0.16's is Clang 21 (GitHub's `windows-2025-vs2026` image of 2026-11-17 broke the
+  Windows build this way; 14.51 on his PC still accepts Clang 20 and up).
 
 ## Taking an upstream release
 
