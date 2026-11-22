@@ -16,6 +16,7 @@ ignore = [
 	{ id = "RUSTSEC-2026-0370", reason = "zvariant is unmaintained (moved into zbus 6); herdr's zbus 5 depends on it" },
 	{ id = "RUSTSEC-2026-0371", reason = "zbus_names is unmaintained (moved into zbus 6); herdr's zbus 5 depends on it" },
 	{ id = "RUSTSEC-2026-0372", reason = "zvariant_derive is unmaintained (moved into zbus 6); herdr's zbus 5 depends on it" },
+	{ id = "RUSTSEC-2026-0592", reason = "url 2.5.8's origin() on nested blob: URLs; Jocasta calls it only on an http URL it checked. url 2.5.9 is from 2026-11-20 and enters the lock on or after 2026-11-27 (0627's 7 days), dropping this line (fork-build.md row 104)" },
 ]
 
 [licenses]
