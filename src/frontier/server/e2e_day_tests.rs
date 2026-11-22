@@ -207,9 +207,11 @@ async fn delivery_0299_0405_0554_each_event_is_an_event_line_and_a_notification_
 
 		// 30 minutes later, both are still open: one reminder each, and only one.
 		time.add(30 * 60_000);
-		// A line put in keeps the boss busy until its turn ends (CR-08): its next idle takes what waits.
+		// A line put in keeps the boss busy until its turn ends (CR-08): its next idle takes what waits. The reminders go
+		// through the service's own tasks; an idle handled before both are queued lets the first in and keeps the second.
 		boss_working(&server);
 		day.tick().unwrap();
+		server.service.context().events.settled().await;
 		boss_idle_now(&server);
 		until(|| lines(&server).len() == 4).await;
 		assert_eq!(
