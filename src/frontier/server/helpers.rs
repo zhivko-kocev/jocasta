@@ -366,6 +366,25 @@ pub(crate) fn until_within(mut check: impl FnMut() -> bool, timeout_ms: i64) -> 
 	}
 }
 
+/// Waits until the service has handled every pane state herdr pushed or a refresh caught up: it takes them on a task of
+/// its own, so a step right after a push or a refresh can run before the state lands.
+#[track_caller]
+pub(crate) fn states_settled(server: &TestServer) -> impl Future<Output = ()> + '_ {
+	until(|| server.service.states_settled())
+}
+
+/// herdr pushes the pane's `state`, and the test waits until the service has handled it ([`states_settled`]).
+#[track_caller]
+pub(crate) fn push_state<'a>(
+	server: &'a TestServer,
+	pane_id: &str,
+	state: AgentState,
+	session_path: Option<&str>,
+) -> impl Future<Output = ()> + 'a {
+	server.herdr.set_state(pane_id, state, session_path, true);
+	states_settled(server)
+}
+
 /// [`until`] with a check that awaits.
 pub(crate) async fn until_async<F, Fut>(mut check: F)
 where
@@ -549,6 +568,7 @@ pub(crate) async fn start_thread(server: &TestServer, options: ThreadOptions<'_>
 		server.herdr.set_state(&pane.pane_id, AgentState::Idle, None, true);
 	}
 	let reply = replied.await.expect("the call ran");
+	states_settled(server).await;
 	server.herdr.state().omp_up_on_create = None;
 	Started { pane_id: pane.pane_id, path, reply: reply.text }
 }

@@ -141,6 +141,13 @@ impl ThreadLifecycle {
 		self.chains.settled().await;
 	}
 
+	/// Whether every state change queued so far was handled: a pane's queue goes once its last one's handling ends
+	/// (tests).
+	#[cfg(test)]
+	pub(crate) fn states_settled(&self) -> bool {
+		self.queues().by_pane.is_empty()
+	}
+
 	/// A pane's state changed: handled after the pane's earlier changes (CR-09).
 	pub fn state_changed(&self, pane_id: &str, state: AgentState, source: StateSource) {
 		let ctx = self.link.ctx();

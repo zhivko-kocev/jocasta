@@ -678,6 +678,12 @@ impl JocastaService {
 		self.ctx.events.boss_state()
 	}
 
+	/// Whether the service has handled every pane state herdr pushed or a refresh caught up (tests).
+	#[cfg(test)]
+	pub(crate) fn states_settled(&self) -> bool {
+		self.ctx.lifecycle.states_settled()
+	}
+
 	/// A toast as a Windows notification through herdr (0407, 0554), logged in `notifications.jsonl` (H2). `show` is
 	/// `options.show !== false`: `None` shows.
 	pub async fn notify(&self, toast: &Toast, show: Option<bool>) {

@@ -15,8 +15,8 @@ use serde_json::{Value, json};
 use crate::frontier::protocol::{NeedsYouKind, ServerMessage, ToastReason};
 use crate::frontier::server::helpers::{
 	BRIEF, Keyed, Msg, Page, TestServer, ThreadOptions, boss_pane, call, call_as, cli, commit_in, demo_project, guard,
-	keyed, pane_check_flags, project_keyed, proposed_plan_file, review, session_file, sh, start_test_server_with,
-	start_thread, task_dir_of, thread_omp, until, until_async, use_hunk_daemon, with_server,
+	keyed, pane_check_flags, project_keyed, proposed_plan_file, push_state, review, session_file, sh,
+	start_test_server_with, start_thread, task_dir_of, thread_omp, until, until_async, use_hunk_daemon, with_server,
 };
 use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
 use crate::frontier::server::herdr::{AgentState, Env};
@@ -492,7 +492,7 @@ async fn a_plan_waiting_in_omps_plan_review_herdr_says_idle_waits_on_him_like_a_
 		let boss = server.herdr.state().pane_list[0].pane_id.clone();
 
 		// herdr's `done` means idle and not yet looked at: not a finished task.
-		server.herdr.set_state(&pane, AgentState::Done, None, true);
+		push_state(&server, &pane, AgentState::Done, None).await;
 		until(|| server.service.hud(None).is_ok_and(|hud| hud.running == 0)).await;
 		assert_eq!(status(&server).await, "demo/Readme line [feature/readme-line] idle");
 

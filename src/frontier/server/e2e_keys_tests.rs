@@ -15,7 +15,8 @@ use crate::frontier::protocol::{PluginAction, ServerMessage};
 use crate::frontier::server::allow::{Answer, Confirmation};
 use crate::frontier::server::helpers::{
 	BRIEF, Msg, Page, TestServer, boss_pane, call, call_as, cli, commit_in, demo_project, guard, http,
-	proposed_plan_file, session_file, sh, task_dir_of, thread_omp, until, use_hunk_daemon, with_server,
+	proposed_plan_file, push_state, session_file, sh, states_settled, task_dir_of, thread_omp, until, use_hunk_daemon,
+	with_server,
 };
 use crate::frontier::server::herdr::AgentState;
 use crate::frontier::server::history::search_history;
@@ -144,8 +145,7 @@ async fn his_keys_stop_refuses_an_idle_thread_with_why_and_stops_a_working_one_f
 				.contains("\"body\":\"Stop: demo/Readme line isn't working; nothing to stop.\"")
 		})
 		.await;
-		state_of(&pane_id, &server, AgentState::Working, None);
-		until(|| server.service.busy_threads().unwrap().working == 1).await;
+		push_state(&server, &pane_id, AgentState::Working, None).await;
 		key("stop", Some(&pane_id)).await;
 		assert!(!said("Stopped demo/Readme line's run.", false).await.1);
 		assert_eq!(server.herdr.of("stop"), vec![vec![json!(pane_id)]]);
@@ -167,8 +167,7 @@ async fn his_keys_stop_refuses_an_idle_thread_with_why_and_stops_a_working_one_f
 		said("Jocasta keeps running.", false).await;
 
 		// Finish once idle with a commit: Merge without its code is refused, with it the thread merges.
-		state_of(&pane_id, &server, AgentState::Idle, None);
-		until(|| server.service.busy_threads().unwrap().working == 0).await;
+		push_state(&server, &pane_id, AgentState::Idle, None).await;
 		commit_in(&path, "demo\nA line.\n", "Add a README line");
 		key("finish", Some(&pane_id)).await;
 		let finish = popup("Jocasta: Finish demo/Readme line").await;
@@ -802,6 +801,7 @@ async fn jocasta_thread_and_worktree_commands_run_the_services_own_functions_and
 				false
 			)
 		);
+		states_settled(&server).await;
 		// No Allow for a new thread, even outside the project he last focused: it waits at its plan for him.
 		assert!(asks_now().is_empty());
 		let task = read(&task_dir_of(&project.id, "Add a README line").join("task.md"));

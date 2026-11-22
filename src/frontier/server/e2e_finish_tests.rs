@@ -17,8 +17,8 @@ use serde_json::{Value, json};
 use crate::frontier::protocol::ServerMessage;
 use crate::frontier::server::day::DayOptions;
 use crate::frontier::server::helpers::{
-	Page, TestServer, ThreadOptions, boss_pane, call, commit_in, demo_project, relay_test_options, review, sh,
-	start_test_server_with, start_thread, task_dir_of, until, use_hunk_daemon, with_server,
+	Page, TestServer, ThreadOptions, boss_pane, call, commit_in, demo_project, push_state, relay_test_options, review,
+	sh, start_test_server_with, start_thread, task_dir_of, until, use_hunk_daemon, with_server,
 };
 use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
 use crate::frontier::server::herdr::{AgentState, Herdr, HerdrError, TabSpec};
@@ -219,10 +219,9 @@ async fn check_merge_refusals(server: &TestServer, project: &Project, pane: &str
 	};
 	assert_eq!(finish("merge").await, text_error("demo/Readme line has no commits ahead of main; nothing to finish."));
 	// A question he dismissed ends the turn (CO-3); with no commits yet it was just a turn.
-	server.herdr.set_state(pane, AgentState::Blocked, None, true);
+	push_state(server, pane, AgentState::Blocked, None).await;
 	assert_eq!(finish("merge").await.text, "demo/Readme line isn't idle (blocked); finish it once it is.");
-	server.herdr.set_state(pane, AgentState::Idle, None, true);
-	until(|| server.service.hud(None).is_ok_and(|hud| hud.blocked == 0)).await;
+	push_state(server, pane, AgentState::Idle, None).await;
 	commit_in(path, "demo\nA line.\n", "Add a README line");
 	commit_in(path, "demo\nA line.\nAnother.\n", "Another line");
 	assert_eq!(finish("rebase").await.text, "thread_finish: how is \"merge\" or \"pr\".");
@@ -505,10 +504,8 @@ async fn events_raised_together_reach_a_busy_boss_as_one_prompt_after_its_turn_n
 		.await;
 		assert!(second.reply.starts_with("Started demo/Two"));
 		let boss = boss_pane(&server.herdr).unwrap();
-		server.herdr.set_state(&boss, AgentState::Idle, None, true);
-		// The service takes herdr's idle on its own task: the closes below must find the boss idle, or both lines wait
-		// and go out as one prompt when that idle lands.
-		until(|| server.service.boss_state() == AgentState::Idle).await;
+		// The closes below must find the boss idle, or both lines wait and go out as one prompt when that idle lands.
+		push_state(&server, &boss, AgentState::Idle, None).await;
 		// Both threads' workspaces close in one refresh.
 		let ids: Vec<String> = {
 			let state = server.herdr.state();

@@ -19,8 +19,9 @@ use crate::frontier::server::day::DayOptions;
 use crate::frontier::server::events::Toast;
 use crate::frontier::server::helpers::{
 	BRIEF, Msg, Page, TEST_BOSS_KEY, TestServer, ThreadOptions, boss_idle, boss_lines, boss_pane, call, commit_in,
-	demo_project, http, relaunch_idle, review, session_file, sh, start_test_server, start_test_server_with,
-	start_thread, task_dir_of, thread_pane, until, until_async, use_hunk_daemon, with_server, write_settings,
+	demo_project, http, push_state, relaunch_idle, review, session_file, sh, start_test_server, start_test_server_with,
+	start_thread, states_settled, task_dir_of, thread_pane, until, until_async, use_hunk_daemon, with_server,
+	write_settings,
 };
 use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
 use crate::frontier::server::herdr::{
@@ -256,6 +257,7 @@ async fn svc_2_a_thread_started_while_the_tick_tells_the_boss_of_a_closed_one_is
 		server.service.refresh().await;
 		boss_idle(&server);
 		server.service.refresh().await;
+		states_settled(&server).await;
 		assert!(fake.state().pane_list.iter().any(|p| p.pane_id == b.pane_id));
 		assert_eq!(call(&server, "thread_status", &json!({})).await.text, "demo/Task B [feature/task-b] idle");
 		let closed: Vec<String> = boss_lines(&server).into_iter().filter(|l| l.contains("closed;")).collect();
@@ -325,8 +327,7 @@ async fn svc_5_thread_finish_looks_again_after_his_allow_a_thread_at_work_meanwh
 		});
 		until(|| asked.load(Ordering::SeqCst)).await;
 		// While his Allow waits, the thread is at work again.
-		server.herdr.set_state(&started.pane_id, AgentState::Working, None, true);
-		until(|| server.service.busy_threads().unwrap().working == 1).await;
+		push_state(&server, &started.pane_id, AgentState::Working, None).await;
 		allow.send_replace(true);
 		assert_eq!(
 			finishing.await.unwrap(),

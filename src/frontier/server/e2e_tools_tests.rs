@@ -13,8 +13,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::frontier::protocol::{ClientMessage, ServerMessage};
 use crate::frontier::server::helpers::{
 	HunkDaemon, Page, README_THREAD_ENV, TEST_BOSS_KEY, TestServer, ThreadOptions, boss_pane, call, call_as, commit_in,
-	demo_project, guard, keyed, pane_check_flags, project_keyed, review, sh, start_test_server_with, start_thread,
-	thread_omp, thread_pane, until, use_hunk_daemon, with_server,
+	demo_project, guard, keyed, pane_check_flags, project_keyed, push_state, review, sh, start_test_server_with,
+	start_thread, thread_omp, thread_pane, until, use_hunk_daemon, with_server,
 };
 use crate::frontier::server::helpers_procs::{ShimTree, with_server_on};
 use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
@@ -325,7 +325,7 @@ async fn herdr_restored_its_panes_as_shells_jocasta_goes_first_the_boss_project_
 		// omp comes up idle in the thread's new pane: its unreviewed commit is reviewed.
 		let fresh = thread_pane(&herdr, &path);
 		assert_ne!(fresh, thread_pane_before);
-		herdr.set_state(&fresh, AgentState::Idle, None, true);
+		push_state(&server, &fresh, AgentState::Idle, None).await;
 		server.service.refresh().await;
 		let asked = review(range, Some(crate::frontier::server::helpers::BRIEF));
 		until(|| prompts(&herdr).iter().any(|(p, t)| *p == fresh && *t == asked)).await;
