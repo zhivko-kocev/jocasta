@@ -506,6 +506,9 @@ async fn events_raised_together_reach_a_busy_boss_as_one_prompt_after_its_turn_n
 		assert!(second.reply.starts_with("Started demo/Two"));
 		let boss = boss_pane(&server.herdr).unwrap();
 		server.herdr.set_state(&boss, AgentState::Idle, None, true);
+		// The service takes herdr's idle on its own task: the closes below must find the boss idle, or both lines wait
+		// and go out as one prompt when that idle lands.
+		until(|| server.service.boss_state() == AgentState::Idle).await;
 		// Both threads' workspaces close in one refresh.
 		let ids: Vec<String> = {
 			let state = server.herdr.state();
