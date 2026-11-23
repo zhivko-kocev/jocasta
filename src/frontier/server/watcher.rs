@@ -408,13 +408,23 @@ impl Inner {
 			stat.mtime_ms,
 		)?;
 		let file = path.to_string_lossy().into_owned();
+		// Projects before the lock: the service names them through its places, which read this same catalog, and a
+		// std mutex taken twice on one thread waits on itself (the hang of 2026-11-23).
+		let found: Vec<(Found, Option<String>)> = read
+			.rows
+			.into_iter()
+			.map(|found| {
+				let project = projects.of(&found.cwd);
+				(found, project)
+			})
+			.collect();
 		let db = lock(&self.db);
 		let mut rows = Vec::new();
-		for found in read.rows {
+		for (found, project) in found {
 			if read.moved && stored_elsewhere(&db, &found, &file)? {
 				continue;
 			}
-			rows.push(found);
+			rows.push((found, project));
 		}
 		if !rows.is_empty() {
 			let tx = db.unchecked_transaction()?;
@@ -422,8 +432,7 @@ impl Inner {
 				let mut insert = tx.prepare_cached(
 					"INSERT OR IGNORE INTO summaries (session_file, entry_id, kind, cwd, at, summary, indexed, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
 				)?;
-				for found in rows {
-					let project = projects.of(&found.cwd);
+				for (found, project) in rows {
 					insert.execute(rusqlite::params![
 						file,
 						found.entry_id,
@@ -457,10 +466,10 @@ impl Inner {
 	}
 
 	/// Puts the lines of each stored summary whose project is known into the history, once (0603).
+	/// Projects are named between the catalog's locks, for the reason `read_and_store` gives.
 	fn index_pending(&self, projects: &mut Projects) -> Result<()> {
-		let db = lock(&self.db);
 		// Without `summary`: a backlog outside any watched project is listed every scan, its text is loaded only to index.
-		let pending = db
+		let pending = lock(&self.db)
 			.prepare_cached(
 				"SELECT session_file, entry_id, kind, cwd, at, project_id FROM summaries WHERE indexed = 0 ORDER BY at, session_file, entry_id",
 			)?
@@ -478,6 +487,7 @@ impl Inner {
 		for row in pending {
 			let project_id = row.project_id.clone().or_else(|| projects.of(&row.cwd));
 			let Some(project_id) = project_id.filter(|id| !id.is_empty()) else { continue };
+			let db = lock(&self.db);
 			let summary: Option<String> = db
 				.prepare_cached("SELECT summary FROM summaries WHERE session_file = ? AND entry_id = ?")?
 				.query_row([&row.session_file, &row.entry_id], |found| found.get(0))

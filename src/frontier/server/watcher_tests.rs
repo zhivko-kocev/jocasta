@@ -132,8 +132,14 @@ struct Setup {
 
 impl Setup {
 	fn with(project_for: ProjectFor) -> Setup {
+		Setup::reading(|_| project_for)
+	}
+
+	/// A watcher whose `project_for` is made from its catalog, as the service's reads it through its places.
+	fn reading(project_for: impl FnOnce(&Arc<Mutex<Connection>>) -> ProjectFor) -> Setup {
 		let j = temp_jocasta();
 		let db = Arc::new(Mutex::new(open_catalog().unwrap()));
+		let project_for = project_for(&db);
 		let sessions_dir = j.root().join("sessions");
 		let state_file = data_dir().join("watcher.json");
 		let clock = Arc::new(AtomicI64::new(now_ms()));
@@ -346,6 +352,47 @@ async fn summaries_outside_watched_projects_are_stored_but_never_indexed() {
 	let rows: Vec<_> = s.rows().into_iter().map(|r| (r.entry_id, r.cwd, r.indexed)).collect();
 	assert_eq!(rows, [("c1".to_owned(), OUTSIDE.to_owned(), 0)]);
 	assert!(s.history().is_empty());
+}
+
+/// The service names a project through its places, which read the catalog the watcher writes: a scan that held the
+/// catalog meanwhile waited on itself for good, and every caller of the catalog with it (2026-11-23).
+#[tokio::test]
+async fn a_scan_names_projects_while_the_catalog_their_lookup_reads_is_free() {
+	let s = Setup::reading(|db| {
+		let db = db.clone();
+		Arc::new(move |cwd: &str| {
+			drop(db.try_lock().expect("the catalog is free while a project is named"));
+			cwd.starts_with(PROJECT).then(|| "p-demo".to_owned())
+		})
+	});
+	session(
+		&s.demo_dir(),
+		"watched",
+		&[
+			header("s1", PROJECT),
+			compaction(
+				"c1",
+				"The importer streams rows to avoid loading the file.",
+				Some("soft"),
+				"2026-10-13T10:01:00.000Z",
+			),
+		],
+	);
+	session(
+		&s.sessions_dir.join("--C--scratch--"),
+		"outside",
+		&[
+			header("s2", OUTSIDE),
+			compaction("c2", "Scratch summary of an unrelated run.", Some("soft"), "2026-10-13T10:02:00.000Z"),
+		],
+	);
+	// The second scan names the outside row's project again: it is still waiting to be indexed.
+	s.watcher.scan().await.unwrap();
+	s.watcher.scan().await.unwrap();
+	let rows: Vec<_> = s.rows().into_iter().map(|r| (r.entry_id, r.indexed)).collect();
+	assert_eq!(rows, pairs(&[("c1", 1), ("c2", 0)]));
+	let lines: Vec<_> = s.history().into_iter().map(|l| (l.project_id, l.text)).collect();
+	assert_eq!(lines, [("p-demo".to_owned(), "The importer streams rows to avoid loading the file.".to_owned())]);
 }
 
 #[tokio::test]
