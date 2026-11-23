@@ -43,8 +43,8 @@ pub struct ProcessEntry {
 /// How long ended processes may take to go before [`end_processes`] stops waiting.
 const KILL_WAIT_MS: u64 = 5_000;
 
-/// The argument omp 19.1.0 starts its per-user daemon with (`DAEMON_WORKER_ARG`, `daemon/protocol.ts:19` in
-/// `target/omp-src/19.1.0`).
+/// The argument omp 19.1.1 starts its per-user daemon with (`DAEMON_WORKER_ARG`, `daemon/protocol.ts:19` in
+/// `target/omp-src/19.1.1`).
 const DAEMON_ARG: &str = "__omp_worker_daemon";
 
 /// Whether `argv` is omp's per-user daemon: one of its arguments after the program is exactly [`DAEMON_ARG`] (a path or
@@ -62,7 +62,7 @@ fn daemons_among(pids: &[u32]) -> HashSet<u32> {
 }
 
 /// Takes omp's daemon and everything under it out of `near`, the candidates of a tree walk, and returns the daemons
-/// (`find` says which of the candidates they are). omp 19.1.0's first omp spawns the one per-user daemon detached
+/// (`find` says which of the candidates they are). omp 19.1.1's first omp spawns the one per-user daemon detached
 /// (`daemon/client.ts:180-191`, `subprocess/worker-client.ts:228-233`), so on Windows it is a child of that omp and a
 /// pane's tree holds it with the workers every other omp on the machine shares: a closed pane ends its own leftovers,
 /// never those (0490). The walk never enters `own`.
@@ -438,7 +438,7 @@ pub fn descendants(root: u32, parents: &BTreeMap<u32, u32>, skip: &HashSet<u32>)
 /// what a short `%TEMP%` gives a child) is expanded to its long one before comparing. Linux: `/proc/<pid>/cwd`. macOS:
 /// `lsof -d cwd`. omp's daemon is found here like any process: when its working folder (the folder of the omp that
 /// spawned it) is inside a worktree about to be removed, worktree removal names it as a holder and leaves the folder;
-/// a caller that ends what it finds through [`end_processes`] still spares it (0490; omp 19.1.0
+/// a caller that ends what it finds through [`end_processes`] still spares it (0490; omp 19.1.1
 /// `daemon/client.ts:180-191`).
 pub fn processes_in(folder: &Path) -> Vec<FolderProcess> {
 	let mut roots = vec![folder.to_path_buf()];

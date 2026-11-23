@@ -1,4 +1,4 @@
-// H1 (0482, 0500, 0501, 0535, 0600, 0623, 0636): the oracle, omp 19.1.0's own code. It is the one TypeScript file of the
+// H1 (0482, 0500, 0501, 0535, 0600, 0623, 0636): the oracle, omp 19.1.1's own code. It is the one TypeScript file of the
 // bench that stays after the Rust port (0636: "H1's oracle stays a TypeScript file, run with Bun"), because omp's modules
 // load only on Bun. It finds and loads omp from the installed sources, judges a command through omp's `BashTool`
 // approval and `resolveApproval` with nothing executed, and runs a line through omp's `executeBash`. It imports node
@@ -8,24 +8,24 @@
 //
 //   bun bench/h1-guard/omp-verdicts.ts
 //
-// How omp decides before a pane's bash tool runs a command (omp 19.1.0, `@oh-my-pi/pi-coding-agent/src`):
-// - `extensibility/extensions/wrapper.ts:271-292,359-376` wraps every tool: `resolveApprovalFromContext`
+// How omp decides before a pane's bash tool runs a command (omp 19.1.1, `@oh-my-pi/pi-coding-agent/src`):
+// - `extensibility/extensions/wrapper.ts:285-306,373-390` wraps every tool: `resolveApprovalFromContext`
 //   (`tools/approval.ts:96-112`) takes the mode from `tools.approvalMode` (default `yolo`, `tools/settings.ts:313-317`;
 //   Jocasta's guard and overlay set none) and `resolveApproval` decides, once on the call as made and again on the
-//   input an extension may have revised; deny throws before the tool runs, prompt asks (`:375-511`; with no UI, as in
-//   `omp -p`, it throws instead, `:448-471`); then the tool executes (`:513-527`).
+//   input an extension may have revised; deny throws before the tool runs, prompt asks (`:389-525`; with no UI, as in
+//   `omp -p`, it throws instead, `:462-485`); then the tool executes (`:527-541`).
 // - `tools/approval.ts:356-492`: the tool's own decision first; a tool `deny` wins; under `yolo` a tool `policy` holds
 //   and everything else is allowed (so a decision with only `override`, omp's critical patterns, asks nothing);
 //   under other modes an override asks and the mode's tier decides the rest; a `tools.restrictedFolders` match then
 //   turns anything but a deny into a prompt.
-// - `tools/bash.ts:821-881` (`BashTool.approval`): the bash interceptor first (`bashInterceptor`, off by default and in
+// - `tools/bash.ts:834-894` (`BashTool.approval`): the bash interceptor first (`bashInterceptor`, off by default and in
 //   Jocasta's guard; it acts only for tools in the call's `toolNames`) refuses a call it intercepts; then
-//   `bash.patterns` (`:253-460`: a line without shell control takes the first rule in list order that matches the
+//   `bash.patterns` (`:254-461`: a line without shell control takes the first rule in list order that matches the
 //   whole normalized command; on a line with shell control allow rules never apply, and a deny or prompt rule matches
 //   the whole line or any segment from `tools/shell-tokenize.ts:14` `tokenizeShellSegments`, which honours and
 //   removes quotes and splits at `; && || | & ( )` and newlines, any deny winning over any prompt; since 18.20.1 a
 //   segment is also matched with its leading `NAME=value` words removed); a deny from the operator's layers holds
-//   whatever a project layer says (`grantAuthority`); then `CRITICAL_BASH_PATTERNS` (`:198-251`) as an override
+//   whatever a project layer says (`grantAuthority`); then `CRITICAL_BASH_PATTERNS` (`:199-252`) as an override
 //   without a policy, checked before prompt rules; then prompt rules. `bash.allowCompoundCommands` (default off)
 //   switches, under a POSIX shell, to per-`&&` segments. Since 18.20.1 `bash.patterns` from several layers and
 //   `--config` files are joined, the higher one's first, where before the last one replaced the rest.
@@ -56,7 +56,7 @@ import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 
-export const PINNED_OMP = "19.1.0";
+export const PINNED_OMP = "19.1.1";
 const PACKAGE = "@oh-my-pi/pi-coding-agent";
 
 /** What the operator is to fix (a wrong package, a wrong version), as opposed to a fault of the oracle's own. */

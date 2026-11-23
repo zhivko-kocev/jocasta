@@ -28,7 +28,7 @@ use crate::shared::layer::layer_on;
 use crate::shared::log::{LogLevel, log};
 use crate::shared::service_file::{NOT_RUNNING, RunningService, connection_refused, running_service};
 
-/// omp 19.1.0 sends this only to a legacy server's `initialize` (`mcp/protocol.ts:21` `MCP_LEGACY_PROTOCOL_VERSION`,
+/// omp 19.1.1 sends this only to a legacy server's `initialize` (`mcp/protocol.ts:21` `MCP_LEGACY_PROTOCOL_VERSION`,
 /// `mcp/host/legacy-session.ts:16`).
 pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 
@@ -556,7 +556,8 @@ impl ServerHandler for Server {
 /// The server as a handshake-era one (omp 19.0 and later, `mcp/host/peers.ts` `probeStdio`): omp's host sends
 /// `server/discover` ahead of `initialize` and takes any answer but a plain error for a 2026-07-28 server, whose
 /// process every omp session then shares and whose later requests carry that revision. rmcp answers the probe with
-/// `-32022` (unsupported version), which omp reads as "modern", and every request after it fails. Jocasta's per-pane
+/// `-32022` (unsupported version), which omp reads as "modern" unless its `data.supported` lists a handshake-era
+/// revision (`eraOfDiscoverError`, 19.1.1), and every request after it fails. Jocasta's per-pane
 /// key and thread arrive in the process's environment (0578), so one process per pane is the contract: the probe gets
 /// "method not found", as it did from the TypeScript server, and omp falls back to `initialize` and a unit of its own.
 struct HandshakeEra(Server);

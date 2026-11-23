@@ -1,10 +1,10 @@
 # The boss pane's omp settings (0424): a calm pane. The service starts the boss with
 # `omp --continue --config <this file> --config <config>/guard.yml` (0450), over his ~/.omp/agent/config.yml. Keys
-# checked against omp 19.1.0's source (0623, 19.1.0 re-check).
+# checked against omp 19.1.1's source (0663, 19.1.1 re-check).
 
 # Memory off (0606): omp recalls and retains nothing here; the boss searches past work with `history_search` (0603).
 # The boss keeps omp's job widgets (0602): only project and thread panes turn them off. Keys checked against omp
-# 19.1.0's source (`memory-backend/settings.ts`).
+# 19.1.1's source (`memory-backend/settings.ts`).
 memory:
   backend: "off"
 
@@ -30,7 +30,7 @@ modelRoles:
 
 # Dictation through omp's own speech-to-text (0556): Right Ctrl, anywhere, sends `app.stt.toggle`'s key to this pane
 # through herdr on press and again on release; the text is sent as soon as recording stops. No fallback model: the
-# audio never leaves this machine. Keys checked against omp 19.1.0's source.
+# audio never leaves this machine. Keys checked against omp 19.1.1's source.
 stt:
   enabled: true
   submitTrigger: release
@@ -56,11 +56,11 @@ statusLine:
   rightSegments: [cost, context_pct]
 
 # Tool output collapsed: omp already shows it collapsed (Ctrl+O expands it); there is no setting
-# for it (`toolOutputExpanded = false`, packages/coding-agent/src/modes/interactive-mode.ts:1472).
+# for it (`toolOutputExpanded = false`, packages/coding-agent/src/modes/interactive-mode.ts:1478).
 
 # Jocasta's local collab relay (0536, 0561): the boss's session hosts there (omp's host registry reports whether it
 # works or asks), never on omp's public relay; `/share` uploads to the same loopback port, which serves nothing else.
-# The port is `RELAY_PORT` in src/frontier/server/relay.rs. Keys checked against omp 19.1.0's source
+# The port is `RELAY_PORT` in src/frontier/server/relay.rs. Keys checked against omp 19.1.1's source
 # (`collab/settings.ts`, `commands/settings.ts`).
 collab:
   autoStart: control

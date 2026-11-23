@@ -1,6 +1,6 @@
 # The guard (0450): every project, thread and boss pane starts with an extra `--config <config>/guard.yml`, so it acts
 # whatever his ~/.omp/agent/config.yml says and outranks a repo's own .omp/config.yml. Keys checked against omp
-# 19.1.0 (`exec/settings.ts`, `tools/bash.ts`; 0623). Since 18.20.1 omp joins `bash.patterns` across layers, this
+# 19.1.1 (`exec/settings.ts`, `tools/bash.ts`; 0663). Since 18.20.1 omp joins `bash.patterns` across layers, this
 # file's first, so its rules still decide before any in his or a repo's config.
 #
 # How omp matches: anchored, case-sensitive, `*` is the only wildcard; quotes are stripped; deny and prompt rules also

@@ -189,7 +189,7 @@ async fn omps_era_probe_gets_method_not_found_and_the_handshake_after_it_works()
 		Some(json!({ "_meta": {
 			"io.modelcontextprotocol/protocolVersion": "2026-07-28",
 			"io.modelcontextprotocol/clientCapabilities": {},
-			"io.modelcontextprotocol/clientInfo": { "name": "omp", "version": "19.1.0" },
+			"io.modelcontextprotocol/clientInfo": { "name": "omp", "version": "19.1.1" },
 		} })),
 	);
 	let mut lines = vec![discover, request(2, "initialize", Some(initialize_params(MCP_PROTOCOL_VERSION)))];

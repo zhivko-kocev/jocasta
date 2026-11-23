@@ -84,7 +84,7 @@ Eight pull requests merged, three open, one issue closed. All eight merged befor
 
 **U11. omp's per-user daemon starts in the folder of whichever omp spawned it.**
 - omp 19.1.0 starts `__omp_worker_daemon` detached from the first omp that needs it, with no `cwd` for a compiled binary (`daemon/client.ts:180-191`, `subprocess/worker-client.ts:228-233`), so it inherits that omp's working folder and, on Windows, stays a child of it. Seen live: the daemon's parent was an interactive omp. It then holds a project folder (a git worktree cannot be removed while it does) and a launcher that ends a closed pane's process tree takes the machine-wide daemon with it (Jocasta spares it by its command line, choice 100).
-- Ask: spawn the daemon with a neutral `cwd` (the home directory or omp's agent directory), so it never holds a project folder. Observed on 19.1.0 only; no related issue found.
+- Ask: spawn the daemon with a neutral `cwd` (the home directory or omp's agent directory), so it never holds a project folder. Observed on 19.1.0 only; no related issue found. 19.1.1 leaves `daemon/client.ts` and `subprocess/worker-client.ts` as they were and adds only an idle exit (3 s after its last client leaves, `DAEMON_IDLE_EXIT_GRACE_MS`), so the folder is held for a shorter time but still held.
 
 ### C. Data points, no ask
 

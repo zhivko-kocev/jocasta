@@ -14,7 +14,7 @@ const PANE_CHECK_ENV = JSON.parse(rustConst("PANE_CHECK_ENV")) as string;
 const PANE_CHECK_WAIT_MS = Number(rustConst("PANE_CHECK_WAIT_MS").replaceAll("_", ""));
 const PANE_CHECK_ASK_MS = Number(rustConst("PANE_CHECK_ASK_MS").replaceAll("_", ""));
 
-/** omp 19.1.0's limit for an extension's handler (`extensibility/extensions/runner.ts`, `EXTENSION_HANDLER_TIMEOUT_MS`). */
+/** omp 19.1.1's limit for an extension's handler (`extensibility/extensions/runner.ts`, `EXTENSION_HANDLER_TIMEOUT_MS`). */
 const OMP_HANDLER_LIMIT_MS = 30_000;
 
 type Handler = (event: { signal?: AbortSignal }) => Promise<{ continue: true; additionalContext: string } | undefined>;

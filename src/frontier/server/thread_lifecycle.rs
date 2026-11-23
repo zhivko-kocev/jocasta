@@ -34,9 +34,9 @@ const PLAN_POLL_MS: u64 = 100;
 /// After a line goes into the boss pane, its idle pane state is herdr's lag, not the end of the turn it started.
 const BOSS_PROMPT_GRACE_MS: i64 = 10_000;
 
-/// omp's Plan Review on a pane's screen (0494): "Approve and keep context", "Refine plan" (omp 19.1.0
-/// `interactive-mode.ts:6790` builds the label, pi-tui `plan-review-overlay.ts:1650-1665` draws it; "Refine plan"
-/// (`:8062`) shows only while the plan has comments).
+/// omp's Plan Review on a pane's screen (0494): "Approve and keep context", "Refine plan" (omp 19.1.1
+/// `interactive-mode.ts:6841` builds the label, pi-tui `plan-review-overlay.ts:1650-1665` draws it; "Refine plan"
+/// (`:8113`) shows only while the plan has comments).
 static PLAN_REVIEW_SCREEN: LazyLock<Regex> =
 	LazyLock::new(|| Regex::new(r"Approve and keep context|Refine plan").expect("the Plan Review pattern"));
 

@@ -5,7 +5,7 @@
 //! for a subagent's own): they are not sessions, but their cost is the session's (CR-04; `omp stats` counts them the
 //! same way, `@oh-my-pi/omp-stats` `parser.ts` `classifyAgentType`, `listSessionFiles`).
 //!
-//! omp's entry kinds (0464; checked against omp 19.1.0, 0623 and the 19.1.0 re-check): `model_usage` entries (side
+//! omp's entry kinds (0464; checked against omp 19.1.1, 0663 and the 19.1.1 re-check): `model_usage` entries (side
 //! calls: memory extraction, cache warming, advisor, judges, session titles; `session-entries.ts:180` `ModelUsageEntry`)
 //! count toward spend like
 //! assistant turns (0452); an assistant turn marked `retryRecovery` (an attempt a retry superseded, pi-ai
@@ -152,11 +152,11 @@ pub struct SessionStats {
 	/// Every message's time, epoch ms, in file order.
 	pub message_times: Vec<i64>,
 	/// The title of a plan waiting for his approval in omp's Plan Review, or `None`. omp records the proposal as a
-	/// successful `propose` command (omp 19.1.0: a bash run whose `toolResult` has `details.toolCommands` with an
+	/// successful `propose` command (omp 19.1.1: a bash run whose `toolResult` has `details.toolCommands` with an
 	/// entry `{tool: "propose", mode: "execute", exitCode: 0, inner: {title, planFilePath, planExists}}`, or a direct
 	/// `propose` tool result whose `details` are that `inner`; `tools/resolve.ts:107-120`, `event-controller.ts:2430-2438`),
 	/// then aborts the turn silently (an empty assistant message). Approving leaves plan mode (`mode_change` to `none`,
-	/// `interactive-mode.ts:6459`, and a second one with `data.approvedPlanFilePath`); refining sends a user message;
+	/// `interactive-mode.ts:6510`, and a second one with `data.approvedPlanFilePath`); refining sends a user message;
 	/// either, or any later assistant output, ends the wait.
 	pub plan_awaiting: Option<String>,
 	/// Whether the session is in plan mode: its last `mode_change` was to `plan` (omp writes one on entering it).
@@ -227,7 +227,7 @@ fn trimmed(value: Option<&Value>) -> Option<String> {
 	value.and_then(Value::as_str).map(str::trim).filter(|text| !text.is_empty()).map(str::to_owned)
 }
 
-/// What a successful `propose` left in a tool result (omp 19.1.0 `proposeDispatchDetails`, `tools/resolve.ts:107-120`).
+/// What a successful `propose` left in a tool result (omp 19.1.1 `proposeDispatchDetails`, `tools/resolve.ts:107-120`).
 struct Proposal<'a> {
 	/// The plan's details as the command returned them (`title`, `planFilePath`, `planExists`).
 	inner: Option<&'a Map<String, Value>>,

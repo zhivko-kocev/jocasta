@@ -1,7 +1,7 @@
 # Jocasta's omp snapshot (fork plan phase 6): `jocasta setup` writes this file over ~/.omp/agent/config.yml after
 # showing the diff and his `y`, keeping the file it replaces in ~/.jocasta/agent/setup/omp-backup/<UTC time>/; keys of
 # his that aren't here go with it (they stay in the backup). Deltas from omp's defaults (principle 3), pins where a
-# later default would send data out or cost tokens, and his model roles (0590, 0591, 0618). Keys checked against omp 19.1.0's source.
+# later default would send data out or cost tokens, and his model roles (0590, 0591, 0618). Keys checked against omp 19.1.1's source.
 # Per-pane values are not here: every project and thread pane gets `--config <config>/guard.yml` (the guard, 0450) and
 # `--config <data>/projects/<pid>/omp.yml` (memory off, no completion probe, no job widgets, compaction, plan mode,
 # AGENTS.local.md, lessons, and the privacy settings `dev.autoqa`, `disabledProviders`, `modelRoles.web`; 0447–0449,
@@ -46,14 +46,14 @@ advisor:
 tools:
   restrictedFolders: ["~/.ssh", "~/.aws", "~/.azure", "~/.docker"]
 
-# The settings trials on omp 18.22.2 (0651; still in force on 19.1.0): a todo list suggested on the first message cut a trial's cost by 21% at
+# The settings trials on omp 18.22.2 (0651; still in force on 19.1.1): a todo list suggested on the first message cut a trial's cost by 21% at
 # the same pass rate. `edit.mode` stays omp's hashline: removing the edit tool was faster on the 12 small cases, but
 # it would turn edits on real code into bash rewrites.
 todo:
   eager: preferred
 
 # omp 19.0.0 turned composer predictions on: after each turn the active model writes a suggested next message, a model
-# call he didn't ask for. Pinned off, as it was before (19.1.0 re-check).
+# call he didn't ask for. Pinned off, as it was before (19.1.0 re-check; unchanged on 19.1.1).
 composer:
   predictions: false
 

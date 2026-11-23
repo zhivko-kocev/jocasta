@@ -1,4 +1,4 @@
-//! omp session files (`~/.omp/agent/sessions/<cwd>/<time>_<id>.jsonl`, omp 19.1.0): one entry per line with an ISO
+//! omp session files (`~/.omp/agent/sessions/<cwd>/<time>_<id>.jsonl`, omp 19.1.1): one entry per line with an ISO
 //! `timestamp`; `message` entries carry `{role, content, timestamp?, completedAt?}`. Times follow the product's
 //! `sessions` `entryTime`: the message's own epoch-ms `timestamp` when non-zero, else the entry's ISO time.
 //!
@@ -80,7 +80,7 @@ pub fn ask_times(text: &str) -> Vec<f64> {
 		.collect()
 }
 
-/// When a plan became ready for his review: a successful `propose` (omp 19.1.0: a direct `propose` result, or a bash run
+/// When a plan became ready for his review: a successful `propose` (omp 19.1.1: a direct `propose` result, or a bash run
 /// whose `details.toolCommands` holds a `propose` execution that exited 0; the product's `sessions` `proposedPlan`).
 pub fn plan_ready_times(text: &str) -> Vec<f64> {
 	messages(text)
@@ -112,7 +112,7 @@ pub fn plan_ready_times(text: &str) -> Vec<f64> {
 }
 
 /// When he left plan mode after a plan was ready (his approval): a `mode_change` away from `plan`, counted only when it
-/// leaves `plan` (the mode before it was `plan`, or no mode was recorded before it). omp 19.1.0 writes a second
+/// leaves `plan` (the mode before it was `plan`, or no mode was recorded before it). omp 19.1.1 writes a second
 /// `mode_change` to `none` with `data.approvedPlanFilePath` once an approval is through, so
 /// "Approve and keep context" leaves two in one file (0589).
 pub fn plan_approval_times(text: &str) -> Vec<f64> {

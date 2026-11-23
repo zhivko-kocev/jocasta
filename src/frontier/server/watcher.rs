@@ -16,7 +16,7 @@
 //!
 //! The scan is polling (an interval, 30 s by default), as the TypeScript's: nothing watches the folder.
 //!
-//! The omp shapes this relies on (checked against omp 19.1.0's `pi-coding-agent/src/session/`, 0623, 19.1.0 re-check):
+//! The omp shapes this relies on (checked against omp 19.1.1's `pi-coding-agent/src/session/`, 0663, 19.1.1 re-check):
 //! - layout: a session is `<sessions>/<cwd dir>/<stem>.jsonl` (`session-paths.ts:223` `sessionDirForCwd`); its subagents
 //!   live in `<sessions>/<cwd dir>/<stem>/<AgentId>.jsonl` beside `__advisor*.jsonl` (`sub-sessions.ts:4-7`), so only
 //!   files directly in a cwd dir are sessions.
@@ -26,10 +26,10 @@
 //!   method?, …}` (`session-entries.ts:235-259`); the text is `summary`. `method` is one of `remote`, `snapcompact`,
 //!   `handoff`, `soft`, `shake` (`compaction-methods.ts:11-39`), absent on legacy and extension compactions; `/handoff`
 //!   writes one with `method: "handoff"` into the same session (`compact(focus, {mode: "handoff"})`, `compact-modes.ts:62`,
-//!   `session-maintenance.ts:1785`; 19.1.0 replaced `session.handoff`).
+//!   `session-maintenance.ts:1787`; 19.1.0 replaced `session.handoff`).
 //! - message: `{type: "message", id, parentId, timestamp, message}` (`session-entries.ts:137-140`); an assistant message
 //!   has `role: "assistant"`, `content` parts (`text` / `thinking` / `toolCall`) and `stopReason` `stop | length |
-//!   toolUse | error | aborted` (pi-ai `types.ts:1113`), and is written once, at `message_end` (`agent-session.ts:4700`
+//!   toolUse | error | aborted` (pi-ai `types.ts:1113`), and is written once, at `message_end` (`agent-session.ts:4711`
 //!   `#persistMessageEnd`).
 //! - moved session (18.12.6, 0464): when another process wrote a session first, omp goes on in a sibling file whose
 //!   header names the old session as `parentSession` and publishes the whole transcript there once

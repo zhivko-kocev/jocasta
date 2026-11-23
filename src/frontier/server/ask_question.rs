@@ -1,5 +1,5 @@
 //! The question an omp `ask` call puts to him, as one line (0589). Since omp 18.18.3 the call's arguments are one HTML
-//! form, `{html}` (`tools/ask.ts:70-72`); before, `{questions: [{question, …}]}`. For a form the question is the first
+//! form, `{html}` (`tools/ask.ts:71-73`); before, `{questions: [{question, …}]}`. For a form the question is the first
 //! named control's, worded as omp words it for its own blocked status (`modes/controllers/extension-ui-controller.ts:970-971`,
 //! pi-tui `html-form/data.ts:134-158` `fieldQuestions`): the control's own label (a text field, number, select or
 //! textarea wrapped in `<label>`, a `<label for>`, its `aria-label` or `title`; a radio or checkbox group has none),
@@ -440,7 +440,7 @@ mod tests {
 	fn an_ask_calls_arguments_omp_18_20_2s_form_or_an_older_sessions_questions() {
 		let html = r#"<form><p>CSV or JSON?</p><label><input type="radio" name="f" value="csv" checked> CSV</label><label><input type="radio" name="f" value="json"> JSON</label></form>"#;
 		assert_eq!(ask_question(&json!({ "html": html })).as_deref(), Some("CSV or JSON?"));
-		// omp 18.18.2's shape (`tools/ask.ts:127-128`, which 19.1.0 still reads: `legacyQuestionsHtml`).
+		// omp 18.18.2's shape (`tools/ask.ts:150-151`, which 19.1.1 still reads: `legacyQuestionsHtml`).
 		let older = json!({ "questions": [{ "question": "CSV or JSON?", "options": [{ "label": "CSV" }] }, { "question": "Later" }] });
 		assert_eq!(ask_question(&older).as_deref(), Some("CSV or JSON?"));
 		assert_eq!(ask_question(&json!({ "questions": [] })), None);

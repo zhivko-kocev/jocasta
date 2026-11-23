@@ -1,6 +1,6 @@
 //! The boss pane (0392, 0404, 0424): workspace "Jocasta", first in herdr's list (Alt+1), with one omp pane in
 //! `<data>/home`. Its manual is `<data>/home/.omp/APPEND_SYSTEM.md`, which omp loads for every session in that folder
-//! when no `--append-system-prompt` is given (omp 19.1.0 `pi-coding-agent/src/main.ts:1421-1444`, `:1490`), so a pane
+//! when no `--append-system-prompt` is given (omp 19.1.1 `pi-coding-agent/src/main.ts:1446-1469`, `:1515`), so a pane
 //! herdr restores or he starts by hand still has it; the procedures it rarely needs are skills in
 //! `<data>/home/.omp/skills/` (0465). Both the service and bare `jocasta` ensure it.
 
