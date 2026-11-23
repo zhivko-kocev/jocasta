@@ -49,6 +49,8 @@ pub struct Pick {
 pub struct Frame {
 	pub lines: Vec<Line>,
 	pub picks: Vec<Pick>,
+	/// Where each pickable row sits: its line in `lines` and its pick's key (0660: a click picks the row under it).
+	pub rows: Vec<(usize, String)>,
 }
 
 const P: crate::frontier::tui::Palette = TOKYO_NIGHT;
@@ -253,17 +255,23 @@ fn header(state: &TodayState, now: i64, width: usize) -> Vec<Line> {
 	lines
 }
 
+/// The one text for a service that has stopped answering (0581 UX-17, 0662): in the header, and in the HUD's status.
+pub fn not_answering(since: Option<i64>) -> String {
+	let since = since.map(|at| format!(" (since {})", hhmm(at))).unwrap_or_default();
+	format!("Jocasta isn't answering{since}")
+}
+
 /// The header's place while the feed isn't up (UX-17): connecting at first, then the time and since when it is down.
 fn offline(state: &TodayState, now: i64, width: usize) -> Line {
 	if !state.seen {
 		return fit(&[Segment::new("Connecting to Jocasta…", P.fg3)], width);
 	}
-	let since = state.down_since.map(|at| format!(" (since {})", hhmm(at))).unwrap_or_default();
+	let since = state.down_since;
 	fit(
 		&[
 			Segment::new(hhmm(now), P.fg).bold(),
 			Segment::new(" · ", P.comment),
-			Segment::new(format!("Jocasta isn't answering{since}; trying again…"), P.yellow),
+			Segment::new(format!("{}; trying again…", not_answering(since)), P.yellow),
 		],
 		width,
 	)
@@ -508,6 +516,8 @@ pub fn render(state: &TodayState, now: i64, width: usize, height: usize) -> Fram
 		};
 		rows = rows.into_iter().skip(start).take(room).collect();
 	}
+	let mut rows_at: Vec<(usize, String)> =
+		rows.iter().enumerate().filter_map(|(i, r)| r.pick.as_ref().map(|p| (top.len() + i, p.key.clone()))).collect();
 	let mut lines = top;
 	lines.extend(rows.into_iter().map(|r| r.line));
 	let spare = |lines: &[Line]| height as i64 - lines.len() as i64 - bottom.len() as i64;
@@ -535,6 +545,9 @@ pub fn render(state: &TodayState, now: i64, width: usize, height: usize) -> Fram
 			let line = [Segment::new(format!("{feed}: "), P.fg3), Segment::new(item.title.clone(), P.fg2)];
 			let tail = pick.is_some().then(link);
 			lines.push(row(&spread(&line, &[], width.saturating_sub(2), tail), pick.clone(), state, width).line);
+			if let Some(pick) = &pick {
+				rows_at.push((lines.len() - 1, pick.key.clone()));
+			}
 			picks.extend(pick);
 		}
 	}
@@ -545,7 +558,8 @@ pub fn render(state: &TodayState, now: i64, width: usize, height: usize) -> Fram
 	lines.truncate(above);
 	lines.extend(bottom);
 	lines.truncate(height);
-	Frame { lines, picks: unique(picks) }
+	rows_at.retain(|(at, _)| *at < above);
+	Frame { lines, picks: unique(picks), rows: rows_at }
 }
 
 #[cfg(test)]

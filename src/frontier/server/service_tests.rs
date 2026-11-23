@@ -47,6 +47,7 @@ fn stand(change: impl FnOnce(&mut TempJocasta, &mut ServiceOptions)) -> Stand {
 	options.relay_url_of = Some(Arc::new(|_, _, _| async { Ok("ws://127.0.0.1:47499".to_owned()) }.boxed()));
 	options.refresh_ms = Some(3_600_000);
 	options.host_poll_ms = Some(3_600_000);
+	options.alive_ms = Some(3_600_000);
 	options.watcher_interval_ms = Some(3_600_000);
 	change(&mut jocasta, &mut options);
 	let catalog: SharedCatalog = Arc::new(Mutex::new(open_catalog().expect("the catalog")));
@@ -83,9 +84,9 @@ async fn a_second_start_gets_the_first_ones_outcome_and_starts_nothing_again() {
 	within_a_second(first).await.unwrap();
 	within_a_second(second).await.unwrap();
 	within_a_second(s.service.start()).await.unwrap();
-	// One boss workspace was made, and one pair of timers runs.
+	// One boss workspace was made, and one set of timers runs: the refresh, the host poll and the heartbeat.
 	assert_eq!(s.herdr.of("ensureWorkspace").len(), 1);
-	assert_eq!(s.service.timer_count(), 2);
+	assert_eq!(s.service.timer_count(), 3);
 	within_a_second(s.service.stop()).await;
 }
 
@@ -235,14 +236,60 @@ async fn a_change_herdr_reports_refreshes_its_facts_soon_while_the_full_tick_wai
 async fn the_host_poll_runs_only_with_the_host_registry_on() {
 	let on = stand(|_, _| {});
 	within_a_second(on.service.start()).await.unwrap();
-	assert_eq!(on.service.timer_count(), 2);
+	assert_eq!(on.service.timer_count(), 3);
 	within_a_second(on.service.stop()).await;
 	assert_eq!(on.service.timer_count(), 0);
 	drop(on);
 	let off = stand(|jocasta, _| jocasta.set_var(HOSTS_ENV, Some("off")));
 	within_a_second(off.service.start()).await.unwrap();
-	assert_eq!(off.service.timer_count(), 1);
+	assert_eq!(off.service.timer_count(), 2);
 	within_a_second(off.service.stop()).await;
+}
+
+/// The hang of 2026-11-23 held the catalog: the dock's heartbeat goes through it, so a stuck service stops beating and
+/// the dock says so (0662); free again, it beats again.
+#[tokio::test]
+async fn the_heartbeat_stops_while_the_catalog_is_held_and_comes_back_when_it_is_free() {
+	let s = stand(|_, options| options.alive_ms = Some(20));
+	within_a_second(s.service.start()).await.unwrap();
+	let beats = || {
+		s.sent
+			.lock()
+			.unwrap_or_else(PoisonError::into_inner)
+			.iter()
+			.filter(|m| matches!(m, ServerMessage::Alive))
+			.count()
+	};
+	within_a_second(async {
+		while beats() == 0 {
+			tokio::time::sleep(Duration::from_millis(5)).await;
+		}
+	})
+	.await;
+	// Held on a thread of its own, as a stuck task would hold it.
+	let catalog = s.service.context().catalog.clone();
+	let (release, released) = std::sync::mpsc::channel::<()>();
+	let (taken, is_taken) = std::sync::mpsc::channel::<()>();
+	let holder = std::thread::spawn(move || {
+		let _held = catalog.lock().unwrap_or_else(PoisonError::into_inner);
+		taken.send(()).expect("the test waits");
+		released.recv().ok();
+	});
+	is_taken.recv().expect("the catalog held");
+	// A beat already past the catalog may still land; none after it.
+	tokio::time::sleep(Duration::from_millis(60)).await;
+	let while_held = beats();
+	tokio::time::sleep(Duration::from_millis(200)).await;
+	assert_eq!(beats(), while_held, "no heartbeat while the catalog is held");
+	release.send(()).expect("the holder waits");
+	holder.join().expect("the holder");
+	within_a_second(async {
+		while beats() == while_held {
+			tokio::time::sleep(Duration::from_millis(5)).await;
+		}
+	})
+	.await;
+	within_a_second(s.service.stop()).await;
 }
 
 #[tokio::test]

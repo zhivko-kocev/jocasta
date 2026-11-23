@@ -103,6 +103,74 @@ fn the_docks_keys_pick_rows_go_to_a_thread_act_on_it_and_give_the_rest_back() {
 	assert!(shell.dock_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL)).pass);
 }
 
+#[test]
+fn a_click_on_a_row_picks_it_and_does_what_enter_does_and_one_elsewhere_does_nothing() {
+	let mut shell = with_today();
+	drawn(&mut shell, 100, 34, false);
+	let line_of = |shell: &JocastaShell, key: &str| {
+		let (at, _) = shell.rows.iter().find(|(_, row_key)| row_key == key).expect("the row is drawn");
+		u16::try_from(*at).unwrap()
+	};
+	// A link row opens its url (0581's service-side checks stand behind `link.open`).
+	let link = shell.dock_mouse(5, line_of(&shell, "https://example.org/web/pull/12"));
+	assert!(link.redraw);
+	assert_eq!(
+		sends(&link),
+		[(SHELL_FEED.to_owned(), json!({"type": "link.open", "url": "https://example.org/web/pull/12"}))]
+	);
+	assert_eq!(shell.today.selected.as_deref(), Some("https://example.org/web/pull/12"));
+	// A thread row focuses its pane.
+	drawn(&mut shell, 100, 34, false);
+	let thread = shell.dock_mouse(5, line_of(&shell, "w2:p1"));
+	assert_eq!(sends(&thread), [(SHELL_FEED.to_owned(), json!({"type": "pane.focus", "paneId": "w2:p1"}))]);
+	// The header's row, and a click left of the dock's text, act on nothing.
+	let header = shell.dock_mouse(5, 0);
+	assert!(header.send.is_empty() && !header.redraw);
+	assert!(shell.dock_mouse(0, line_of(&shell, "w2:p1")).send.is_empty());
+}
+
+/// The silence test's own clock, so the others' stays still.
+static SILENCE_CLOCK: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+fn silence_clock() -> i64 {
+	today_now() + SILENCE_CLOCK.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+#[test]
+fn thirty_seconds_without_a_message_shows_jocasta_not_answering_dimmed_and_the_next_message_clears_it() {
+	let mut shell = JocastaShell::new(silence_clock);
+	message(&mut shell, SHELL_BOSS, &"w1");
+	let at = |ms: i64| SILENCE_CLOCK.store(ms, std::sync::atomic::Ordering::SeqCst);
+	at(0);
+	message(&mut shell, SHELL_FEED, &ServerMessage::Today { today: today() });
+	// Heartbeats keep it up and change nothing to draw.
+	at(10_000);
+	assert!(!message(&mut shell, SHELL_FEED, &ServerMessage::Alive).redraw);
+	at(39_999);
+	shell.tick();
+	assert!(shell.today.up, "29.999 s after the last word it is still up");
+	// 30 s after the last message: not answering since that message, picture kept, dimmed.
+	at(40_000);
+	assert!(shell.tick());
+	assert!(!shell.today.up);
+	let since = crate::shared::day::hhmm(today_now() + 10_000);
+	assert_eq!(shell.status().as_deref(), Some(format!("Jocasta isn't answering (since {since})").as_str()));
+	let rows = drawn(&mut shell, 100, 34, false);
+	assert!(rows.iter().any(|row| row.contains("Jocasta isn't answering")), "{rows:#?}");
+	assert!(rows.iter().any(|row| row.contains("Export v2")), "the last picture stays");
+	let area = Rect::new(0, 0, 100, 34);
+	let mut buffer = Buffer::empty(area);
+	shell.draw_dock(&mut buffer, area, false);
+	assert!(buffer.cell((5, 10)).unwrap().modifier.contains(ratatui::style::Modifier::DIM));
+	// The next message, a heartbeat even, clears it.
+	at(50_000);
+	assert!(message(&mut shell, SHELL_FEED, &ServerMessage::Alive).redraw);
+	assert!(shell.today.up);
+	let rows = drawn(&mut shell, 100, 34, false);
+	assert!(!rows.iter().any(|row| row.contains("Jocasta isn't answering")), "{rows:#?}");
+	assert!(!shell.status().is_some_and(|text| text.contains("isn't answering")));
+}
+
 fn allow_view(code: &str) -> PopupView {
 	PopupView {
 		title: "Jocasta: Allow or Deny".to_owned(),

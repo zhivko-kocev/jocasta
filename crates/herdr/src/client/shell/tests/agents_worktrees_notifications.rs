@@ -6,21 +6,23 @@ fn mouse_hits_use_stable_workspace_tab_and_pane_ids() {
     let mut state = ClientShellState::new(config);
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
-    state.compose(106, 20).expect("composed frame");
+    state.sidebar_collapsed = true;
+    state.compose(106, 20).expect("collapsed sidebar");
+    let marker = state.hits.workspaces[0].rect;
 
     let workspace_down =
         state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
-            column: 2,
-            row: 2,
+            column: marker.x,
+            row: marker.y,
             modifiers: KeyModifiers::empty(),
         })]);
     assert!(workspace_down.actions.is_empty());
     let workspace =
         state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
             kind: MouseEventKind::Up(MouseButton::Left),
-            column: 2,
-            row: 2,
+            column: marker.x,
+            row: marker.y,
             modifiers: KeyModifiers::empty(),
         })]);
     assert!(workspace.requests.is_empty());
@@ -33,6 +35,8 @@ fn mouse_hits_use_stable_workspace_tab_and_pane_ids() {
             if target.workspace_id == "ws_1"
     ));
 
+    state.sidebar_collapsed = false;
+    state.compose(106, 20).expect("composed frame");
     let pane = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: 27,
@@ -90,88 +94,7 @@ fn collapsed_workspace_jitter_remains_a_click() {
 }
 
 #[test]
-fn grouped_worktrees_render_parent_branch_and_indented_child() {
-    let config = ClientShellConfig::from_config(&Config::default());
-    let mut state = ClientShellState::new(config);
-    let mut snapshot = snapshot();
-    snapshot.workspaces[0].worktree = Some(ClientShellWorktree {
-        key: "repo".into(),
-        label: "repo".into(),
-        is_linked_worktree: false,
-    });
-    snapshot.workspaces.push(ClientShellWorkspace {
-        workspace_id: "ws_2".into(),
-        active_tab_id: "tab_ws2".into(),
-        new_workspace_cwd: "/repo/feature".into(),
-        number: 2,
-        label: "repo-feature".into(),
-        custom_label: false,
-        branch: Some("worktree/feature".into()),
-        git_ahead_behind: None,
-        tokens: Vec::new(),
-        worktree: Some(ClientShellWorktree {
-            key: "repo".into(),
-            label: "repo".into(),
-            is_linked_worktree: true,
-        }),
-        focused: false,
-        agent_status: AgentStatus::Idle,
-    });
-    state.set_snapshot(Box::new(snapshot));
-    state.set_pane_surface(surface());
-    let frame = state.compose(106, 20).expect("composed frame");
-    let text = frame
-        .cells
-        .chunks(frame.width as usize)
-        .map(|row| {
-            row.iter()
-                .map(|cell| cell.symbol.as_str())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(text.contains("main"));
-    assert!(text.contains("└─"));
-    assert!(text.contains("feature"));
-
-    let mut replacement = (**state.snapshot.as_ref().expect("snapshot")).clone();
-    replacement.revision = 2;
-    replacement.focused_workspace_id = Some("ws_2".into());
-    replacement.workspaces[0].focused = false;
-    replacement.workspaces[1].focused = true;
-    replacement.workspaces[1].agent_status = AgentStatus::Blocked;
-    let mut replacement_surface = surface();
-    replacement_surface.projection_revision = 2;
-    state.collapsed_groups.insert("repo".into());
-    state.set_snapshot(Box::new(replacement));
-    state.set_pane_surface(replacement_surface);
-    let collapsed = state.compose(106, 20).expect("collapsed worktree group");
-    let parent = state.hits.workspaces[0].rect;
-    let status_cell = usize::from(parent.y) * usize::from(collapsed.width)
-        + usize::from(parent.x.saturating_add(1));
-    assert_eq!(
-        collapsed.cells[status_cell].fg,
-        crate::protocol::color_to_u32(state.config.palette.red)
-    );
-
-    let mut next = ClientShellInput::default();
-    state.record_binding(
-        crate::input::KeybindMatch::Action(crate::input::KeybindAction::NextWorkspace),
-        &mut next,
-    );
-    assert!(matches!(
-        &next.actions[..],
-        [ClientShellAction::Endpoint { request, .. }]
-            if matches!(
-                &request.method,
-                crate::api::schema::Method::WorkspaceFocus(target)
-                    if target.workspace_id == "ws_1"
-            )
-    ));
-}
-
-#[test]
-fn duplicate_repo_parents_remain_visible_and_focusable_when_collapsed() {
+fn duplicate_repo_parent_context_menu_closes_only_its_own_workspace() {
     for linked_child in [false, true] {
         let mut projected = snapshot();
         projected.workspaces[0].agent_status = AgentStatus::Idle;
@@ -197,56 +120,6 @@ fn duplicate_repo_parents_remain_visible_and_focusable_when_collapsed() {
         let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
         state.set_snapshot(Box::new(projected));
         state.set_pane_surface(surface());
-        for collapsed in [false, true] {
-            if collapsed {
-                state.collapsed_groups.insert("repo".into());
-            }
-            let frame = state
-                .compose(106, 24)
-                .expect("duplicate repository parents");
-            for workspace_id in ["ws_1", "ws_duplicate"] {
-                let hit = state
-                    .hits
-                    .workspaces
-                    .iter()
-                    .find(|hit| hit.workspace_id == workspace_id)
-                    .expect("repository parent remains visible");
-                assert!(!hit.indented);
-                assert_eq!(hit.group_toggle.is_some(), linked_child);
-            }
-            let parent = state.hits.workspaces[0].rect;
-            let status_cell =
-                usize::from(parent.y) * usize::from(frame.width) + usize::from(parent.x + 1);
-            assert_ne!(
-                frame.cells[status_cell].fg,
-                crate::protocol::color_to_u32(state.config.palette.red)
-            );
-            assert_eq!(
-                state
-                    .hits
-                    .workspaces
-                    .iter()
-                    .any(|hit| hit.workspace_id == "ws_child" && hit.indented),
-                linked_child && !collapsed
-            );
-            let duplicate = state.hits.workspaces[1].rect;
-            state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
-                kind: MouseEventKind::Down(MouseButton::Left),
-                column: duplicate.x + 2,
-                row: duplicate.y,
-                modifiers: KeyModifiers::empty(),
-            })]);
-            let click = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
-                kind: MouseEventKind::Up(MouseButton::Left),
-                column: duplicate.x + 2,
-                row: duplicate.y,
-                modifiers: KeyModifiers::empty(),
-            })]);
-            assert!(matches!(click.actions.as_slice(),
-                [ClientShellAction::Endpoint { request, .. }]
-                    if matches!(&request.method, crate::api::schema::Method::WorkspaceFocus(target)
-                        if target.workspace_id == "ws_duplicate")));
-        }
         let original = state.snapshot.as_deref().unwrap().clone();
         for confirm_close in [false, true] {
             let mut restored = original.clone();
@@ -258,12 +131,6 @@ fn duplicate_repo_parents_remain_visible_and_focusable_when_collapsed() {
                 panic!("repository workspace context menu");
             };
             assert_eq!(menu.items()[1].label, "Close");
-            assert_eq!(
-                menu.items()
-                    .iter()
-                    .any(|item| matches!(item.action, ClientContextMenuAction::ToggleGroup)),
-                linked_child
-            );
             if linked_child {
                 let mut replacement = original.clone();
                 replacement.revision = state.snapshot.as_deref().unwrap().revision + 1;
@@ -285,276 +152,6 @@ fn duplicate_repo_parents_remain_visible_and_focusable_when_collapsed() {
                 [ClientShellAction::Endpoint { request, .. }]
                     if matches!(&request.method, crate::api::schema::Method::WorkspaceClose(params)
                         if params.workspace_id == "ws_duplicate" && !params.close_group)));
-        }
-    }
-}
-
-#[test]
-fn workspace_click_waits_for_release_and_drag_reorders_by_stable_id() {
-    let mut projected = snapshot();
-    for index in 2..=3 {
-        let mut workspace = projected.workspaces[0].clone();
-        workspace.workspace_id = format!("ws_{index}");
-        workspace.number = index;
-        workspace.label = format!("workspace-{index}");
-        workspace.focused = false;
-        projected.workspaces.push(workspace);
-    }
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    state.set_snapshot(Box::new(projected));
-    state.set_pane_surface(surface());
-    state.compose(106, 24).expect("three workspaces");
-    let first = state.hits.workspaces[0].rect;
-    let third = state.hits.workspaces[2].rect;
-
-    let down = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column: first.x + 2,
-        row: first.y,
-        modifiers: KeyModifiers::empty(),
-    })]);
-    assert!(down.actions.is_empty());
-    let drag = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-        kind: MouseEventKind::Drag(MouseButton::Left),
-        column: third.x + 2,
-        row: third.bottom(),
-        modifiers: KeyModifiers::empty(),
-    })]);
-    assert!(drag.repaint);
-    assert!(matches!(
-        state.chrome_drag,
-        Some(ClientChromeDrag::Workspace {
-            ref source_workspace_id,
-            target: Some((None, _)),
-        }) if source_workspace_id == "ws_1"
-    ));
-    let frame = state.compose(106, 24).expect("workspace drop indicator");
-    assert!(frame
-        .cells
-        .chunks(frame.width as usize)
-        .any(|row| row.iter().take(20).any(|cell| cell.symbol == "─")));
-
-    let release =
-        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-            kind: MouseEventKind::Up(MouseButton::Left),
-            column: third.x + 2,
-            row: third.bottom(),
-            modifiers: KeyModifiers::empty(),
-        })]);
-    assert!(matches!(
-        &release.actions[..],
-        [ClientShellAction::Endpoint { request, .. }]
-            if matches!(
-                &request.method,
-                crate::api::schema::Method::WorkspaceMove(params)
-                    if params.workspace_id == "ws_1" && params.insert_index == 3
-            )
-    ));
-
-    state.compose(106, 24).expect("workspaces after drag");
-    let second = state.hits.workspaces[1].rect;
-    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column: second.x + 2,
-        row: second.y,
-        modifiers: KeyModifiers::empty(),
-    })]);
-    let click = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-        kind: MouseEventKind::Up(MouseButton::Left),
-        column: second.x + 2,
-        row: second.y,
-        modifiers: KeyModifiers::empty(),
-    })]);
-    assert!(matches!(
-        &click.actions[..],
-        [ClientShellAction::Endpoint { request, .. }]
-            if matches!(
-                &request.method,
-                crate::api::schema::Method::WorkspaceFocus(target)
-                    if target.workspace_id == "ws_2"
-            )
-    ));
-}
-
-#[test]
-fn duplicate_repo_parent_drag_does_not_target_its_own_move_block() {
-    let mut projected = snapshot();
-    projected.workspaces[0].worktree = Some(ClientShellWorktree {
-        key: "repo".into(),
-        label: "repo".into(),
-        is_linked_worktree: false,
-    });
-    let mut other = projected.workspaces[0].clone();
-    other.workspace_id = "ws_other".into();
-    other.worktree = None;
-    other.focused = false;
-    let mut duplicate = projected.workspaces[0].clone();
-    duplicate.workspace_id = "ws_duplicate".into();
-    duplicate.focused = false;
-    projected.workspaces.extend([other, duplicate]);
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    state.set_snapshot(Box::new(projected));
-    state.set_pane_surface(surface());
-    state
-        .compose(106, 24)
-        .expect("separated repository parents");
-    let source = state.hits.workspaces[0].rect;
-    let target = state.hits.workspaces[2].rect;
-    for (kind, rect, row) in [
-        (MouseEventKind::Down(MouseButton::Left), source, source.y),
-        (
-            MouseEventKind::Drag(MouseButton::Left),
-            target,
-            target.y.saturating_sub(1),
-        ),
-    ] {
-        state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
-            kind,
-            column: rect.x + 2,
-            row,
-            modifiers: KeyModifiers::empty(),
-        })]);
-    }
-    assert!(
-        matches!(state.chrome_drag.as_ref(), Some(ClientChromeDrag::Workspace {
-        target: Some((Some(workspace_id), _)), ..
-    }) if workspace_id == "ws_duplicate")
-    );
-    let drop = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
-        kind: MouseEventKind::Up(MouseButton::Left),
-        column: target.x + 2,
-        row: target.y.saturating_sub(1),
-        modifiers: KeyModifiers::empty(),
-    })]);
-    assert!(drop.actions.is_empty());
-}
-
-#[test]
-fn workspace_drag_moves_parent_worktree_as_one_block_and_rejects_child() {
-    let mut projected = snapshot();
-    projected.workspaces[0].worktree = Some(ClientShellWorktree {
-        key: "repo".into(),
-        label: "repo".into(),
-        is_linked_worktree: false,
-    });
-    let mut child = projected.workspaces[0].clone();
-    child.workspace_id = "ws_child".into();
-    child.number = 2;
-    child.label = "feature".into();
-    child.focused = false;
-    child.worktree = Some(ClientShellWorktree {
-        key: "repo".into(),
-        label: "repo".into(),
-        is_linked_worktree: true,
-    });
-    let mut other = projected.workspaces[0].clone();
-    other.workspace_id = "ws_other".into();
-    other.number = 3;
-    other.label = "other".into();
-    other.focused = false;
-    other.worktree = None;
-    projected.workspaces.extend([child, other]);
-
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    state.set_snapshot(Box::new(projected));
-    state.set_pane_surface(surface());
-    state.compose(106, 24).expect("worktree workspaces");
-    assert!(state.hits.workspaces[1].indented);
-    let parent = state.hits.workspaces[0].rect;
-    let child = state.hits.workspaces[1].rect;
-    let other = state.hits.workspaces[2].rect;
-
-    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column: parent.x + 2,
-        row: parent.y,
-        modifiers: KeyModifiers::empty(),
-    })]);
-    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-        kind: MouseEventKind::Drag(MouseButton::Left),
-        column: other.x + 2,
-        row: other.bottom(),
-        modifiers: KeyModifiers::empty(),
-    })]);
-    let moved = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-        kind: MouseEventKind::Up(MouseButton::Left),
-        column: other.x + 2,
-        row: other.bottom(),
-        modifiers: KeyModifiers::empty(),
-    })]);
-    assert!(matches!(
-        &moved.actions[..],
-        [ClientShellAction::Endpoint { request, .. }]
-            if matches!(
-                &request.method,
-                crate::api::schema::Method::WorkspaceMoveBlock(params)
-                    if params.workspace_ids == ["ws_1", "ws_child"]
-                        && params.before_workspace_id.is_none()
-            )
-    ));
-
-    state.compose(106, 24).expect("worktree child");
-    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column: child.x + 2,
-        row: child.y,
-        modifiers: KeyModifiers::empty(),
-    })]);
-    let dragging_child =
-        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-            kind: MouseEventKind::Drag(MouseButton::Left),
-            column: other.x + 2,
-            row: other.bottom(),
-            modifiers: KeyModifiers::empty(),
-        })]);
-    assert!(dragging_child.actions.is_empty());
-    assert!(state.chrome_drag.is_none());
-
-    let mut projected = state.snapshot.as_deref().unwrap().clone();
-    let mut duplicate = projected.workspaces[0].clone();
-    duplicate.workspace_id = "ws_duplicate".into();
-    duplicate.focused = false;
-    projected.workspaces.push(duplicate);
-    state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    state.set_snapshot(Box::new(projected));
-    state.set_pane_surface(surface());
-    state
-        .compose(106, 24)
-        .expect("repository block with duplicate root");
-    let duplicate = state.hits.workspaces[1].rect;
-    let other = state.hits.workspaces[3].rect;
-    for (source, target_row, moving_duplicate) in [
-        (other, duplicate.y.saturating_sub(1), false),
-        (duplicate, other.bottom(), true),
-    ] {
-        state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: source.x + 2,
-            row: source.y,
-            modifiers: KeyModifiers::empty(),
-        })]);
-        state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
-            kind: MouseEventKind::Drag(MouseButton::Left),
-            column: source.x + 2,
-            row: target_row,
-            modifiers: KeyModifiers::empty(),
-        })]);
-        let moved = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
-            kind: MouseEventKind::Up(MouseButton::Left),
-            column: source.x + 2,
-            row: target_row,
-            modifiers: KeyModifiers::empty(),
-        })]);
-        if moving_duplicate {
-            assert!(matches!(moved.actions.as_slice(),
-                [ClientShellAction::Endpoint { request, .. }]
-                    if matches!(&request.method, crate::api::schema::Method::WorkspaceMoveBlock(params)
-                        if params.workspace_ids == ["ws_duplicate", "ws_1", "ws_child"] && params.before_workspace_id.is_none())));
-        } else {
-            assert!(matches!(moved.actions.as_slice(),
-                [ClientShellAction::Endpoint { request, .. }]
-                    if matches!(&request.method, crate::api::schema::Method::WorkspaceMove(params)
-                        if params.workspace_id == "ws_other" && params.insert_index == 0)));
         }
     }
 }
@@ -749,7 +346,7 @@ fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
         crate::api::schema::Method::PaneFocus(target) if target.pane_id == "pane_2"
     ));
 
-    state.compose(106, 10).expect("short agent sidebar frame");
+    state.compose(106, 6).expect("short agent sidebar frame");
     assert_eq!(
         state
             .hits
@@ -765,9 +362,7 @@ fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
         row: body.y,
         modifiers: KeyModifiers::empty(),
     })]);
-    state
-        .compose(106, 10)
-        .expect("scrolled agent sidebar frame");
+    state.compose(106, 6).expect("scrolled agent sidebar frame");
     assert_eq!(
         state
             .hits
@@ -827,29 +422,6 @@ fn muted_agent_sidebar_rows_do_not_stack_terminal_faint() {
             "{label} cell at ({x},{y}) should not stack terminal faint: {cell:?}"
         );
     }
-}
-
-#[test]
-fn workspace_state_text_does_not_stack_terminal_faint() {
-    use crate::config::SpaceSidebarToken;
-
-    let mut config = Config::default();
-    config.ui.sidebar.spaces.rows = vec![
-        vec![SpaceSidebarToken::StateIcon, SpaceSidebarToken::Workspace],
-        vec![SpaceSidebarToken::StateText],
-    ];
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
-    state.set_snapshot(Box::new(snapshot()));
-    state.set_pane_surface(surface());
-    let frame = state.compose(106, 30).expect("workspace sidebar frame");
-    let rect = state.hits.workspaces.first().expect("workspace hit").rect;
-    let buffer = frame.to_ratatui_buffer().expect("workspace sidebar buffer");
-    let (x, y) = cell_symbol_position(&frame, rect, "idle");
-    let cell = buffer.cell((x, y)).expect("workspace state text cell");
-    assert!(
-        !cell.modifier.contains(Modifier::DIM),
-        "workspace state text at ({x},{y}) should not stack terminal faint: {cell:?}"
-    );
 }
 
 #[test]
@@ -1080,44 +652,6 @@ fn workspace_actions_preserve_selected_target_and_client_confirmation() {
 }
 
 #[test]
-fn desktop_workspace_navigation_reveals_overflowing_selection() {
-    let mut projected = snapshot();
-    for index in 2..=8 {
-        let mut workspace = projected.workspaces[0].clone();
-        workspace.workspace_id = format!("ws_{index}");
-        workspace.number = index;
-        workspace.label = format!("workspace-{index}");
-        workspace.focused = false;
-        projected.workspaces.push(workspace);
-    }
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    state.set_snapshot(Box::new(projected));
-    state.set_pane_surface(surface());
-    state.mode = ClientShellMode::Navigate;
-    state.navigate_workspace_id = state.navigation_target(&ClientEndpointId::Local, "ws_1");
-    state.compose(106, 12).expect("overflowing sidebar");
-
-    for _ in 0..6 {
-        state.handle_input_bytes(b"\x1b[B");
-        state.compose(106, 12).expect("revealed workspace");
-        let selected = state
-            .navigate_workspace_id
-            .as_ref()
-            .expect("selection")
-            .workspace_id
-            .as_str();
-        assert!(
-            state
-                .hits
-                .workspaces
-                .iter()
-                .any(|hit| hit.workspace_id == selected),
-            "{selected} should remain visible"
-        );
-    }
-}
-
-#[test]
 fn named_workspace_overlay_targets_projected_source_workspace() {
     let mut config = Config::default();
     config.ui.prompt_new_workspace_name = true;
@@ -1199,7 +733,6 @@ fn navigate_mode_selects_workspace_locally_then_focuses_by_stable_id() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("second"));
     assert!(text.contains("NAVIGATE"));
 
     let focus = state.handle_input_bytes(b"\r");

@@ -28,6 +28,11 @@ binary; it is not shipped as `herdr`. Changed files are listed below, as Apache-
   test fixture (`tests/fixtures/codex-manifest.toml`) for the loader's tests.
 - Packaging and docs: `distribution/`, `docs/` except `docs/next/api/herdr-api.schema.json` (embedded by `cli/api.rs`),
   `scripts/` except the ConPTY, vendor and libghostty scripts, `CHANGELOG.md`.
+- The expanded sidebar's spaces section (0659): its rows, hits, scroll, drag and reorder, section divider and split,
+  worktree-group collapse, and the multi-machine "machines" list that shared its area. The agents list takes the
+  sidebar's height under a one-row strip with `new` and `menu`. The collapsed sidebar's workspace markers stay.
+  `[ui.sidebar.spaces]`, the split ratio and the client preferences' `sidebar_section_split`, `collapsed_groups` and
+  `remote_collapsed_groups` are still read, and ignored; the server's session file and wire types keep their fields.
 
 Kept whole: plugins, kitty graphics, live handoff, worktrees, notifications and sound, persistence, sessions,
 `vendor/`, `skills/herdr/SKILL.md`, `tests/fixtures/`, the local release notes and announcements, onboarding.
@@ -43,7 +48,10 @@ crate and `crates/ghostty-vt` and patches `portable-pty`; the MSVC static C runt
 `.cargo/config.toml`), `api/client.rs`, `api/server.rs`, `app/{actions,api,mod,runtime,state}.rs`,
 `app/api/worktrees.rs`, `cli.rs`, `cli/{integration,plugin,server,spec,status,target,worktree}.rs`,
 `client/{endpoint,handshake,mod,shell,shell_runtime,transport}.rs`, `client/endpoint/{catalog,supervisor}.rs`,
-`client/shell/{composition,endpoint_sidebar,endpoints,input,render,state}.rs`, `client/shell/tests/endpoints.rs`,
+`client/shell/{composition,config,context_menu,endpoint_navigation,endpoint_sidebar,endpoints,input,mobile,mouse,
+preferences,render,sidebar,state,workspace_navigation}.rs`, `client/shell/tests/{agents_worktrees_notifications,
+chrome_context,endpoints,keybindings_settings,popup_focus_projection,workspace_navigation}.rs`, `ui.rs`,
+`ui/sidebar.rs`, `ui/sidebar/tokens.rs`,
 `config.rs`, `detect/{mod,manifest}.rs`, `detect/manifest/tests.rs`, `events.rs`,
 `integration/{actions,env,mod,registry,targets,tests,types}.rs`, `ipc.rs`, `logging.rs`, `noninteractive_process.rs`,
 `pane.rs`, `platform/{fallback,linux,macos,mod,unix_common,windows}.rs`, `product_announcements.rs`,

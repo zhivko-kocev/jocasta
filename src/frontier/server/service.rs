@@ -153,6 +153,8 @@ pub struct ServiceOptions {
 	pub hosts_dir: Option<PathBuf>,
 	/// How often the thread panes' omp hosts are asked for their state (0547, 0561); 1 s.
 	pub host_poll_ms: Option<i64>,
+	/// How often the dock's heartbeat goes (0662); 10 s (test seam).
+	pub alive_ms: Option<i64>,
 	/// `Some(false)` (test seam): a task end without a `report_result` goes straight to its review, with no steer asking
 	/// for the report first (0539).
 	pub ask_report: Option<bool>,
@@ -200,6 +202,7 @@ impl ServiceOptions {
 			relay_url_of: None,
 			hosts_dir: None,
 			host_poll_ms: None,
+			alive_ms: None,
 			ask_report: None,
 			checks: None,
 			plan_settle_ms: None,
@@ -226,6 +229,8 @@ const FULL_REFRESH_MS: u64 = 60_000;
 const CHANGE_SETTLE_MS: u64 = 150;
 /// How often the thread panes' omp hosts are asked for their state (0547, 0561); a pipe answers in 0–5 ms.
 const HOST_POLL_MS: u64 = 1_000;
+/// How often the dock hears the service is alive (0662); it says the service isn't answering after 30 s without word.
+const ALIVE_MS: u64 = 10_000;
 /// How long `stop` waits for tool calls in flight before closing the catalog under them (SVC-13).
 const CALLS_WAIT_MS: u64 = 25_000;
 
@@ -536,6 +541,22 @@ impl JocastaService {
 			let poll_ms = self.ctx.options.host_poll_ms.map_or(HOST_POLL_MS, |ms| ms.unsigned_abs().max(1));
 			timers.push(every(poll_ms, me.clone(), |service| async move { service.ctx.omps.poll().await }.boxed()));
 		}
+		// The dock's heartbeat (0662), off a blocking thread: through the day's state and the catalog, the two the hang
+		// of 2026-11-23 held, so a service stuck on either stops beating.
+		let alive_ms = self.ctx.options.alive_ms.map_or(ALIVE_MS, |ms| ms.unsigned_abs().max(1));
+		timers.push(every(alive_ms, me.clone(), |service| {
+			async move {
+				let (day, catalog) = (service.ctx.day.clone(), service.ctx.catalog.clone());
+				let through = tokio::task::spawn_blocking(move || {
+					day.answering();
+					drop(locked(&catalog));
+				});
+				if through.await.is_ok() {
+					service.ctx.events.send(ServerMessage::Alive);
+				}
+			}
+			.boxed()
+		}));
 		locked(&self.timers).extend(timers);
 	}
 

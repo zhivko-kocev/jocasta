@@ -2,7 +2,6 @@ use super::*;
 
 pub(super) const MIN_TAB_WIDTH: u16 = 8;
 pub(super) const NEW_TAB_WIDTH: u16 = 3;
-pub(super) const WORKSPACE_HEADER_ROWS: u16 = 2;
 const ENDPOINT_ERROR_TIMEOUT_SECS: u64 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,7 +20,6 @@ pub(crate) struct ClientShellConfig {
     pub(super) mobile_width_threshold: u16,
     pub(super) tab_bar_position: TabBarPositionConfig,
     pub(super) hide_tab_bar_when_single_tab: bool,
-    pub(super) spaces: SpacesSidebarConfig,
     pub(super) agents: crate::config::AgentsSidebarConfig,
     pub(super) agent_panel_sort: crate::config::AgentPanelSortConfig,
     pub(super) status_indicators: crate::config::StatusIndicatorStyle,
@@ -87,9 +85,6 @@ pub(super) enum ClientMobileTarget {
 pub(super) struct ShellHitMap {
     pub(super) machines: Vec<MachineHit>,
     pub(super) workspaces: Vec<WorkspaceHit>,
-    pub(super) workspace_body: Rect,
-    pub(super) workspace_scrollbar: Rect,
-    pub(super) workspace_scroll_metrics: Option<crate::pane::ScrollMetrics>,
     pub(super) workspace_max_scroll: usize,
     pub(super) tabs: Vec<(Rect, String)>,
     pub(super) panes: Vec<PaneHit>,
@@ -103,7 +98,6 @@ pub(super) struct ShellHitMap {
     pub(super) agent_max_scroll: usize,
     pub(super) agent_sort_toggle: Rect,
     pub(super) sidebar_divider: Rect,
-    pub(super) sidebar_section_divider: Rect,
     pub(super) sidebar_toggle: Rect,
     pub(super) new_workspace: Rect,
     pub(super) new_tab: Rect,
@@ -179,8 +173,6 @@ pub(super) struct ClientPaneMouseGesture {
 pub(super) struct ClientWorkspacePress {
     pub(super) endpoint_id: ClientEndpointId,
     pub(super) workspace_id: String,
-    pub(super) start_column: u16,
-    pub(super) start_row: u16,
 }
 
 pub(super) struct ClientTabPress {
@@ -192,10 +184,6 @@ pub(super) struct ClientTabPress {
 
 pub(super) enum ClientChromeDrag {
     SidebarWidth,
-    SidebarSection,
-    WorkspaceScrollbar {
-        grab_row_offset: u16,
-    },
     AgentScrollbar {
         grab_row_offset: u16,
     },
@@ -216,10 +204,6 @@ pub(super) enum ClientChromeDrag {
         workspace_id: String,
         insert_index: Option<usize>,
     },
-    Workspace {
-        source_workspace_id: String,
-        target: Option<(Option<String>, u16)>,
-    },
     PaneSplit {
         hit: PaneSplitHit,
         tab_id: String,
@@ -239,8 +223,6 @@ pub(super) struct WorkspaceHit {
     pub(super) rect: Rect,
     pub(super) endpoint_id: ClientEndpointId,
     pub(super) workspace_id: String,
-    pub(super) indented: bool,
-    pub(super) group_toggle: Option<(Rect, String)>,
 }
 
 #[derive(Debug)]
@@ -519,7 +501,6 @@ pub(super) enum ClientContextMenuAction {
     NewWorktree,
     OpenWorktree,
     RemoveWorktree,
-    ToggleGroup,
     NewTab,
     RenamePane,
     ClearPaneName,
@@ -539,7 +520,6 @@ pub(super) enum ClientContextMenuTarget {
         is_linked_worktree: bool,
         has_worktree_children: bool,
         close_group: bool,
-        collapsed: bool,
     },
     Tab {
         tab_id: String,
@@ -876,21 +856,16 @@ pub(crate) struct ClientShellState {
     pub(super) sidebar_collapsed_manual: bool,
     pub(super) sidebar_width: u16,
     pub(super) sidebar_width_manual: bool,
-    pub(super) sidebar_section_split: f32,
-    pub(super) sidebar_section_split_manual: bool,
     pub(super) agent_panel_sort_manual: bool,
     pub(super) last_sidebar_divider_click: Option<std::time::Instant>,
     pub(super) chrome_drag: Option<ClientChromeDrag>,
     pub(super) workspace_press: Option<ClientWorkspacePress>,
     pub(super) tab_press: Option<ClientTabPress>,
-    pub(super) collapsed_groups: HashSet<String>,
-    pub(super) remote_collapsed_groups: HashMap<ClientEndpointId, HashSet<String>>,
     pub(super) workspace_scroll: usize,
     pub(super) agent_scroll: usize,
     pub(super) pending_agent_reveal: Option<(ClientEndpointId, String)>,
     pub(super) tab_scroll: usize,
     pub(super) mobile_switcher_scroll: usize,
-    pub(super) reveal_focused_workspace: bool,
     pub(super) reveal_mobile_workspace: bool,
     pub(super) mobile_switcher_suspended: bool,
     pub(super) reveal_focused_tab: bool,
@@ -1016,23 +991,8 @@ impl ClientShellState {
             .sidebar_width
             .unwrap_or(config.sidebar_width)
             .clamp(min_width, max_width);
-        let sidebar_section_split = preferences
-            .sidebar_section_split
-            .filter(|split| split.is_finite())
-            .map(|split| split.clamp(0.1, 0.9))
-            .unwrap_or(0.5);
         if let Some(sort) = preferences.agent_panel_sort {
             config.agent_panel_sort = sort;
-        }
-        let mut remote_collapsed_groups = HashMap::<ClientEndpointId, HashSet<String>>::new();
-        for saved in preferences.remote_collapsed_groups {
-            let Ok(profile_id) = crate::client::endpoint::ProfileId::parse(saved.profile_id) else {
-                continue;
-            };
-            remote_collapsed_groups
-                .entry(ClientEndpointId::Ssh(profile_id))
-                .or_default()
-                .extend(saved.collapsed_groups);
         }
         Self {
             config,
@@ -1051,21 +1011,16 @@ impl ClientShellState {
             sidebar_collapsed_manual: preferences.sidebar_collapsed.is_some(),
             sidebar_width,
             sidebar_width_manual: preferences.sidebar_width.is_some(),
-            sidebar_section_split,
-            sidebar_section_split_manual: preferences.sidebar_section_split.is_some(),
             agent_panel_sort_manual: preferences.agent_panel_sort.is_some(),
             last_sidebar_divider_click: None,
             chrome_drag: None,
             workspace_press: None,
             tab_press: None,
-            collapsed_groups: preferences.collapsed_groups.into_iter().collect(),
-            remote_collapsed_groups,
             workspace_scroll: 0,
             agent_scroll: 0,
             pending_agent_reveal: None,
             tab_scroll: 0,
             mobile_switcher_scroll: 0,
-            reveal_focused_workspace: true,
             reveal_mobile_workspace: false,
             mobile_switcher_suspended: false,
             reveal_focused_tab: true,
@@ -1159,49 +1114,11 @@ impl ClientShellState {
             .is_some_and(|(cols, rows)| !self.layout(cols, rows).mobile_header.is_empty())
     }
 
-    pub(super) fn collapsed_groups_for_endpoint(
-        &self,
-        endpoint_id: &ClientEndpointId,
-    ) -> Option<&HashSet<String>> {
-        if endpoint_id.is_local() {
-            Some(&self.collapsed_groups)
-        } else {
-            self.remote_collapsed_groups.get(endpoint_id)
-        }
-    }
-
-    pub(super) fn group_is_collapsed(&self, endpoint_id: &ClientEndpointId, key: &str) -> bool {
-        self.collapsed_groups_for_endpoint(endpoint_id)
-            .is_some_and(|groups| groups.contains(key))
-    }
-
-    pub(super) fn toggle_collapsed_group(&mut self, endpoint_id: &ClientEndpointId, key: String) {
-        let groups = if endpoint_id.is_local() {
-            &mut self.collapsed_groups
-        } else {
-            self.remote_collapsed_groups
-                .entry(endpoint_id.clone())
-                .or_default()
-        };
-        if !groups.remove(&key) {
-            groups.insert(key);
-        }
-    }
-
     pub(super) fn navigation_workspace_entries(
         &self,
         snapshot: &ClientShellSnapshot,
     ) -> Vec<WorkspaceEntry> {
-        let empty_collapsed_groups = HashSet::new();
-        if self.mobile_layout_active() {
-            render::workspace_entries(snapshot, &empty_collapsed_groups)
-        } else {
-            render::workspace_entries(
-                snapshot,
-                self.collapsed_groups_for_endpoint(&self.active_endpoint_id)
-                    .unwrap_or(&empty_collapsed_groups),
-            )
-        }
+        render::workspace_entries(snapshot)
     }
 
     pub(super) fn reveal_workspace(&mut self, workspace_id: &str) {
@@ -1255,7 +1172,6 @@ impl ClientShellState {
         self.agent_scroll = 0;
         self.tab_scroll = 0;
         self.mobile_switcher_scroll = 0;
-        self.reveal_focused_workspace = true;
         self.reveal_mobile_workspace = false;
         self.mobile_switcher_suspended = false;
         self.reveal_focused_tab = true;
@@ -1428,14 +1344,6 @@ impl ClientShellState {
                     })
                 || render::tab_bar_status_width(current) != render::tab_bar_status_width(&snapshot)
         });
-        if self
-            .snapshot
-            .as_deref()
-            .and_then(|current| current.focused_workspace_id.as_deref())
-            != snapshot.focused_workspace_id.as_deref()
-        {
-            self.reveal_focused_workspace = true;
-        }
         if tab_layout_changed
             || self
                 .snapshot

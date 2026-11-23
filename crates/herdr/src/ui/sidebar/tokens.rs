@@ -1,7 +1,4 @@
-use crate::config::{
-    AgentSidebarToken, AgentsSidebarConfig, SidebarTokenStyle, SpaceSidebarToken,
-    SpacesSidebarConfig,
-};
+use crate::config::{AgentSidebarToken, AgentsSidebarConfig, SidebarTokenStyle};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedToken {
@@ -19,8 +16,6 @@ pub(crate) enum ResolvedTokenKind {
     Pane(String),
     Agent(String),
     TerminalTitle(String),
-    Branch(String),
-    GitStatus { ahead: usize, behind: usize },
     Custom(String),
 }
 
@@ -34,9 +29,8 @@ impl ResolvedTokenKind {
             | Self::Pane(value)
             | Self::Agent(value)
             | Self::TerminalTitle(value)
-            | Self::Branch(value)
             | Self::Custom(value) => Some(value),
-            Self::StateIcon | Self::GitStatus { .. } => None,
+            Self::StateIcon => None,
         }
     }
 }
@@ -121,66 +115,8 @@ pub(crate) fn agent_rows(
         .collect()
 }
 
-pub(crate) struct SpaceTokenContext<'a> {
-    pub(crate) workspace: &'a str,
-    pub(crate) branch: Option<&'a str>,
-    pub(crate) state_text: &'a str,
-    pub(crate) ahead_behind: Option<(usize, usize)>,
-    pub(crate) tokens: &'a std::collections::HashMap<String, String>,
-    pub(crate) suppress_git_details: bool,
-}
-
-pub(crate) fn space_rows(
-    config: &SpacesSidebarConfig,
-    context: SpaceTokenContext<'_>,
-) -> Vec<Vec<ResolvedToken>> {
-    config
-        .rows
-        .iter()
-        .filter_map(|row| {
-            let resolved = row
-                .iter()
-                .filter_map(|configured| {
-                    let (token, style) = configured.parts();
-                    let kind = match token {
-                        SpaceSidebarToken::StateIcon => Some(ResolvedTokenKind::StateIcon),
-                        SpaceSidebarToken::StateText => {
-                            Some(ResolvedTokenKind::StateText(context.state_text.to_string()))
-                        }
-                        SpaceSidebarToken::Workspace => {
-                            Some(ResolvedTokenKind::Workspace(context.workspace.to_string()))
-                        }
-                        SpaceSidebarToken::Branch if !context.suppress_git_details => context
-                            .branch
-                            .map(|branch| ResolvedTokenKind::Branch(branch.to_string())),
-                        SpaceSidebarToken::Branch => None,
-                        SpaceSidebarToken::GitStatus if !context.suppress_git_details => context
-                            .ahead_behind
-                            .filter(|(ahead, behind)| *ahead > 0 || *behind > 0)
-                            .map(|(ahead, behind)| ResolvedTokenKind::GitStatus { ahead, behind }),
-                        SpaceSidebarToken::GitStatus => None,
-                        SpaceSidebarToken::Custom(name) => context
-                            .tokens
-                            .get(name)
-                            .cloned()
-                            .map(ResolvedTokenKind::Custom),
-                        SpaceSidebarToken::Styled { .. } => None,
-                    }?;
-                    let style = kind
-                        .text_value()
-                        .map_or(Some(style), |value| configured.style_for_value(value))?;
-                    Some(ResolvedToken::new(kind, style))
-                })
-                .collect::<Vec<_>>();
-            (!resolved.is_empty()).then_some(resolved)
-        })
-        .collect()
-}
-
-pub(crate) fn separator(previous: &ResolvedToken, current: &ResolvedToken) -> &'static str {
-    if matches!(previous.kind, ResolvedTokenKind::StateIcon)
-        || matches!(current.kind, ResolvedTokenKind::GitStatus { .. })
-    {
+pub(crate) fn separator(previous: &ResolvedToken) -> &'static str {
+    if matches!(previous.kind, ResolvedTokenKind::StateIcon) {
         " "
     } else {
         " · "
@@ -190,7 +126,6 @@ pub(crate) fn separator(previous: &ResolvedToken, current: &ResolvedToken) -> &'
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AgentSidebarToken, SpaceSidebarToken};
 
     struct Entry {
         workspace: String,
@@ -299,15 +234,13 @@ rows = [[{ token = "workspace", rules = [{ equals = "long-workspace-name", fg = 
     }
 
     #[test]
-    fn custom_numeric_rules_resolve_in_agent_overrides_and_space_rows() {
+    fn custom_numeric_rules_resolve_in_agent_overrides() {
         let config: crate::config::SidebarConfig = toml::from_str(
             r#"
 [agents]
 rows = [["workspace"]]
 [agents.rows_by_agent]
 pi = [[{ token = "$load", rules = [{ gt = 80, bold = true }, { gt = 50, dim = true }] }]]
-[spaces]
-rows = [[{ token = "$load", rules = [{ lt = 50, dim = true }] }]]
 "#,
         )
         .unwrap();
@@ -323,18 +256,6 @@ rows = [[{ token = "$load", rules = [{ lt = 50, dim = true }] }]]
             assert_eq!(rows[0][0].kind, ResolvedTokenKind::Custom(value.into()));
             assert_eq!(rows[0][0].style.bold, bold);
             assert_eq!(rows[0][0].style.dim, dim);
-            let spaces = space_rows(
-                &config.spaces,
-                SpaceTokenContext {
-                    workspace: "repo",
-                    branch: None,
-                    state_text: "working",
-                    ahead_behind: None,
-                    suppress_git_details: false,
-                    tokens: &entry.tokens,
-                },
-            );
-            assert_eq!(spaces[0][0].style.dim, (value == "20").then_some(true));
         }
     }
 
@@ -346,8 +267,6 @@ rows = [[{ token = "$load", rules = [{ lt = 50, dim = true }] }]]
 rows = [[{ token = "machine", fg = "#61afef", rules = [{ equals = "Local", hide = true }] }, "agent"]]
 [agents.rows_by_agent]
 pi = [[{ token = "$load", rules = [{ lt = 50, hide = true }] }], ["agent"]]
-[spaces]
-rows = [[{ token = "$load", rules = [{ lt = 50, hide = true }] }], ["workspace"]]
 "##,
         ).unwrap();
         let encoded = toml::to_string(&config).unwrap();
@@ -372,18 +291,6 @@ rows = [[{ token = "$load", rules = [{ lt = 50, hide = true }] }], ["workspace"]
                 agent_rows(&config.agents, context(&entry), "working").len(),
                 count
             );
-            let rows = space_rows(
-                &config.spaces,
-                SpaceTokenContext {
-                    workspace: "repo",
-                    branch: None,
-                    state_text: "working",
-                    ahead_behind: None,
-                    suppress_git_details: false,
-                    tokens: &entry.tokens,
-                },
-            );
-            assert_eq!(rows.len(), count);
         }
     }
 
@@ -532,55 +439,6 @@ rows = [[{ token = "$load", rules = [{ lt = 50, hide = true }] }], ["workspace"]
             agent_rows(&config, context(&pi), "working"),
             vec![vec![ResolvedToken::unstyled(ResolvedTokenKind::Workspace(
                 "repo".into()
-            ))]]
-        );
-    }
-
-    #[test]
-    fn grouped_children_suppress_all_builtin_git_details() {
-        let config = SpacesSidebarConfig::default();
-
-        assert_eq!(
-            space_rows(
-                &config,
-                SpaceTokenContext {
-                    workspace: "feature",
-                    branch: Some("worktree/feature"),
-                    state_text: "idle",
-                    ahead_behind: Some((2, 1)),
-                    tokens: &std::collections::HashMap::new(),
-                    suppress_git_details: true,
-                },
-            ),
-            vec![vec![
-                ResolvedToken::unstyled(ResolvedTokenKind::StateIcon),
-                ResolvedToken::unstyled(ResolvedTokenKind::Workspace("feature".into())),
-            ]]
-        );
-    }
-
-    #[test]
-    fn workspace_custom_token_can_replace_git_specific_details() {
-        let tokens = std::collections::HashMap::from([("jj_status".into(), "2 changes".into())]);
-        let config = SpacesSidebarConfig {
-            rows: vec![vec![SpaceSidebarToken::Custom("jj_status".into())]],
-            ..Default::default()
-        };
-
-        assert_eq!(
-            space_rows(
-                &config,
-                SpaceTokenContext {
-                    workspace: "repo",
-                    branch: None,
-                    state_text: "idle",
-                    ahead_behind: None,
-                    tokens: &tokens,
-                    suppress_git_details: false,
-                },
-            ),
-            vec![vec![ResolvedToken::unstyled(ResolvedTokenKind::Custom(
-                "2 changes".into()
             ))]]
         );
     }

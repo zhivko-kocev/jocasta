@@ -126,18 +126,23 @@ impl ClientShellState {
         true
     }
 
-    /// A click in the dock gives it his keys, and one elsewhere takes them back; the dock's own events stop there.
+    /// A click in the dock gives it his keys and acts on the row under it (0660), and one elsewhere takes them back;
+    /// the dock's own events stop there.
     pub(super) fn extension_takes_mouse(
         &mut self,
         mouse: MouseEvent,
         outcome: &mut ClientShellInput,
     ) -> bool {
         let in_dock = contains(self.hits.dock, (mouse.column, mouse.row));
-        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
-            && in_dock != self.dock_focused
-        {
-            self.dock_focused = in_dock;
-            outcome.repaint = true;
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            if in_dock != self.dock_focused {
+                self.dock_focused = in_dock;
+                outcome.repaint = true;
+            }
+            if in_dock {
+                let reply = crate::embed::shell_dock_mouse(mouse.column, mouse.row);
+                self.apply_reply(reply, outcome);
+            }
         }
         in_dock
     }

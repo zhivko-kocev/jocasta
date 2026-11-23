@@ -419,6 +419,12 @@ impl Day {
 		})
 	}
 
+	/// Waits for the day's state and lets it go: the dock's heartbeat goes through it (0662), so a day stuck holding
+	/// it stops the beat.
+	pub fn answering(&self) {
+		drop(self.st());
+	}
+
 	fn st(&self) -> MutexGuard<'_, State> {
 		lock(&self.inner.state)
 	}

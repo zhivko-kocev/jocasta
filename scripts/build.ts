@@ -344,6 +344,72 @@ function shipHunk(target: Target, dest: string): void {
 	cpSync(join(pkg, "LICENSE"), join(dest, "LICENSE"));
 }
 
+/** herdr's pin of Microsoft's ConPTY runtime (0661): the package, its files and notices, each with its SHA-256. */
+const CONPTY_PIN = join(root, "crates", "herdr", "packaging", "windows", "conpty.json");
+
+type ConptyPin = {
+	package: { id: string; version: string; url: string; sha256: string };
+	bundles: Record<string, { files: { source: string; destination: string; sha256: string }[] }>;
+	notices: { source: string; destination: string; sha256: string }[];
+};
+
+/**
+ * The Windows build's `conpty\` folder and its notices (0661), laid out as herdr's `package_windows_conpty.py` does:
+ * herdr's toasts need `conpty\x64\OpenConsole.exe`, and its pty loads the folder only when every file and the marker
+ * are there and match their hashes. The package is downloaded once into the cache and checked like Node's.
+ */
+async function shipConpty(out: string): Promise<void> {
+	const pin = JSON.parse(readFileSync(CONPTY_PIN, "utf8")) as ConptyPin;
+	const bundle = pin.bundles.x86_64 ?? fail(`${CONPTY_PIN} has no x86_64 bundle`);
+	const cached = join(CACHE, "conpty", `${pin.package.id}.${pin.package.version}.nupkg`);
+	if (!existsSync(cached)) {
+		console.log(`build: downloading ${pin.package.url}`);
+		let response: Response;
+		try {
+			response = await fetch(pin.package.url);
+		} catch (error) {
+			fail(
+				`couldn't download ConPTY ${pin.package.version}: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+		if (!response.ok) fail(`${pin.package.url} answered ${response.status}`);
+		mkdirSync(dirname(cached), { recursive: true });
+		writeFileSync(`${cached}.part`, Buffer.from(await response.arrayBuffer()));
+		renameSync(`${cached}.part`, cached);
+	}
+	const sha = createHash("sha256").update(readFileSync(cached)).digest("hex");
+	if (sha !== pin.package.sha256) {
+		rmSync(cached);
+		fail(`${parse(cached).base} has SHA-256 ${sha}, not the pinned ${pin.package.sha256}; removed it`);
+	}
+	const staging = join(CACHE, "conpty", "unpacking");
+	rmSync(staging, { recursive: true, force: true });
+	mkdirSync(staging, { recursive: true });
+	await $`${TAR} -xf ${cached} -C ${staging} ${bundle.files.map((file) => file.source)}`;
+	const copyChecked = (from: string, to: string, sha256: string) => {
+		const got = createHash("sha256").update(readFileSync(from)).digest("hex");
+		if (got !== sha256) fail(`${from} has SHA-256 ${got}, not the pinned ${sha256}`);
+		mkdirSync(dirname(join(out, to)), { recursive: true });
+		cpSync(from, join(out, to));
+	};
+	for (const file of bundle.files) copyChecked(join(staging, file.source), file.destination, file.sha256);
+	rmSync(staging, { recursive: true, force: true });
+	const files = Object.fromEntries(
+		[...bundle.files].sort((a, b) => a.destination.localeCompare(b.destination)).map((f) => [f.destination, f.sha256]),
+	);
+	const marker = {
+		architecture: "x86_64",
+		files,
+		package: pin.package.id,
+		schema_version: 1,
+		version: pin.package.version,
+	};
+	writeFileSync(join(out, "conpty", "herdr-conpty.json"), `${JSON.stringify(marker, null, 2)}\n`);
+	for (const notice of pin.notices) {
+		copyChecked(join(root, "crates", "herdr", notice.source), notice.destination, notice.sha256);
+	}
+}
+
 /**
  * Empties `dist/<target>`. A file there held open (a `jocasta.exe` or its server run from it, or omp's `jocasta mcp`
  * started from it) fails with the file and, on Windows, the processes running from the folder, instead of a raw EBUSY.
@@ -396,6 +462,7 @@ async function build(): Promise<void> {
 	shipWhiteboardRuntime(join(out, "whiteboard"));
 	await shipNode(target, join(out, "node"));
 	shipHunk(target, join(out, "hunk"));
+	if (target === "windows-x64") await shipConpty(out);
 	// whiteboard's canvas build and its LICENSE, served to the canvas page from beside the exe (0393, whiteboard.rs).
 	cpSync(CANVAS_BUILD, join(out, "whiteboard-canvas"), { recursive: true });
 	cpSync(join(WHITEBOARD, "LICENSE"), join(out, "whiteboard-canvas", "LICENSE"));

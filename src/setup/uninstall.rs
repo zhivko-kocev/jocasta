@@ -259,8 +259,9 @@ pub struct InstallContents {
 }
 
 /// The install folder's entries by owner (0579): the ones `install.json` lists, with the `<name>.old-<stamp>` copies an
-/// upgrade renamed aside while they were in use (install.ps1); an install from before the list is all Jocasta's only
-/// when every entry is a release's name, else it is refused whole. `windows` defaults to the platform.
+/// upgrade renamed aside while they were in use (install.ps1), a ConPTY file's as `conpty-<path>.old-<stamp>` (0661);
+/// an install from before the list is all Jocasta's only when every entry is a release's name, else it is refused
+/// whole. `windows` defaults to the platform.
 pub fn install_contents(record: &InstallRecord, windows: Option<bool>) -> Result<InstallContents> {
 	static OLD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\.old-\d+$").expect("a fixed pattern"));
 	let windows = windows.unwrap_or(cfg!(windows));
@@ -269,7 +270,11 @@ pub fn install_contents(record: &InstallRecord, windows: Option<bool>) -> Result
 		Some(entries) => entries.iter().map(|name| key(name)).collect(),
 		None => RELEASE_NAMES.iter().map(|name| key(name)).collect(),
 	};
-	let is_ours = |name: &str| listed.contains(&key(&OLD.replace(name, "")));
+	let is_ours = |name: &str| {
+		let base = OLD.replace(name, "");
+		let moved_from_conpty = base.len() < name.len() && key(&base).starts_with("conpty-");
+		listed.contains(&key(if moved_from_conpty { "conpty" } else { &base }))
+	};
 	let mut names: Vec<String> = fs::read_dir(&record.dir)?
 		.map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
 		.collect::<std::io::Result<_>>()?;

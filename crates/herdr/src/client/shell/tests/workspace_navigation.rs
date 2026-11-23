@@ -75,80 +75,74 @@ fn workspace_rect(state: &ClientShellState, endpoint: &ClientEndpointId, workspa
 fn local_navigation_highlight_stays_visible_with_terminal_theme() {
     use ratatui::style::Color;
 
-    for compact in [false, true] {
-        for selection_bg in [Color::Reset, Color::Rgb(70, 63, 93)] {
-            let mut config = ClientShellConfig::from_config(&Config::default());
-            config.palette = Palette::terminal();
-            config.palette.selection_bg = selection_bg;
-            let expected_bg = if selection_bg == Color::Reset {
-                config.palette.active_row_bg
-            } else {
-                selection_bg
-            };
-            let mut state = ClientShellState::new(config);
-            state.set_snapshot(Box::new(workspaces(3)));
-            state.set_pane_surface(surface());
-            state.sidebar_collapsed = compact;
-            state.compose(100, 28).unwrap();
-            enter_navigation(&mut state);
+    for selection_bg in [Color::Reset, Color::Rgb(70, 63, 93)] {
+        let mut config = ClientShellConfig::from_config(&Config::default());
+        config.palette = Palette::terminal();
+        config.palette.selection_bg = selection_bg;
+        let expected_bg = if selection_bg == Color::Reset {
+            config.palette.active_row_bg
+        } else {
+            selection_bg
+        };
+        let mut state = ClientShellState::new(config);
+        state.set_snapshot(Box::new(workspaces(3)));
+        state.set_pane_surface(surface());
+        state.sidebar_collapsed = true;
+        state.compose(100, 28).unwrap();
+        enter_navigation(&mut state);
 
-            for workspace_id in ["ws_1", "ws_2"] {
-                assert_selected(&state, &ClientEndpointId::Local, workspace_id);
-                let buffer = state.compose(100, 28).unwrap().to_ratatui_buffer().unwrap();
-                let selected = workspace_rect(&state, &ClientEndpointId::Local, workspace_id);
-                for y in selected.y..selected.bottom() {
-                    for x in selected.x..selected.right() {
-                        assert_eq!(
-                            buffer[(x, y)].bg,
-                            expected_bg,
-                            "compact={compact}, {workspace_id}, ({x}, {y})"
-                        );
-                    }
-                }
-                let untouched = workspace_rect(&state, &ClientEndpointId::Local, "ws_3");
-                assert_ne!(buffer[(untouched.x, untouched.y)].bg, expected_bg);
-                if workspace_id != "ws_1" {
-                    let focused = workspace_rect(&state, &ClientEndpointId::Local, "ws_1");
-                    assert_eq!(
-                        buffer[(focused.x, focused.y)].bg,
-                        if selection_bg == Color::Reset {
-                            state.config.palette.sidebar_bg
-                        } else {
-                            state.config.palette.active_row_bg
-                        }
-                    );
-                    assert_ne!(buffer[(focused.x, focused.y)].bg, expected_bg);
-                }
-                preview_key(&mut state, b"\x1b[B");
-            }
-            assert_eq!(
-                state
-                    .snapshot
-                    .as_ref()
-                    .unwrap()
-                    .focused_workspace_id
-                    .as_deref(),
-                Some("ws_1")
-            );
-            preview_key(&mut state, b"\x1b");
+        for workspace_id in ["ws_1", "ws_2"] {
+            assert_selected(&state, &ClientEndpointId::Local, workspace_id);
             let buffer = state.compose(100, 28).unwrap().to_ratatui_buffer().unwrap();
-            let focused = workspace_rect(&state, &ClientEndpointId::Local, "ws_1");
-            assert_eq!(
-                buffer[(focused.x, focused.y)].bg,
-                state.config.palette.active_row_bg
-            );
-            let cancelled = workspace_rect(&state, &ClientEndpointId::Local, "ws_3");
-            assert_eq!(
-                buffer[(cancelled.x, cancelled.y)].bg,
-                state.config.palette.sidebar_bg
-            );
+            let selected = workspace_rect(&state, &ClientEndpointId::Local, workspace_id);
+            for y in selected.y..selected.bottom() {
+                for x in selected.x..selected.right() {
+                    assert_eq!(buffer[(x, y)].bg, expected_bg, "{workspace_id}, ({x}, {y})");
+                }
+            }
+            let untouched = workspace_rect(&state, &ClientEndpointId::Local, "ws_3");
+            assert_ne!(buffer[(untouched.x, untouched.y)].bg, expected_bg);
+            if workspace_id != "ws_1" {
+                let focused = workspace_rect(&state, &ClientEndpointId::Local, "ws_1");
+                assert_eq!(
+                    buffer[(focused.x, focused.y)].bg,
+                    if selection_bg == Color::Reset {
+                        state.config.palette.sidebar_bg
+                    } else {
+                        state.config.palette.active_row_bg
+                    }
+                );
+                assert_ne!(buffer[(focused.x, focused.y)].bg, expected_bg);
+            }
+            preview_key(&mut state, b"\x1b[B");
         }
+        assert_eq!(
+            state
+                .snapshot
+                .as_ref()
+                .unwrap()
+                .focused_workspace_id
+                .as_deref(),
+            Some("ws_1")
+        );
+        preview_key(&mut state, b"\x1b");
+        let buffer = state.compose(100, 28).unwrap().to_ratatui_buffer().unwrap();
+        let focused = workspace_rect(&state, &ClientEndpointId::Local, "ws_1");
+        assert_eq!(
+            buffer[(focused.x, focused.y)].bg,
+            state.config.palette.active_row_bg
+        );
+        let cancelled = workspace_rect(&state, &ClientEndpointId::Local, "ws_3");
+        assert_eq!(
+            buffer[(cancelled.x, cancelled.y)].bg,
+            state.config.palette.sidebar_bg
+        );
     }
 }
 
 #[test]
 fn navigation_highlights_only_the_preview_and_activates_on_enter() {
-    for (compact, cols) in [(true, 100), (false, 100), (false, 44)] {
+    for (compact, cols) in [(true, 100), (false, 44)] {
         for terminal_theme in [false, true] {
             let (mut state, remote) = navigation_state(workspaces(2));
             state.sidebar_collapsed = compact;
@@ -331,6 +325,7 @@ fn foreign_workspace_preview_blocks_paste_into_hidden_copy_search() {
 fn mouse_clicks_cancel_remote_workspace_navigation() {
     for pane in [false, true] {
         let (mut state, _) = state_with_remote();
+        state.sidebar_collapsed = true;
         state.compose(100, 28).unwrap();
         enter_navigation(&mut state);
         preview_key(&mut state, b"\x1b[B");
@@ -355,65 +350,6 @@ fn mouse_clicks_cancel_remote_workspace_navigation() {
         assert!(state.navigate_workspace_id.is_none());
         enter_navigation(&mut state);
         assert_selected(&state, &ClientEndpointId::Local, "ws_1");
-    }
-}
-
-#[test]
-fn single_machine_compact_navigation_includes_visible_collapsed_group_children() {
-    let (mut state, _) = navigation_state(grouped_workspaces());
-    state.set_endpoint_catalog(&[]);
-    state.toggle_collapsed_group(&ClientEndpointId::Local, "repo".into());
-    state.sidebar_collapsed = true;
-    state.compose(100, 28).unwrap();
-    workspace_rect(&state, &ClientEndpointId::Local, "ws_3");
-    enter_navigation(&mut state);
-    for id in ["ws_2", "ws_3"] {
-        preview_key(&mut state, b"\x1b[B");
-        assert_selected(&state, &ClientEndpointId::Local, id);
-    }
-}
-
-#[test]
-fn workspace_navigation_respects_each_machines_visible_worktree_groups() {
-    for (cols, compact, unavailable, show_child) in [
-        (100, false, false, false),
-        (100, true, false, true),
-        (44, false, false, true),
-        (44, true, true, false),
-    ] {
-        let (mut state, remote) = navigation_state(grouped_workspaces());
-        state.toggle_collapsed_group(&remote, "repo".into());
-        state.sidebar_collapsed = compact;
-        if unavailable {
-            state.pane_surface = None;
-        }
-        state.compose(cols, 28).unwrap();
-        enter_navigation(&mut state);
-        let local = if compact && !unavailable {
-            ["ws_2", "ws_3"]
-        } else {
-            ["ws_3", "ws_2"]
-        };
-        let remote_ids: &[&str] = if !show_child {
-            &["ws_1", "ws_2"]
-        } else if compact {
-            &["ws_1", "ws_2", "ws_3"]
-        } else {
-            &["ws_1", "ws_3", "ws_2"]
-        };
-        for (endpoint, ids) in [
-            (&ClientEndpointId::Local, local.as_slice()),
-            (&remote, remote_ids),
-        ] {
-            for id in ids {
-                preview_key(&mut state, b"\x1b[B");
-                assert_selected(&state, endpoint, id);
-                state.compose(cols, 28).unwrap();
-                workspace_rect(&state, endpoint, id);
-            }
-        }
-        assert!(state.group_is_collapsed(&remote, "repo"));
-        assert!(!state.group_is_collapsed(&ClientEndpointId::Local, "repo"));
     }
 }
 
@@ -550,7 +486,7 @@ fn active_preview_is_not_retargeted_by_deletion_or_reboot() {
 
 #[test]
 fn aggregate_navigation_reveals_overflow_and_preserves_order() {
-    for (compact, cols) in [(true, 100), (false, 100), (false, 44)] {
+    for (compact, cols) in [(true, 100), (false, 44)] {
         let (mut state, remote_id) = state_with_remote();
         let mut remote = workspaces(15);
         remote.boot_id = "remote-boot".into();
@@ -585,10 +521,10 @@ fn aggregate_navigation_reveals_overflow_and_preserves_order() {
     }
 }
 
-fn local_navigation_state(compact: bool) -> ClientShellState {
+fn local_navigation_state() -> ClientShellState {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.config.palette = Palette::terminal();
-    state.sidebar_collapsed = compact;
+    state.sidebar_collapsed = true;
     state.set_snapshot(Box::new(workspaces(3)));
     state.set_pane_surface(surface());
     state.compose(100, 28).unwrap();
@@ -639,55 +575,53 @@ fn set_local_focus(state: &mut ClientShellState, workspace_id: &str, revision: u
 
 #[test]
 fn accepted_local_navigation_keeps_highlight_until_authoritative_focus() {
-    for compact in [false, true] {
-        for response_first in [false, true] {
-            let mut state = local_navigation_state(compact);
-            let request_id = request_local_navigation(&mut state, 2);
-            assert_eq!(state.mode, ClientShellMode::Terminal);
-            assert!(state.navigate_workspace_id.is_none());
-            assert_eq!(
-                state
-                    .snapshot
-                    .as_ref()
-                    .unwrap()
-                    .focused_workspace_id
-                    .as_deref(),
-                Some("ws_1")
+    for response_first in [false, true] {
+        let mut state = local_navigation_state();
+        let request_id = request_local_navigation(&mut state, 2);
+        assert_eq!(state.mode, ClientShellMode::Terminal);
+        assert!(state.navigate_workspace_id.is_none());
+        assert_eq!(
+            state
+                .snapshot
+                .as_ref()
+                .unwrap()
+                .focused_workspace_id
+                .as_deref(),
+            Some("ws_1")
+        );
+        assert_eq!(state.focused_pane_id().as_deref(), Some("pane_1"));
+        assert_local_highlight(&mut state, "ws_3");
+        state.invalidate_pane_surface();
+        assert_local_highlight(&mut state, "ws_3");
+        state.set_pane_surface(surface());
+        if response_first {
+            state.handle_endpoint_result(
+                "boot-1",
+                &request_id,
+                Ok(crate::api::schema::ResponseResult::Ok {}),
             );
-            assert_eq!(state.focused_pane_id().as_deref(), Some("pane_1"));
             assert_local_highlight(&mut state, "ws_3");
-            state.invalidate_pane_surface();
-            assert_local_highlight(&mut state, "ws_3");
-            state.set_pane_surface(surface());
-            if response_first {
-                state.handle_endpoint_result(
-                    "boot-1",
-                    &request_id,
-                    Ok(crate::api::schema::ResponseResult::Ok {}),
-                );
-                assert_local_highlight(&mut state, "ws_3");
-            }
-            set_local_focus(&mut state, "ws_1", 2);
-            assert_local_highlight(&mut state, "ws_3");
-            set_local_focus(&mut state, "ws_3", 3);
-            assert_local_highlight(&mut state, "ws_3");
-            if !response_first {
-                state.handle_endpoint_result(
-                    "boot-1",
-                    &request_id,
-                    Ok(crate::api::schema::ResponseResult::Ok {}),
-                );
-            }
-            set_local_focus(&mut state, "ws_2", 4);
-            assert_local_highlight(&mut state, "ws_2");
         }
+        set_local_focus(&mut state, "ws_1", 2);
+        assert_local_highlight(&mut state, "ws_3");
+        set_local_focus(&mut state, "ws_3", 3);
+        assert_local_highlight(&mut state, "ws_3");
+        if !response_first {
+            state.handle_endpoint_result(
+                "boot-1",
+                &request_id,
+                Ok(crate::api::schema::ResponseResult::Ok {}),
+            );
+        }
+        set_local_focus(&mut state, "ws_2", 4);
+        assert_local_highlight(&mut state, "ws_2");
     }
 }
 
 #[test]
 fn failed_local_navigation_releases_only_its_own_highlight() {
     for failure in ["rejected", "endpoint_timeout", "cancelled"] {
-        let mut state = local_navigation_state(false);
+        let mut state = local_navigation_state();
         let request_id = request_local_navigation(&mut state, 2);
         assert_local_highlight(&mut state, "ws_3");
         if failure == "cancelled" {
@@ -711,7 +645,7 @@ fn failed_local_navigation_releases_only_its_own_highlight() {
         assert_local_highlight(&mut state, "ws_1");
     }
     for old_down in [1, 2] {
-        let mut state = local_navigation_state(false);
+        let mut state = local_navigation_state();
         let old_request = request_local_navigation(&mut state, old_down);
         let latest_request = request_local_navigation(&mut state, 2);
         state.cancel_endpoint_request(&old_request);
@@ -731,7 +665,7 @@ fn pending_navigation_highlight_does_not_survive_identity_changes() {
         "deleted",
         "endpoint",
     ] {
-        let mut state = local_navigation_state(false);
+        let mut state = local_navigation_state();
         let request_id = request_local_navigation(&mut state, 2);
         state.handle_endpoint_result(
             "boot-1",
@@ -788,7 +722,7 @@ fn pending_navigation_highlight_does_not_survive_identity_changes() {
 
 #[test]
 fn navigation_highlight_requires_enqueued_focus_and_yields_to_new_intent() {
-    let mut state = local_navigation_state(false);
+    let mut state = local_navigation_state();
     state.set_endpoint_methods(Some(Vec::new()));
     enter_navigation(&mut state);
     preview_key(&mut state, b"\x1b[B");
@@ -837,7 +771,7 @@ fn directional_pane_focus_releases_an_accepted_workspace_highlight() {
         (b'l', PaneDirection::Right),
     ] {
         for rejected in [false, true] {
-            let mut state = local_navigation_state(false);
+            let mut state = local_navigation_state();
             let pending_request = request_local_navigation(&mut state, 2);
             assert_local_highlight(&mut state, "ws_3");
             preview_key(&mut state, &[0x02]);
@@ -874,7 +808,7 @@ fn direct_agent_focus_repaints_when_releasing_a_workspace_highlight() {
     projected.agents.push(agent("agent", AgentStatus::Idle, 1));
 
     for pending in [false, true] {
-        let mut state = local_navigation_state(false);
+        let mut state = local_navigation_state();
         state.config.keybinds = ClientShellConfig::from_config(&config).keybinds;
         state.set_snapshot(Box::new(projected.clone()));
         state.compose(100, 28).unwrap();
@@ -902,7 +836,7 @@ fn direct_agent_focus_repaints_when_releasing_a_workspace_highlight() {
 
 #[test]
 fn cancelled_close_does_not_restore_an_older_navigation_highlight() {
-    let mut state = local_navigation_state(false);
+    let mut state = local_navigation_state();
     request_local_navigation(&mut state, 2);
     state.open_confirm_close_overlay("ws_1".into());
     preview_key(&mut state, b"\x1b");
@@ -914,7 +848,7 @@ fn cancelled_close_does_not_restore_an_older_navigation_highlight() {
 
 #[test]
 fn coalesced_navigation_focus_does_not_leave_a_permanent_highlight() {
-    let mut state = local_navigation_state(false);
+    let mut state = local_navigation_state();
     let before_request = std::time::Instant::now();
     let request_id = request_local_navigation(&mut state, 2);
     state.handle_endpoint_result(
@@ -934,7 +868,7 @@ fn coalesced_navigation_focus_does_not_leave_a_permanent_highlight() {
 
 #[test]
 fn navigation_highlight_ends_for_noop_focus_and_focused_creation() {
-    let mut state = local_navigation_state(false);
+    let mut state = local_navigation_state();
     request_local_navigation(&mut state, 0);
     assert!(state.pending_workspace_highlight.is_none());
     set_local_focus(&mut state, "ws_2", 2);
@@ -959,7 +893,7 @@ fn navigation_highlight_ends_for_noop_focus_and_focused_creation() {
                 env: Default::default(),
             }),
         ] {
-            let mut state = local_navigation_state(false);
+            let mut state = local_navigation_state();
             request_local_navigation(&mut state, 2);
             let mut outcome = ClientShellInput::default();
             state.push_endpoint_method(method, &mut outcome);
@@ -975,7 +909,7 @@ const KITTY_CTRL_SHIFT_BRACKET: &[u8] = b"\x1b[91;6u";
 
 #[test]
 fn kitty_ctrl_bracket_leaves_navigation_like_esc() {
-    let mut state = local_navigation_state(false);
+    let mut state = local_navigation_state();
     enter_navigation(&mut state);
     preview_key(&mut state, b"\x1b[B");
 
@@ -1003,7 +937,7 @@ fn configured_ctrl_bracket_navigate_binding_wins_over_cancel() {
 
 #[test]
 fn kitty_ctrl_shift_bracket_keeps_navigation_open() {
-    let mut state = local_navigation_state(false);
+    let mut state = local_navigation_state();
     enter_navigation(&mut state);
 
     state.handle_input_bytes(KITTY_CTRL_SHIFT_BRACKET);

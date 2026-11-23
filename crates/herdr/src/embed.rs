@@ -321,6 +321,8 @@ pub trait ShellExtension: Send {
     fn draw_dock(&mut self, buffer: &mut Buffer, area: Rect, focused: bool);
     /// A key while the dock has his keys.
     fn dock_key(&mut self, key: KeyEvent) -> Reply;
+    /// A left click at (`column`, `row`) in the dock, in the client's cells: it picks and acts on the row there.
+    fn dock_mouse(&mut self, column: u16, row: u16) -> Reply;
     /// Whether a question is up: it takes every key.
     fn asking(&self) -> bool;
     /// Draws the question over `area` (the whole terminal); returns the part it covers.
@@ -367,6 +369,11 @@ pub(crate) fn shell_dock_key(key: KeyEvent) -> Reply {
         pass: true,
         ..Reply::default()
     })
+}
+
+/// A left click at (`column`, `row`) in the dock: what picking the row there does.
+pub(crate) fn shell_dock_mouse(column: u16, row: u16) -> Reply {
+    with_shell(|shell| shell.dock_mouse(column, row)).unwrap_or_default()
 }
 
 pub(crate) fn shell_asking() -> bool {

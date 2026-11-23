@@ -583,11 +583,11 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0574](0574-task-benchmark-grades-what-the-agent-broke.md) | The task benchmark grades what the agent broke, has limits, and holds its conditions | benchmark | v1 | program | 2026-11-09 |  |
 | [0575](0575-follow-up-drops-f-keepalive.md) | The follow-up drops f-keepalive; A6's layer builds its code index before the trial's clock | benchmark | v1 | program | 2026-11-09 | 0586 |
 | [0576](0576-live-benchmarks-on-the-harness-os-build.md) | The live benchmarks on the harness-OS build | benchmark | v1 | program | 2026-11-09 | 0585 |
-| [0577](0577-thread-prompts-and-tool-time-limits.md) | Thread prompts and the tools' time limits | product | v1 | program | 2026-11-09 |  |
+| [0577](0577-thread-prompts-and-tool-time-limits.md) | Thread prompts and the tools' time limits | product | v1 | program | 2026-11-09 | 0662 |
 | [0578](0578-allow-popup-and-local-api.md) | The Allow popup and the service's local API | product, security | v1 | program | 2026-11-09 |  |
 | [0579](0579-install-folder-is-jocastas-alone.md) | The install folder is Jocasta's alone | product | v1 | program | 2026-11-09 |  |
 | [0580](0580-guard-covers-more-shapes.md) | The guard covers more shapes, and done_when goes through it | product, security | v1 | program | 2026-11-09 | 0613 |
-| [0581](0581-today-keys-wording-and-canvas.md) | today, the keys, the wording and the canvas | product, ux | v1 | program | 2026-11-09 |  |
+| [0581](0581-today-keys-wording-and-canvas.md) | today, the keys, the wording and the canvas | product, ux | v1 | program | 2026-11-09 | 0660, 0662 |
 | [0582](0582-starting-recovering-and-counting-cost.md) | Starting, recovering and counting cost | product | v1 | program | 2026-11-09 | 0649 |
 | [0583](0583-boss-manual-and-shipped-prompt-texts.md) | The boss manual and shipped prompt texts | product, prompts | v1 | program | 2026-11-09 | 0608, 0611, 0616, 0619, 0621 |
 | [0584](0584-setup-settings-tests-names-and-stale-files.md) | Setup, settings, tests, names and stale files | product, process | v1 | program | 2026-11-09 |  |
@@ -654,7 +654,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0646](0646-readme-for-newcomers.md) | A README for newcomers, the reference in the manual | product | v1 | program | 2026-11-17 |  |
 | [0647](0647-deny-ignores-chrono-unmaintained.md) | cargo-deny ignores chrono's two "unmaintained" notices by ID | process | v1 | program | 2026-11-18 |  |
 | [0648](0648-audit-ignores-picomatch-redos.md) | CI's `bun audit` ignores picomatch's ReDoS advisory by ID | process | v1 | program | 2026-11-18 |  |
-| [0649](0649-herdr-fork-one-binary-one-server.md) | The herdr fork: one binary, one server | product | v1 | fork build | 2026-11-18 |  |
+| [0649](0649-herdr-fork-one-binary-one-server.md) | The herdr fork: one binary, one server | product | v1 | fork build | 2026-11-18 | 0659, 0661 |
 | [0650](0650-omp-snapshot-replaces-his-omp-files.md) | The omp snapshot: setup writes Jocasta's omp files over his | product | v1 | fork build | 2026-11-18 |  |
 | [0651](0651-snapshot-settings-from-trials-on-omp-18-22-2.md) | The snapshot's settings come from trials on omp 18.22.2 | product, benchmark | v1 | fork build | 2026-11-19 | 0653 |
 | [0652](0652-benchmarks-on-his-pc-vm-removed.md) | The benchmarks run on his PC on his own omp; the VM is removed | process | v1 | fork build | 2026-11-18 | 0657 |
@@ -664,3 +664,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0656](0656-url-2-5-9-before-its-seventh-day.md) | url 2.5.9 enters the lock before its seventh day | process | v1 | fork build | 2026-11-23 |  |
 | [0657](0657-vm-benchmarks-after-the-vm.md) | The VM's benchmarks after the VM | benchmark, process | v1 | fork build | 2026-11-23 |  |
 | [0658](0658-session-report-from-his-omp-history.md) | A report on his omp sessions: where the tokens went, what could be deterministic | process | v1 | fork build | 2026-11-23 |  |
+| [0659](0659-sidebar-without-spaces.md) | The sidebar without herdr's spaces section | product | v1 | fork build | 2026-11-23 |  |
+| [0660](0660-a-click-on-a-today-row-acts-like-enter.md) | A click on a `today` row acts like Enter | product, ux | v1 | fork build | 2026-11-23 |  |
+| [0661](0661-bundled-conpty-runtime.md) | The Windows build ships Microsoft's ConPTY runtime, as herdr's does | product | v1 | fork build | 2026-11-23 |  |
+| [0662](0662-a-silent-service-is-shown-and-cut.md) | A service that stops answering is shown in the dock, and the boss's calls to it end | product | v1 | fork build | 2026-11-23 |  |

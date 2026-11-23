@@ -6,6 +6,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use rmcp::model::{
 	CallToolRequestParams, CallToolResponse, CallToolResult, ClientNotification, ClientRequest, CompleteRequestMethod,
@@ -391,11 +392,44 @@ struct Call {
 	body: Value,
 }
 
-/// Posts a call to the service and turns its answer into a tool result.
-async fn call_service(call: Call) -> CallToolResult {
+/// How long a call waits for the service's answer before it ends (0662): the service answers these in seconds, so a
+/// minute of silence means it hangs.
+const ANSWER_CUT: Duration = Duration::from_secs(60);
+
+/// The tools that may wait for his Allow (2 minutes), a check (up to 30), or a commit, so they keep 0577's no-cut rule,
+/// as the service's handlers show: `thread_start` (his Allow for another project than his last focused one's),
+/// `thread_finish` (his Allow, then the commit), `worktree_remove` (his Allow), `lesson` (his Allow) and `check` (the
+/// checks run). `big_picture_review` starts its review and answers at once (0577), so it is cut like the rest.
+const WAITING_TOOLS: [&str; 5] = ["thread_start", "thread_finish", "worktree_remove", "lesson", "check"];
+
+/// How long `tool`'s call waits for the service; `None` for a tool that may wait for him or a run (0577, 0662).
+fn answer_cut(tool: &str) -> Option<Duration> {
+	(!WAITING_TOOLS.contains(&tool)).then_some(ANSWER_CUT)
+}
+
+/// Posts a call to the service and turns its answer into a tool result; with a `cut`, a call with no answer by then
+/// ends with an error result (0662).
+async fn call_service(call: Call, cut: Option<Duration>) -> CallToolResult {
+	let tool = call.tool.clone();
+	let Some(cut) = cut else { return post_to_service(call).await };
+	match tokio::time::timeout(cut, post_to_service(call)).await {
+		Ok(answer) => answer,
+		Err(_) => {
+			let text = format!(
+				"{tool}: Jocasta's service didn't answer in {} s. Close and start Jocasta again if this repeats.",
+				ANSWER_CUT.as_secs()
+			);
+			log(LogLevel::Error, "mcp", &text, None);
+			result(&text, true)
+		}
+	}
+}
+
+/// The post itself. No idle cut of its own (0577): his Allow waits 2 minutes and a check up to 30; the service bounds
+/// every step itself, and [`call_service`] cuts the tools that don't wait.
+async fn post_to_service(call: Call) -> CallToolResult {
 	let Call { address, tool, body } = call;
 	let url = format!("http://127.0.0.1:{}/api/mcp/{tool}", address.port);
-	// No idle cut (0577): his Allow waits 2 minutes and a check up to 30; the service bounds every step itself.
 	let client = reqwest::Client::builder().no_proxy().build().unwrap_or_default();
 	let sent = client
 		.post(url)
@@ -514,7 +548,8 @@ impl ServerHandler for Server {
 		if let Some(key) = self.boss_key.as_ref().filter(|key| !key.is_empty()) {
 			body.insert("bossKey".to_owned(), json!(key));
 		}
-		Ok(call_service(Call { address, tool: tool.name.to_string(), body: Value::Object(body) }).await.into())
+		let cut = answer_cut(&tool.name);
+		Ok(call_service(Call { address, tool: tool.name.to_string(), body: Value::Object(body) }, cut).await.into())
 	}
 }
 

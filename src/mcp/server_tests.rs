@@ -416,6 +416,75 @@ async fn a_refused_connection_is_the_not_running_text_too() {
 	assert_eq!(replies[0]["result"], not_running());
 }
 
+/// A service that accepts a call and answers it only after `after` (never, for `None`).
+async fn slow_service(after: Option<std::time::Duration>) -> RunningService {
+	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+	let port = listener.local_addr().unwrap().port();
+	tokio::spawn(async move {
+		loop {
+			let Ok((mut stream, _)) = listener.accept().await else { return };
+			tokio::spawn(async move {
+				let mut buffer = [0u8; 4096];
+				let _ = stream.read(&mut buffer).await;
+				let Some(after) = after else {
+					std::future::pending::<()>().await;
+					return;
+				};
+				tokio::time::sleep(after).await;
+				let body = json!({ "text": "late but here" }).to_string();
+				let head = format!(
+					"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+					body.len()
+				);
+				let _ = stream.write_all(format!("{head}{body}").as_bytes()).await;
+			});
+		}
+	});
+	RunningService { port, token: "t".to_owned() }
+}
+
+fn call_of(address: RunningService, tool: &str) -> Call {
+	Call { address, tool: tool.to_owned(), body: json!({ "args": {} }) }
+}
+
+fn text_in(result: CallToolResult) -> (String, bool) {
+	let value = serde_json::to_value(result).unwrap();
+	(value["content"][0]["text"].as_str().unwrap().to_owned(), value["isError"] == true)
+}
+
+#[tokio::test]
+async fn a_call_the_service_never_answers_ends_with_the_cut_text_unless_the_tool_may_wait_for_him_0662() {
+	assert_eq!(ANSWER_CUT, Duration::from_secs(60));
+	assert_eq!(answer_cut("projects"), Some(ANSWER_CUT));
+	assert_eq!(answer_cut("thread_send"), Some(ANSWER_CUT));
+	assert_eq!(answer_cut("big_picture_review"), Some(ANSWER_CUT), "it answers at once (0577)");
+	for waiting in WAITING_TOOLS {
+		assert_eq!(answer_cut(waiting), None, "{waiting} may wait for his Allow, a check or a commit");
+	}
+	// Every waiting tool is one the server lists.
+	let (boss, thread) = (mcp_tools(true, Some(&HashMap::new())), mcp_tools(false, Some(&thread_env())));
+	let listed: Vec<String> = boss.iter().chain(&thread).map(|tool| tool.name.to_string()).collect();
+	for waiting in WAITING_TOOLS {
+		assert!(listed.iter().any(|name| name == waiting), "{waiting} isn't a tool");
+	}
+	// A fast-path tool against a service that accepts and never answers (a short cut in place of the minute).
+	let hung = slow_service(None).await;
+	let cut = Some(Duration::from_millis(150));
+	let (text, is_error) = text_in(call_service(call_of(hung, "projects"), cut).await);
+	assert!(is_error);
+	assert_eq!(
+		text,
+		"projects: Jocasta's service didn't answer in 60 s. Close and start Jocasta again if this repeats."
+	);
+}
+
+#[tokio::test]
+async fn a_tool_that_may_wait_keeps_waiting_for_a_slow_answer() {
+	let slow = slow_service(Some(Duration::from_millis(400))).await;
+	let (text, is_error) = text_in(call_service(call_of(slow, "check"), answer_cut("check")).await);
+	assert_eq!((text.as_str(), is_error), ("late but here", false));
+}
+
 #[tokio::test]
 async fn by_default_a_call_goes_to_the_service_the_data_dir_file_names_while_its_pid_lives_frontier_json_is_still_read()
 {

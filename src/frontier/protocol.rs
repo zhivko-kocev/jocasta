@@ -630,6 +630,9 @@ pub enum ServerMessage {
 	},
 	/// The service is stopping (Jocasta closing as one; 0434).
 	Bye,
+	/// The service is up and its refresh read the day's state (0662): every 10 s at most; the dock calls the service
+	/// silent after 30 s without a message.
+	Alive,
 }
 
 /// Client → service.
@@ -985,6 +988,7 @@ mod tests {
 			&json!({"type": "error", "message": "bad frame"}),
 		);
 		wire(&ServerMessage::Bye, &json!({"type": "bye"}));
+		wire(&ServerMessage::Alive, &json!({"type": "alive"}));
 	}
 
 	#[test]

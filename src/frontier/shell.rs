@@ -11,7 +11,7 @@
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::KeyEvent;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, Clear, Widget};
 
 use crate::frontier::ask::view::{AskState, Key, ask_lines, ask_state, exhausted_note, paste, press, wrong_note};
@@ -20,7 +20,7 @@ use crate::frontier::protocol::{
 	SHELL_FEED, SHELL_GONE, SHELL_QUESTION, ServerMessage, ShellAction, ShellAnswer, ShellAnswered, ShellQuestion,
 };
 use crate::frontier::server::wording::money;
-use crate::frontier::today::view::{Pick, SAID_MS, Said, TodayState, render};
+use crate::frontier::today::view::{Pick, SAID_MS, Said, TodayState, not_answering, render};
 use crate::frontier::tui::{TOKYO_NIGHT, render_lines};
 use crate::shared::clock::now_ms;
 use crate::shared::service_file::NOT_RUNNING;
@@ -32,6 +32,8 @@ const KEY_GRACE_MS: i64 = 750;
 const EXHAUSTED_MS: i64 = 2_000;
 /// How often the dock redraws for its clock.
 const CLOCK_MS: i64 = 30_000;
+/// With no message from the service for this long it is shown as not answering, its picture dimmed (0662).
+const SILENT_MS: i64 = 30_000;
 /// The question's box: this share of the terminal's width, and this many rows inside its border (0553).
 const QUESTION_PERCENT: u16 = 70;
 const QUESTION_ROWS: u16 = 18;
@@ -61,6 +63,12 @@ pub struct JocastaShell {
 	question: Option<Asking>,
 	/// The clock's last drawn tick, and whether his last key's outcome was still showing then.
 	ticked: (i64, bool),
+	/// When the service last sent any message (epoch ms), and whether it went silent past [`SILENT_MS`] (0662).
+	heard: i64,
+	silent: bool,
+	/// The dock's text area as last drawn, and the line and key of each pickable row in it (0660).
+	inner: Rect,
+	rows: Vec<(usize, String)>,
 }
 
 impl Default for JocastaShell {
@@ -76,7 +84,18 @@ fn sent<T: serde::Serialize>(kind: &str, data: &T) -> (String, String) {
 impl JocastaShell {
 	/// A shell with nothing shown yet; `now` is its clock (a test's own).
 	pub fn new(now: Now) -> Self {
-		Self { now, today: TodayState::default(), picks: Vec::new(), boss: None, question: None, ticked: (0, false) }
+		Self {
+			now,
+			today: TodayState::default(),
+			picks: Vec::new(),
+			boss: None,
+			question: None,
+			ticked: (0, false),
+			heard: 0,
+			silent: false,
+			inner: Rect::default(),
+			rows: Vec::new(),
+		}
 	}
 
 	fn say(&mut self, text: &str, is_error: bool) {
@@ -85,8 +104,12 @@ impl JocastaShell {
 
 	/// One feed message into the dock's state; false for those not the dock's to draw.
 	fn apply(&mut self, message: ServerMessage) -> bool {
+		// Any message from a service that was down, or not heard from, brings the dock back (0662).
+		let revived = !self.today.up;
 		self.today.up = true;
 		self.today.seen = true;
+		self.silent = false;
+		self.heard = (self.now)();
 		match message {
 			ServerMessage::Snapshot { hud, today, dashboard } => {
 				self.today.hud = Some(hud);
@@ -99,7 +122,9 @@ impl JocastaShell {
 			ServerMessage::Action { text, is_error } => self.say(&text, is_error),
 			ServerMessage::Error { message } => self.say(&message, true),
 			// Not the dock's to draw: notifications (herdr raises them).
-			ServerMessage::Toast { .. } => return false,
+			ServerMessage::Toast { .. } => return revived,
+			// The service's heartbeat: only a dock that was down has anything to redraw.
+			ServerMessage::Alive => return revived,
 			ServerMessage::Bye => {
 				self.today.up = false;
 				self.today.down_since = Some((self.now)());
@@ -143,6 +168,20 @@ impl JocastaShell {
 			None => ClientMessage::LinkOpen { url: pick.url.unwrap_or_default() },
 		};
 		Reply { send: vec![sent(SHELL_FEED, &message)], ..Reply::default() }
+	}
+
+	/// A left click on a row: picks it and does what Enter does on it (0660).
+	fn click(&mut self, column: u16, row: u16) -> Reply {
+		let area = self.inner;
+		if column < area.x || column >= area.x + area.width || row < area.y {
+			return Reply::default();
+		}
+		let line = usize::from(row - area.y);
+		let Some(key) = self.rows.iter().find(|(at, _)| *at == line).map(|(_, key)| key.clone()) else {
+			return Reply::default();
+		};
+		self.today.selected = Some(key);
+		Reply { redraw: true, ..self.enter() }
 	}
 
 	fn question(&mut self, data: &str) -> bool {
@@ -245,7 +284,12 @@ impl ShellExtension for JocastaShell {
 			}
 		}
 		self.picks.clone_from(&drawn.picks);
+		self.rows.clone_from(&drawn.rows);
+		self.inner = inner;
 		render_lines(buffer, inner, &drawn.lines);
+		if self.silent {
+			buffer.set_style(inner, Style::new().add_modifier(Modifier::DIM));
+		}
 	}
 
 	fn dock_key(&mut self, key: KeyEvent) -> Reply {
@@ -265,6 +309,10 @@ impl ShellExtension for JocastaShell {
 			_ => return Reply { pass: true, ..Reply::default() },
 		}
 		Reply { redraw: true, ..Reply::default() }
+	}
+
+	fn dock_mouse(&mut self, column: u16, row: u16) -> Reply {
+		self.click(column, row)
 	}
 
 	fn asking(&self) -> bool {
@@ -329,6 +377,13 @@ impl ShellExtension for JocastaShell {
 			self.question = None;
 			redraw = true;
 		}
+		// A service heard from, then not for 30 s, is shown as not answering since its last word (0662).
+		if self.today.up && now - self.heard >= SILENT_MS {
+			self.today.up = false;
+			self.silent = true;
+			self.today.down_since = Some(self.heard);
+			redraw = true;
+		}
 		let saying = self.today.said.as_ref().is_some_and(|said| now - said.at < SAID_MS);
 		let tick = now / CLOCK_MS;
 		if (tick, saying) != self.ticked {
@@ -342,6 +397,9 @@ impl ShellExtension for JocastaShell {
 	/// today`; the one text for a service that stopped (0581 UX-13); none before the first message.
 	fn status(&self) -> Option<String> {
 		if !self.today.up {
+			if self.silent {
+				return Some(not_answering(self.today.down_since));
+			}
 			return self.today.seen.then(|| NOT_RUNNING.to_owned());
 		}
 		let hud = self.today.hud.as_ref()?;

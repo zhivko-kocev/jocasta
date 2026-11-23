@@ -554,19 +554,37 @@ async fn install_jsons_entries_are_kept_as_plain_names_only_a_list_with_a_path_i
 async fn uninstall_removes_only_the_installs_listed_entries_a_folder_holding_his_files_stays_with_them() {
 	let m = Machine::new().await;
 	let dir = m.root.join("bin");
-	for name in ["jocasta", "config/boss.md", "node/node", "his-tool", "notes/his.txt", "jocasta.old-20261109"] {
+	for name in [
+		"jocasta",
+		"config/boss.md",
+		"node/node",
+		"his-tool",
+		"notes/his.txt",
+		"jocasta.old-20261109",
+		"conpty/conpty.dll",
+	] {
 		put(&dir.join(name), "x");
 	}
+	// A pane's ConPTY host an upgrade moved out of `conpty\` (0661), and a file of his that only looks like one.
+	put(&dir.join("conpty-x64-OpenConsole.exe.old-20261123"), "x");
+	put(&dir.join("conpty-notes.txt"), "x");
 	put(
 		&dir.join("install.json"),
-		&json!({ "dir": dir.to_string_lossy(), "entries": ["jocasta", "config", "node"] }).to_string(),
+		&json!({ "dir": dir.to_string_lossy(), "entries": ["jocasta", "config", "node", "conpty"] }).to_string(),
 	);
 	let record = read_install_record(&dir, None, Some(false)).unwrap();
 	assert_eq!(
 		install_contents(&record, Some(false)).unwrap(),
 		InstallContents {
-			ours: strings(&["config", "jocasta", "jocasta.old-20261109", "node"]),
-			others: strings(&["his-tool", "notes"]),
+			ours: strings(&[
+				"config",
+				"conpty",
+				"conpty-x64-OpenConsole.exe.old-20261123",
+				"jocasta",
+				"jocasta.old-20261109",
+				"node"
+			]),
+			others: strings(&["conpty-notes.txt", "his-tool", "notes"]),
 		}
 	);
 	let Out { code, text, .. } = m.uninstall_with(&["y", "n"], &record).await;
@@ -577,7 +595,7 @@ async fn uninstall_removes_only_the_installs_listed_entries_a_folder_holding_his
 			dir.display()
 		))
 	);
-	assert_eq!(names(&dir), ["his-tool", "notes"]);
+	assert_eq!(names(&dir), ["conpty-notes.txt", "his-tool", "notes"]);
 
 	// Only Jocasta's entries: the folder goes with them.
 	let own = m.root.join("own");

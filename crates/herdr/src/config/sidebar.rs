@@ -155,13 +155,6 @@ impl AgentSidebarToken {
 }
 
 impl SpaceSidebarToken {
-    pub(crate) fn style_for_value(&self, value: &str) -> Option<SidebarTokenStyle> {
-        match self {
-            Self::Styled { style, rules, .. } => rules::matching_style(rules, *style, value),
-            _ => Some(SidebarTokenStyle::default()),
-        }
-    }
-
     pub(crate) fn parts(&self) -> (&Self, SidebarTokenStyle) {
         match self {
             Self::Styled { token, style, .. } => (token, *style),

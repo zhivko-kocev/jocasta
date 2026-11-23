@@ -7,8 +7,7 @@ use ratatui::{
 };
 
 pub(crate) use self::tokens::{
-    agent_rows as sidebar_agent_rows, space_rows as sidebar_space_rows, AgentTokenContext,
-    ResolvedToken, ResolvedTokenKind, SpaceTokenContext,
+    agent_rows as sidebar_agent_rows, AgentTokenContext, ResolvedToken, ResolvedTokenKind,
 };
 use super::text::{display_width, truncate_end};
 use crate::app::state::Palette;
@@ -27,52 +26,18 @@ pub(crate) struct AgentPanelEntry {
     pub tokens: std::collections::HashMap<String, String>,
 }
 
-fn sidebar_section_heights(total_height: u16, split_ratio: f32) -> (u16, u16) {
-    if total_height == 0 {
-        return (0, 0);
-    }
-    if total_height < 6 {
-        let workspace_height = total_height.div_ceil(2);
-        return (
-            workspace_height,
-            total_height.saturating_sub(workspace_height),
-        );
-    }
-
-    let workspace_height = ((total_height as f32) * split_ratio.clamp(0.1, 0.9)).round() as u16;
-    let workspace_height = workspace_height.clamp(3, total_height.saturating_sub(3));
-    (
-        workspace_height,
-        total_height.saturating_sub(workspace_height),
-    )
-}
-
-pub(crate) fn expanded_sidebar_sections(area: Rect, split_ratio: f32) -> (Rect, Rect) {
+/// The expanded sidebar's areas: the one-row launcher strip on top, and the agents list under it (0659).
+/// The 1-column divider at the right edge belongs to neither.
+pub(crate) fn expanded_sidebar_sections(area: Rect) -> (Rect, Rect) {
     let content = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
     if content.is_empty() {
         return (Rect::default(), Rect::default());
     }
 
-    let (workspace_height, detail_height) = sidebar_section_heights(content.height, split_ratio);
     (
-        Rect::new(content.x, content.y, content.width, workspace_height),
-        Rect::new(
-            content.x,
-            content.y + workspace_height,
-            content.width,
-            detail_height,
-        ),
+        Rect::new(content.x, content.y, content.width, 1),
+        Rect::new(content.x, content.y + 1, content.width, content.height - 1),
     )
-}
-
-pub(crate) fn sidebar_section_divider_rect(area: Rect, split_ratio: f32) -> Rect {
-    let content = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
-    if content.width == 0 || content.height < 6 {
-        return Rect::default();
-    }
-
-    let (workspace_height, _) = sidebar_section_heights(content.height, split_ratio);
-    Rect::new(content.x, content.y + workspace_height, content.width, 1)
 }
 
 pub(crate) fn agent_panel_entries_from(
@@ -117,11 +82,6 @@ pub(crate) fn resolved_token_spans(
         .iter()
         .map(|token| match &token.kind {
             ResolvedTokenKind::StateIcon => display_width(state_icon.0),
-            ResolvedTokenKind::GitStatus { ahead, behind } => {
-                usize::from(*ahead > 0) * display_width(&format!("↑{ahead}"))
-                    + usize::from(*behind > 0) * display_width(&format!("↓{behind}"))
-                    + usize::from(*ahead > 0 && *behind > 0)
-            }
             _ => 0,
         })
         .collect::<Vec<_>>();
@@ -135,7 +95,6 @@ pub(crate) fn resolved_token_spans(
             | ResolvedTokenKind::Pane(text)
             | ResolvedTokenKind::Agent(text)
             | ResolvedTokenKind::TerminalTitle(text)
-            | ResolvedTokenKind::Branch(text)
             | ResolvedTokenKind::Custom(text) => display_width(text),
             _ => 0,
         })
@@ -152,7 +111,7 @@ pub(crate) fn resolved_token_spans(
             .sum::<usize>();
         let separators = indices
             .windows(2)
-            .map(|pair| display_width(tokens::separator(&resolved[pair[0]], &resolved[pair[1]])))
+            .map(|pair| display_width(tokens::separator(&resolved[pair[0]])))
             .sum::<usize>();
         content + separators
     };
@@ -180,7 +139,7 @@ pub(crate) fn resolved_token_spans(
         .collect::<Vec<_>>();
     let separator_width = visible_indices
         .windows(2)
-        .map(|pair| display_width(tokens::separator(&resolved[pair[0]], &resolved[pair[1]])))
+        .map(|pair| display_width(tokens::separator(&resolved[pair[0]])))
         .sum::<usize>();
     let fixed_width = visible_indices
         .iter()
@@ -218,7 +177,7 @@ pub(crate) fn resolved_token_spans(
         if position > 0 {
             let previous = &resolved[visible_indices[position - 1]];
             spans.push(Span::styled(
-                tokens::separator(previous, token),
+                tokens::separator(previous),
                 Style::default().fg(palette.overlay0),
             ));
         }
@@ -238,31 +197,10 @@ pub(crate) fn resolved_token_spans(
             ResolvedTokenKind::Machine(text)
             | ResolvedTokenKind::Tab(text)
             | ResolvedTokenKind::Pane(text)
-            | ResolvedTokenKind::Agent(text)
-            | ResolvedTokenKind::Branch(text) => spans.push(Span::styled(
+            | ResolvedTokenKind::Agent(text) => spans.push(Span::styled(
                 truncate_end(text, budgets[index]),
                 apply_token_style(secondary_style, token.style),
             )),
-            ResolvedTokenKind::GitStatus { ahead, behind } => {
-                if *ahead > 0 {
-                    spans.push(Span::styled(
-                        format!("↑{ahead}"),
-                        apply_token_style(Style::default().fg(palette.green), token.style),
-                    ));
-                }
-                if *ahead > 0 && *behind > 0 {
-                    spans.push(Span::styled(
-                        " ",
-                        apply_token_style(Style::default(), token.style),
-                    ));
-                }
-                if *behind > 0 {
-                    spans.push(Span::styled(
-                        format!("↓{behind}"),
-                        apply_token_style(Style::default().fg(palette.red), token.style),
-                    ));
-                }
-            }
             ResolvedTokenKind::TerminalTitle(text) | ResolvedTokenKind::Custom(text) => {
                 spans.push(Span::styled(
                     truncate_end(text, budgets[index]),

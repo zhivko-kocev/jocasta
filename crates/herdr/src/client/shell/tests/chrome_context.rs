@@ -145,70 +145,12 @@ fn focused_last_overflow_tab_shows_its_full_label() {
 }
 
 #[test]
-fn focused_workspace_change_reveals_new_workspace_in_full_sidebar() {
-    let mut initial = snapshot();
-    let template = initial.workspaces[0].clone();
-    initial.workspaces = (1..=12)
-        .map(|number| ClientShellWorkspace {
-            workspace_id: format!("ws_{number}"),
-            number,
-            label: format!("space-{number}"),
-            branch: None,
-            focused: number == 1,
-            ..template.clone()
-        })
-        .collect();
-
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    state.set_snapshot(Box::new(initial));
-    state.set_pane_surface(surface());
-    state.compose(106, 20).expect("full sidebar");
-    assert!(state.hits.workspace_max_scroll > 0);
-    assert!(state
-        .hits
-        .workspaces
-        .iter()
-        .all(|hit| hit.workspace_id != "ws_12"));
-
-    let mut update = state.snapshot.as_deref().expect("snapshot").clone();
-    update.revision = 2;
-    update.focused_workspace_id = Some("ws_12".into());
-    for workspace in &mut update.workspaces {
-        workspace.focused = workspace.workspace_id == "ws_12";
-    }
-    let mut updated_surface = surface();
-    updated_surface.projection_revision = 2;
-    state.set_snapshot(Box::new(update));
-    state.set_pane_surface(updated_surface);
-    state.compose(106, 2).expect("zero-height workspace body");
-    assert!(state.reveal_focused_workspace);
-    state.compose(106, 20).expect("updated full sidebar");
-
-    assert!(state
-        .hits
-        .workspaces
-        .iter()
-        .any(|hit| hit.workspace_id == "ws_12"));
-}
-
-#[test]
-fn client_owned_sidebar_dividers_resize_live() {
+fn client_owned_sidebar_divider_resizes_live() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
     state.compose(106, 30).expect("expanded sidebar");
     assert!(state.hits.machines.is_empty());
-    let workspace_body = state.hits.workspace_body;
-    let needless_scroll =
-        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-            kind: MouseEventKind::ScrollDown,
-            column: workspace_body.x,
-            row: workspace_body.y,
-            modifiers: KeyModifiers::empty(),
-        })]);
-    assert_eq!(state.hits.workspace_max_scroll, 0);
-    assert_eq!(state.workspace_scroll, 0);
-    assert!(!needless_scroll.repaint);
     let width_divider = state.hits.sidebar_divider;
     state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
@@ -234,8 +176,8 @@ fn client_owned_sidebar_dividers_resize_live() {
         .map(|cell| cell.symbol.as_str())
         .collect();
     assert!(
-        waiting_text.contains(" spaces"),
-        "local sidebar must keep spaces while resizing: {waiting_text}"
+        waiting_text.contains(" agents"),
+        "local sidebar must keep its agents list while resizing: {waiting_text}"
     );
     assert!(!waiting_text.contains(" machines"));
     assert!(!waiting_text.contains("Select a connected machine"));
@@ -246,7 +188,7 @@ fn client_owned_sidebar_dividers_resize_live() {
     assert!(state.hits.pane_splits.is_empty());
     assert!(state.hits.machines.is_empty());
     assert_eq!(state.hits.sidebar_divider.x, 31);
-    assert_eq!(state.hits.workspaces[0].workspace_id, "ws_1");
+    assert!(state.hits.workspaces.is_empty());
 
     let next_resize =
         state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
@@ -273,25 +215,9 @@ fn client_owned_sidebar_dividers_resize_live() {
         .iter()
         .map(|cell| cell.symbol.as_str())
         .collect();
-    assert!(recovered_text.contains(" spaces"));
+    assert!(recovered_text.contains(" agents"));
     assert!(recovered_text.contains("LIVE"));
     assert!(!state.hits.panes.is_empty());
-    let section_divider = state.hits.sidebar_section_divider;
-    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column: section_divider.x + 2,
-        row: section_divider.y,
-        modifiers: KeyModifiers::empty(),
-    })]);
-    let split = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-        kind: MouseEventKind::Drag(MouseButton::Left),
-        column: section_divider.x + 2,
-        row: 20,
-        modifiers: KeyModifiers::empty(),
-    })]);
-    assert!(state.sidebar_section_split > 0.6);
-    assert!(split.repaint);
-    assert!(!split.resize);
 }
 
 #[test]
@@ -299,13 +225,14 @@ fn context_menus_capture_stable_targets_and_route_actions() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
+    state.sidebar_collapsed = true;
     state.compose(106, 20).expect("composed frame");
 
     let workspace = state.hits.workspaces[0].rect;
     let open_workspace_menu =
         state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Right),
-            column: workspace.x + 2,
+            column: workspace.x,
             row: workspace.y,
             modifiers: KeyModifiers::empty(),
         })]);
