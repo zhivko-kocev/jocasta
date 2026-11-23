@@ -31,3 +31,8 @@ His words above, and the report-first answer; 0599's rule that what can be deter
 ## Consequences
 - Nothing in the product changes from this record; each proposal he takes gets its own record.
 - A command for it, if he wants one later, is a feature request (0018).
+
+## The report and his answers (2026-11-23)
+The report (`D:/thesis/data/doctor/report.md`, `doctor.py`, 3,504 transcripts from 2026-08-25) found compaction at 300k with a handoff first working since 2026-11-10 (the share of cost above 300k from 39.8% to 2.5%; a lower threshold gains nothing on the recent period), and the advisor at 29% of recent cost, reviewing 0.77 times per eligible update in every period: his installed Jocasta (2026-11-10) predates the snapshot, so `advisor.reviewInterval: 3` (0616), `composer.predictions: false`, 0655's default and four other values were never written to his `~/.omp/agent/config.yml`. His answers:
+- **Now:** he adds `advisor.reviewInterval: 3` and `composer.predictions: false` to his config by hand; the snapshot's full install waits.
+- **Later:** the report runs again one week after that, and the smaller items (subagent requests at max or xhigh, cache misses within an hour, orchestrated runs, old tool results in context) are decided on what remains.
