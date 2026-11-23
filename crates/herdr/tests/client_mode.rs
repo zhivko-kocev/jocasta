@@ -984,8 +984,10 @@ fn federated_launch_opens_local_directly_while_saved_ssh_is_unavailable() {
     }
 }
 
+/// The client shell has no detach key in the fork (0666): it leaves as his
+/// terminal does, by hangup, and the server stays for a fresh client.
 #[test]
-fn client_shell_detaches_restores_and_freshly_reattaches_to_current_state() {
+fn client_shell_leaves_on_hangup_restores_and_freshly_reattaches_to_current_state() {
     let _lock = test_lock();
     let base = unique_test_dir();
     let config_home = base.join("config");
@@ -1031,30 +1033,26 @@ fn client_shell_detaches_restores_and_freshly_reattaches_to_current_state() {
         read_output(&output_a)
     );
 
-    let detach_watermark = output_len(&output_a);
-    client_a
-        ._master
-        .as_ref()
-        .expect("first client shell PTY")
-        .take_writer()
-        .expect("first client shell writer")
-        .write_all(b"\x02q")
-        .expect("detach first client shell");
-    let detach_output = drain_until_client_exits(&mut client_a, &output_a, detach_watermark);
+    let leave_watermark = output_len(&output_a);
+    let pid = client_a.child.process_id().expect("first client shell pid") as libc::pid_t;
+    unsafe {
+        libc::kill(pid, libc::SIGHUP);
+    }
+    let leave_output = drain_until_client_exits(&mut client_a, &output_a, leave_watermark);
     assert!(
-        output_has_mouse_teardown(&detach_output),
-        "client shell should restore the host terminal after detach; output: {detach_output:?}"
+        output_has_mouse_teardown(&leave_output),
+        "client shell should restore the host terminal after a hangup; output: {leave_output:?}"
     );
     assert!(
         ping_socket(&api_socket).contains("pong"),
-        "server should remain alive after client shell detach"
+        "server should remain alive after the client shell leaves"
     );
     drop(client_a);
 
     send_pane_shell_command(
         &api_socket,
         &pane_id,
-        "printf 'SHELL_LIFECYCLE_DETACHED\\n'",
+        "printf 'SHELL_LIFECYCLE_AWAY\\n'",
     );
     let mut client_b = spawn_client_shell_process(&config_home, &runtime_dir, &api_socket);
     let output_b = spawn_pty_drain(
@@ -1068,9 +1066,9 @@ fn client_shell_detaches_restores_and_freshly_reattaches_to_current_state() {
     assert!(
         wait_until(Duration::from_secs(8), Duration::from_millis(20), || {
             let output = read_output(&output_b);
-            output.contains("shell-lifecycle") && output.contains("SHELL_LIFECYCLE_DETACHED")
+            output.contains("shell-lifecycle") && output.contains("SHELL_LIFECYCLE_AWAY")
         }),
-        "fresh client shell should receive current state and detached-period output; output: {:?}",
+        "fresh client shell should receive current state and output from while it was away; output: {:?}",
         read_output(&output_b)
     );
 
