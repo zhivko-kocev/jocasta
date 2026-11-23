@@ -1049,11 +1049,7 @@ fn client_shell_leaves_on_hangup_restores_and_freshly_reattaches_to_current_stat
     );
     drop(client_a);
 
-    send_pane_shell_command(
-        &api_socket,
-        &pane_id,
-        "printf 'SHELL_LIFECYCLE_AWAY\\n'",
-    );
+    send_pane_shell_command(&api_socket, &pane_id, "printf 'SHELL_LIFECYCLE_AWAY\\n'");
     let mut client_b = spawn_client_shell_process(&config_home, &runtime_dir, &api_socket);
     let output_b = spawn_pty_drain(
         client_b
