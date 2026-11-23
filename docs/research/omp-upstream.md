@@ -32,16 +32,11 @@ Eight pull requests merged, three open, one issue closed. All eight merged befor
 
 ### A. Defects with a repro
 
-**U1. A bash call with `pty: true` loses every in-process builtin.**
-- Without `pty`, `type jq` answers "jq is a shell builtin" (omp's own shell, bash 5.3.0). With `pty: true` the same line runs in the system's `/usr/bin/bash` (5.3.9) and answers "not found" for `jq`, `sd`, `fd`, `rg`, `sponge` and `ast-grep`; the coreutils resolve to the system's. `jq --version` exits 127.
-- The tool's description lists these as "in-process builtins, ahead of PATH" and says only that `pty` is interactive. Internal URLs as paths, which the builtins understand, are lost the same way.
-- Ask: say in the tool text that a `pty` call runs the system shell without the builtins, or put them on that shell's PATH. Seen before and after the update to 18.20.2. No related issue found.
-
-**U2. In print mode the advisor's notes arrive after the run has ended.**
+**U2. In print mode the advisor's notes arrive after the run has ended.** Not filed (see D): issue 14995 covers it.
 - `omp -p` with `advisor.enabled: true`, 72 trials on 12 small cases: the advisor wrote 8 notes (3 concerns, 5 nits), and none was followed by an assistant message. The runs cost 61% to 83% more and took 21% to 29% longer than with the advisor off. With `advisor.syncBacklog: strict`, 6 more trials: 1 of 2 notes was followed by a turn.
 - `advisor.enabled` carries `protocolDefault: ["rpc", "acp"]`, so those hosts start with it off; print mode takes the user's value.
 - Ask: treat print mode like the protocol hosts, or hold the exit until the last review is delivered, as `--wait-async` does for background jobs.
-- Jocasta's side is decided (0619): the weekly review and the benchmark's base arm pin the advisor off. No related issue found.
+- Jocasta's side is decided (0619): the weekly review and the benchmark's base arm pin the advisor off. Related: issue 14995 (notes at the terminal turn are never acted on, with a `-p` repro) and 7098.
 
 **U3. `omp update` on a bun-global install on Windows leaves two omps of different versions, silently.**
 - At 2026-11-15 00:50Z `~/.bun/bin/omp.exe` (bun's 8 KB shim) was renamed to `omp.exe.<ms>.<pid>.0.bak` and the 252 MB standalone binary of 18.20.2 took its place; `omp.bunx` is not there now. Bun's global `@oh-my-pi/pi-coding-agent` and its sibling packages stayed at 18.20.0, untouched since their install two days earlier.
@@ -86,6 +81,19 @@ Eight pull requests merged, three open, one issue closed. All eight merged befor
 - omp 19.1.0 starts `__omp_worker_daemon` detached from the first omp that needs it, with no `cwd` for a compiled binary (`daemon/client.ts:180-191`, `subprocess/worker-client.ts:228-233`), so it inherits that omp's working folder and, on Windows, stays a child of it. Seen live: the daemon's parent was an interactive omp. It then holds a project folder (a git worktree cannot be removed while it does) and a launcher that ends a closed pane's process tree takes the machine-wide daemon with it (Jocasta spares it by its command line, choice 100).
 - Ask: spawn the daemon with a neutral `cwd` (the home directory or omp's agent directory), so it never holds a project folder. Observed on 19.1.0 only; no related issue found. 19.1.1 leaves `daemon/client.ts` and `subprocess/worker-client.ts` as they were and adds only an idle exit (3 s after its last client leaves, `DAEMON_IDLE_EXIT_GRACE_MS`), so the folder is held for a shorter time but still held.
 
+### D. Filed or commented 2026-11-23 (omp 19.1.1)
+
+Nothing was sent before this. No pull requests: omp's CONTRIBUTING forbids agent-written ones without his own sentence.
+
+| What | Status | Link |
+|---|---|---|
+| Haiku 4.5 side turn reads nothing from the prompt cache (71 probes, 0.1% read) | data comment on the open issue 17408, marked as from 18.x sessions and not re-run on 19.1.1 | https://github.com/can1357/oh-my-pi/issues/17408#issuecomment-7114434304 |
+| `bash.patterns` match the argument text of MCP tool commands | new issue 20317; repro and control run on 19.1.1 with a temp overlay deny rule `*git*reset* --hard*` and a local echo MCP tool: blocked with the rule, runs without it | https://github.com/can1357/oh-my-pi/issues/20317 |
+| The per-user daemon starts in the spawning omp's folder (U11 above) | new issue 20318; source checked on 19.1.1, and the live daemon's current directory read as a project folder; the last step (removal fails) not run against the daemon | https://github.com/can1357/oh-my-pi/issues/20318 |
+| Advisor notes after a print-mode run ended (U2 above) | not filed: issue 14995 already has a clean-room `-p` repro of notes stranded at the terminal turn (and 7098 the late-feedback ask); not re-tested on 19.1.1 | https://github.com/can1357/oh-my-pi/issues/14995 |
+
+Issue 20317's rule is not a second report of 19196 (project patterns against operator rules) or 20033 (eval `sh()` skips the interceptor); it names both.
+
 ### C. Data points, no ask
 
 - **`shellMinimizer`** rewrote 101 of 7,153 bash results (850 KB down to 514 KB); the raw output was fetched back for 13 of them, 8 under the `chain` filter.
@@ -98,9 +106,12 @@ Eight pull requests merged, three open, one issue closed. All eight merged befor
 
 - **A `deny` or `prompt` rule missed a command behind `NAME=value` words.** 18.20.1 matches the segment again without them (`tools/bash.ts`). Fixed upstream.
 - **grep's context lines.** 18.20.1 made the default 0 and 0.
+- **U1, a bash call with `pty: true` losing the in-process builtins.** Removed 2026-11-23: does not reproduce on 19.1.1 (`type jq` answers "jq is a shell builtin" in bash 5.3.0 and `jq --version` exits 0 with `pty: true`).
+- **The MCP era probe** (`-32022` from `server/discover` read as a modern server). Removed 2026-11-23: fixed upstream by PR #20113 (issue #20188), present in 19.1.1 (`src/mcp/host/peers.ts`).
 
 ## 4. Before anything is sent
 
 - Search again for a duplicate of each item; several areas move daily.
 - One issue or pull request per item, with the repro or the count and no session content, project names or config values.
-- U1 and U3 first: they have a repro and no related issue.
+- U11 (the daemon) was filed first, on 2026-11-23 (D).
+- Each item's duplicate search was redone on 2026-11-23; U1 is gone (3).
