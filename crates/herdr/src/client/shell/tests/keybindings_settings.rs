@@ -65,28 +65,11 @@ fn plus_commands_survive_snapshots_and_reload_for_both_keybinding_sources() {
 #[test]
 fn shell_new_controls_use_the_same_client_action_routes_as_keybinds() {
     let mut config = Config::default();
-    config.ui.prompt_new_workspace_name = false;
     config.ui.prompt_new_tab_name = true;
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
     state.compose(106, 20).expect("composed frame");
-
-    let new_workspace = state.hits.new_workspace;
-    let create_workspace =
-        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: new_workspace.x + 1,
-            row: new_workspace.y,
-            modifiers: KeyModifiers::empty(),
-        })]);
-    let [ClientShellAction::Endpoint { request, .. }] = &create_workspace.actions[..] else {
-        panic!("new workspace click should use the endpoint API");
-    };
-    assert!(matches!(
-        request.method,
-        crate::api::schema::Method::WorkspaceCreate(_)
-    ));
 
     let new_tab = state.hits.new_tab;
     let open_new_tab =
@@ -344,10 +327,6 @@ detach = "prefix+x"
         .join("\n");
     assert!(text.contains("PREFIX"), "frame: {text:?}");
     assert!(text.contains("ctrl+a"), "frame: {text:?}");
-
-    let detach = state.handle_input_bytes(b"x");
-    assert!(detach.detach);
-    assert!(detach.requests.is_empty());
 }
 
 #[test]
@@ -852,7 +831,7 @@ fn help_overlay_restores_released_search_scroll_and_custom_binding_behavior() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("custom"));
+    assert!(text.contains("jocasta"));
     assert!(text.contains("run plugin action"));
     state.handle_input_bytes(b"\x1b");
 

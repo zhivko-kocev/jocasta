@@ -18,11 +18,6 @@ pub(crate) enum KeybindMatch {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum KeybindAction {
-    NewWorkspace,
-    NewWorktree,
-    OpenWorktree,
-    RemoveWorktree,
-    RenameWorkspace,
     CloseWorkspace,
     SwitchWorkspace(usize),
     SwitchTab(usize),
@@ -68,7 +63,6 @@ pub(crate) enum KeybindAction {
     Settings,
     ReloadConfig,
     OpenNotificationTarget,
-    Detach,
     OpenNavigator,
 }
 
@@ -99,11 +93,6 @@ pub(crate) fn resolve_non_indexed_action(
         (&keybinds.help, KeybindAction::Help),
         (&keybinds.settings, KeybindAction::Settings),
         (&keybinds.workspace_picker, KeybindAction::WorkspacePicker),
-        (&keybinds.new_workspace, KeybindAction::NewWorkspace),
-        (&keybinds.new_worktree, KeybindAction::NewWorktree),
-        (&keybinds.open_worktree, KeybindAction::OpenWorktree),
-        (&keybinds.remove_worktree, KeybindAction::RemoveWorktree),
-        (&keybinds.rename_workspace, KeybindAction::RenameWorkspace),
         (&keybinds.close_workspace, KeybindAction::CloseWorkspace),
         (
             &keybinds.previous_workspace,
@@ -152,7 +141,6 @@ pub(crate) fn resolve_non_indexed_action(
             &keybinds.open_notification_target,
             KeybindAction::OpenNotificationTarget,
         ),
-        (&keybinds.detach, KeybindAction::Detach),
         (&keybinds.goto, KeybindAction::OpenNavigator),
     ] {
         if action_matches(bindings, key, dispatch) {

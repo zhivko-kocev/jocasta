@@ -180,13 +180,7 @@ pub(crate) fn render_collapsed_sidebar(
         hits.sidebar_toggle.y,
         hits.sidebar_toggle.width,
         "»",
-        if super::super::global_menu::global_menu_attention(snapshot) {
-            Style::default()
-                .fg(palette.accent)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(palette.overlay0)
-        },
+        Style::default().fg(palette.overlay0),
     );
 }
 
@@ -209,57 +203,20 @@ pub(crate) fn render_sidebar(
 
     let launcher_y = launcher_area.y;
     if config.mouse_capture {
-        hits.new_workspace = Rect::new(
-            launcher_area.x,
-            launcher_y,
-            5.min(launcher_area.width),
-            u16::from(launcher_area.height > 0),
-        );
-        put_text(
-            buffer,
-            launcher_area.x,
-            launcher_y,
-            launcher_area.width,
-            " new",
-            Style::default().fg(palette.overlay0),
-        );
-        let attention = super::super::global_menu::global_menu_attention(snapshot);
-        let launcher_width = if attention { 8 } else { 6 }.min(launcher_area.width);
+        let width = 6.min(launcher_area.width);
         hits.global_launcher = Rect::new(
-            launcher_area.right().saturating_sub(launcher_width),
+            launcher_area.right().saturating_sub(width),
             launcher_y,
-            launcher_width,
+            width,
             1,
         );
-        if attention {
-            let start_x = launcher_area.right().saturating_sub(6);
-            put_text(
-                buffer,
-                start_x,
-                launcher_y,
-                2,
-                "● ",
-                Style::default()
-                    .fg(palette.accent)
-                    .add_modifier(Modifier::BOLD),
-            );
-            put_text(
-                buffer,
-                start_x.saturating_add(2),
-                launcher_y,
-                4,
-                "menu",
-                Style::default().fg(palette.overlay0),
-            );
-        } else {
-            put_right_text(
-                buffer,
-                launcher_area,
-                launcher_y,
-                "menu",
-                Style::default().fg(palette.overlay0),
-            );
-        }
+        put_right_text(
+            buffer,
+            launcher_area,
+            launcher_y,
+            "menu",
+            Style::default().fg(palette.overlay0),
+        );
     }
 
     super::render_agent_panel(

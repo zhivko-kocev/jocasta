@@ -251,17 +251,6 @@ impl ClientShellState {
                         self.reconcile_input_source();
                         continue;
                     }
-                    if matches!(
-                        self.overlay,
-                        Some(
-                            ClientShellOverlay::Onboarding
-                                | ClientShellOverlay::ProductAnnouncement(_)
-                                | ClientShellOverlay::ReleaseNotes(_)
-                        )
-                    ) {
-                        self.reconcile_input_source();
-                        continue;
-                    }
                     if self.prepare_committed_text(&text, &mut outcome) {
                         self.reconcile_input_source();
                         continue;
@@ -291,17 +280,6 @@ impl ClientShellState {
                     if crate::embed::shell_asking()
                         && self.extension_takes_text(&text, true, &mut outcome)
                     {
-                        self.reconcile_input_source();
-                        continue;
-                    }
-                    if matches!(
-                        self.overlay,
-                        Some(
-                            ClientShellOverlay::Onboarding
-                                | ClientShellOverlay::ProductAnnouncement(_)
-                                | ClientShellOverlay::ReleaseNotes(_)
-                        )
-                    ) {
                         self.reconcile_input_source();
                         continue;
                     }
@@ -585,19 +563,6 @@ impl ClientShellState {
         matches!(
             self.overlay.as_ref(),
             Some(ClientShellOverlay::Rename(_))
-                | Some(ClientShellOverlay::WorktreeCreate(
-                    ClientWorktreeCreateOverlay {
-                        creating: false,
-                        ..
-                    }
-                ))
-                | Some(ClientShellOverlay::WorktreeOpen(
-                    ClientWorktreeOpenOverlay {
-                        search_focused: true,
-                        opening: false,
-                        ..
-                    }
-                ))
                 | Some(ClientShellOverlay::Navigator(ClientNavigatorOverlay {
                     search_focused: true,
                     ..
@@ -636,19 +601,6 @@ impl ClientShellState {
         }
         if self.handle_modal_paste_shortcut_with(key, outcome, crate::platform::read_clipboard_text)
         {
-            return None;
-        }
-        if matches!(
-            self.overlay,
-            Some(
-                ClientShellOverlay::Onboarding
-                    | ClientShellOverlay::ProductAnnouncement(_)
-                    | ClientShellOverlay::ReleaseNotes(_)
-            )
-        ) {
-            if key.kind == KeyEventKind::Press {
-                self.route_overlay_key(key, outcome);
-            }
             return None;
         }
         // Fork seam (FORK.md): Jocasta's question, then its dock while it has his keys.
@@ -1120,14 +1072,7 @@ impl ClientShellState {
     pub(crate) fn clipboard_image_target(
         &self,
     ) -> Option<crate::protocol::ClientClipboardImageTarget> {
-        if matches!(
-            self.overlay,
-            Some(
-                ClientShellOverlay::Onboarding
-                    | ClientShellOverlay::ProductAnnouncement(_)
-                    | ClientShellOverlay::ReleaseNotes(_)
-            )
-        ) || self
+        if self
             .copy_mode
             .as_ref()
             .is_some_and(|copy_mode| copy_mode.search_prompt.is_some())

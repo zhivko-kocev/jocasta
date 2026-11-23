@@ -37,18 +37,15 @@ pub(crate) struct ClientShellConfig {
     pub(super) local_keys: crate::config::KeysConfig,
     pub(super) keybinding_source: ClientShellKeybindingSource,
     pub(super) prompt_new_tab_name: bool,
-    pub(super) prompt_new_workspace_name: bool,
     pub(super) confirm_close: bool,
     pub(super) mouse_capture: bool,
     pub(super) mouse_scroll_lines: usize,
     pub(super) right_click_passthrough_modifiers: Option<crossterm::event::KeyModifiers>,
     pub(super) redraw_on_focus_gained: bool,
     pub(super) switch_ascii_input_source_in_prefix: bool,
-    pub(super) local_config_path: std::path::PathBuf,
     pub(super) preferences_path: Option<std::path::PathBuf>,
     pub(super) preferences: preferences::ClientChromePreferences,
     pub(super) startup_config_diagnostic: Option<String>,
-    pub(super) startup_onboarding: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,7 +61,6 @@ pub(super) struct ClientShellLayout {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ClientMobileTarget {
     Machine(ClientEndpointId),
-    NewWorkspace,
     Workspace {
         endpoint_id: ClientEndpointId,
         workspace_id: String,
@@ -99,7 +95,6 @@ pub(super) struct ShellHitMap {
     pub(super) agent_sort_toggle: Rect,
     pub(super) sidebar_divider: Rect,
     pub(super) sidebar_toggle: Rect,
-    pub(super) new_workspace: Rect,
     pub(super) new_tab: Rect,
     pub(super) tab_scroll_left: Rect,
     pub(super) tab_scroll_right: Rect,
@@ -119,8 +114,6 @@ pub(super) struct ShellHitMap {
     pub(super) navigator_rows: Vec<(Rect, ClientNavigatorTarget)>,
     pub(super) navigator_scrollbar: Rect,
     pub(super) navigator_scroll_metrics: Option<crate::pane::ScrollMetrics>,
-    pub(super) worktree_search: Rect,
-    pub(super) worktree_rows: Vec<(Rect, usize)>,
     pub(super) help_popup: Rect,
     pub(super) help_scrollbar: Rect,
     pub(super) help_scroll_metrics: Option<crate::pane::ScrollMetrics>,
@@ -128,12 +121,6 @@ pub(super) struct ShellHitMap {
     pub(super) settings_popup: Rect,
     pub(super) settings_tabs: Vec<(Rect, ClientSettingsSection)>,
     pub(super) settings_choices: Vec<(Rect, usize)>,
-    pub(super) product_announcement_scrollbar: Rect,
-    pub(super) product_announcement_scroll_metrics: Option<crate::pane::ScrollMetrics>,
-    pub(super) product_announcement_max_scroll: usize,
-    pub(super) release_notes_scrollbar: Rect,
-    pub(super) release_notes_scroll_metrics: Option<crate::pane::ScrollMetrics>,
-    pub(super) release_notes_max_scroll: usize,
     /// Fork seam (FORK.md): Jocasta's dock.
     pub(super) dock: Rect,
 }
@@ -193,12 +180,6 @@ pub(super) enum ClientChromeDrag {
     NavigatorScrollbar {
         grab_row_offset: u16,
     },
-    ProductAnnouncementScrollbar {
-        grab_row_offset: u16,
-    },
-    ReleaseNotesScrollbar {
-        grab_row_offset: u16,
-    },
     Tab {
         tab_id: String,
         workspace_id: String,
@@ -244,7 +225,6 @@ pub(crate) enum ClientShellAction {
 
 #[derive(Default)]
 pub(crate) struct ClientShellInput {
-    pub detach: bool,
     pub repaint: bool,
     pub resize: bool,
     pub query_host_appearance: bool,
@@ -264,16 +244,10 @@ pub(super) enum ClientShellMode {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ClientShellOverlayKind {
-    Onboarding,
-    ProductAnnouncement,
-    ReleaseNotes,
     Rename,
     ConfirmClose,
     Help,
     Navigator,
-    WorktreeCreate,
-    WorktreeOpen,
-    WorktreeRemove,
     ContextMenu,
     GlobalMenu,
     Settings,
@@ -281,14 +255,6 @@ pub(super) enum ClientShellOverlayKind {
 
 #[derive(Debug)]
 pub(super) enum ClientRenameTarget {
-    NewWorkspace {
-        source_workspace_id: Option<String>,
-        cwd: Option<String>,
-        suggested_name: String,
-    },
-    Workspace {
-        workspace_id: String,
-    },
     NewTab {
         workspace_id: String,
         default_name: String,
@@ -373,17 +339,10 @@ pub(super) enum ClientSettingsSection {
     Indicators,
     Sound,
     Toast,
-    Integrations,
 }
 
 impl ClientSettingsSection {
-    pub(super) const ALL: &[Self] = &[
-        Self::Theme,
-        Self::Indicators,
-        Self::Sound,
-        Self::Toast,
-        Self::Integrations,
-    ];
+    pub(super) const ALL: &[Self] = &[Self::Theme, Self::Indicators, Self::Sound, Self::Toast];
 
     pub(super) fn label(self) -> &'static str {
         match self {
@@ -391,7 +350,6 @@ impl ClientSettingsSection {
             Self::Indicators => "indicators",
             Self::Sound => "sound",
             Self::Toast => "toasts",
-            Self::Integrations => "integrations",
         }
     }
 }
@@ -402,105 +360,12 @@ pub(super) struct ClientSettingsOverlay {
     pub(super) selected: usize,
     pub(super) original_theme_name: String,
     pub(super) original_palette: Palette,
-    pub(super) integrations: Vec<crate::api::schema::IntegrationInfo>,
-    pub(super) integration_messages: Vec<String>,
-    pub(super) loading_integrations: bool,
-    pub(super) installing_integrations: bool,
-}
-
-#[derive(Debug)]
-pub(super) struct ClientWorktreeCreateOverlay {
-    pub(super) source_workspace_id: String,
-    pub(super) repo_name: String,
-    pub(super) branch: TextEditor,
-    pub(super) checkout_path: String,
-    pub(super) error: Option<String>,
-    pub(super) creating: bool,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct ClientWorktreeOpenEntry {
-    pub(super) path: String,
-    pub(super) branch: Option<String>,
-    pub(super) is_linked_worktree: bool,
-    pub(super) is_detached: bool,
-    pub(super) open_workspace_id: Option<String>,
-    pub(super) label: String,
-}
-
-impl ClientWorktreeOpenEntry {
-    pub(super) fn status_label(&self) -> &'static str {
-        if self.open_workspace_id.is_some() {
-            "open"
-        } else if self.branch.is_some() {
-            ""
-        } else if self.is_detached && self.is_linked_worktree {
-            "detached"
-        } else {
-            "root"
-        }
-    }
-
-    pub(super) fn matches_query(&self, query: &str) -> bool {
-        let query = query.trim().to_lowercase();
-        query.is_empty()
-            || format!(
-                "{} {} {} {}",
-                self.label,
-                self.branch.as_deref().unwrap_or_default(),
-                self.path,
-                self.status_label()
-            )
-            .to_lowercase()
-            .contains(&query)
-    }
-}
-
-#[derive(Debug)]
-pub(super) struct ClientWorktreeOpenOverlay {
-    pub(super) source_workspace_id: String,
-    pub(super) entries: Vec<ClientWorktreeOpenEntry>,
-    pub(super) selected: usize,
-    pub(super) query: TextEditor,
-    pub(super) search_focused: bool,
-    pub(super) error: Option<String>,
-    pub(super) opening: bool,
-}
-
-impl ClientWorktreeOpenOverlay {
-    pub(super) fn filtered_indices(&self) -> Vec<usize> {
-        self.entries
-            .iter()
-            .enumerate()
-            .filter_map(|(index, entry)| entry.matches_query(&self.query).then_some(index))
-            .collect()
-    }
-
-    pub(super) fn selected_entry_index(&self) -> Option<usize> {
-        let filtered = self.filtered_indices();
-        filtered
-            .contains(&self.selected)
-            .then_some(self.selected)
-            .or_else(|| filtered.first().copied())
-    }
-}
-
-#[derive(Debug)]
-pub(super) struct ClientWorktreeRemoveOverlay {
-    pub(super) workspace_id: String,
-    pub(super) path: String,
-    pub(super) error: Option<String>,
-    pub(super) removing: bool,
-    pub(super) force_confirmation: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ClientContextMenuAction {
     Rename,
     Close,
-    NewWorktree,
-    OpenWorktree,
-    RemoveWorktree,
     NewTab,
     RenamePane,
     ClearPaneName,
@@ -516,14 +381,13 @@ pub(super) enum ClientContextMenuAction {
 pub(super) enum ClientContextMenuTarget {
     Workspace {
         workspace_id: String,
-        is_git: bool,
-        is_linked_worktree: bool,
-        has_worktree_children: bool,
         close_group: bool,
     },
     Tab {
         tab_id: String,
         workspace_id: String,
+        /// The boss's workspace (0665): no new tab, no close.
+        boss: bool,
     },
     Pane {
         pane_id: String,
@@ -531,6 +395,8 @@ pub(super) enum ClientContextMenuTarget {
         source_pane_id: Option<String>,
         has_manual_label: bool,
         right_click_passthrough: bool,
+        /// The boss's workspace (0665): no split, no close.
+        boss: bool,
     },
 }
 
@@ -565,16 +431,10 @@ pub(super) struct ClientConfirmCloseOverlay {
 
 #[derive(Debug)]
 pub(super) enum ClientShellOverlay {
-    Onboarding,
-    ProductAnnouncement(crate::app::state::ProductAnnouncementState),
-    ReleaseNotes(crate::app::state::ReleaseNotesState),
     Rename(ClientRenameOverlay),
     ConfirmClose(ClientConfirmCloseOverlay),
     Help(ClientHelpOverlay),
     Navigator(ClientNavigatorOverlay),
-    WorktreeCreate(ClientWorktreeCreateOverlay),
-    WorktreeOpen(ClientWorktreeOpenOverlay),
-    WorktreeRemove(ClientWorktreeRemoveOverlay),
     ContextMenu(ClientContextMenuOverlay),
     GlobalMenu(ClientGlobalMenuOverlay),
     Settings(ClientSettingsOverlay),
@@ -583,16 +443,10 @@ pub(super) enum ClientShellOverlay {
 impl ClientShellOverlay {
     pub(super) fn kind(&self) -> ClientShellOverlayKind {
         match self {
-            Self::Onboarding => ClientShellOverlayKind::Onboarding,
-            Self::ProductAnnouncement(_) => ClientShellOverlayKind::ProductAnnouncement,
-            Self::ReleaseNotes(_) => ClientShellOverlayKind::ReleaseNotes,
             Self::Rename(_) => ClientShellOverlayKind::Rename,
             Self::ConfirmClose(_) => ClientShellOverlayKind::ConfirmClose,
             Self::Help(_) => ClientShellOverlayKind::Help,
             Self::Navigator(_) => ClientShellOverlayKind::Navigator,
-            Self::WorktreeCreate(_) => ClientShellOverlayKind::WorktreeCreate,
-            Self::WorktreeOpen(_) => ClientShellOverlayKind::WorktreeOpen,
-            Self::WorktreeRemove(_) => ClientShellOverlayKind::WorktreeRemove,
             Self::ContextMenu(_) => ClientShellOverlayKind::ContextMenu,
             Self::GlobalMenu(_) => ClientShellOverlayKind::GlobalMenu,
             Self::Settings(_) => ClientShellOverlayKind::Settings,
@@ -603,29 +457,8 @@ impl ClientShellOverlay {
 #[derive(Debug)]
 pub(super) enum PendingEndpointKind {
     Generic,
-    ProductAnnouncementDismiss {
-        version: String,
-        id: String,
-    },
-    ReleaseNotesDismiss,
     PopupCommand,
     ReloadConfig,
-    IntegrationList,
-    IntegrationInstall,
-    PrepareWorktreeCreate {
-        workspace_id: String,
-    },
-    PrepareWorktreeOpen {
-        workspace_id: String,
-    },
-    PrepareWorktreeRemove {
-        workspace_id: String,
-    },
-    WorktreeCreate,
-    WorktreeOpen,
-    WorktreeRemove {
-        forced: bool,
-    },
     SelectionCopy,
     PaneScroll {
         pane_id: String,
@@ -922,7 +755,6 @@ pub(crate) struct ClientShellState {
     pub(super) popup_pending_deadline: Option<std::time::Instant>,
     pub(super) next_request_id: u64,
     pub(super) pending_requests: HashMap<String, PendingEndpointRequest>,
-    pub(super) pending_integration_installs: usize,
     pub(super) pending_notifications: Vec<ClientPendingNotification>,
     pub(super) visible_notification: Option<ClientVisibleNotification>,
     pub(super) queued_notifications: VecDeque<ClientVisibleNotification>,
@@ -938,31 +770,6 @@ pub(crate) struct ClientShellState {
     pub(super) config_diagnostic: Option<String>,
     pub(super) endpoint_error: Option<String>,
     pub(super) endpoint_error_deadline: Option<std::time::Instant>,
-    pub(super) dismissed_product_announcement: Option<(String, String)>,
-}
-
-pub(super) fn product_announcement_state(
-    announcement: &crate::protocol::ClientShellProductAnnouncement,
-) -> crate::app::state::ProductAnnouncementState {
-    crate::app::state::ProductAnnouncementState {
-        version: announcement.version.clone(),
-        id: announcement.id.clone(),
-        title: announcement.title.clone(),
-        body: announcement.body.clone(),
-        scroll: 0,
-        preview: announcement.preview,
-    }
-}
-
-pub(super) fn release_notes_state(
-    notes: &crate::protocol::ClientShellReleaseNotes,
-) -> crate::app::state::ReleaseNotesState {
-    crate::app::state::ReleaseNotesState {
-        version: notes.version.clone(),
-        body: notes.body.clone(),
-        scroll: 0,
-        preview: notes.preview,
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -976,9 +783,6 @@ impl ClientShellState {
     pub(crate) fn new(mut config: ClientShellConfig) -> Self {
         let preferences = config.preferences.clone();
         let local_config_diagnostic = config.startup_config_diagnostic.take();
-        let overlay = config
-            .startup_onboarding
-            .then_some(ClientShellOverlay::Onboarding);
         let sidebar_collapsed = preferences
             .sidebar_collapsed
             .unwrap_or(config.sidebar_start_collapsed);
@@ -1036,7 +840,7 @@ impl ClientShellState {
             navigate_workspace_id: None,
             pending_workspace_highlight: None,
             reveal_navigation_workspace: false,
-            overlay,
+            overlay: None,
             dock_focused: false,
             previous_pane_id: None,
             pane_mouse_gesture: None,
@@ -1070,7 +874,6 @@ impl ClientShellState {
             popup_pending_deadline: None,
             next_request_id: 1,
             pending_requests: HashMap::new(),
-            pending_integration_installs: 0,
             pending_notifications: Vec::new(),
             visible_notification: None,
             queued_notifications: VecDeque::new(),
@@ -1086,7 +889,6 @@ impl ClientShellState {
             local_config_diagnostic,
             endpoint_error: None,
             endpoint_error_deadline: None,
-            dismissed_product_announcement: None,
         }
     }
 
@@ -1185,17 +987,13 @@ impl ClientShellState {
         self.pane_scroll_targets.clear();
         self.popup_pending = false;
         self.popup_pending_deadline = None;
-        self.pending_integration_installs = 0;
         self.endpoint_notice_seen.clear();
         self.visible_endpoint_notice = None;
         self.endpoint_error = None;
         self.endpoint_error_deadline = None;
         self.navigate_workspace_id = None;
         self.pending_workspace_highlight = None;
-        self.overlay = self
-            .config
-            .startup_onboarding
-            .then_some(ClientShellOverlay::Onboarding);
+        self.overlay = None;
         self.previous_pane_id = None;
         self.pane_mouse_gesture = None;
         self.link_hover = None;
@@ -1215,7 +1013,6 @@ impl ClientShellState {
         self.copy_feedback = None;
         self.copy_feedback_deadline = None;
         self.host_mouse_pixels = None;
-        self.dismissed_product_announcement = None;
     }
 
     pub(super) fn apply_active_snapshot(
@@ -1444,61 +1241,6 @@ impl ClientShellState {
         self.pane_scroll_targets
             .retain(|pane_id, _| pane_exists(pane_id));
 
-        if !self.config.startup_onboarding {
-            match snapshot.product_announcement.as_ref() {
-                Some(announcement) => {
-                    let key = (announcement.version.clone(), announcement.id.clone());
-                    let already_open = matches!(
-                        self.overlay.as_ref(),
-                        Some(ClientShellOverlay::ProductAnnouncement(current))
-                            if current.version == announcement.version && current.id == announcement.id
-                    );
-                    let may_open = self.overlay.is_none()
-                        || matches!(
-                            self.overlay.as_ref(),
-                            Some(ClientShellOverlay::ProductAnnouncement(_))
-                        );
-                    if self.dismissed_product_announcement.as_ref() != Some(&key)
-                        && may_open
-                        && !already_open
-                    {
-                        self.overlay = Some(ClientShellOverlay::ProductAnnouncement(
-                            product_announcement_state(announcement),
-                        ));
-                    }
-                }
-                None if matches!(
-                    self.overlay.as_ref(),
-                    Some(ClientShellOverlay::ProductAnnouncement(_))
-                ) =>
-                {
-                    self.overlay = None;
-                    self.chrome_drag = None;
-                    self.dismissed_product_announcement = None;
-                }
-                None => {
-                    self.dismissed_product_announcement = None;
-                }
-            }
-        }
-        if let Some(ClientShellOverlay::ReleaseNotes(current)) = self.overlay.as_ref() {
-            match snapshot.release_notes.as_ref() {
-                Some(notes)
-                    if current.version != notes.version
-                        || current.body != notes.body
-                        || current.preview != notes.preview =>
-                {
-                    self.overlay =
-                        Some(ClientShellOverlay::ReleaseNotes(release_notes_state(notes)));
-                    self.chrome_drag = None;
-                }
-                None => {
-                    self.overlay = None;
-                    self.chrome_drag = None;
-                }
-                Some(_) => {}
-            }
-        }
         self.snapshot = Some(snapshot);
         self.reconcile_pending_workspace_highlight();
         let pending_surface = self.pending_pane_surface.take();
@@ -1592,15 +1334,7 @@ impl ClientShellState {
             }
             self.mode = ClientShellMode::Terminal;
             self.navigate_workspace_id = None;
-            if !matches!(
-                self.overlay.as_ref(),
-                Some(ClientShellOverlay::Onboarding | ClientShellOverlay::ProductAnnouncement(_))
-            ) {
-                self.overlay = self
-                    .config
-                    .startup_onboarding
-                    .then_some(ClientShellOverlay::Onboarding);
-            }
+            self.overlay = None;
             self.selection = None;
             self.last_pane_click = None;
             self.selection_autoscroll = None;

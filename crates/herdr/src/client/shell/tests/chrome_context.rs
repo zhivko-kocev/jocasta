@@ -248,24 +248,9 @@ fn context_menus_capture_stable_targets_and_route_actions() {
         Some(ClientShellOverlay::ContextMenu(menu)) => menu.items(),
         _ => panic!("workspace context menu"),
     };
-    assert!(workspace_items
-        .iter()
-        .any(|item| item.action == ClientContextMenuAction::NewWorktree));
+    assert_eq!(workspace_items.len(), 1);
+    assert_eq!(workspace_items[0].action, ClientContextMenuAction::Close);
     state.compose(106, 20).expect("workspace context menu");
-    let rename = state.hits.context_menu_rows[0].0;
-    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column: rename.x + 1,
-        row: rename.y,
-        modifiers: KeyModifiers::empty(),
-    })]);
-    assert!(matches!(
-        state.overlay,
-        Some(ClientShellOverlay::Rename(ClientRenameOverlay {
-            target: ClientRenameTarget::Workspace { ref workspace_id },
-            ..
-        })) if workspace_id == "ws_1"
-    ));
 
     state.overlay = None;
     state.compose(106, 20).expect("composed frame");
@@ -334,7 +319,7 @@ fn global_menu_opens_from_sidebar_and_routes_client_actions() {
     assert!(text.contains("settings"));
     assert!(text.contains("keybinds"));
     assert!(text.contains("reload config"));
-    assert!(text.contains("detach"));
+    assert!(text.contains("quit Jocasta"));
 
     let keybinds = state.hits.global_menu_rows[1].0;
     let help = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
@@ -345,13 +330,6 @@ fn global_menu_opens_from_sidebar_and_routes_client_actions() {
     })]);
     assert!(help.actions.is_empty());
     assert!(matches!(state.overlay, Some(ClientShellOverlay::Help(_))));
-
-    state.overlay = Some(ClientShellOverlay::GlobalMenu(ClientGlobalMenuOverlay {
-        highlighted: 3,
-    }));
-    let detach = state.handle_input_bytes(b"\r");
-    assert!(detach.detach);
-    assert!(state.overlay.is_none());
 }
 
 #[test]

@@ -333,7 +333,7 @@ impl HerdrPath {
         outcome: ClientShellInput,
         events: &mut Vec<ClientPaneInputEvent>,
     ) -> bool {
-        let mut owned = outcome.detach;
+        let mut owned = false;
         for request in outcome.requests {
             if let ClientMessage::ClientShellPaneInput { events: batch, .. } = request {
                 events.extend(batch);

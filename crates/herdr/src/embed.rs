@@ -297,6 +297,10 @@ pub(crate) fn server_stopped() {
 /// The command a key binds (`type = "plugin_action"`) to give the dock his keys; herdr's client takes it itself.
 pub const DOCK_COMMAND: &str = "jocasta.today";
 
+/// The command that closes Jocasta, which a key binds the same way; the client's menu runs it for "quit Jocasta"
+/// (0666).
+pub(crate) const QUIT_COMMAND: &str = "jocasta.quit";
+
 /// What a shell extension's key or paste did.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Reply {
@@ -315,7 +319,8 @@ pub struct Reply {
 pub trait ShellExtension: Send {
     /// A message from the server's extension: whether what it draws changed, and what goes back.
     fn message(&mut self, kind: &str, data: &str) -> Reply;
-    /// Whether the dock shows beside the panes of `workspace_id`, the focused workspace.
+    /// Whether the dock shows beside the panes of `workspace_id`, the focused workspace. The dock shows beside the
+    /// boss's workspace only, so this also marks it: his client may not close, split or add a tab to it (0665).
     fn docks(&self, workspace_id: &str) -> bool;
     /// Draws the dock in `area`; `focused` while it has his keys.
     fn draw_dock(&mut self, buffer: &mut Buffer, area: Rect, focused: bool);

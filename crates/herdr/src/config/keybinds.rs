@@ -353,15 +353,9 @@ pub struct Keybinds {
     pub navigate: NavigateKeybinds,
     pub help: ActionKeybinds,
     pub settings: ActionKeybinds,
-    pub new_workspace: ActionKeybinds,
-    pub new_worktree: ActionKeybinds,
-    pub open_worktree: ActionKeybinds,
-    pub remove_worktree: ActionKeybinds,
-    pub rename_workspace: ActionKeybinds,
     pub close_workspace: ActionKeybinds,
     pub workspace_picker: ActionKeybinds,
     pub goto: ActionKeybinds,
-    pub detach: ActionKeybinds,
     pub reload_config: ActionKeybinds,
     pub open_notification_target: ActionKeybinds,
     pub previous_workspace: ActionKeybinds,
@@ -536,15 +530,9 @@ impl Config {
             },
             help: empty_action!(),
             settings: empty_action!(),
-            new_workspace: empty_action!(),
-            new_worktree: empty_action!(),
-            open_worktree: empty_action!(),
-            remove_worktree: empty_action!(),
-            rename_workspace: empty_action!(),
             close_workspace: empty_action!(),
             workspace_picker: empty_action!(),
             goto: empty_action!(),
-            detach: empty_action!(),
             reload_config: empty_action!(),
             open_notification_target: empty_action!(),
             previous_workspace: empty_action!(),
@@ -665,15 +653,9 @@ impl Config {
             apply_navigate!(keybinds.navigate.pane_right, navigate_pane_right, source);
             apply_action!(keybinds.help, help, source);
             apply_action!(keybinds.settings, settings, source);
-            apply_action!(keybinds.new_workspace, new_workspace, source);
-            apply_action!(keybinds.new_worktree, new_worktree, source);
-            apply_action!(keybinds.open_worktree, open_worktree, source);
-            apply_action!(keybinds.remove_worktree, remove_worktree, source);
-            apply_action!(keybinds.rename_workspace, rename_workspace, source);
             apply_action!(keybinds.close_workspace, close_workspace, source);
             apply_action!(keybinds.workspace_picker, workspace_picker, source);
             apply_action!(keybinds.goto, goto, source);
-            apply_action!(keybinds.detach, detach, source);
             apply_action!(keybinds.reload_config, reload_config, source);
             apply_action!(
                 keybinds.open_notification_target,
@@ -1664,18 +1646,6 @@ next_tab = "prefix+n"
     }
 
     #[test]
-    fn new_worktree_defaults_to_prefix_shift_g() {
-        let kb = Config::default().keybinds();
-        assert_eq!(
-            binding_triggers(&kb.new_worktree),
-            vec![BindingTrigger::Prefix((
-                KeyCode::Char('g'),
-                KeyModifiers::SHIFT
-            ))]
-        );
-    }
-
-    #[test]
     fn goto_defaults_to_prefix_g() {
         let kb = Config::default().keybinds();
         assert_eq!(
@@ -1685,13 +1655,6 @@ next_tab = "prefix+n"
                 KeyModifiers::empty()
             ))]
         );
-    }
-
-    #[test]
-    fn open_and_remove_worktree_keybinds_are_unset_by_default() {
-        let kb = Config::default().keybinds();
-        assert!(kb.open_worktree.bindings.is_empty());
-        assert!(kb.remove_worktree.bindings.is_empty());
     }
 
     #[test]
@@ -2425,15 +2388,15 @@ switch_tab = "prefix+?"
             r#"
 [keys]
 next_tab = "prefix+n"
-new_workspace = "prefix+n"
+workspace_picker = "prefix+n"
 "#,
         )
         .unwrap();
         let diagnostics = config.collect_diagnostics();
         let kb = config.keybinds();
-        assert!(kb.next_tab.bindings.is_empty() || kb.new_workspace.bindings.is_empty());
+        assert!(kb.next_tab.bindings.is_empty() || kb.workspace_picker.bindings.is_empty());
         assert!(diagnostics.iter().any(|diag| {
-            diag.contains("kept keys.new_workspace") && diag.contains("disabled keys.next_tab")
+            diag.contains("kept keys.workspace_picker") && diag.contains("disabled keys.next_tab")
         }));
     }
 

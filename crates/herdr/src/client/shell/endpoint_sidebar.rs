@@ -1,4 +1,4 @@
-use super::render::{display_width, put_right_text, put_text, ShellRenderState};
+use super::render::{put_right_text, put_text, ShellRenderState};
 use super::*;
 
 pub(super) fn render_collapsed(
@@ -226,23 +226,7 @@ pub(super) fn render_expanded(
 
     let launcher_y = launcher_area.y;
     if config.mouse_capture {
-        let label = format!(" new · {}", active_endpoint_label(state));
-        hits.new_workspace = Rect::new(
-            launcher_area.x,
-            launcher_y,
-            display_width(&label).min(launcher_area.width),
-            u16::from(launcher_area.height > 0),
-        );
-        put_text(
-            buffer,
-            launcher_area.x,
-            launcher_y,
-            launcher_area.width,
-            &label,
-            Style::default().fg(palette.overlay0),
-        );
-        let attention = active_snapshot.is_some_and(super::global_menu::global_menu_attention);
-        let width = if attention { 8 } else { 6 }.min(launcher_area.width);
+        let width = 6.min(launcher_area.width);
         hits.global_launcher = Rect::new(
             launcher_area.right().saturating_sub(width),
             launcher_y,
@@ -253,12 +237,8 @@ pub(super) fn render_expanded(
             buffer,
             launcher_area,
             launcher_y,
-            if attention { "● menu" } else { "menu" },
-            Style::default().fg(if attention {
-                palette.accent
-            } else {
-                palette.overlay0
-            }),
+            "menu",
+            Style::default().fg(palette.overlay0),
         );
     }
     super::endpoint_agents::render_expanded(
@@ -285,12 +265,4 @@ pub(super) fn render_expanded(
         "«",
         Style::default().fg(palette.overlay0),
     );
-}
-
-fn active_endpoint_label<'a>(state: &'a ShellRenderState<'_>) -> &'a str {
-    state
-        .endpoints
-        .iter()
-        .find(|endpoint| &endpoint.endpoint_id == state.active_endpoint_id)
-        .map_or("Local", |endpoint| endpoint.label.as_str())
 }

@@ -646,7 +646,6 @@ impl ClientShellState {
                     &mut composed,
                     self.hits.global_launcher,
                     menu,
-                    snapshot,
                     &self.config.palette,
                 )?;
                 occlusion.cover(rendered.area);
@@ -656,7 +655,6 @@ impl ClientShellState {
                 let rendered = render::render_client_overlay(
                     &mut composed,
                     overlay,
-                    snapshot,
                     &self.endpoints,
                     &self.active_endpoint_id,
                     &self.config.keybinds,
@@ -671,8 +669,6 @@ impl ClientShellState {
                 self.hits.navigator_rows = rendered.navigator_rows;
                 self.hits.navigator_scrollbar = rendered.navigator_scrollbar;
                 self.hits.navigator_scroll_metrics = rendered.navigator_scroll_metrics;
-                self.hits.worktree_search = rendered.worktree_search;
-                self.hits.worktree_rows = rendered.worktree_rows;
                 self.hits.help_popup = rendered.help_popup;
                 self.hits.help_scrollbar = rendered.help_scrollbar;
                 self.hits.help_scroll_metrics = rendered.help_scroll_metrics;
@@ -680,14 +676,6 @@ impl ClientShellState {
                 self.hits.settings_popup = rendered.settings_popup;
                 self.hits.settings_tabs = rendered.settings_tabs;
                 self.hits.settings_choices = rendered.settings_choices;
-                self.hits.product_announcement_scrollbar = rendered.product_announcement_scrollbar;
-                self.hits.product_announcement_scroll_metrics =
-                    rendered.product_announcement_scroll_metrics;
-                self.hits.product_announcement_max_scroll =
-                    rendered.product_announcement_max_scroll;
-                self.hits.release_notes_scrollbar = rendered.release_notes_scrollbar;
-                self.hits.release_notes_scroll_metrics = rendered.release_notes_scroll_metrics;
-                self.hits.release_notes_max_scroll = rendered.release_notes_max_scroll;
                 rendered.cursor
             };
             frame.replace_from_ratatui_buffer_preserving_effects(&composed, cursor);
@@ -703,16 +691,6 @@ impl ClientShellState {
         }
         if let Some(ClientShellOverlay::Help(help)) = self.overlay.as_mut() {
             help.scroll = help.scroll.min(self.hits.help_max_scroll);
-        }
-        if let Some(ClientShellOverlay::ProductAnnouncement(announcement)) = self.overlay.as_mut() {
-            announcement.scroll = announcement
-                .scroll
-                .min(u16::try_from(self.hits.product_announcement_max_scroll).unwrap_or(u16::MAX));
-        }
-        if let Some(ClientShellOverlay::ReleaseNotes(notes)) = self.overlay.as_mut() {
-            notes.scroll = notes
-                .scroll
-                .min(u16::try_from(self.hits.release_notes_max_scroll).unwrap_or(u16::MAX));
         }
         if self.endpoint_status(&self.active_endpoint_id) != Some(ClientEndpointStatus::Online) {
             frame.cursor = None;

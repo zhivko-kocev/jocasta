@@ -654,17 +654,21 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0646](0646-readme-for-newcomers.md) | A README for newcomers, the reference in the manual | product | v1 | program | 2026-11-17 |  |
 | [0647](0647-deny-ignores-chrono-unmaintained.md) | cargo-deny ignores chrono's two "unmaintained" notices by ID | process | v1 | program | 2026-11-18 |  |
 | [0648](0648-audit-ignores-picomatch-redos.md) | CI's `bun audit` ignores picomatch's ReDoS advisory by ID | process | v1 | program | 2026-11-18 |  |
-| [0649](0649-herdr-fork-one-binary-one-server.md) | The herdr fork: one binary, one server | product | v1 | fork build | 2026-11-18 | 0659, 0661 |
+| [0649](0649-herdr-fork-one-binary-one-server.md) | The herdr fork: one binary, one server | product | v1 | fork build | 2026-11-18 | 0659, 0661, 0665, 0666 |
 | [0650](0650-omp-snapshot-replaces-his-omp-files.md) | The omp snapshot: setup writes Jocasta's omp files over his | product | v1 | fork build | 2026-11-18 |  |
 | [0651](0651-snapshot-settings-from-trials-on-omp-18-22-2.md) | The snapshot's settings come from trials on omp 18.22.2 | product, benchmark | v1 | fork build | 2026-11-19 | 0653 |
 | [0652](0652-benchmarks-on-his-pc-vm-removed.md) | The benchmarks run on his PC on his own omp; the VM is removed | process | v1 | fork build | 2026-11-18 | 0657 |
-| [0653](0653-omp-19-1-0-pinned.md) | omp 19.1.0 is the pinned omp | product, benchmark | v1 | fork build | 2026-11-21 |  |
+| [0653](0653-omp-19-1-0-pinned.md) | omp 19.1.0 is the pinned omp | product, benchmark | v1 | fork build | 2026-11-21 | 0663 |
 | [0654](0654-fork-build-review.md) | His review of the fork build: what stays as built | process, product | v1 | fork build | 2026-11-23 |  |
 | [0655](0655-normal-threads-on-opus-5-5-medium.md) | Normal threads on Opus 5.5 at medium | product | v1 | fork build | 2026-11-23 |  |
 | [0656](0656-url-2-5-9-before-its-seventh-day.md) | url 2.5.9 enters the lock before its seventh day | process | v1 | fork build | 2026-11-23 |  |
 | [0657](0657-vm-benchmarks-after-the-vm.md) | The VM's benchmarks after the VM | benchmark, process | v1 | fork build | 2026-11-23 |  |
 | [0658](0658-session-report-from-his-omp-history.md) | A report on his omp sessions: where the tokens went, what could be deterministic | process | v1 | fork build | 2026-11-23 |  |
-| [0659](0659-sidebar-without-spaces.md) | The sidebar without herdr's spaces section | product | v1 | fork build | 2026-11-23 |  |
+| [0659](0659-sidebar-without-spaces.md) | The sidebar without herdr's spaces section | product | v1 | fork build | 2026-11-23 | 0664 |
 | [0660](0660-a-click-on-a-today-row-acts-like-enter.md) | A click on a `today` row acts like Enter | product, ux | v1 | fork build | 2026-11-23 |  |
 | [0661](0661-bundled-conpty-runtime.md) | The Windows build ships Microsoft's ConPTY runtime, as herdr's does | product | v1 | fork build | 2026-11-23 |  |
 | [0662](0662-a-silent-service-is-shown-and-cut.md) | A service that stops answering is shown in the dock, and the boss's calls to it end | product | v1 | fork build | 2026-11-23 |  |
+| [0663](0663-omp-19-1-1-pinned.md) | omp 19.1.1 is the pinned omp | product, benchmark | v1 | fork build | 2026-11-23 |  |
+| [0664](0664-the-sidebar-strip-keeps-only-menu.md) | The sidebar's top strip keeps only `menu` | product, ux | v1 | fork build | 2026-11-23 |  |
+| [0665](0665-jocasta-owns-the-workspaces.md) | Jocasta owns the workspaces | product, ux | v1 | fork build | 2026-11-23 |  |
+| [0666](0666-herdrs-leftovers-pruned.md) | herdr's leftovers pruned, the menu and help in Jocasta's words | product, ux | v1 | fork build | 2026-11-23 |  |

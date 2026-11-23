@@ -121,7 +121,6 @@ impl ClientShellConfig {
             local_keys: config.keys.clone(),
             keybinding_source: ClientShellKeybindingSource::Local,
             prompt_new_tab_name: config.ui.prompt_new_tab_name,
-            prompt_new_workspace_name: config.ui.prompt_new_workspace_name,
             confirm_close: config.ui.confirm_close,
             mouse_capture: config.ui.mouse_capture,
             mouse_scroll_lines: config.ui.mouse_scroll_lines(),
@@ -130,21 +129,14 @@ impl ClientShellConfig {
             switch_ascii_input_source_in_prefix: config
                 .experimental
                 .switch_ascii_input_source_in_prefix,
-            local_config_path: crate::config::config_path(),
             preferences_path: None,
             preferences: preferences::ClientChromePreferences::default(),
             startup_config_diagnostic: None,
-            startup_onboarding: false,
         }
     }
 
     pub(crate) fn with_startup_config_diagnostic(mut self, diagnostic: Option<String>) -> Self {
         self.startup_config_diagnostic = diagnostic;
-        self
-    }
-
-    pub(crate) fn with_startup_onboarding(mut self, show: bool) -> Self {
-        self.startup_onboarding = show;
         self
     }
 
@@ -335,7 +327,6 @@ impl ClientShellConfig {
                 self.clipboard_toast_enabled = ui.toast.clipboard.enabled;
                 self.clipboard_toast_position = ui.toast.clipboard.position;
                 self.prompt_new_tab_name = ui.prompt_new_tab_name;
-                self.prompt_new_workspace_name = ui.prompt_new_workspace_name;
                 self.confirm_close = ui.confirm_close;
                 self.mouse_capture = ui.mouse_capture;
                 self.mouse_scroll_lines = ui.mouse_scroll_lines();

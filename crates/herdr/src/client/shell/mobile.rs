@@ -748,11 +748,6 @@ fn mobile_items(
     }
 
     items.push(MobileItem::section("spaces", palette));
-    items.push(MobileItem::action(
-        "  + new workspace",
-        ClientMobileTarget::NewWorkspace,
-        palette,
-    ));
     for endpoint in super::aggregate_navigation::cached_endpoint_snapshots(endpoints) {
         for entry in super::render::workspace_entries(endpoint.snapshot) {
             let Some(workspace) = endpoint.snapshot.workspaces.get(entry.index) else {
@@ -924,10 +919,7 @@ fn mobile_items(
     }
 
     items.push(MobileItem::section("menu", palette));
-    for (index, (label, _)) in super::global_menu::global_menu_items(snapshot)
-        .into_iter()
-        .enumerate()
-    {
+    for (index, (label, _)) in super::global_menu::GLOBAL_MENU_ITEMS.iter().enumerate() {
         items.push(MobileItem {
             lines: vec![Line::from(Span::styled(
                 format!("  {label}"),
@@ -1015,13 +1007,6 @@ impl ClientShellState {
                     self.navigate_workspace_id = None;
                 }
             }
-            Some(ClientMobileTarget::NewWorkspace) => {
-                self.mobile_switcher_suspended = true;
-                self.record_binding(
-                    crate::input::KeybindMatch::Action(crate::input::KeybindAction::NewWorkspace),
-                    outcome,
-                );
-            }
             Some(ClientMobileTarget::Workspace {
                 endpoint_id,
                 workspace_id,
@@ -1069,18 +1054,8 @@ impl ClientShellState {
                 );
             }
             Some(ClientMobileTarget::Menu(index)) => {
-                let actionable = self.snapshot.as_deref().is_some_and(|snapshot| {
-                    super::global_menu::global_menu_items(snapshot)
-                        .get(index)
-                        .is_some_and(|(_, action)| {
-                            *action != super::global_menu::ClientGlobalMenuAction::WhatsNew
-                                || snapshot.release_notes.is_some()
-                        })
-                });
-                if actionable {
-                    self.mobile_switcher_suspended = true;
-                    self.activate_global_menu_item(index, outcome);
-                }
+                self.mobile_switcher_suspended = true;
+                self.activate_global_menu_item(index, outcome);
             }
             None => {}
         }

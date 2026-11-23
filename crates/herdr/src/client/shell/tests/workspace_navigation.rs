@@ -250,23 +250,9 @@ fn foreign_preview_blocks_keyboard_actions_but_keeps_active_action_context() {
     preview_key(&mut state, b"\x1b[B");
     assert_selected(&state, &remote, "ws_2");
     assert_eq!(state.workspace_action_id().as_deref(), Some("ws_1"));
-    state.config.prompt_new_workspace_name = false;
-    let mut create = ClientShellInput::default();
-    state.record_binding(
-        crate::input::KeybindMatch::Action(crate::input::KeybindAction::NewWorkspace),
-        &mut create,
-    );
-    assert!(
-        matches!(create.actions.as_slice(), [ClientShellAction::Endpoint { endpoint_id: ClientEndpointId::Local, request, .. }]
-        if matches!(&request.method, crate::api::schema::Method::WorkspaceCreate(params) if params.source_workspace_id.as_deref() == Some("ws_1")))
-    );
     preview_key(&mut state, b"\x1b");
     assert!(state.navigate_workspace_id.is_none());
     assert_eq!(state.active_endpoint_id, ClientEndpointId::Local);
-    assert!(state.activate_endpoint_projection(&remote));
-    enter_navigation(&mut state);
-    preview_key(&mut state, b"W");
-    assert!(matches!(state.overlay, Some(ClientShellOverlay::Rename(_))));
 }
 
 #[test]

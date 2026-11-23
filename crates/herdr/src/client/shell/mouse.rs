@@ -511,146 +511,8 @@ impl ClientShellState {
             self.navigate_workspace_id = None;
             outcome.repaint = true;
         }
-        if matches!(self.overlay, Some(ClientShellOverlay::Onboarding)) {
-            if mouse.kind == MouseEventKind::Down(MouseButton::Left)
-                && super::contains(self.hits.overlay_primary, point)
-            {
-                self.complete_onboarding(outcome);
-            }
-            return;
-        }
         // Fork seam (FORK.md): Jocasta's dock.
         if self.overlay.is_none() && self.extension_takes_mouse(mouse, outcome) {
-            return;
-        }
-        if matches!(
-            self.overlay,
-            Some(ClientShellOverlay::ProductAnnouncement(_))
-        ) {
-            match mouse.kind {
-                MouseEventKind::Down(MouseButton::Left)
-                    if super::contains(self.hits.overlay_primary, point) =>
-                {
-                    self.dismiss_product_announcement(outcome);
-                }
-                MouseEventKind::Down(MouseButton::Left)
-                    if super::contains(self.hits.product_announcement_scrollbar, point) =>
-                {
-                    if let Some(metrics) = self.hits.product_announcement_scroll_metrics {
-                        if let Some(grab_row_offset) = crate::ui::scrollbar_thumb_grab_offset(
-                            metrics,
-                            self.hits.product_announcement_scrollbar,
-                            mouse.row,
-                        ) {
-                            self.chrome_drag =
-                                Some(ClientChromeDrag::ProductAnnouncementScrollbar {
-                                    grab_row_offset,
-                                });
-                        } else {
-                            let offset = crate::ui::scrollbar_offset_from_row(
-                                metrics,
-                                self.hits.product_announcement_scrollbar,
-                                mouse.row,
-                            );
-                            self.set_product_announcement_offset_from_bottom(offset);
-                            outcome.repaint = true;
-                        }
-                    }
-                }
-                MouseEventKind::Drag(MouseButton::Left) => {
-                    if let (
-                        Some(ClientChromeDrag::ProductAnnouncementScrollbar { grab_row_offset }),
-                        Some(metrics),
-                    ) = (
-                        self.chrome_drag.as_ref(),
-                        self.hits.product_announcement_scroll_metrics,
-                    ) {
-                        let offset = crate::ui::scrollbar_offset_from_drag_row(
-                            metrics,
-                            self.hits.product_announcement_scrollbar,
-                            mouse.row,
-                            *grab_row_offset,
-                        );
-                        self.set_product_announcement_offset_from_bottom(offset);
-                        outcome.repaint = true;
-                    }
-                }
-                MouseEventKind::Up(MouseButton::Left) => {
-                    self.chrome_drag = None;
-                }
-                MouseEventKind::ScrollUp => {
-                    self.scroll_product_announcement(-3);
-                    outcome.repaint = true;
-                }
-                MouseEventKind::ScrollDown => {
-                    self.scroll_product_announcement(3);
-                    outcome.repaint = true;
-                }
-                _ => {}
-            }
-            return;
-        }
-        if matches!(self.overlay, Some(ClientShellOverlay::ReleaseNotes(_))) {
-            let (close, track, metrics) = self
-                .current_release_notes_input_geometry()
-                .map(|(close, track, metrics)| (close, track, Some(metrics)))
-                .unwrap_or((
-                    self.hits.overlay_primary,
-                    (!self.hits.release_notes_scrollbar.is_empty())
-                        .then_some(self.hits.release_notes_scrollbar),
-                    self.hits.release_notes_scroll_metrics,
-                ));
-            match mouse.kind {
-                MouseEventKind::Down(MouseButton::Left) if super::contains(close, point) => {
-                    self.dismiss_release_notes(outcome);
-                }
-                MouseEventKind::Down(MouseButton::Left)
-                    if track.is_some_and(|track| super::contains(track, point)) =>
-                {
-                    if let (Some(track), Some(metrics)) = (track, metrics) {
-                        if let Some(grab_row_offset) =
-                            crate::ui::scrollbar_thumb_grab_offset(metrics, track, mouse.row)
-                        {
-                            self.chrome_drag =
-                                Some(ClientChromeDrag::ReleaseNotesScrollbar { grab_row_offset });
-                        } else {
-                            let offset =
-                                crate::ui::scrollbar_offset_from_row(metrics, track, mouse.row);
-                            self.set_release_notes_offset_from_bottom(offset);
-                            outcome.repaint = true;
-                        }
-                    }
-                }
-                MouseEventKind::Drag(MouseButton::Left) => {
-                    if let (
-                        Some(ClientChromeDrag::ReleaseNotesScrollbar { grab_row_offset }),
-                        Some(track),
-                        Some(metrics),
-                    ) = (self.chrome_drag.as_ref(), track, metrics)
-                    {
-                        let offset = crate::ui::scrollbar_offset_from_drag_row(
-                            metrics,
-                            track,
-                            mouse.row,
-                            *grab_row_offset,
-                        );
-                        self.set_release_notes_offset_from_bottom(offset);
-                        outcome.repaint = true;
-                    }
-                }
-                MouseEventKind::Up(MouseButton::Left) => {
-                    self.chrome_drag = None;
-                }
-                MouseEventKind::ScrollUp => {
-                    self.scroll_release_notes(-3);
-                    outcome.repaint = true;
-                }
-                MouseEventKind::ScrollDown => {
-                    self.scroll_release_notes(3);
-                    outcome.repaint = true;
-                }
-                _ => {}
-            }
             return;
         }
         if self.url_click_consumes_until_up {
@@ -898,13 +760,6 @@ impl ClientShellState {
                     }
                     return;
                 }
-                Some(
-                    ClientChromeDrag::ProductAnnouncementScrollbar { .. }
-                    | ClientChromeDrag::ReleaseNotesScrollbar { .. },
-                ) => {
-                    self.chrome_drag = None;
-                    return;
-                }
                 Some(ClientChromeDrag::PaneScrollbar {
                     hit,
                     grab_row_offset,
@@ -1122,9 +977,7 @@ impl ClientShellState {
                     }
                     ClientChromeDrag::AgentScrollbar { .. }
                     | ClientChromeDrag::HelpScrollbar { .. }
-                    | ClientChromeDrag::NavigatorScrollbar { .. }
-                    | ClientChromeDrag::ProductAnnouncementScrollbar { .. }
-                    | ClientChromeDrag::ReleaseNotesScrollbar { .. } => {}
+                    | ClientChromeDrag::NavigatorScrollbar { .. } => {}
                 }
                 return;
             }
@@ -1201,83 +1054,6 @@ impl ClientShellState {
             }
             return;
         }
-        if matches!(
-            self.overlay,
-            Some(
-                ClientShellOverlay::WorktreeCreate(_)
-                    | ClientShellOverlay::WorktreeOpen(_)
-                    | ClientShellOverlay::WorktreeRemove(_)
-            )
-        ) {
-            match mouse.kind {
-                MouseEventKind::ScrollUp
-                    if matches!(self.overlay, Some(ClientShellOverlay::WorktreeOpen(_))) =>
-                {
-                    self.move_worktree_open_selection(-1);
-                    outcome.repaint = true;
-                }
-                MouseEventKind::ScrollDown
-                    if matches!(self.overlay, Some(ClientShellOverlay::WorktreeOpen(_))) =>
-                {
-                    self.move_worktree_open_selection(1);
-                    outcome.repaint = true;
-                }
-                MouseEventKind::Down(MouseButton::Left) => {
-                    if super::contains(self.hits.overlay_cancel, point) {
-                        let busy =
-                            matches!(
-                                self.overlay,
-                                Some(
-                                    ClientShellOverlay::WorktreeCreate(
-                                        ClientWorktreeCreateOverlay { creating: true, .. }
-                                    ) | ClientShellOverlay::WorktreeOpen(
-                                        ClientWorktreeOpenOverlay { opening: true, .. }
-                                    ) | ClientShellOverlay::WorktreeRemove(
-                                        ClientWorktreeRemoveOverlay { removing: true, .. }
-                                    )
-                                )
-                            );
-                        if !busy {
-                            self.overlay = None;
-                            outcome.repaint = true;
-                        }
-                    } else if super::contains(self.hits.worktree_search, point) {
-                        if let Some(ClientShellOverlay::WorktreeOpen(open)) = self.overlay.as_mut()
-                        {
-                            open.search_focused = true;
-                            outcome.repaint = true;
-                        }
-                    } else if let Some((_, index)) = self
-                        .hits
-                        .worktree_rows
-                        .iter()
-                        .find(|(rect, _)| super::contains(*rect, point))
-                        .copied()
-                    {
-                        if let Some(ClientShellOverlay::WorktreeOpen(open)) = self.overlay.as_mut()
-                        {
-                            open.selected = index;
-                        }
-                        self.submit_worktree_open(outcome);
-                    } else if super::contains(self.hits.overlay_primary, point) {
-                        match self.overlay.as_ref() {
-                            Some(ClientShellOverlay::WorktreeCreate(_)) => {
-                                self.submit_worktree_create(outcome)
-                            }
-                            Some(ClientShellOverlay::WorktreeOpen(_)) => {
-                                self.submit_worktree_open(outcome)
-                            }
-                            Some(ClientShellOverlay::WorktreeRemove(_)) => {
-                                self.submit_worktree_remove(outcome)
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                _ => {}
-            }
-            return;
-        }
         if matches!(self.overlay, Some(ClientShellOverlay::Settings(_))) {
             if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
                 if let Some((_, section)) = self
@@ -1314,17 +1090,8 @@ impl ClientShellState {
                 } else if super::contains(self.hits.overlay_cancel, point)
                     || !super::contains(self.hits.settings_popup, point)
                 {
-                    let installing = matches!(
-                        self.overlay,
-                        Some(ClientShellOverlay::Settings(ClientSettingsOverlay {
-                            installing_integrations: true,
-                            ..
-                        }))
-                    );
-                    if !installing {
-                        self.cancel_settings_overlay();
-                        outcome.repaint = true;
-                    }
+                    self.cancel_settings_overlay();
+                    outcome.repaint = true;
                 }
             }
             return;
@@ -1755,15 +1522,6 @@ impl ClientShellState {
                 if super::contains(self.hits.global_launcher, point) {
                     self.toggle_global_menu();
                     outcome.repaint = true;
-                    return;
-                }
-                if super::contains(self.hits.new_workspace, point) {
-                    self.record_binding(
-                        crate::input::KeybindMatch::Action(
-                            crate::input::KeybindAction::NewWorkspace,
-                        ),
-                        outcome,
-                    );
                     return;
                 }
                 if super::contains(self.hits.new_tab, point) {

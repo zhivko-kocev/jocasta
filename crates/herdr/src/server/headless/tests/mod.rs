@@ -1029,7 +1029,6 @@ async fn client_shell_receives_metadata_then_shell_free_pane_surface() {
         id: "client-shell".into(),
         title: "Client shell".into(),
         body: "announcement".into(),
-        scroll: 0,
         preview: true,
     });
     server.server_config_diagnostic_without_keybindings = Some("endpoint config warning".into());

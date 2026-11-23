@@ -703,10 +703,6 @@ pub(super) fn finish_client_shell_input(
     scheduled_activation: &mut Option<ClientLoopEvent>,
 ) -> Result<bool, ClientError> {
     apply_client_shell_input_source_changes(state, prefix_input_source);
-    if outcome.detach {
-        let _ = write_to_server(endpoints, &ClientMessage::Detach);
-        return Ok(true);
-    }
     if outcome.resize {
         let shell = state.shell.as_ref().expect("shell mode remains active");
         let resize = client_shell_resize_message(

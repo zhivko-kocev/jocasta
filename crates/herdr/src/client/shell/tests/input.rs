@@ -221,7 +221,9 @@ fn client_shell_graphics_follow_final_shell_origin_and_local_overlay_visibility(
     assert!(visible.contains("a=t,t=d"));
     assert!(visible.contains("\u{1b}[2;27H"));
 
-    state.overlay = Some(ClientShellOverlay::Onboarding);
+    state.overlay = Some(ClientShellOverlay::GlobalMenu(ClientGlobalMenuOverlay {
+        highlighted: 0,
+    }));
     let uncovered = state.compose(106, 20).expect("overlay frame");
     assert!(
         !String::from_utf8_lossy(&uncovered.graphics.clone().into_inline_bytes()).contains("a=d")
@@ -747,10 +749,7 @@ fn shell_targets_unconsumed_input_and_keeps_prefix_local() {
             ..
         }] if *modifiers == KeyModifiers::ALT.bits()
     ));
-    assert!(!state.handle_input_bytes(&[0x02]).detach);
-    let detach = state.handle_input_bytes(b"q");
-    assert!(detach.detach);
-    assert!(detach.requests.is_empty());
+    assert!(state.handle_input_bytes(&[0x02]).requests.is_empty());
 }
 
 #[test]
@@ -985,23 +984,6 @@ fn report_all_kitty_host_state(snapshot: crate::protocol::ClientShellSnapshot) -
     state.set_snapshot(Box::new(snapshot));
     state.set_pane_surface(surface());
     state
-}
-
-#[test]
-fn plain_text_after_the_prefix_runs_the_prefix_binding_on_a_report_all_host() {
-    // Prefix as a key report, then a plain `q` (Tern, IME commit).
-    let mut state = report_all_kitty_host_state(snapshot());
-    let _ = state.handle_input_bytes(b"\x1b[98;5u");
-    assert_eq!(state.mode, ClientShellMode::Prefix);
-    let detach = state.handle_input_bytes(b"q");
-    assert!(detach.detach, "plain q after a reported prefix must detach");
-    assert!(pane_text_commits(&detach).is_empty());
-
-    // Raw prefix byte and the key in one write (Ghostty `text:` bind).
-    let mut state = report_all_kitty_host_state(snapshot());
-    let detach = state.handle_input_bytes(b"\x02q");
-    assert!(detach.detach, "one-write ^B q must detach");
-    assert!(pane_text_commits(&detach).is_empty());
 }
 
 #[test]

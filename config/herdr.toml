@@ -2,9 +2,6 @@
 # ~/.jocasta/agent/herdr.toml; when that file differs from this one, setup shows the diff and replaces it after `y`
 # (0440). The herdr built into `jocasta` reads it there (HERDR_CONFIG_PATH still wins); it checks for no updates.
 
-# No first-run overlay: `jocasta setup` already installs herdr's omp integration.
-onboarding = false
-
 [session]
 # Restored panes come back as shells; the service starts omp in them again with each pane's
 # `--config` (the boss's boss.yml, a thread's project overlay), which herdr's own resume drops.
@@ -79,9 +76,6 @@ tab_bar_right_separator = " · "
 # asks, "plan ready", "review ready"), so they get the full width (UX-04). The service reports
 # `$model`, `$cost` and the state labels with pane.report_metadata (0402).
 rows = [["state_icon", "workspace", "$model", "$cost"], ["state_text"]]
-
-[ui.sidebar.spaces]
-rows = [["state_icon", "workspace", "$running"], ["branch", "git_status"]]
 
 [ui.toast]
 # The service's notifications go to Windows' notification service through herdr (0407, 0554).

@@ -89,8 +89,8 @@ mod tests {
         )
         .unwrap();
 
-        update_file_at(&path, "onboarding setting", |content| {
-            crate::config::upsert_top_level_bool(content, "onboarding", false)
+        update_file_at(&path, "toast setting", |content| {
+            crate::config::upsert_section_bool(content, "ui.toast", "enabled", false)
         })
         .unwrap();
 

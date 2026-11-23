@@ -15,7 +15,11 @@ fn clipboard_image_targets_the_focused_pane_or_active_popup() {
     state.mode = ClientShellMode::Prefix;
     assert_eq!(state.clipboard_image_target(), None);
     state.mode = ClientShellMode::Terminal;
-    state.overlay = Some(ClientShellOverlay::Onboarding);
+    state.overlay = Some(ClientShellOverlay::Help(ClientHelpOverlay {
+        query: TextEditor::default(),
+        search_focused: false,
+        scroll: 0,
+    }));
     assert_eq!(state.clipboard_image_target(), None);
     state.overlay = None;
 
@@ -26,8 +30,6 @@ fn clipboard_image_targets_the_focused_pane_or_active_popup() {
             "terminal-popup".into()
         ))
     );
-    state.overlay = Some(ClientShellOverlay::Onboarding);
-    assert_eq!(state.clipboard_image_target(), None);
 }
 
 #[test]
@@ -42,39 +44,6 @@ fn modal_paste_target_requires_a_focused_editable_client_field() {
             pane_id: "pane_1".into(),
         },
     }));
-    assert!(state.modal_paste_target_active());
-
-    state.overlay = Some(ClientShellOverlay::WorktreeCreate(
-        ClientWorktreeCreateOverlay {
-            source_workspace_id: "ws_1".into(),
-            repo_name: "repo".into(),
-            branch: TextEditor::default(),
-            checkout_path: String::new(),
-            error: None,
-            creating: true,
-        },
-    ));
-    assert!(!state.modal_paste_target_active());
-    if let Some(ClientShellOverlay::WorktreeCreate(create)) = state.overlay.as_mut() {
-        create.creating = false;
-    }
-    assert!(state.modal_paste_target_active());
-
-    state.overlay = Some(ClientShellOverlay::WorktreeOpen(
-        ClientWorktreeOpenOverlay {
-            source_workspace_id: "ws_1".into(),
-            entries: Vec::new(),
-            selected: 0,
-            query: TextEditor::default(),
-            search_focused: false,
-            error: None,
-            opening: false,
-        },
-    ));
-    assert!(!state.modal_paste_target_active());
-    if let Some(ClientShellOverlay::WorktreeOpen(open)) = state.overlay.as_mut() {
-        open.search_focused = true;
-    }
     assert!(state.modal_paste_target_active());
 
     state.overlay = Some(ClientShellOverlay::Navigator(ClientNavigatorOverlay {

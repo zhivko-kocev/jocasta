@@ -13,7 +13,7 @@ Jocasta is a work surface around your daily omp, in three parts (0386, 0392, 055
 ## Prerequisites
 
 - Windows 11 (Linux and macOS builds exist; the test suite passes there, the builds themselves are untested; see below).
-- omp on PATH, signed in (`omp`, then `/login`; 0386). This build is checked against omp 19.1.0 (0535, 0623; the fork build moved the pin). Dictation is omp's own: omp downloads its speech model on first use or with `omp setup speech` (0556).
+- omp on PATH, signed in (`omp`, then `/login`; 0386). This build is checked against omp 19.1.1 (0535, 0623, 0663; the fork build moved the pin). Dictation is omp's own: omp downloads its speech model on first use or with `omp setup speech` (0556).
 - [mise](https://mise.jdx.dev), optional: with it, setup pins hunk and gh (0476, 0542).
 
 ## Install
@@ -57,6 +57,8 @@ After upgrading, run `jocasta setup` once: this build removes the old herdr plug
 ## Daily use
 
 Run `jocasta` in a terminal. It starts the Jocasta service when none answers and waits for it (a hung one is ended after 15 s, herdr's session and its panes spared, and replaced; 0565, 0582), then attaches herdr's client to session `jocasta`; if the service stops while starting, `jocasta` prints its last error and "jocasta: run `jocasta diagnose` for the full log." and exits 1 (0582). The boss pane runs omp with the boss manual and continues where it was (0424), with the `today` dock beside it (boss 65 / `today` 35; 0553), drawn by herdr's client in the boss's workspace. Ask the boss for a thread in a project, press Ctrl+B then Alt+N (pick the project, write the brief), or run `jocasta thread new`; it opens a worktree workspace, plans first, and you approve the plan in its pane. Each thread runs with `--warn-cost 50` (0541) and can carry `done_when` commands its review runs (0540); it ends a task with `report_result` (0539), and its `check` runs the project's checks once per git tree (0542, 0546). When a task ends, hunk opens beside it with the reviewer's notes (0394); `thread_finish` merges it or opens a PR (0426). The boss's `big_picture_review` answers at once ("Started acme-api's big-picture review; its result comes as an [event].") and its result reaches the boss later as one `[event]` line; one runs per project at a time (0577).
+
+The sidebar lists the agents, Jocasta's threads; its top strip holds only `menu` (0659, 0664). Jocasta makes every workspace: herdr's own new workspace, git worktree and workspace-rename actions are gone, with their keys (Ctrl+B then Shift+N, Shift+G, Shift+W). On the boss's workspace your close workspace, new tab (the key and the tab bar's `+`), close tab, split and close pane do nothing but say "Jocasta owns this workspace: it can't be closed, split or given tabs."; other workspaces keep tabs, splits and close, so a shell beside a thread is one split away (0665). `menu` offers settings, keybinds, reload config and "quit Jocasta", the same as Ctrl+B then Alt+Q; herdr's detach (Ctrl+B then q) is gone. Help (Ctrl+B then ?) lists Jocasta's keys first (0666).
 
 `thread_status` and `jocasta thread list` give each thread's ledger line, such as `spend $1.84 · peak context 41% (82k of 200k) · cache read 71% · 3 re-reads · 1 repeated call · 1 cache miss · 2 compactions` (0546). Requests are every assistant message and every side call omp records (`model_usage`); a cache miss is a cache write of 10,000 tokens or more after more than 5 minutes without a request on the same provider and model; compactions are omp's own, not Jocasta's `/handoff` (0582).
 

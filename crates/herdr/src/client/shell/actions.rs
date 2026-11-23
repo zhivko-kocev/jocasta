@@ -7,9 +7,6 @@ impl ClientShellState {
         outcome: &mut ClientShellInput,
     ) {
         match binding {
-            crate::input::KeybindMatch::Action(crate::input::KeybindAction::Detach) => {
-                outcome.detach = true;
-            }
             crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleSidebar) => {
                 self.sidebar_collapsed = !self.sidebar_collapsed;
                 self.sidebar_collapsed_manual = true;
@@ -21,26 +18,12 @@ impl ClientShellState {
             }
             crate::input::KeybindMatch::Action(action) => {
                 if self.workspace_preview_action_blocked()
-                    && matches!(
-                        action,
-                        crate::input::KeybindAction::RenameWorkspace
-                            | crate::input::KeybindAction::CloseWorkspace
-                    )
+                    && action == crate::input::KeybindAction::CloseWorkspace
                 {
                     self.receive_endpoint_unavailable(
-                        "Select an available workspace and press Enter before renaming or closing it"
-                            .into(),
+                        "Select an available workspace and press Enter before closing it".into(),
                     );
                     outcome.repaint = true;
-                    return;
-                }
-                if matches!(
-                    action,
-                    crate::input::KeybindAction::NewWorktree
-                        | crate::input::KeybindAction::OpenWorktree
-                        | crate::input::KeybindAction::RemoveWorktree
-                ) {
-                    self.begin_worktree_action(action, outcome);
                     return;
                 }
                 if action == crate::input::KeybindAction::OpenNavigator {
@@ -80,31 +63,6 @@ impl ClientShellState {
                     outcome.resize = true;
                     return;
                 }
-                if action == crate::input::KeybindAction::NewWorkspace {
-                    if self.config.prompt_new_workspace_name {
-                        self.open_new_workspace_overlay();
-                    } else {
-                        self.push_endpoint_method(
-                            crate::api::schema::Method::WorkspaceCreate(
-                                crate::api::schema::WorkspaceCreateParams {
-                                    source_workspace_id: self.workspace_action_id(),
-                                    cwd: None,
-                                    focus: true,
-                                    label: None,
-                                    env: Default::default(),
-                                },
-                            ),
-                            outcome,
-                        );
-                    }
-                    outcome.repaint = true;
-                    return;
-                }
-                if action == crate::input::KeybindAction::RenameWorkspace {
-                    self.open_rename_workspace_overlay();
-                    outcome.repaint = true;
-                    return;
-                }
                 if action == crate::input::KeybindAction::CloseWorkspace {
                     if let Some(workspace_id) = self.workspace_action_id() {
                         self.request_workspace_close(workspace_id, None, outcome);
@@ -134,6 +92,15 @@ impl ClientShellState {
                 }
                 if action == crate::input::KeybindAction::NewTab && self.config.prompt_new_tab_name
                 {
+                    if let Some(workspace_id) = self
+                        .snapshot
+                        .as_deref()
+                        .and_then(|snapshot| snapshot.focused_workspace_id.clone())
+                    {
+                        if self.refuse_on_boss(&workspace_id, outcome) {
+                            return;
+                        }
+                    }
                     self.open_new_tab_overlay();
                     outcome.repaint = true;
                     return;
@@ -363,6 +330,11 @@ impl ClientShellState {
         kind: PendingEndpointKind,
         outcome: &mut ClientShellInput,
     ) -> bool {
+        if let Some(workspace_id) = self.guarded_workspace(&method) {
+            if self.refuse_on_boss(&workspace_id, outcome) {
+                return false;
+            }
+        }
         let changes_focus = match &method {
             crate::api::schema::Method::WorkspaceFocus(_)
             | crate::api::schema::Method::TabFocus(_)
@@ -574,51 +546,6 @@ impl ClientShellState {
         match pending.kind {
             PendingEndpointKind::Generic => {}
             PendingEndpointKind::PaneLinkResolve { .. } => unreachable!("handled above"),
-            PendingEndpointKind::ProductAnnouncementDismiss { version, id } => {
-                return match result {
-                    Ok(_) => (false, Vec::new()),
-                    Err(_) => {
-                        let key = (version.clone(), id.clone());
-                        if self.dismissed_product_announcement.as_ref() == Some(&key) {
-                            self.dismissed_product_announcement = None;
-                        }
-                        if self.overlay.is_none() {
-                            if let Some(announcement) = self
-                                .snapshot
-                                .as_deref()
-                                .and_then(|snapshot| snapshot.product_announcement.as_ref())
-                                .filter(|announcement| {
-                                    announcement.version == version && announcement.id == id
-                                })
-                            {
-                                self.overlay = Some(ClientShellOverlay::ProductAnnouncement(
-                                    product_announcement_state(announcement),
-                                ));
-                            }
-                        }
-                        (true, Vec::new())
-                    }
-                };
-            }
-            PendingEndpointKind::ReleaseNotesDismiss => {
-                return match result {
-                    Ok(_) => (false, Vec::new()),
-                    Err(_) => {
-                        if self.overlay.is_none() {
-                            if let Some(notes) = self
-                                .snapshot
-                                .as_deref()
-                                .and_then(|snapshot| snapshot.release_notes.as_ref())
-                            {
-                                self.overlay = Some(ClientShellOverlay::ReleaseNotes(
-                                    release_notes_state(notes),
-                                ));
-                            }
-                        }
-                        (true, Vec::new())
-                    }
-                };
-            }
             PendingEndpointKind::PopupCommand => {
                 return match result {
                     Ok(_) => {
@@ -835,15 +762,6 @@ impl ClientShellState {
                     Err(_) => true,
                 };
                 return (repaint, Vec::new());
-            }
-            kind @ (PendingEndpointKind::IntegrationList
-            | PendingEndpointKind::IntegrationInstall) => {
-                return self.handle_settings_endpoint_result(kind, result);
-            }
-            kind => {
-                let mut outcome = ClientShellInput::default();
-                let repaint = self.handle_worktree_endpoint_result(kind, result, &mut outcome);
-                return (repaint || outcome.repaint, outcome.actions);
             }
         }
         let repaint = match result {

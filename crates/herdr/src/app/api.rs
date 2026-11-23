@@ -1416,7 +1416,6 @@ mod tests {
             id: "client-shell".into(),
             title: "Client shell".into(),
             body: "announcement".into(),
-            scroll: 0,
             preview: true,
         });
 

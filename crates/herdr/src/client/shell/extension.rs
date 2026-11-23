@@ -13,6 +13,11 @@ const DOCK_PERCENT: u32 = 35;
 const DOCK_MIN: u16 = 24;
 const PANES_MIN: u16 = 40;
 
+/// Whether `workspace_id` is the boss's workspace, which Jocasta's extension says it docks beside (0665).
+pub(super) fn is_boss_workspace(workspace_id: &str) -> bool {
+    crate::embed::shell_docks(workspace_id)
+}
+
 impl ClientShellState {
     /// `layout` with the dock carved from the right of its pane area, where the focused workspace shows it.
     pub(super) fn with_dock(&self, mut layout: ClientShellLayout) -> ClientShellLayout {
@@ -49,6 +54,56 @@ impl ClientShellState {
         if !self.hits.dock.is_empty() && !self.dock_focused {
             self.dock_focused = true;
             outcome.repaint = true;
+        }
+    }
+
+    /// 0665: his client may not close, split or add a tab to the boss's workspace (the one the dock shows beside);
+    /// says so in a short notice and returns true when `workspace_id` is it. Jocasta's own calls don't pass here.
+    pub(super) fn refuse_on_boss(
+        &mut self,
+        workspace_id: &str,
+        outcome: &mut ClientShellInput,
+    ) -> bool {
+        if !is_boss_workspace(workspace_id) {
+            return false;
+        }
+        outcome.repaint |= self.push_endpoint_notice(
+            ClientEndpointNoticeKind::Rejected,
+            "boss_workspace",
+            "Jocasta's workspace",
+            "Jocasta owns this workspace: it can't be closed, split or given tabs.",
+        );
+        true
+    }
+
+    /// The workspace `method` would close, split or add a tab to; `None` for any other method.
+    pub(super) fn guarded_workspace(&self, method: &crate::api::schema::Method) -> Option<String> {
+        use crate::api::schema::Method;
+        let snapshot = self.snapshot.as_deref()?;
+        let pane_workspace = |pane_id: &str| {
+            snapshot
+                .panes
+                .iter()
+                .find(|pane| pane.pane_id == pane_id)
+                .map(|pane| pane.workspace_id.clone())
+        };
+        match method {
+            Method::WorkspaceClose(params) => Some(params.workspace_id.clone()),
+            Method::TabCreate(params) => params
+                .workspace_id
+                .clone()
+                .or_else(|| snapshot.focused_workspace_id.clone()),
+            Method::PaneSplit(params) => params
+                .workspace_id
+                .clone()
+                .or_else(|| params.target_pane_id.as_deref().and_then(pane_workspace)),
+            Method::PaneClose(target) => pane_workspace(&target.pane_id),
+            Method::TabClose(target) => snapshot
+                .tabs
+                .iter()
+                .find(|tab| tab.tab_id == target.tab_id)
+                .map(|tab| tab.workspace_id.clone()),
+            _ => None,
         }
     }
 

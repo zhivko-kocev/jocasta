@@ -30,7 +30,13 @@ pub(crate) fn render_tab_bar(
         .collect::<Vec<_>>();
     let content = tab_bar_content_area(snapshot, area);
     let mouse_chrome = config.mouse_capture;
-    let new_tab_width = if mouse_chrome { NEW_TAB_WIDTH } else { 0 };
+    // 0665: no `+` on the boss's workspace.
+    let new_tab_button = mouse_chrome
+        && !snapshot
+            .focused_workspace_id
+            .as_deref()
+            .is_some_and(super::extension::is_boss_workspace);
+    let new_tab_width = if new_tab_button { NEW_TAB_WIDTH } else { 0 };
     let desired_total = desired_widths
         .iter()
         .copied()
@@ -149,16 +155,18 @@ pub(crate) fn render_tab_bar(
                 })
                 .bg(palette.surface0),
         );
-        hits.new_tab = Rect::new(
-            hits.tab_scroll_right.right(),
-            area.y,
-            content
-                .right()
-                .saturating_sub(hits.tab_scroll_right.right())
-                .min(NEW_TAB_WIDTH),
-            1,
-        );
-    } else if mouse_chrome {
+        if new_tab_button {
+            hits.new_tab = Rect::new(
+                hits.tab_scroll_right.right(),
+                area.y,
+                content
+                    .right()
+                    .saturating_sub(hits.tab_scroll_right.right())
+                    .min(NEW_TAB_WIDTH),
+                1,
+            );
+        }
+    } else if new_tab_button {
         hits.new_tab = Rect::new(
             x.min(content.right()),
             area.y,
@@ -166,7 +174,7 @@ pub(crate) fn render_tab_bar(
             1,
         );
     }
-    if mouse_chrome {
+    if new_tab_button {
         put_text(
             buffer,
             hits.new_tab.x,

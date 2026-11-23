@@ -494,7 +494,6 @@ impl App {
                     id: announcement.id,
                     title: announcement.title,
                     body: announcement.body,
-                    scroll: 0,
                     preview: announcement.preview,
                 }
             }),
@@ -1637,7 +1636,7 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(
             &path,
-            "[terminal]\ndefault_shell = \"nu\"\nshell_mode = \"non_login\"\nnew_cwd = \"home\"\n[keys]\nnew_workspace = \"prefix+m\"\nprefix = \"ctrl+a\"\n[update]\nversion_check = false\nmanifest_check = false\n[server]\nheadless_cols = 160\nheadless_rows = 50\n[ui]\nagent_panel_sort = \"priority\"\n[ui.toast]\ndelivery = \"herdr\"\n",
+            "[terminal]\ndefault_shell = \"nu\"\nshell_mode = \"non_login\"\nnew_cwd = \"home\"\n[keys]\nworkspace_picker = \"prefix+m\"\nprefix = \"ctrl+a\"\n[update]\nversion_check = false\nmanifest_check = false\n[server]\nheadless_cols = 160\nheadless_rows = 50\n[ui]\nagent_panel_sort = \"priority\"\n[ui.toast]\ndelivery = \"herdr\"\n",
         )
         .unwrap();
         std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
@@ -1654,7 +1653,7 @@ mod tests {
         assert!(app
             .state
             .keybinds
-            .new_workspace
+            .workspace_picker
             .matches_prefix(&KeyEvent::new(KeyCode::Char('m'), KeyModifiers::empty())));
         assert_eq!(
             app.state.toast_config.delivery,
@@ -1895,7 +1894,7 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(
             &path,
-            "[keys]\nnew_workspace = \"wat\"\n[ui.toast]\ndelivery = \"terminal\"\n",
+            "[keys]\nworkspace_picker = \"wat\"\n[ui.toast]\ndelivery = \"terminal\"\n",
         )
         .unwrap();
         std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
@@ -1906,10 +1905,10 @@ mod tests {
 
         assert_eq!(report.status, crate::config::ConfigReloadStatus::Partial);
         assert!(report.diagnostics.iter().any(|diagnostic| {
-            diagnostic.contains("keys.new_workspace") && diagnostic.contains("disabling binding")
+            diagnostic.contains("keys.workspace_picker") && diagnostic.contains("disabling binding")
         }));
         assert_eq!(app.state.prefix_keys, original_prefix);
-        assert!(app.state.keybinds.new_workspace.bindings.is_empty());
+        assert!(app.state.keybinds.workspace_picker.bindings.is_empty());
         assert_eq!(
             app.state.toast_config.delivery,
             crate::config::ToastDelivery::Terminal
@@ -1989,7 +1988,7 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(
             &path,
-            "[keys]\nnew_workspace = \"prefix+m\"\n[ui.toast]\ndelivery = \"desktop\"\n",
+            "[keys]\nworkspace_picker = \"prefix+m\"\n[ui.toast]\ndelivery = \"desktop\"\n",
         )
         .unwrap();
         std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
@@ -2006,7 +2005,7 @@ mod tests {
         assert!(app
             .state
             .keybinds
-            .new_workspace
+            .workspace_picker
             .matches_prefix(&KeyEvent::new(KeyCode::Char('m'), KeyModifiers::empty())));
         assert_eq!(
             app.state.toast_config.delivery,
@@ -2054,18 +2053,18 @@ mod tests {
         let _guard = config_env_lock().lock().unwrap();
         let path = temp_config_path("reload-config-invalid-toml");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, "[keys\nnew_workspace = \"g\"\n").unwrap();
+        std::fs::write(&path, "[keys\nworkspace_picker = \"g\"\n").unwrap();
         std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
 
         let mut app = test_app();
         let original_prefix = app.state.prefix_keys.clone();
-        let original_keybinds = app.state.keybinds.new_workspace.clone();
+        let original_keybinds = app.state.keybinds.workspace_picker.clone();
         let original_toast_delivery = app.state.toast_config.delivery;
         let report = app.reload_config();
 
         assert_eq!(report.status, crate::config::ConfigReloadStatus::Failed);
         assert_eq!(app.state.prefix_keys, original_prefix);
-        assert_eq!(app.state.keybinds.new_workspace, original_keybinds);
+        assert_eq!(app.state.keybinds.workspace_picker, original_keybinds);
         assert_eq!(app.state.toast_config.delivery, original_toast_delivery);
         assert!(app
             .state

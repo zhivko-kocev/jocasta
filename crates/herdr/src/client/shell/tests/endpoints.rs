@@ -674,7 +674,11 @@ fn live_catalog_active_removal_does_not_retain_remote_projection_or_input() {
     assert!(state.activate_endpoint_projection(&remote));
     state.set_pane_surface(surface());
     state.mode = ClientShellMode::Prefix;
-    state.overlay = Some(ClientShellOverlay::Onboarding);
+    state.overlay = Some(ClientShellOverlay::Help(ClientHelpOverlay {
+        query: TextEditor::default(),
+        search_focused: false,
+        scroll: 0,
+    }));
     state.select_unavailable_local();
     state.retire_endpoint(&remote);
     state.set_endpoint_catalog(&[]);
@@ -1740,7 +1744,6 @@ fn disconnected_active_endpoint_freezes_surface_and_marks_cached_ui_stale() {
     let mut remote_surface = surface();
     remote_surface.boot_id = "remote-boot".into();
     state.set_pane_surface(remote_surface);
-    state.pending_integration_installs = 2;
 
     state.mark_endpoint_disconnected(&endpoint_id);
     let frame = state.compose(100, 28).expect("frozen endpoint frame");
@@ -1755,7 +1758,6 @@ fn disconnected_active_endpoint_freezes_surface_and_marks_cached_ui_stale() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert_eq!(state.pending_integration_installs, 0);
     assert_eq!(
         state.endpoint_status(&endpoint_id),
         Some(ClientEndpointStatus::Reconnecting)

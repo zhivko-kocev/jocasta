@@ -70,10 +70,6 @@ mod worktree;
 const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Place this file at ~/.config/herdr/config.toml
 
-# Show first-run notification setup on startup.
-# Missing also shows onboarding; set false after you've chosen.
-# onboarding = true
-
 [theme]
 # Built-in themes: catppuccin, terminal, tokyo-night, dracula, nord,
 #                  gruvbox, one-dark, solarized, kanagawa, rose-pine,
@@ -137,16 +133,10 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Prefix-mode actions
 # help = "prefix+?"
 # settings = "prefix+s"
-# detach = "prefix+q"
 # reload_config = "prefix+shift+r"
 # open_notification_target = "prefix+o"
 # workspace_picker = "prefix+w"
 # goto = "prefix+g"
-# new_workspace = "prefix+shift+n"
-# new_worktree = "prefix+shift+g"
-# open_worktree = ""    # optional, unset by default
-# remove_worktree = ""  # optional, unset by default; opens confirmation
-# rename_workspace = "prefix+shift+w"
 # close_workspace = "prefix+shift+d"
 # previous_workspace = "" # optional, unset by default
 # next_workspace = ""     # optional, unset by default
@@ -278,9 +268,6 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Ask for a tab name before creating a new tab.
 # Set false to create tabs immediately with generated names.
 # prompt_new_tab_name = true
-
-# Ask for a workspace name before interactive creation.
-# prompt_new_workspace_name = false
 
 # Draw borders around split panes.
 # "auto" draws them only for split panes, "always" also frames a lone pane

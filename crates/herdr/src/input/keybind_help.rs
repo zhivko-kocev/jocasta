@@ -83,7 +83,6 @@ pub(crate) fn keybind_help_groups(
                 entry(crate::config::format_prefix_combos(prefixes), "prefix mode"),
                 entry(binding_label(&keybinds.help), "keybinds"),
                 entry(binding_label(&keybinds.settings), "settings"),
-                entry(binding_label(&keybinds.detach), "detach"),
                 entry(binding_label(&keybinds.reload_config), "reload config"),
                 entry(
                     binding_label(&keybinds.open_notification_target),
@@ -126,17 +125,6 @@ pub(crate) fn keybind_help_groups(
                     "workspace navigation",
                 ),
                 entry(binding_label(&keybinds.goto), "session navigator"),
-                entry(binding_label(&keybinds.new_workspace), "new workspace"),
-                entry(binding_label(&keybinds.new_worktree), "new worktree"),
-                entry(binding_label(&keybinds.open_worktree), "open worktree"),
-                entry(
-                    binding_label(&keybinds.remove_worktree),
-                    "delete worktree checkout",
-                ),
-                entry(
-                    binding_label(&keybinds.rename_workspace),
-                    "rename workspace",
-                ),
                 entry(binding_label(&keybinds.close_workspace), "close workspace"),
                 entry(
                     binding_label(&keybinds.previous_workspace),
@@ -207,23 +195,27 @@ pub(crate) fn keybind_help_groups(
     ];
 
     if !keybinds.custom_commands.is_empty() {
-        groups.push((
-            "custom",
-            keybinds
-                .custom_commands
-                .iter()
-                .map(|binding| {
-                    (
-                        binding.label.clone(),
-                        binding
-                            .description
-                            .clone()
-                            .map(Cow::Owned)
-                            .unwrap_or(Cow::Borrowed("custom command")),
-                    )
-                })
-                .collect(),
-        ));
+        // Jocasta's keys come first (0666): they are the ones the user needs.
+        groups.insert(
+            0,
+            (
+                "jocasta",
+                keybinds
+                    .custom_commands
+                    .iter()
+                    .map(|binding| {
+                        (
+                            binding.label.clone(),
+                            binding
+                                .description
+                                .clone()
+                                .map(Cow::Owned)
+                                .unwrap_or(Cow::Borrowed("custom command")),
+                        )
+                    })
+                    .collect(),
+            ),
+        );
     }
     groups
 }
@@ -299,6 +291,27 @@ mod tests {
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].1[0].1, "close pane");
         assert!(filter_keybind_help_groups(groups(), "panes").is_empty());
+    }
+
+    #[test]
+    fn help_lists_jocastas_keys_before_herdrs() {
+        let config: crate::config::Config = toml::from_str(
+            r#"
+[[keys.command]]
+key = "prefix+alt+q"
+type = "plugin_action"
+command = "jocasta.quit"
+description = "Quit Jocasta"
+"#,
+        )
+        .unwrap();
+        let groups = keybind_help_groups(
+            &config.keybinds(),
+            &[(KeyCode::Char('b'), KeyModifiers::CONTROL)],
+        );
+        assert_eq!(groups[0].0, "jocasta");
+        assert_eq!(groups[0].1[0].1, "Quit Jocasta");
+        assert_eq!(groups[1].0, "global");
     }
 
     #[test]

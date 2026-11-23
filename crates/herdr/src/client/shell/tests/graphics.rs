@@ -234,21 +234,6 @@ fn endpoint_notice_and_multiline_diagnostic_cover_the_actual_rows() {
 fn every_dialog_and_menu_occludes_its_panel_not_the_whole_screen() {
     let palette = ClientShellConfig::from_config(&Config::default()).palette;
     let overlays = vec![
-        ClientShellOverlay::Onboarding,
-        ClientShellOverlay::ProductAnnouncement(crate::app::state::ProductAnnouncementState {
-            version: "1".into(),
-            id: "test".into(),
-            title: "news".into(),
-            body: "body".into(),
-            scroll: 0,
-            preview: false,
-        }),
-        ClientShellOverlay::ReleaseNotes(crate::app::state::ReleaseNotesState {
-            version: "1".into(),
-            body: "body".into(),
-            scroll: 0,
-            preview: false,
-        }),
         ClientShellOverlay::Rename(ClientRenameOverlay {
             title: "rename",
             input: "name".into(),
@@ -275,34 +260,11 @@ fn every_dialog_and_menu_occludes_its_panel_not_the_whole_screen() {
             scroll: 0,
             filter: None,
         }),
-        ClientShellOverlay::WorktreeCreate(ClientWorktreeCreateOverlay {
-            source_workspace_id: "ws_1".into(),
-            repo_name: "repo".into(),
-            branch: "branch".into(),
-            checkout_path: "path".into(),
-            error: None,
-            creating: false,
-        }),
-        ClientShellOverlay::WorktreeOpen(ClientWorktreeOpenOverlay {
-            source_workspace_id: "ws_1".into(),
-            entries: Vec::new(),
-            selected: 0,
-            query: TextEditor::default(),
-            search_focused: false,
-            error: None,
-            opening: false,
-        }),
-        ClientShellOverlay::WorktreeRemove(ClientWorktreeRemoveOverlay {
-            workspace_id: "ws_1".into(),
-            path: "path".into(),
-            error: None,
-            removing: false,
-            force_confirmation: false,
-        }),
         ClientShellOverlay::ContextMenu(ClientContextMenuOverlay {
             target: ClientContextMenuTarget::Tab {
                 tab_id: "tab_1".into(),
                 workspace_id: "ws_1".into(),
+                boss: false,
             },
             x: 35,
             y: 8,
@@ -314,10 +276,6 @@ fn every_dialog_and_menu_occludes_its_panel_not_the_whole_screen() {
             selected: 0,
             original_theme_name: String::new(),
             original_palette: palette,
-            integrations: Vec::new(),
-            integration_messages: Vec::new(),
-            loading_integrations: false,
-            installing_integrations: false,
         }),
     ];
     for overlay in overlays {
@@ -327,7 +285,6 @@ fn every_dialog_and_menu_occludes_its_panel_not_the_whole_screen() {
         state.compose(106, 40).unwrap();
         let layout = state.layout(106, 40);
         let mut buffer = Buffer::empty(Rect::new(0, 0, 106, 40));
-        let snapshot = state.snapshot.as_deref().unwrap();
         let rendered = match &overlay {
             ClientShellOverlay::ContextMenu(menu) => {
                 render::render_context_menu(&mut buffer, menu, &state.config.palette)
@@ -336,13 +293,11 @@ fn every_dialog_and_menu_occludes_its_panel_not_the_whole_screen() {
                 &mut buffer,
                 state.hits.global_launcher,
                 menu,
-                snapshot,
                 &state.config.palette,
             ),
             _ => render::render_client_overlay(
                 &mut buffer,
                 &overlay,
-                snapshot,
                 &state.endpoints,
                 &state.active_endpoint_id,
                 &state.config.keybinds,
@@ -532,17 +487,6 @@ fn popup_terminal_keeps_own_graphics_and_hides_only_background_overlap() {
         &frame.graphics.clone().into_inline_bytes(),
         inside
     ));
-    state.overlay = Some(ClientShellOverlay::Onboarding);
-    let frame = state.compose(106, 20).unwrap();
-    assert!(is_placed(
-        &frame.graphics.clone().into_inline_bytes(),
-        outside
-    ));
-    assert!(!is_placed(
-        &frame.graphics.clone().into_inline_bytes(),
-        inside
-    ));
-    state.overlay = None;
     let frame = state.compose(106, 20).unwrap();
     assert!(is_placed(
         &frame.graphics.clone().into_inline_bytes(),

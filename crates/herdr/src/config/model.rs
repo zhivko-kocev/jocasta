@@ -341,15 +341,15 @@ pub struct KeysConfig {
     pub help: BindingConfig,
     /// Open settings. Default: "prefix+s"
     pub settings: BindingConfig,
-    /// Create a new workspace. Default: "prefix+shift+n"
+    /// Read and ignored since 0665 (Jocasta owns the workspaces).
     pub new_workspace: BindingConfig,
-    /// Create a Git worktree from the selected workspace. Default: "prefix+shift+g"
+    /// Read and ignored since 0665.
     pub new_worktree: BindingConfig,
-    /// Open an existing Git worktree from the selected workspace. Unset by default.
+    /// Read and ignored since 0665.
     pub open_worktree: BindingConfig,
-    /// Delete the selected managed worktree checkout after confirmation. Unset by default.
+    /// Read and ignored since 0665.
     pub remove_worktree: BindingConfig,
-    /// Rename the selected workspace. Default: "prefix+shift+w"
+    /// Read and ignored since 0665.
     pub rename_workspace: BindingConfig,
     /// Close the selected workspace. Default: "prefix+shift+d"
     pub close_workspace: BindingConfig,
@@ -369,7 +369,7 @@ pub struct KeysConfig {
     pub navigate_pane_up: BindingConfig,
     /// Focus the pane to the right in navigate mode. Default: "l". Right arrow is always an alias.
     pub navigate_pane_right: BindingConfig,
-    /// Detach the current client from its Herdr server. Default: "prefix+q".
+    /// Read and ignored since 0666 (the menu's "quit Jocasta" replaced detach).
     pub detach: BindingConfig,
     /// Reload config.toml in the running app/server. Default: "prefix+shift+r".
     pub reload_config: BindingConfig,
@@ -751,11 +751,6 @@ impl KeysConfig {
         profile.prefix = Some(self.prefix.clone());
         copy_effective_action_field!(help, keybinds.help);
         copy_effective_action_field!(settings, keybinds.settings);
-        copy_effective_action_field!(new_workspace, keybinds.new_workspace);
-        copy_effective_action_field!(new_worktree, keybinds.new_worktree);
-        copy_effective_action_field!(open_worktree, keybinds.open_worktree);
-        copy_effective_action_field!(remove_worktree, keybinds.remove_worktree);
-        copy_effective_action_field!(rename_workspace, keybinds.rename_workspace);
         copy_effective_action_field!(close_workspace, keybinds.close_workspace);
         copy_effective_action_field!(workspace_picker, keybinds.workspace_picker);
         copy_effective_action_field!(goto, keybinds.goto);
@@ -765,7 +760,6 @@ impl KeysConfig {
         copy_effective_action_field!(navigate_pane_down, keybinds.navigate.pane_down);
         copy_effective_action_field!(navigate_pane_up, keybinds.navigate.pane_up);
         copy_effective_action_field!(navigate_pane_right, keybinds.navigate.pane_right);
-        copy_effective_action_field!(detach, keybinds.detach);
         copy_effective_action_field!(reload_config, keybinds.reload_config);
         copy_effective_action_field!(open_notification_target, keybinds.open_notification_target);
         copy_effective_action_field!(previous_workspace, keybinds.previous_workspace);
@@ -1123,11 +1117,11 @@ impl Default for KeysConfig {
             prefix: BindingConfig::one("ctrl+b"),
             help: BindingConfig::one("prefix+?"),
             settings: BindingConfig::one("prefix+s"),
-            new_workspace: BindingConfig::one("prefix+shift+n"),
-            new_worktree: BindingConfig::one("prefix+shift+g"),
+            new_workspace: BindingConfig::empty(),
+            new_worktree: BindingConfig::empty(),
             open_worktree: BindingConfig::empty(),
             remove_worktree: BindingConfig::empty(),
-            rename_workspace: BindingConfig::one("prefix+shift+w"),
+            rename_workspace: BindingConfig::empty(),
             close_workspace: BindingConfig::one("prefix+shift+d"),
             workspace_picker: BindingConfig::one("prefix+w"),
             goto: BindingConfig::one("prefix+g"),
@@ -1137,7 +1131,7 @@ impl Default for KeysConfig {
             navigate_pane_down: BindingConfig::one("j"),
             navigate_pane_up: BindingConfig::one("k"),
             navigate_pane_right: BindingConfig::one("l"),
-            detach: BindingConfig::one("prefix+q"),
+            detach: BindingConfig::empty(),
             reload_config: BindingConfig::one("prefix+shift+r"),
             open_notification_target: BindingConfig::one("prefix+o"),
             previous_workspace: BindingConfig::empty(),
@@ -1965,18 +1959,6 @@ delay_seconds = {}
         let error = toml::from_str::<Config>(&toml).unwrap_err().to_string();
 
         assert!(error.contains("ui.toast.delay_seconds must be between 0 and 3600"));
-    }
-
-    #[test]
-    fn missing_onboarding_shows_setup() {
-        let config = Config::default();
-        assert!(config.should_show_onboarding());
-    }
-
-    #[test]
-    fn onboarding_false_skips_setup() {
-        let config: Config = toml::from_str("onboarding = false").unwrap();
-        assert!(!config.should_show_onboarding());
     }
 
     #[test]

@@ -33,9 +33,22 @@ binary; it is not shipped as `herdr`. Changed files are listed below, as Apache-
   sidebar's height under a one-row strip with `new` and `menu`. The collapsed sidebar's workspace markers stay.
   `[ui.sidebar.spaces]`, the split ratio and the client preferences' `sidebar_section_split`, `collapsed_groups` and
   `remote_collapsed_groups` are still read, and ignored; the server's session file and wire types keep their fields.
+- The strip's `new · Local` button (0664): the expanded sidebar's top strip draws `menu` only.
+- Workspace creation, rename and worktrees in the client (0665): `new_workspace`, the worktree create/open/delete
+  overlays (`client/shell/{worktrees,worktree_overlays}.rs`), the workspace rename, their keys, buttons, right-click
+  and mobile entries. The workspace right-click menu is Close alone. The `new_workspace`, `new_worktree`,
+  `open_worktree`, `remove_worktree` and `rename_workspace` keys, `ui.prompt_new_workspace_name` and `onboarding`
+  are still read, and ignored. The server's `worktree.*` API and the `herdr worktree` CLI stay.
+- On the boss's workspace, his client's close workspace, new tab (key and `+`), split and close pane do nothing, and
+  its tab close too (see the seams below).
+- The release notes and "what's new", the "update ready" badge, the product announcement overlay, onboarding
+  (`ui/{release_notes,onboarding}.rs`) and the settings' Integrations tab with its installs (0666). The menu's
+  "detach" and the `detach` key (`prefix+q`, still read, and ignored) went; the menu ends with "quit Jocasta".
+  Help lists Jocasta's `[[keys.command]]` entries first.
 
-Kept whole: plugins, kitty graphics, live handoff, worktrees, notifications and sound, persistence, sessions,
-`vendor/`, `skills/herdr/SKILL.md`, `tests/fixtures/`, the local release notes and announcements, onboarding.
+Kept whole: plugins, kitty graphics, live handoff, the server's worktree commands and API, notifications and sound,
+persistence, sessions, `vendor/`, `skills/herdr/SKILL.md`, `tests/fixtures/`, the server's `release_notes.rs` and
+`product_announcements.rs` with their wire fields and API methods (nothing in the client reads them).
 
 ## Changed
 
@@ -56,6 +69,14 @@ chrome_context,endpoints,keybindings_settings,popup_focus_projection,workspace_n
 `integration/{actions,env,mod,registry,targets,tests,types}.rs`, `ipc.rs`, `logging.rs`, `noninteractive_process.rs`,
 `pane.rs`, `platform/{fallback,linux,macos,mod,unix_common,windows}.rs`, `product_announcements.rs`,
 `release_notes.rs`, `server/{mod,headless}.rs`, `server/headless/notifications.rs`, `server/headless/tests/mod.rs`.
+
+0664–0666 also reached `app/{api,mod,state}.rs`, `client/shell/{actions,agent_sidebar,config,context_menu,
+endpoint_sidebar,endpoints,extension,global_menu,input,input_source,mobile,mouse,overlay_input,overlays,render,
+settings,settings_overlay,sidebar,tabs,text_editor}.rs`, `client/shell_runtime.rs`, `config/{io,keybinds,model,
+write}.rs`, `input/{keybind_help,keybindings}.rs`, `ui.rs`, `ui/{scrollbar,widgets}.rs`, `update.rs`, `lib.rs` (the
+config template), `workspace.rs` and `workspace/git/{discovery,mod}.rs`, and deleted `client/shell/{worktrees,
+worktree_overlays}.rs` and `ui/{onboarding,release_notes}.rs`; the tests of the removed features went with them, and
+`client/shell/tests/{boss_guard,global_menu}.rs` are new.
 
 Also `src/pane/terminal.rs`, the test `render_keeps_halfwidth_katakana_voiced_tail_empty`: it checks what the host
 terminal is sent (no write over the wide tail) rather than the test backend's copy, because the workspace's ratatui
@@ -100,8 +121,17 @@ terminal is sent (no write over the wide tail) rather than the test backend's co
   state,tabs}.rs`: the client hands `jocasta.` messages to the shell extension and writes its replies back to the
   server; draws the dock beside the focused workspace's panes when the extension docks there, and a question over
   everything; gives the dock his keys on `DOCK_COMMAND` or a click in it, and every key, text and paste to a question,
-  ahead of herdr's own overlays (onboarding, announcements, release notes); ticks it with the client's timers; puts its
+  ahead of herdr's own overlays; ticks it with the client's timers; puts its
   status at the left of the tab bar's right side.
+- `src/embed.rs` (`QUIT_COMMAND`, and `ShellExtension::docks` marking the boss's workspace) and
+  `src/client/shell/{extension,actions,overlay_input,context_menu,tabs,global_menu}.rs`: the boss guard (0665).
+  `extension::is_boss_workspace` asks `embed::shell_docks`, since the dock shows beside the boss's workspace only.
+  `push_endpoint_method_with_kind` drops, in his client only, a `workspace.close`, `tab.create`, `tab.close`,
+  `pane.split` and `pane.close` aimed at it, with the notice "Jocasta owns this workspace: it can't be closed, split
+  or given tabs." (`tab.close` too, since closing its only tab closes the workspace). The keys' confirm dialogs and
+  prompts check first; the tab-bar `+` is not drawn there; the tab and pane menus drop the refused items; the
+  workspace menu does not open. Jocasta's own API calls never pass the client, so they are not affected. The global
+  menu's "quit Jocasta" runs the `[[keys.command]]` entry for `jocasta.quit` exactly as its key does (0666).
 - `src/client/mod.rs` (the client's failure exit) and `src/lib.rs` (a launch that failed) end the process through
   `embed::exit`, which runs the exit hook first.
 

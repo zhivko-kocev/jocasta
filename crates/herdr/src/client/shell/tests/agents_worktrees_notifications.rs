@@ -130,7 +130,7 @@ fn duplicate_repo_parent_context_menu_closes_only_its_own_workspace() {
             let Some(ClientShellOverlay::ContextMenu(menu)) = state.overlay.as_ref() else {
                 panic!("repository workspace context menu");
             };
-            assert_eq!(menu.items()[1].label, "Close");
+            assert_eq!(menu.items()[0].label, "Close");
             if linked_child {
                 let mut replacement = original.clone();
                 replacement.revision = state.snapshot.as_deref().unwrap().revision + 1;
@@ -140,7 +140,7 @@ fn duplicate_repo_parent_context_menu_closes_only_its_own_workspace() {
                 state.set_snapshot(Box::new(replacement));
             }
             let mut close = ClientShellInput::default();
-            state.activate_context_menu_item(1, &mut close);
+            state.activate_context_menu_item(0, &mut close);
             if confirm_close {
                 assert!(close.actions.is_empty());
                 assert!(matches!(state.overlay.as_ref(),
@@ -601,32 +601,6 @@ fn workspace_actions_preserve_selected_target_and_client_confirmation() {
     state.set_snapshot(Box::new(snapshot));
     state.mode = ClientShellMode::Navigate;
     state.navigate_workspace_id = state.navigation_target(&ClientEndpointId::Local, "ws_2");
-
-    let rename = state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
-        KeyCode::Char('w'),
-        KeyModifiers::SHIFT,
-    ))]);
-    assert!(rename.actions.is_empty());
-    assert!(matches!(
-        state.overlay.as_ref(),
-        Some(ClientShellOverlay::Rename(ClientRenameOverlay {
-            target: ClientRenameTarget::Workspace { workspace_id },
-            ..
-        })) if workspace_id == "ws_2"
-    ));
-    assert!(state.handle_input_bytes(&[0x15]).actions.is_empty());
-    assert!(state.handle_input_bytes(b"renamed").actions.is_empty());
-    let save = state.handle_input_bytes(b"\r");
-    let [ClientShellAction::Endpoint { request, .. }] = &save.actions[..] else {
-        panic!("workspace rename should use endpoint API");
-    };
-    assert!(matches!(
-        &request.method,
-        crate::api::schema::Method::WorkspaceRename(params)
-            if params.workspace_id == "ws_2" && params.label == "renamed"
-    ));
-
-    state.navigate_workspace_id = state.navigation_target(&ClientEndpointId::Local, "ws_2");
     let mut close = ClientShellInput::default();
     state.record_binding(
         crate::input::KeybindMatch::Action(crate::input::KeybindAction::CloseWorkspace),
@@ -648,41 +622,6 @@ fn workspace_actions_preserve_selected_target_and_client_confirmation() {
         &request.method,
         crate::api::schema::Method::WorkspaceClose(params)
             if params.workspace_id == "ws_2" && !params.close_group
-    ));
-}
-
-#[test]
-fn named_workspace_overlay_targets_projected_source_workspace() {
-    let mut config = Config::default();
-    config.ui.prompt_new_workspace_name = true;
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
-    state.set_snapshot(Box::new(snapshot()));
-    let mut open = ClientShellInput::default();
-    state.record_binding(
-        crate::input::KeybindMatch::Action(crate::input::KeybindAction::NewWorkspace),
-        &mut open,
-    );
-    assert!(matches!(
-        state.overlay.as_ref(),
-        Some(ClientShellOverlay::Rename(ClientRenameOverlay {
-            input: value,
-            target: ClientRenameTarget::NewWorkspace {
-                source_workspace_id,
-                ..
-            },
-            ..
-        })) if value.as_str() == "repo" && source_workspace_id.as_deref() == Some("ws_1")
-    ));
-    let create = state.handle_input_bytes(b"\r");
-    let [ClientShellAction::Endpoint { request, .. }] = &create.actions[..] else {
-        panic!("named workspace should use endpoint API");
-    };
-    assert!(matches!(
-        &request.method,
-        crate::api::schema::Method::WorkspaceCreate(params)
-            if params.source_workspace_id.as_deref() == Some("ws_1")
-                && params.cwd.as_deref() == Some("/repo")
-                && params.label.is_none()
     ));
 }
 
@@ -748,110 +687,13 @@ fn navigate_mode_selects_workspace_locally_then_focuses_by_stable_id() {
 }
 
 #[test]
-fn worktree_create_previews_the_endpoint_owned_checkout_path() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    state.set_snapshot(Box::new(snapshot()));
-    state.set_pane_surface(surface());
-    let mut prepare = ClientShellInput::default();
-    state.record_binding(
-        crate::input::KeybindMatch::Action(crate::input::KeybindAction::NewWorktree),
-        &mut prepare,
-    );
-    let [ClientShellAction::Endpoint { request, .. }] = &prepare.actions[..] else {
-        panic!("new worktree should prepare through worktree.list");
-    };
-    assert!(matches!(
-        &request.method,
-        crate::api::schema::Method::WorktreeList(params)
-            if params.workspace_id.as_deref() == Some("ws_1")
-    ));
-    let request_id = request.id.clone();
-    assert!(
-        state
-            .handle_endpoint_result("boot-1", &request_id, Ok(worktree_list_result(None)))
-            .0
-    );
-    let frame = state.compose(106, 30).expect("new worktree modal");
-    let text = frame
-        .cells
-        .chunks(frame.width as usize)
-        .map(|row| {
-            row.iter()
-                .map(|cell| cell.symbol.as_str())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(text.contains("new worktree"));
-    assert!(text.contains("create and open"));
-    assert!(frame.cursor.as_ref().is_some_and(|cursor| cursor.visible));
-
-    assert!(state
-        .handle_input_bytes(b"feature/client-shell")
-        .actions
-        .is_empty());
-    assert!(matches!(
-        &state.overlay,
-        Some(ClientShellOverlay::WorktreeCreate(create))
-            if create.checkout_path
-                == "/tmp/herdr-worktrees/repo/feature-client-shell"
-    ));
-    let submit = state.handle_input_bytes(b"\r");
-    let [ClientShellAction::Endpoint { request, .. }] = &submit.actions[..] else {
-        panic!("worktree create should use endpoint API");
-    };
-    assert!(matches!(
-        &request.method,
-        crate::api::schema::Method::WorktreeCreate(params)
-            if params.workspace_id.as_deref() == Some("ws_1")
-                && params.branch.as_deref() == Some("feature/client-shell")
-                && params.path.is_none()
-                && !params.focus
-    ));
-}
-
-#[test]
-fn unavailable_worktree_create_does_not_wedge_the_overlay() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    state.set_snapshot(Box::new(snapshot()));
-    state.set_pane_surface(surface());
-    let mut prepare = ClientShellInput::default();
-    state.record_binding(
-        crate::input::KeybindMatch::Action(crate::input::KeybindAction::NewWorktree),
-        &mut prepare,
-    );
-    let [ClientShellAction::Endpoint { request, .. }] = &prepare.actions[..] else {
-        panic!("new worktree should prepare through worktree.list");
-    };
-    state.handle_endpoint_result("boot-1", &request.id, Ok(worktree_list_result(None)));
-    state.set_endpoint_methods(Some(vec!["worktree.list".into()]));
-    state.handle_input_bytes(b"feature/unavailable");
-
-    let submit = state.handle_input_bytes(b"\r");
-
-    assert!(submit.actions.is_empty());
-    assert!(matches!(
-        &state.overlay,
-        Some(ClientShellOverlay::WorktreeCreate(create)) if !create.creating
-    ));
-    assert!(state
-        .visible_endpoint_notice
-        .as_ref()
-        .is_some_and(|notice| notice.key.code == "worktree.create"));
-}
-
-#[test]
-fn worktree_action_errors_expire_without_more_input() {
+fn endpoint_errors_expire_without_more_input() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
 
-    let mut guard = ClientShellInput::default();
-    state.record_binding(
-        crate::input::KeybindMatch::Action(crate::input::KeybindAction::RemoveWorktree),
-        &mut guard,
-    );
     let message = "This workspace is not a Herdr-managed worktree checkout.";
+    state.set_endpoint_error(message);
     assert_eq!(state.endpoint_error.as_deref(), Some(message));
 
     let deadline = state.endpoint_error_deadline.expect("deadline");
@@ -869,195 +711,6 @@ fn worktree_action_errors_expire_without_more_input() {
         state.endpoint_error_deadline.expect("deadline")
             >= before_repeat + std::time::Duration::from_secs(5)
     );
-}
-
-#[test]
-fn worktree_prepare_rejection_notice_expires() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    state.set_snapshot(Box::new(snapshot()));
-    state.set_pane_surface(surface());
-    let mut prepare = ClientShellInput::default();
-    state.record_binding(
-        crate::input::KeybindMatch::Action(crate::input::KeybindAction::NewWorktree),
-        &mut prepare,
-    );
-    let [ClientShellAction::Endpoint { request, .. }] = &prepare.actions[..] else {
-        panic!("new worktree should prepare through worktree.list");
-    };
-    let request_id = request.id.clone();
-    state.handle_endpoint_result(
-        "boot-1",
-        &request_id,
-        Err(ClientShellEndpointError {
-            code: Some("not_git_worktree".into()),
-            message: "Herdr worktree actions require a workspace inside a Git work tree".into(),
-        }),
-    );
-    let notice = state
-        .visible_endpoint_notice
-        .as_ref()
-        .expect("rejection notice");
-    assert!(notice.key.code.contains("not_git_worktree"));
-    let deadline = notice.deadline;
-
-    let (_, repaint) = state.tick_notifications(deadline + std::time::Duration::from_millis(1));
-    assert!(repaint);
-    assert!(state.visible_endpoint_notice.is_none());
-}
-
-#[test]
-fn worktree_open_filters_and_clicks_a_stable_public_entry() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    state.set_snapshot(Box::new(snapshot()));
-    state.set_pane_surface(surface());
-    let mut prepare = ClientShellInput::default();
-    state.record_binding(
-        crate::input::KeybindMatch::Action(crate::input::KeybindAction::OpenWorktree),
-        &mut prepare,
-    );
-    let [ClientShellAction::Endpoint { request, .. }] = &prepare.actions[..] else {
-        panic!("open worktree should prepare through worktree.list");
-    };
-    let request_id = request.id.clone();
-    state.handle_endpoint_result("boot-1", &request_id, Ok(worktree_list_result(None)));
-    let frame = state.compose(106, 30).expect("open worktree modal");
-    let text = frame
-        .cells
-        .chunks(frame.width as usize)
-        .map(|row| {
-            row.iter()
-                .map(|cell| cell.symbol.as_str())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(text.contains("feature"));
-    let row = state.hits.worktree_rows[0].0;
-    let open = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column: row.x + 2,
-        row: row.y,
-        modifiers: KeyModifiers::empty(),
-    })]);
-    let [ClientShellAction::Endpoint { request, .. }] = &open.actions[..] else {
-        panic!("worktree row should open through endpoint API");
-    };
-    assert!(matches!(
-        &request.method,
-        crate::api::schema::Method::WorktreeOpen(params)
-            if params.workspace_id.as_deref() == Some("ws_1")
-                && params.path.as_deref() == Some("/repo-feature")
-                && params.focus
-    ));
-}
-
-#[test]
-fn worktree_remove_escalates_recoverable_failure_to_force_confirmation() {
-    for (code, message, expect_force) in [
-        ("dirty_worktree_requires_force", "dirty worktree", true),
-        (
-            "worktree_remove_failed",
-            "fatal: '/repo-feature' is not a working tree",
-            true,
-        ),
-        ("worktree_remove_failed", "Permission denied", false),
-        ("server_unavailable", "is not a working tree", false),
-    ] {
-        let mut snapshot = snapshot();
-        snapshot.workspaces[0].worktree = Some(ClientShellWorktree {
-            key: "repo-key".into(),
-            label: "repo".into(),
-            is_linked_worktree: true,
-        });
-        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-        state.set_snapshot(Box::new(snapshot));
-        state.set_pane_surface(surface());
-        let mut prepare = ClientShellInput::default();
-        state.record_binding(
-            crate::input::KeybindMatch::Action(crate::input::KeybindAction::RemoveWorktree),
-            &mut prepare,
-        );
-        let [ClientShellAction::Endpoint { request, .. }] = &prepare.actions[..] else {
-            panic!("remove worktree should prepare through worktree.list");
-        };
-        let request_id = request.id.clone();
-        state.handle_endpoint_result(
-            "boot-1",
-            &request_id,
-            Ok(worktree_list_result(Some("ws_1"))),
-        );
-        let remove = state.handle_input_bytes(b"\r");
-        let [ClientShellAction::Endpoint { request, .. }] = &remove.actions[..] else {
-            panic!("worktree remove should use endpoint API");
-        };
-        assert!(matches!(
-            &request.method,
-            crate::api::schema::Method::WorktreeRemove(params)
-                if params.workspace_id == "ws_1" && !params.force
-        ));
-        let request_id = request.id.clone();
-        let (_, actions) = state.handle_endpoint_result(
-            "boot-1",
-            &request_id,
-            Err(ClientShellEndpointError {
-                code: Some(code.into()),
-                message: message.into(),
-            }),
-        );
-        assert!(actions.is_empty(), "failure must not retry automatically");
-        let Some(ClientShellOverlay::WorktreeRemove(remove)) = &state.overlay else {
-            panic!("failed remove should keep its confirmation");
-        };
-        assert!(!remove.removing);
-        assert_eq!(remove.force_confirmation, expect_force);
-        if !expect_force {
-            assert_eq!(remove.error.as_deref(), Some(message));
-            continue;
-        }
-        assert!(remove.error.is_none());
-        let frame = state.compose(106, 30).expect("force remove modal");
-        let text = frame
-            .cells
-            .chunks(frame.width as usize)
-            .map(|row| {
-                row.iter()
-                    .map(|cell| cell.symbol.as_str())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(text.contains("delete anyway"));
-        assert!(text.contains("permanently deleted"));
-        let force = state.handle_input_bytes(b"\r");
-        let [ClientShellAction::Endpoint { request, .. }] = &force.actions[..] else {
-            panic!("forced worktree remove should use endpoint API");
-        };
-        assert!(matches!(
-            &request.method,
-            crate::api::schema::Method::WorktreeRemove(params)
-                if params.workspace_id == "ws_1" && params.force
-        ));
-        let request_id = request.id.clone();
-        let (_, actions) = state.handle_endpoint_result(
-            "boot-1",
-            &request_id,
-            Err(ClientShellEndpointError {
-                code: Some("worktree_remove_failed".into()),
-                message: "fatal: '/repo-feature' is not a working tree".into(),
-            }),
-        );
-        assert!(actions.is_empty());
-        let Some(ClientShellOverlay::WorktreeRemove(remove)) = &state.overlay else {
-            panic!("forced failure should keep its confirmation");
-        };
-        assert!(!remove.removing);
-        assert_eq!(
-            remove.error.as_deref(),
-            Some("fatal: '/repo-feature' is not a working tree")
-        );
-        state.handle_input_bytes(b"\x1b");
-        assert!(state.overlay.is_none());
-    }
 }
 
 #[test]

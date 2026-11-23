@@ -66,28 +66,6 @@ pub(super) fn snapshot() -> ClientShellSnapshot {
     }
 }
 
-fn worktree_list_result(open_workspace_id: Option<&str>) -> crate::api::schema::ResponseResult {
-    crate::api::schema::ResponseResult::WorktreeList {
-        source: crate::api::schema::WorktreeSourceInfo {
-            repo_key: "repo-key".into(),
-            repo_name: "repo".into(),
-            repo_root: "/repo".into(),
-            source_checkout_path: "/repo".into(),
-            source_workspace_id: Some("ws_1".into()),
-        },
-        worktrees: vec![crate::api::schema::WorktreeInfo {
-            path: "/repo-feature".into(),
-            branch: Some("feature".into()),
-            is_bare: false,
-            is_detached: false,
-            is_prunable: false,
-            is_linked_worktree: true,
-            open_workspace_id: open_workspace_id.map(str::to_owned),
-            label: "repo".into(),
-        }],
-    }
-}
-
 fn surface() -> PaneSurfaceFrame {
     let surface_buffer = Buffer::with_lines(["LIVE", "PANE"]);
     PaneSurfaceFrame {
@@ -246,12 +224,14 @@ fn surface_with_popup() -> PaneSurfaceFrame {
 }
 
 mod agents_worktrees_notifications;
+mod boss_guard;
 mod chrome_context;
 mod close_pane;
 mod close_tab;
 mod copy;
 mod endpoint_requests;
 mod endpoints;
+mod global_menu;
 mod graphics;
 mod input_conformance;
 #[path = "input.rs"]
