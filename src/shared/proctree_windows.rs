@@ -18,7 +18,7 @@ use windows_sys::Win32::System::Threading::{
 	PROCESS_VM_READ, TerminateProcess,
 };
 
-use super::FolderProcess;
+use super::{FolderProcess, TreeUsage};
 
 const STILL_ACTIVE: u32 = 259;
 
@@ -238,6 +238,59 @@ fn start(pid: u32) -> Option<Option<f64>> {
 
 pub fn starts(pids: &[u32]) -> HashMap<u32, Option<f64>> {
 	pids.iter().filter_map(|pid| start(*pid).map(|start| (*pid, start))).collect()
+}
+
+/// `VM_COUNTERS` as `NtQueryInformationProcess` class 3 (`ProcessVmCounters`) fills it on x64.
+#[repr(C)]
+#[derive(Default)]
+#[allow(dead_code, reason = "the fields only give the call its layout")]
+struct VmCounters {
+	peak_virtual_size: usize,
+	virtual_size: usize,
+	page_fault_count: u32,
+	peak_working_set_size: usize,
+	working_set_size: usize,
+	quota_peak_paged_pool_usage: usize,
+	quota_paged_pool_usage: usize,
+	quota_peak_non_paged_pool_usage: usize,
+	quota_non_paged_pool_usage: usize,
+	pagefile_usage: usize,
+	peak_pagefile_usage: usize,
+}
+
+/// A process's working set and its user plus kernel time, or `None` when it can't be opened or read. Class 3 answers a
+/// `PROCESS_QUERY_LIMITED_INFORMATION` handle (checked on this PC), so no other access or Cargo feature is needed.
+fn usage(pid: u32) -> Option<TreeUsage> {
+	let handle = Handle::open(pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
+	let mut counters = VmCounters::default();
+	// SAFETY: `counters` is the `size_of` bytes the call fills.
+	let status = unsafe {
+		NtQueryInformationProcess(
+			handle.0,
+			3,
+			std::ptr::from_mut(&mut counters).cast(),
+			size_of::<VmCounters>() as u32,
+			std::ptr::null_mut(),
+		)
+	};
+	if status != 0 {
+		return None;
+	}
+	let mut times = [FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 }; 4];
+	// SAFETY: each pointer is one FILETIME of `times`.
+	let ok = unsafe {
+		let [creation, exit, kernel, user] = &mut times;
+		GetProcessTimes(handle.0, creation, exit, kernel, user)
+	};
+	let filetime = |time: &FILETIME| (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime);
+	// 100 ns units to ms.
+	let cpu_ms = if ok == 0 { 0 } else { (filetime(&times[2]) + filetime(&times[3])) / 10_000 };
+	Some(TreeUsage { rss_bytes: counters.working_set_size as u64, cpu_ms })
+}
+
+/// The usage of each of `pids` this user can read.
+pub fn usages(pids: &[u32]) -> Vec<TreeUsage> {
+	pids.iter().filter_map(|pid| usage(*pid)).collect()
 }
 
 /// `TerminateProcess` on `pid` (exit code 1, as Node's `process.kill(pid, "SIGKILL")` does).

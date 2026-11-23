@@ -23,8 +23,8 @@ use tokio::sync::{OnceCell, watch};
 use tokio::task::JoinHandle;
 
 use crate::frontier::protocol::{
-	ClientMessage, Dashboard, Hud, Leftover, ServerMessage, ServiceHealth, ServiceName, ServiceState, ToastLevel,
-	ToastReason, Today,
+	ClientMessage, Dashboard, Hud, Leftover, PrFacts, ServerMessage, ServiceHealth, ServiceName, ServiceState,
+	ToastLevel, ToastReason, Today,
 };
 use crate::frontier::server::allow::Confirm;
 use crate::frontier::server::asker::Notifier;
@@ -32,12 +32,13 @@ use crate::frontier::server::boss::fresh_session;
 use crate::frontier::server::checks::CheckRunner;
 use crate::frontier::server::close::CloseService;
 use crate::frontier::server::context::{Link, ServiceContext};
-use crate::frontier::server::day::{AlertDetails, Day, DayHooks, DayOptions, DayThread, SharedCatalog};
+use crate::frontier::server::day::{AlertDetails, Day, DayHooks, DayOptions, DayThread, ScheduleStart, SharedCatalog};
 use crate::frontier::server::door_routes::DoorService;
 use crate::frontier::server::events::{Toast, clean};
 use crate::frontier::server::feed::{FeedService, Reply};
 use crate::frontier::server::herdr::{AgentState, Env, Herdr, HerdrSnapshot, StopWatch, pane_text};
 use crate::frontier::server::keys::{FinishHow, KeyFinishable, KeyOutcome, Keys, NewThreadForm};
+use crate::frontier::server::phone::PhoneFacts;
 use crate::frontier::server::popups::Counts;
 use crate::frontier::server::ptt_hold::STT_TOGGLE_KEY;
 use crate::frontier::server::push_gate::PushGate;
@@ -47,6 +48,7 @@ use crate::frontier::server::stop_sequence::StopService;
 use crate::frontier::server::thread_keys::KeyService;
 use crate::frontier::server::tools::{Caller, ToolReply, Tools};
 use crate::frontier::server::watcher::{Watcher, WatcherOptions, start_watcher};
+use crate::frontier::server::wording::Door;
 use crate::frontier::server::worklog::WorklogSession;
 use crate::shared::day::{day_start, midnight_of};
 use crate::shared::errors::{Error, Result};
@@ -56,6 +58,7 @@ use crate::shared::paths::data_dir;
 use crate::shared::process::AbortSignal;
 use crate::shared::projects::Project;
 use crate::shared::push_hook::{PushAnswer, PushRequest};
+use crate::shared::schedules::Schedule;
 use crate::shared::settings::settings_problems;
 
 /// The dock's workspace and the Agents view (0553), healed on every refresh with herdr's panes as read and the boss
@@ -342,6 +345,17 @@ impl DayHooks for ServiceHooks {
 		let project = project.clone();
 		Box::pin(async move { if c.options.weekly_reviews_on() { c.weekly.review(&project).await } else { Ok(None) } })
 	}
+
+	/// A scheduled thread's start (0673): E's vet, same-title check and start, through his key's door.
+	fn start_scheduled(&self, project: &str, schedule: &Schedule) -> BoxFuture<'static, Result<ScheduleStart>> {
+		let c = self.link.ctx();
+		let (project, schedule) = (project.to_owned(), schedule.clone());
+		Box::pin(async move { c.starts.start_scheduled(&project, &schedule).await })
+	}
+
+	fn pr_facts(&self, url: &str) -> Option<PrFacts> {
+		self.link.ctx().thread_facts.pr_facts(url)
+	}
 }
 
 /// The last folder of `cwd`, as `node:path`'s `basename`.
@@ -458,6 +472,7 @@ impl JocastaService {
 		self.found.send_replace(true);
 		self.begin_watching();
 		c.day.start();
+		self.start_spend_backfill().await;
 		self.start_setup_notice();
 		self.start_watcher().await;
 		self.refresh().await;
@@ -579,7 +594,24 @@ impl JocastaService {
 		#[cfg(test)]
 		self.ticks.fetch_add(1, Ordering::SeqCst);
 		self.ctx.events.resend_unshown();
+		self.refresh_facts();
 		drop(self.refresher.refresh());
+	}
+
+	/// Each open thread's diff, mtime and watched PRs, read off the tick (0668); `ThreadFacts` keeps one read at a time.
+	fn refresh_facts(&self) {
+		let c = Arc::clone(&self.ctx);
+		self.ctx.calls.spawn(async move { c.thread_facts.refresh(&c).await });
+	}
+
+	/// The 7-day average starts warm (0668): once, the prior days' totals come from omp's session files of the last 8
+	/// days, never over a recorded day.
+	async fn start_spend_backfill(&self) {
+		let c = Arc::clone(&self.ctx);
+		let dir = c.sessions.lock().await.dir.clone();
+		self.ctx.calls.spawn(async move {
+			c.day.backfill_spend(&dir).await;
+		});
 	}
 
 	/// How many timer ticks ran, and how many timers run (tests).
@@ -643,6 +675,7 @@ impl JocastaService {
 	/// of a client are sent again (0584).
 	pub async fn refresh(&self) {
 		self.ctx.events.resend_unshown();
+		self.refresh_facts();
 		self.refresher.refresh().await;
 	}
 
@@ -687,6 +720,15 @@ impl JocastaService {
 			Some(today) => Ok(self.ctx.status.hud_for(today)),
 			None => self.ctx.status.hud(),
 		}
+	}
+
+	/// What the phone check-in pushes about (0672): the rows awaiting him, what finished, and quiet hours.
+	pub fn phone_facts(&self) -> PhoneFacts {
+		let (needs, finished) = match self.ctx.day.today() {
+			Ok(today) => (today.needs_you, today.landed),
+			Err(_) => (Vec::new(), Vec::new()),
+		};
+		PhoneFacts { needs, finished, quiet: self.ctx.day.quiet() }
 	}
 
 	/// The threads closing Jocasta would cut off (0434, 0438): awaiting him, and working among the rest.
@@ -829,13 +871,34 @@ impl JocastaService {
 	/// One message from a client (SEC-NET-5: `pane.focus` and `link.open` only; the type of any other fails to read, so
 	/// it never gets here); `reply` answers that client only. Refusals come back as `error`.
 	pub async fn handle(&self, message: ClientMessage, reply: impl Fn(ServerMessage)) {
+		if let ClientMessage::LeftoverRemove { folder } = message {
+			if let Some(answer) = self.remove_leftover(&folder).await {
+				reply(answer);
+			}
+			return;
+		}
 		if let Err(error) = self.handle_one(message).await {
 			reply(ServerMessage::Error { message: error.to_string() });
 		}
 	}
 
+	/// His `x` on a leftover in the dock (0670): only a folder `leftovers` lists is acted on (anything else is
+	/// ignored, nothing said); his Allow comes first (`Door::Key`); the result comes back as an action, removed or not.
+	async fn remove_leftover(&self, folder: &Path) -> Option<ServerMessage> {
+		let listed = self.ctx.status.leftovers().await.ok()?;
+		let leftover = listed.into_iter().find(|leftover| leftover.folder == folder)?;
+		let path = leftover.folder.to_string_lossy().into_owned();
+		let done = self.track(self.tools.remove_leftover(&path, Door::Key)).await;
+		Some(match done {
+			Ok(text) => ServerMessage::Action { text, is_error: false },
+			Err(error) => ServerMessage::Action { text: error.to_string(), is_error: true },
+		})
+	}
+
 	async fn handle_one(&self, message: ClientMessage) -> Result<()> {
 		match message {
+			// Answered in `handle`, which replies with an action.
+			ClientMessage::LeftoverRemove { .. } => {}
 			ClientMessage::PaneFocus { pane_id } => self.ctx.herdr.focus(&pane_id).await?,
 			ClientMessage::LinkOpen { url } => {
 				// Only a link the service itself shows now, and only http(s): a client can't open anything else (C9).

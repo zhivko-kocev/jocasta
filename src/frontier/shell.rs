@@ -3,10 +3,13 @@
 //! messages, which come over herdr's client connection (`protocol.rs`'s `SHELL_*` kinds); no pane, popup or second
 //! program runs for them.
 //!
-//! The dock draws the service's feed and takes his keys once he clicks it or presses its key: up/down pick a row, Enter
-//! goes to a thread's pane or opens a link row, f, s, r and n Finish, Stop, Review and start a New thread (0544, 0554,
-//! 0581), Esc gives the keys back. A question takes every key while it is up; its answer goes to the service, whose
-//! reply says whether it was taken.
+//! The dock draws the service's feed and takes his keys once he clicks it or presses its key: up/down pick a row (at the
+//! NEWS box's edge they scroll it, as does the wheel over it), Enter goes to a thread's pane or opens a link row, f, s, r
+//! and n Finish, Stop, Review and start a New thread (0544, 0554, 0581), x removes a picked leftover worktree behind his
+//! Allow (0670), Esc gives the keys back. A question takes every key while it is up; its answer goes to the service,
+//! whose reply says whether it was taken.
+
+use std::path::PathBuf;
 
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::KeyEvent;
@@ -20,7 +23,7 @@ use crate::frontier::protocol::{
 	SHELL_FEED, SHELL_GONE, SHELL_QUESTION, ServerMessage, ShellAction, ShellAnswer, ShellAnswered, ShellQuestion,
 };
 use crate::frontier::server::wording::money;
-use crate::frontier::today::view::{Pick, SAID_MS, Said, TodayState, not_answering, render};
+use crate::frontier::today::view::{NewsBox, Pick, SAID_MS, Said, TodayState, not_answering, render};
 use crate::frontier::tui::{TOKYO_NIGHT, render_lines};
 use crate::shared::clock::now_ms;
 use crate::shared::service_file::NOT_RUNNING;
@@ -69,6 +72,8 @@ pub struct JocastaShell {
 	/// The dock's text area as last drawn, and the line and key of each pickable row in it (0660).
 	inner: Rect,
 	rows: Vec<(usize, String)>,
+	/// The NEWS box as last drawn (0668).
+	news: Option<NewsBox>,
 }
 
 impl Default for JocastaShell {
@@ -95,6 +100,7 @@ impl JocastaShell {
 			silent: false,
 			inner: Rect::default(),
 			rows: Vec::new(),
+			news: None,
 		}
 	}
 
@@ -137,17 +143,75 @@ impl JocastaShell {
 		self.picks.iter().find(|pick| Some(&pick.key) == self.today.selected.as_ref())
 	}
 
-	/// Up or down one pick; the selection stays when there is none to move to.
-	fn step(&mut self, down: bool) {
+	/// One pick down (`step` 1) or up (-1); the selection stays when there is none to move to. In the NEWS box it moves
+	/// through every headline, scrolling the box at its edges (0668).
+	fn step(&mut self, step: isize) {
+		if self.step_news(step) {
+			return;
+		}
 		let at = self.picks.iter().position(|pick| Some(&pick.key) == self.today.selected.as_ref());
-		let to = match (at, down) {
-			(None, _) => 0,
-			(Some(at), true) => (at + 1).min(self.picks.len().saturating_sub(1)),
-			(Some(at), false) => at.saturating_sub(1),
-		};
+		let last = self.picks.len().saturating_sub(1);
+		let to = at.map_or(0, |at| at.saturating_add_signed(step).min(last));
 		if let Some(pick) = self.picks.get(to) {
 			self.today.selected = Some(pick.key.clone());
 		}
+	}
+
+	/// A step from a picked headline to the next or previous one, the box scrolling to keep it in view; false when
+	/// the pick isn't a headline, or is the first one going up (the step then leaves the box).
+	fn step_news(&mut self, step: isize) -> bool {
+		let Some(news) = &self.news else { return false };
+		if !self.picked().is_some_and(|pick| pick.news) {
+			return false;
+		}
+		let Some(at) = news.keys.iter().position(|key| Some(key) == self.today.selected.as_ref()) else {
+			return false;
+		};
+		let target = if step > 0 {
+			news.keys.iter().enumerate().skip(at + 1).find(|(_, key)| !key.is_empty()).map(|(i, _)| i)
+		} else {
+			news.keys.iter().enumerate().take(at).rev().find(|(_, key)| !key.is_empty()).map(|(i, _)| i)
+		};
+		let Some(target) = target else { return step > 0 };
+		let shown = news.lines.len();
+		let top = if target < news.top {
+			target
+		} else if target >= news.top + shown {
+			target + 1 - shown
+		} else {
+			news.top
+		};
+		self.today.selected = Some(news.keys[target].clone());
+		self.today.news_top = top;
+		true
+	}
+
+	/// The wheel over the NEWS box: one headline up or down (0668). A picked headline pushed out of view moves to the
+	/// box's edge, so the pick never leaves the screen.
+	fn scroll_news(&mut self, column: u16, row: u16, step: isize) -> Reply {
+		let area = self.inner;
+		let Some(news) = &self.news else { return Reply::default() };
+		if column < area.x || column >= area.x + area.width || row < area.y {
+			return Reply::default();
+		}
+		if !news.lines.contains(&usize::from(row - area.y)) {
+			return Reply::default();
+		}
+		let shown = news.lines.len();
+		let last = news.keys.len().saturating_sub(shown);
+		let top = news.top.saturating_add_signed(step).min(last);
+		if top == news.top {
+			return Reply::default();
+		}
+		self.today.news_top = top;
+		let picked = news.keys.iter().position(|key| Some(key) == self.today.selected.as_ref());
+		if let Some(picked) = picked.filter(|_| self.picked().is_some_and(|pick| pick.news)) {
+			let edge = picked.clamp(top, top + shown - 1);
+			if edge != picked {
+				self.today.selected = Some(news.keys[edge].clone());
+			}
+		}
+		Reply { redraw: true, ..Reply::default() }
 	}
 
 	/// His key on a thread: Finish, Stop, Review, or New thread (which needs no thread, C10).
@@ -160,14 +224,25 @@ impl JocastaShell {
 		Reply { send: vec![sent(SHELL_ACTION, &ShellAction { action, pane_id })], redraw: true, ..Reply::default() }
 	}
 
-	/// Enter: goes to the picked thread's pane, or opens the picked link row.
+	/// Enter: goes to the picked thread's pane, or opens the picked link row; a leftover has nothing to open.
 	fn enter(&self) -> Reply {
 		let Some(pick) = self.picked().cloned() else { return Reply::default() };
-		let message = match pick.pane_id.filter(|id| !id.is_empty()) {
-			Some(pane_id) => ClientMessage::PaneFocus { pane_id },
-			None => ClientMessage::LinkOpen { url: pick.url.unwrap_or_default() },
+		let message = match (pick.pane_id.filter(|id| !id.is_empty()), pick.url) {
+			(Some(pane_id), _) => ClientMessage::PaneFocus { pane_id },
+			(None, Some(url)) => ClientMessage::LinkOpen { url },
+			(None, None) => return Reply::default(),
 		};
 		Reply { send: vec![sent(SHELL_FEED, &message)], ..Reply::default() }
+	}
+
+	/// `x` on a picked leftover: asks the service to remove its folder, which it does only behind his Allow (0670).
+	fn remove_leftover(&mut self) -> Reply {
+		let Some(folder) = self.picked().and_then(|pick| pick.leftover.clone()) else {
+			self.say("No leftover to remove.", true);
+			return Reply { redraw: true, ..Reply::default() };
+		};
+		let message = ClientMessage::LeftoverRemove { folder: PathBuf::from(folder) };
+		Reply { send: vec![sent(SHELL_FEED, &message)], redraw: true, ..Reply::default() }
 	}
 
 	/// A left click on a row: picks it and does what Enter does on it (0660).
@@ -285,6 +360,7 @@ impl ShellExtension for JocastaShell {
 		}
 		self.picks.clone_from(&drawn.picks);
 		self.rows.clone_from(&drawn.rows);
+		self.news = drawn.news.clone();
 		self.inner = inner;
 		render_lines(buffer, inner, &drawn.lines);
 		if self.silent {
@@ -298,14 +374,15 @@ impl ShellExtension for JocastaShell {
 			return Reply { pass: true, ..Reply::default() };
 		}
 		match key.name.as_str() {
-			"up" | "k" => self.step(false),
-			"down" | "j" => self.step(true),
+			"up" | "k" => self.step(-1),
+			"down" | "j" => self.step(1),
 			"return" | "enter" => return self.enter(),
 			"escape" => return Reply { release: true, redraw: true, ..Reply::default() },
 			"f" => return self.act(PluginAction::Finish),
 			"s" => return self.act(PluginAction::Stop),
 			"r" => return self.act(PluginAction::Review),
 			"n" => return self.act(PluginAction::NewThread),
+			"x" => return self.remove_leftover(),
 			_ => return Reply { pass: true, ..Reply::default() },
 		}
 		Reply { redraw: true, ..Reply::default() }
@@ -313,6 +390,10 @@ impl ShellExtension for JocastaShell {
 
 	fn dock_mouse(&mut self, column: u16, row: u16) -> Reply {
 		self.click(column, row)
+	}
+
+	fn dock_scroll(&mut self, column: u16, row: u16, step: isize) -> Reply {
+		self.scroll_news(column, row, step)
 	}
 
 	fn asking(&self) -> bool {

@@ -6,8 +6,8 @@
 //! its popup closing did (`Closed`). A question nobody got yet goes to the next such shell that attaches. A terminal a
 //! thread's program attached (`jocasta` run in a pane) never reads a question. Each question but those his own keys
 //! opened also goes out as a notification with herdr's request sound, for when the terminal isn't in front (0552, 0581).
-//! The Agents view (blocked and done first, then working, then idle; the boss's workspace left out) is set once per boss
-//! workspace.
+//! The Agents view (the boss's row pinned first, then blocked and done first, then working, then idle; the boss's
+//! workspace otherwise left out) is set once per boss workspace and pane.
 
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -45,17 +45,26 @@ fn json_of<T: Serialize>(value: &T) -> String {
 	serde_json::to_string(value).unwrap_or_default()
 }
 
-/// The Agents view (0553, 0554): blocked and done threads first, then working, then idle, as herdr's status sort puts
-/// them; the boss's workspace (the boss and the dock) left out.
-pub fn agent_view(boss_workspace_id: &str) -> AgentView {
+/// The sidebar token that pins the boss's row first in the Agents view (0667): `status.rs` reports it on the boss pane.
+pub const PIN_TOKEN: &str = "pin";
+/// The token's value on the boss pane.
+pub const PIN_VALUE: &str = "1";
+
+/// The Agents view (0553, 0554, 0667): the boss's row first, then blocked and done threads, then working, then idle, as
+/// herdr's status sort puts them; every other pane of the boss's workspace (the dock) left out.
+pub fn agent_view(boss_workspace_id: &str, boss_pane_id: &str) -> AgentView {
 	AgentView {
 		source: VIEW_SOURCE.to_owned(),
 		label: Some("threads".to_owned()),
 		filter: Some(json!({
-			"op": "not",
-			"filter": {"op": "eq", "field": "workspace_id", "value": boss_workspace_id},
+			"op": "any",
+			"filters": [
+				{"op": "not", "filter": {"op": "eq", "field": "workspace_id", "value": boss_workspace_id}},
+				{"op": "eq", "field": "pane_id", "value": boss_pane_id},
+			],
 		})),
 		sort: Some(vec![
+			json!({"field": {"token": PIN_TOKEN}, "order": "asc"}),
 			json!({"field": "attention", "order": "desc"}),
 			json!({"field": "status", "order": "desc"}),
 			json!({"field": "state_change_seq", "order": "desc"}),
@@ -106,8 +115,8 @@ struct State {
 	/// The attached shells in the order they attached, each with whether it runs inside one of the server's panes.
 	clients: Vec<(u64, bool)>,
 	boss: Option<String>,
-	/// The boss workspace the Agents view was set for.
-	view_for: Option<String>,
+	/// The boss workspace and pane the Agents view was set for.
+	view_for: Option<(String, String)>,
 	queue: Vec<Popup>,
 	current: Option<Shown>,
 	/// When each warning subject was last logged.
@@ -159,13 +168,15 @@ impl Native {
 		self.host.send(Target::Shells, SHELL_FEED, json_of(message));
 	}
 
-	/// Heals against `snapshot` (the service's refresh): the Agents view once per boss workspace, and the boss's
-	/// workspace for every shell, whose dock shows there. Nothing without a boss pane in the snapshot.
+	/// Heals against `snapshot` (the service's refresh): the Agents view once per boss workspace and pane (a relaunched
+	/// boss pane has a new id), and the boss's workspace for every shell, whose dock shows there. Nothing without a
+	/// boss pane in the snapshot.
 	pub async fn heal(&self, herdr: &dyn Herdr, snapshot: &HerdrSnapshot, boss_pane_id: Option<&str>) {
 		let Some(boss) = boss_pane_id.and_then(|id| snapshot.panes.iter().find(|pane| pane.pane_id == id)) else {
 			return;
 		};
 		let workspace = boss.workspace_id.clone();
+		let pane = boss.pane_id.clone();
 		let changed = {
 			let mut state = locked(&self.state);
 			let changed = state.boss.as_ref() != Some(&workspace);
@@ -175,11 +186,12 @@ impl Native {
 		if changed {
 			self.host.send(Target::Shells, SHELL_BOSS, json_of(&workspace));
 		}
-		if locked(&self.state).view_for.as_ref() == Some(&workspace) {
+		let key = (workspace, pane);
+		if locked(&self.state).view_for.as_ref() == Some(&key) {
 			return;
 		}
-		match herdr.set_agent_view(&agent_view(&workspace)).await {
-			Ok(()) => locked(&self.state).view_for = Some(workspace),
+		match herdr.set_agent_view(&agent_view(&key.0, &key.1)).await {
+			Ok(()) => locked(&self.state).view_for = Some(key),
 			Err(error) => self.warn("the Agents view wasn't set", &error),
 		}
 	}

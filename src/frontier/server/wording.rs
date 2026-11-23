@@ -132,9 +132,19 @@ pub fn person(door: Door) -> Person {
 	}
 }
 
-/// Who asks in his Allow window (0484, 0544): the boss, or the `jocasta` command run from a terminal.
+/// Who asks in his Allow window (0484, 0544, 0670): the boss, the `jocasta` command run from a terminal, or him (his
+/// own key opened the question).
 pub fn asker(door: Door, command: &str) -> String {
-	if door == Door::Cli { format!("A `jocasta {command}` command") } else { "The boss".to_owned() }
+	match door {
+		Door::Cli => format!("A `jocasta {command}` command"),
+		Door::Key => "You".to_owned(),
+		Door::Boss => "The boss".to_owned(),
+	}
+}
+
+/// The verb that goes with [`asker`]: "asks", but he "asked" (the question is his own key's).
+pub fn asks(door: Door) -> &'static str {
+	if door == Door::Key { "asked" } else { "asks" }
 }
 
 /// Outside text in an `[event]` line (SEC-2): one line, inside «», with no « or » of its own, so it can't pose as more

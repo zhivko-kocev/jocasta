@@ -13,7 +13,7 @@ use futures_util::future::BoxFuture;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::*;
-use crate::frontier::protocol::{ActivitySummary, CalendarEntry, NeedsYou, NeedsYouKind, NextItem, Today};
+use crate::frontier::protocol::{ActivitySummary, CalendarEntry, NeedsYou, NeedsYouKind, NextItem, PrFacts, Today};
 use crate::shared::events::queue::EventSource;
 use crate::shared::schema::open_catalog;
 use crate::shared::settings::settings_file;
@@ -48,6 +48,9 @@ pub(super) fn thread(change: impl FnOnce(&mut DayThread)) -> DayThread {
 		reviewed_at: None,
 		cost: None,
 		context: None,
+		diff: None,
+		check: None,
+		last_write_ms: None,
 	};
 	change(&mut thread);
 	thread
@@ -55,6 +58,7 @@ pub(super) fn thread(change: impl FnOnce(&mut DayThread)) -> DayThread {
 
 type Sessions = Arc<dyn Fn(&str) -> HashMap<String, Vec<WorklogSession>> + Send + Sync>;
 pub(super) type Review = Arc<dyn Fn(&Project) -> Option<String> + Send + Sync>;
+pub(super) type StartAnswer = Arc<dyn Fn(&str, &Schedule) -> Result<ScheduleStart> + Send + Sync>;
 
 /// The hooks of a stand: what the service would be handed, recorded, and what it would answer, settable.
 pub(super) struct Shared {
@@ -67,6 +71,12 @@ pub(super) struct Shared {
 	pub review: Mutex<Review>,
 	pub sessions: Mutex<Sessions>,
 	pub projects: Vec<Project>,
+	/// What the PR cache answers, by url.
+	pub prs: Mutex<HashMap<String, PrFacts>>,
+	/// The scheduled starts asked for: project name and brief.
+	pub starts: Mutex<Vec<(String, String)>>,
+	/// What starting a scheduled thread answers.
+	pub start: Mutex<StartAnswer>,
 }
 
 impl DayHooks for Shared {
@@ -116,6 +126,16 @@ impl DayHooks for Shared {
 		let line = (self.review.lock().unwrap().clone())(project);
 		Box::pin(async { Ok(line) })
 	}
+
+	fn pr_facts(&self, url: &str) -> Option<PrFacts> {
+		self.prs.lock().unwrap().get(url).cloned()
+	}
+
+	fn start_scheduled(&self, project: &str, schedule: &Schedule) -> BoxFuture<'static, Result<ScheduleStart>> {
+		self.starts.lock().unwrap().push((project.to_owned(), schedule.brief.clone()));
+		let answer = (self.start.lock().unwrap().clone())(project, schedule);
+		Box::pin(std::future::ready(answer))
+	}
 }
 
 /// A Day on a fake clock with stand-in hooks.
@@ -151,6 +171,9 @@ impl Stand {
 			review: Mutex::new(Arc::new(|_| None)),
 			sessions: Mutex::new(Arc::new(|_| HashMap::new())),
 			projects,
+			prs: Mutex::new(HashMap::new()),
+			starts: Mutex::new(Vec::new()),
+			start: Mutex::new(Arc::new(|_, _| Ok(ScheduleStart::Started))),
 		});
 		let catalog: SharedCatalog = Arc::new(Mutex::new(open_catalog().expect("the catalog")));
 		let day = Day::new(Arc::clone(&catalog), Arc::clone(&shared) as Arc<dyn DayHooks>, options).expect("a day");
@@ -435,6 +458,7 @@ async fn today_has_the_calendar_with_links_awaiting_you_and_next_and_a_meeting_i
 				text: "try the new parser".to_owned(),
 				project: Some("demo".to_owned())
 			}],
+			scheduled: vec![],
 		}
 	);
 

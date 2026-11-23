@@ -5,7 +5,7 @@ use chrono::{DateTime, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, Tim
 use regex::Regex;
 use rusqlite::params;
 
-use super::{ACTIVITY_ROWS, Day, DayThread, EventPriority, WORKLOG_SO_FAR_MS, event, iso, local, lock};
+use super::{ACTIVITY_ROWS, Day, DayThread, EventPriority, STUCK_MS, WORKLOG_SO_FAR_MS, event, iso, local, lock};
 use crate::frontier::protocol::{
 	Activity, ActivityEvent, ActivitySummary, CalendarEntry, Dashboard, LandedItem, NeedsYou, NeedsYouKind, NextItem,
 	RailItem, ServerMessage, ThreadState, Today, wait_label,
@@ -21,6 +21,15 @@ use crate::shared::projects::Project;
 /// `Date.parse` of an ISO time as the day writes them (`toISOString`); 0 when it isn't one.
 pub(super) fn parse_iso(text: &str) -> i64 {
 	DateTime::parse_from_rfc3339(text).map_or(0, |at| at.timestamp_millis())
+}
+
+/// A thread that landed, for `Day::landed`: its pane and title, its project, how it landed, and its PR when sent as one.
+pub struct Landing<'a> {
+	pub pane_id: &'a str,
+	pub title: &'a str,
+	pub project_id: &'a str,
+	pub line: &'a str,
+	pub url: Option<&'a str>,
 }
 
 /// The epoch ms of local `naive` time; a time the clock skips (a spring-forward gap) moves on to the first one after
@@ -119,7 +128,16 @@ fn rail(t: &DayThread) -> RailItem {
 		since: None,
 		cost: None,
 		context: None,
+		diff: t.diff.clone(),
+		check: t.check,
+		stuck_for: None,
 	}
+}
+
+/// How long a working thread has not written its session file, when that is long enough to call it stuck (0668).
+fn stuck_for(t: &DayThread, now: i64) -> Option<i64> {
+	let silent = now - t.last_write_ms?;
+	(t.state == ThreadState::Working && silent >= STUCK_MS).then_some(silent)
 }
 
 fn needs(kind: NeedsYouKind, text: String) -> NeedsYou {
@@ -352,6 +370,7 @@ impl Day {
 			.map(|t| landed_item(rail(t)))
 			.collect();
 		landed.extend(self.finished_since(yesterday, &project_name)?);
+		let scheduled = self.scheduled_next(&projects);
 		Ok(Today {
 			date,
 			calendar,
@@ -366,19 +385,29 @@ impl Day {
 					since: Some(t.changed_at),
 					cost: t.cost,
 					context: t.context,
+					stuck_for: stuck_for(t, now),
 					..rail(t)
 				})
 				.collect(),
 			next,
+			scheduled,
 		})
 	}
 
 	/// The blocked threads, then the reviewed ones, as Awaiting-you rows.
 	fn threads_awaiting(&self, threads: &[DayThread], needs_you: &mut Vec<NeedsYou>) {
+		let now = self.now_ms();
 		// A blocked thread says since when it waits (UX-4, 0581): its last state change.
 		for t in threads.iter().filter(|t| t.state == ThreadState::Blocked) {
 			let line = if t.line.is_empty() { "awaiting you" } else { &t.line };
 			needs_you.push(needs_thread(NeedsYouKind::Blocked, format!("{} — {line}", t.title), t.changed_at, t));
+		}
+		// A working thread whose session file wasn't written for 10 minutes (0668): since its last write.
+		for t in threads {
+			if let (Some(stuck), Some(wrote)) = (stuck_for(t, now), t.last_write_ms) {
+				let text = format!("{} — stuck, no writes for {}", t.title, wait_label(stuck));
+				needs_you.push(needs_thread(NeedsYouKind::Stuck, text, wrote, t));
+			}
 		}
 		// Reviewed and not finished (0456): they wait on him, oldest first, for as long as it takes.
 		let mut reviewed: Vec<(&DayThread, i64)> = threads
@@ -395,11 +424,13 @@ impl Day {
 
 	/// A thread that landed (0263, 0300): squash-merged into trunk or sent as a PR, its pane gone. Kept as a low event
 	/// (0299: only `today`), so today's Landed lists it since yesterday, across restarts; `line` says how it landed.
-	pub fn landed(&self, pane_id: &str, title: &str, project_id: &str, line: &str) -> Result<()> {
+	pub fn landed(&self, landing: &Landing<'_>) -> Result<()> {
+		let Landing { pane_id, title, project_id, line, url } = *landing;
 		let source_id = format!("thread:landed:{pane_id}");
 		let mut landed =
 			event(&source_id, EventSource::Thread, "landed", EventPriority::Low, &format!("{title} — {line}"));
 		landed.project_id = Some(project_id.to_owned());
+		landed.url = url.filter(|url| !url.is_empty()).map(str::to_owned);
 		self.queue(|queue| queue.add(&landed))?;
 		self.queue(|queue| queue.resolve(&source_id))?;
 		self.push_today()
@@ -410,17 +441,21 @@ impl Day {
 		let rows = {
 			let db = lock(&self.inner.catalog);
 			let mut statement = db.prepare_cached(
-				"SELECT text, project_id FROM events WHERE kind = 'landed' AND created_at >= ? ORDER BY created_at, id",
+				"SELECT text, project_id, url FROM events WHERE kind = 'landed' AND created_at >= ? ORDER BY created_at, id",
 			)?;
 			statement
 				.query_map(params![iso(since)], |row| {
-					Ok((row.get::<_, String>("text")?, row.get::<_, Option<String>>("project_id")?))
+					Ok((
+						row.get::<_, String>("text")?,
+						row.get::<_, Option<String>>("project_id")?,
+						row.get::<_, Option<String>>("url")?,
+					))
 				})?
 				.collect::<rusqlite::Result<Vec<_>>>()?
 		};
 		Ok(rows
 			.into_iter()
-			.map(|(text, project_id)| {
+			.map(|(text, project_id, url)| {
 				// The line is Jocasta's own words, without " — "; a title may hold one.
 				let cut = text.rfind(" — ");
 				LandedItem {
@@ -433,6 +468,7 @@ impl Day {
 					since: None,
 					cost: None,
 					context: None,
+					pr: url.as_deref().filter(|url| !url.is_empty()).and_then(|url| self.inner.hooks.pr_facts(url)),
 				}
 			})
 			.collect())
@@ -609,5 +645,6 @@ fn landed_item(rail: RailItem) -> LandedItem {
 		since: None,
 		cost: None,
 		context: None,
+		pr: None,
 	}
 }

@@ -250,20 +250,35 @@ async fn heal_tells_every_shell_the_boss_workspace_once_and_sets_the_agents_view
 	r.native.heal(&herdr, &snapshot, Some(&boss)).await;
 	assert_eq!(r.sent(SHELL_BOSS), [(Target::Shells, json!(workspace))]);
 	assert_eq!(herdr.of("setAgentView").len(), 1);
+	// A relaunched boss pane (a new pane id) gets the view set again (0667).
+	let mut relaunched = snapshot.clone();
+	relaunched.panes.iter_mut().find(|pane| pane.pane_id == boss).unwrap().pane_id = "w9:p9".to_owned();
+	r.native.heal(&herdr, &relaunched, Some("w9:p9")).await;
+	r.native.heal(&herdr, &relaunched, Some("w9:p9")).await;
+	let views = herdr.of("setAgentView");
+	assert_eq!(views.len(), 2);
+	assert_eq!(views[1][0]["filter"]["filters"][1], json!({"op": "eq", "field": "pane_id", "value": "w9:p9"}));
 	// A shell that attaches later is told too.
 	r.native.joined(9, None);
 	assert_eq!(r.sent(SHELL_BOSS).last().cloned(), Some((Target::Client(9), json!(workspace))));
 }
 
 #[test]
-fn the_agents_view_sorts_attention_then_status_and_leaves_the_boss_workspace_out() {
-	let view = agent_view("w1");
+fn the_agents_view_pins_the_boss_row_first_sorts_attention_then_status_and_leaves_the_rest_of_its_workspace_out() {
+	let view = agent_view("w1", "w1:p1");
 	assert_eq!(view.source, "jocasta");
 	assert_eq!(view.label.as_deref(), Some("threads"));
-	assert_eq!(view.filter, Some(json!({"op": "not", "filter": {"op": "eq", "field": "workspace_id", "value": "w1"}})));
-	let sort = view.sort.unwrap();
 	assert_eq!(
-		sort.iter().map(|s| s["field"].as_str().unwrap()).collect::<Vec<_>>(),
+		view.filter,
+		Some(json!({"op": "any", "filters": [
+			{"op": "not", "filter": {"op": "eq", "field": "workspace_id", "value": "w1"}},
+			{"op": "eq", "field": "pane_id", "value": "w1:p1"},
+		]}))
+	);
+	let sort = view.sort.unwrap();
+	assert_eq!(sort[0], json!({"field": {"token": "pin"}, "order": "asc"}));
+	assert_eq!(
+		sort[1..].iter().map(|s| s["field"].as_str().unwrap()).collect::<Vec<_>>(),
 		["attention", "status", "state_change_seq"]
 	);
 }

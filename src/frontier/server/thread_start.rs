@@ -11,13 +11,14 @@ use crate::frontier::protocol::ThreadState;
 use crate::frontier::server::allow::Confirmation;
 use crate::frontier::server::boss::{PANE_KEY_ENV, new_pane_key};
 use crate::frontier::server::context::{Link, Shared};
+use crate::frontier::server::day::ScheduleStart;
 use crate::frontier::server::herdr::{AgentState, Env, PaneInfo, Prepare, WorktreeOptions};
 use crate::frontier::server::overlay::ensure_overlay;
 use crate::frontier::server::pane_launch::{THREAD_FLAGS, after_overlay};
 use crate::frontier::server::task_file::{NewTask, TaskRecord, new_task, task_dir};
 use crate::frontier::server::thread::{Thread, ThreadPlan, ThreadRef, subject};
 use crate::frontier::server::thread_lifecycle::StateSource;
-use crate::frontier::server::wording::{COMMIT_LINE, Door, LESSONS_LINE, branch_slug, start_prefix};
+use crate::frontier::server::wording::{COMMIT_LINE, Door, LESSONS_LINE, branch_slug, brief_title, start_prefix};
 use crate::frontier::server::worktrees::{
 	GIT_MS, ThreadPlace, copy_worktree_include, git_out, remove_checkout, thread_place,
 };
@@ -29,6 +30,7 @@ use crate::shared::install::shipped_config_dir;
 use crate::shared::pathkey::same_dir;
 use crate::shared::poll::wait_for;
 use crate::shared::projects::Project;
+use crate::shared::schedules::Schedule;
 
 /// How long `thread_start` waits for omp to come up in the new pane before sending the brief.
 const AGENT_WAIT_MS: i64 = 20_000;
@@ -215,6 +217,37 @@ impl ThreadStarts {
 		self.start_with(project, title, brief, StartOptions::new(door)).await
 	}
 
+	/// A scheduled thread's start (0673): through the key's door, so it opens in plan mode and waits for his approval.
+	/// Skipped, with the reason as his notification, when a thread with its title is already open in the project, or
+	/// when its `done_when` is one the guard asks about or denies: an unattended Key door would run it unasked. Any
+	/// other failure is the start's own error.
+	pub async fn start_scheduled(&self, project_name: &str, schedule: &Schedule) -> Result<ScheduleStart> {
+		let c = self.link.ctx();
+		let title = brief_title(&schedule.brief);
+		c.places.sync().await;
+		let project = c.places.find(project_name)?;
+		if c.threads.of_project(&project.id).iter().any(|thread| thread.with(|t| t.title == title)) {
+			return Ok(ScheduleStart::Skipped(format!(
+				"a thread named \"{title}\" is already open in {}",
+				project.name
+			)));
+		}
+		let checks: Vec<String> = schedule.done_when.iter().map(|command| js_trim(command).to_owned()).collect();
+		match Self::vet_done_when(start_prefix(Door::Key), &checks, Door::Key) {
+			Ok(false) => {}
+			Ok(true) => {
+				return Ok(ScheduleStart::Skipped(format!(
+					"its done_when needs your Allow under Jocasta's guard, which an unattended start can't ask: {}",
+					checks.join("; ")
+				)));
+			}
+			Err(denied) => return Ok(ScheduleStart::Skipped(denied.to_string())),
+		}
+		let options = StartOptions { door: Door::Key, done_when: checks, heavy: schedule.heavy };
+		self.start_with(&project.name, &title, &schedule.brief, options).await?;
+		Ok(ScheduleStart::Started)
+	}
+
 	/// The project's workspace with its project pane, the project's omp overlay, a herdr worktree workspace on branch
 	/// `feature/<title slug>` from the project's trunk in `<project>.wt/<title slug>` (`-2`, `-3`… when the branch or
 	/// folder is taken; `thread-<YYYYMMDD>-<n>` for a title with no slug, 0581), its `.worktreeinclude` files copied in,
@@ -320,7 +353,7 @@ impl ThreadStarts {
 	/// omp's guard. omp matches a command with its quotes removed, Jocasta's copy the raw text, so both forms are matched
 	/// and the stricter verdict counts: `git push --for"ce"` is still `--force`. Returns whether any command needs his
 	/// Allow; one at the CLI's door, which asks nothing (0544), is refused.
-	fn vet_done_when(prefix: &str, checks: &[String], door: Door) -> Result<bool> {
+	pub(super) fn vet_done_when(prefix: &str, checks: &[String], door: Door) -> Result<bool> {
 		if checks.is_empty() {
 			return Ok(false);
 		}

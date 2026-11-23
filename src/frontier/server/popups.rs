@@ -10,7 +10,7 @@ use std::fmt::Write as _;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use serde_json::Value;
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 
 use super::herdr::clean_text;
 use crate::frontier::protocol::{PopupForm, PopupView};
@@ -31,6 +31,8 @@ pub const START: &str = "Start";
 const CODE_LETTERS: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ";
 /// Wrong codes before a coded question counts as its fallback: no guessing through herdr's socket (0558).
 pub const WRONG_CODES: u32 = 3;
+/// Questions the `opened` feed keeps for a slow reader.
+const OPENED_BACKLOG: usize = 32;
 
 fn random_bytes<const N: usize>() -> [u8; N] {
 	let mut bytes = [0_u8; N];
@@ -38,8 +40,8 @@ fn random_bytes<const N: usize>() -> [u8; N] {
 	bytes
 }
 
-/// 32 random bytes as hex: a question's code.
-fn random_hex() -> String {
+/// 32 random bytes as hex: a question's code (and the phone's topics and tokens, 0672).
+pub fn random_hex() -> String {
 	random_bytes::<32>().iter().fold(String::with_capacity(64), |mut hex, byte| {
 		let _ = write!(hex, "{byte:02x}");
 		hex
@@ -276,6 +278,8 @@ pub enum AnswerTaken {
 /// The open questions by code. A code is only ever looked up here; a used or unknown one finds nothing.
 pub struct Popups {
 	entries: Arc<Registry>,
+	/// Every question opened from now on (0672: the phone's pushes); a receiver that falls behind skips the oldest.
+	pub(super) opened: broadcast::Sender<Popup>,
 }
 
 impl Default for Popups {
@@ -286,7 +290,7 @@ impl Default for Popups {
 
 impl Popups {
 	pub fn new() -> Self {
-		Self { entries: Arc::new(Mutex::new(Vec::new())) }
+		Self { entries: Arc::new(Mutex::new(Vec::new())), opened: broadcast::channel(OPENED_BACKLOG).0 }
 	}
 
 	fn find(&self, code: &str) -> Option<Popup> {
@@ -308,6 +312,7 @@ impl Popups {
 			}),
 		};
 		locked(&self.entries).push(popup.clone());
+		let _ = self.opened.send(popup.clone());
 		popup
 	}
 

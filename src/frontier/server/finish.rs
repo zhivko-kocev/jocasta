@@ -9,6 +9,7 @@ use serde_json::Value;
 use crate::frontier::protocol::ToastPriority;
 use crate::frontier::server::allow::Confirmation;
 use crate::frontier::server::context::{Finishing, Link};
+use crate::frontier::server::day::Landing;
 use crate::frontier::server::herdr::AgentState;
 use crate::frontier::server::status::FileReads;
 use crate::frontier::server::task_file::{CloseFacts, CloseHow, close_task};
@@ -367,7 +368,14 @@ impl Finisher {
 		let logged = git_out(main, &["log", "-1", "--format=%H%n%h"]).await?.unwrap_or_default();
 		let mut ids = logged.split('\n');
 		let (full, commit) = (ids.next().unwrap_or_default(), ids.next().unwrap_or_default());
-		c.day.landed(&t.pane_id, &t.title, &t.project.id, &format!("merged into {trunk} as {commit}"))?;
+		let line = format!("merged into {trunk} as {commit}");
+		c.day.landed(&Landing {
+			pane_id: &t.pane_id,
+			title: &t.title,
+			project_id: &t.project.id,
+			line: &line,
+			url: None,
+		})?;
 		let merged = format!("Merged {name} into {trunk} as {commit} ({} squashed)", commits_said(ahead));
 		let commit_id = (!full.is_empty()).then(|| full.to_owned());
 		if let Some(removed) = self.remove_thread(thread, CloseHow::Merged, commit_id).await? {
@@ -485,6 +493,18 @@ impl Finisher {
 		Some(GhRun { code: run.code, out: format!("{}{}", run.stdout, run.stderr).trim().to_owned() })
 	}
 
+	/// `gh pr view <url> --json number,state,statusCheckRollup` (0668): its output when gh answered, else why not. A PR's
+	/// url needs no repository, so it runs in the data folder.
+	pub(super) async fn pr_view(&self, url: &str) -> std::result::Result<String, String> {
+		let args = ["pr", "view", url, "--json", "number,state,statusCheckRollup"];
+		match self.gh(&args, &crate::shared::paths::data_dir()).await {
+			Some(run) if run.code == Some(0) => Ok(run.out),
+			Some(run) if run.code.is_none() => Err("gh didn't answer in time".to_owned()),
+			Some(run) => Err(run.out.split('\n').next().unwrap_or_default().to_owned()),
+			None => Err("gh isn't installed".to_owned()),
+		}
+	}
+
 	/// `thread_finish` pr (0426): the thread is asked to push its branch and open the PR with gh; its turn's end, then
 	/// `pr_opened`, removes the worktree. Refuses when gh isn't installed or logged in, or the project has no remote.
 	pub async fn open_pr(&self, thread: &ThreadRef, trunk: &str, door: Door) -> Result<String> {
@@ -562,8 +582,16 @@ impl Finisher {
 			return Ok(());
 		}
 		let removed = self.remove_thread(thread, CloseHow::Pr, field("headRefOid")).await?;
-		c.day.landed(&t.pane_id, &t.title, &t.project.id, "PR open")?;
 		let url = field("url").unwrap_or_else(|| "undefined".to_owned());
+		let pr = field("url");
+		let landing = Landing {
+			pane_id: &t.pane_id,
+			title: &t.title,
+			project_id: &t.project.id,
+			line: "PR open",
+			url: pr.as_deref(),
+		};
+		c.day.landed(&landing)?;
 		let how = match removed {
 			Some(removed) => format!(", but {removed}"),
 			None => "; its worktree and workspace are removed, the branch stays".to_owned(),

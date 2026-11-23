@@ -688,7 +688,12 @@ impl ReviewFlow {
 		};
 		env.extend(own);
 		match c.checks.run(&place.path, specs, &env, tree).await {
-			Ok(run) => run,
+			Ok(run) => {
+				if let Some(run) = &run {
+					c.thread_facts.note_check(&place.path, run.passed, c.day.now_ms());
+				}
+				run
+			}
 			Err(error) => {
 				c.warn(Error::other(format!("{}'s checks didn't run: {error}", place.title)));
 				None

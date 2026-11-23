@@ -432,6 +432,79 @@ pub fn descendants(root: u32, parents: &BTreeMap<u32, u32>, skip: &HashSet<u32>)
 	found
 }
 
+/// The resident memory and CPU time of one process, or of a tree's sum (0671).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TreeUsage {
+	pub rss_bytes: u64,
+	pub cpu_ms: u64,
+}
+
+/// `root` and every process under it now, summed: resident memory (Windows' working set, Linux's `VmRSS`, macOS's
+/// `ps rss`) and CPU time spent so far (user plus kernel). A process that ended between two calls takes its CPU time
+/// with it, and one this user can't open counts nothing.
+pub fn tree_usage(root: u32) -> TreeUsage {
+	let parents = parent_pids(None);
+	let mut pids = vec![root];
+	pids.extend(descendants(root, &parents, &HashSet::new()));
+	os::usages(&pids).into_iter().fold(TreeUsage::default(), |sum, one| TreeUsage {
+		rss_bytes: sum.rss_bytes + one.rss_bytes,
+		cpu_ms: sum.cpu_ms + one.cpu_ms,
+	})
+}
+
+/// One process's memory and CPU time; `None` when it can't be read.
+pub fn process_usage(pid: u32) -> Option<TreeUsage> {
+	os::usages(&[pid]).into_iter().next()
+}
+
+/// The `VmRSS` of `/proc/<pid>/status`'s text, in bytes.
+#[cfg(any(test, not(windows)))]
+fn parse_status_rss(status: &str) -> Option<u64> {
+	let line = status.lines().find_map(|line| line.strip_prefix("VmRSS:"))?;
+	let kib: u64 = line.trim().strip_suffix("kB").unwrap_or(line).trim().parse().ok()?;
+	Some(kib * 1024)
+}
+
+/// The user plus system time of `/proc/<pid>/stat`'s text (fields 14 and 15, after the `comm` in parentheses), in ms.
+/// The clock tick is taken as 100 Hz, as it is on every Linux build Jocasta runs on (no libc crate to ask).
+#[cfg(any(test, not(windows)))]
+fn parse_stat_cpu_ms(stat: &str) -> Option<u64> {
+	let rest = stat.get(stat.rfind(')')? + 2..)?;
+	let mut fields = rest.split(' ').skip(11);
+	let user: u64 = fields.next()?.parse().ok()?;
+	let system: u64 = fields.next()?.parse().ok()?;
+	Some((user + system) * 10)
+}
+
+/// `ps`'s `time` column (`0:00.05`, `1:02:03.45`, `2-03:04:05`) in ms.
+#[cfg(any(test, not(windows)))]
+fn parse_ps_time(text: &str) -> Option<u64> {
+	let (days, clock) = match text.split_once('-') {
+		Some((days, clock)) => (days.parse::<u64>().ok()?, clock),
+		None => (0, text),
+	};
+	let mut seconds = 0.0;
+	let mut unit = 1.0;
+	for part in clock.rsplit(':') {
+		seconds += part.parse::<f64>().ok().filter(|n| n.is_finite() && *n >= 0.0)? * unit;
+		unit *= 60.0;
+	}
+	Some(days * 86_400_000 + (seconds * 1000.0).round() as u64)
+}
+
+/// `ps -o pid=,rss=,time=`'s lines (rss in KiB) as usages; a line that doesn't parse is left out.
+#[cfg(any(test, not(windows)))]
+fn parse_ps_usage(text: &str) -> Vec<TreeUsage> {
+	text.lines()
+		.filter_map(|line| {
+			let mut fields = line.split_whitespace();
+			fields.next()?.parse::<u32>().ok()?;
+			let rss: u64 = fields.next()?.parse().ok()?;
+			Some(TreeUsage { rss_bytes: rss * 1024, cpu_ms: parse_ps_time(fields.next()?)? })
+		})
+		.collect()
+}
+
 /// The processes whose working folder is `folder` or inside it, this process excepted. Windows: each process's current
 /// directory is read from its PEB (`NtQueryInformationProcess` + `ReadProcessMemory`); a process this user can't open
 /// (another user's, an elevated one) is skipped, and a folder recorded with an 8.3 short name (`C:\Users\ZHIVKO~1\…`,

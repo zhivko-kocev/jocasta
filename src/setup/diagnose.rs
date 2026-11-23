@@ -13,10 +13,12 @@ use futures_util::future::BoxFuture;
 
 use crate::frontier::server::herdr::{Herdr, HerdrSnapshot, PaneInfo, TabSpec};
 use crate::frontier::server::launch::ServiceState;
+use crate::frontier::server::phone::{PhoneMode, mode_of, read_topics};
 use crate::setup::setup::SetupCheck;
 use crate::shared::errors::{Error, Result};
 use crate::shared::log::{LOG_DAYS, LOG_FILE};
 use crate::shared::service_file::ServiceFile;
+use crate::shared::settings::{NtfySettings, read_ntfy};
 
 /// The boss's workspace (0392, 0404), where the diagnose pane opens.
 const WORKSPACE: &str = "Jocasta";
@@ -131,6 +133,22 @@ fn service_line(service: &ServiceInfo) -> String {
 		None => format!("{state} (no jocasta-service.json: it isn't running)"),
 		Some(file) => format!("{state} (jocasta-service.json names pid {}, port {})", file.pid, file.port),
 	}
+}
+
+/// The `phone` line (0672), `None` with the phone off: the server, the mode and the main topic his phone's ntfy app
+/// subscribes to. Printed for him alone and never written into `state.md`, which goes to his model provider. The token
+/// is never shown; the reply topic isn't needed on the phone.
+pub fn phone_line(ntfy: &NtfySettings, data_dir: &Path) -> Option<String> {
+	let server = ntfy.server.as_deref()?;
+	let mode = match mode_of(ntfy) {
+		PhoneMode::Own => "own server",
+		PhoneMode::Public => "public server",
+	};
+	let topic = match read_topics(data_dir) {
+		Some(topics) => format!("main topic {}", topics.main),
+		None => "the topics are made when Jocasta starts".to_owned(),
+	};
+	Some(format!("phone: {server}, {mode}, {topic} (a secret: don't paste this output)"))
 }
 
 fn panes_section(snapshot: &HerdrSnapshot) -> Vec<String> {
@@ -249,6 +267,9 @@ async fn open_pane(
 	let tab =
 		herdr.create_tab(&workspace, &TabSpec { title: "diagnose".to_owned(), cwd: dir, command, env: None }).await?;
 	herdr.focus(&tab.pane_id).await?;
+	if let Some(line) = phone_line(&read_ntfy(), &deps.data_dir) {
+		print(&line);
+	}
 	print(&format!(
 		"Opened a read-only diagnose pane in workspace {WORKSPACE} (herdr session `{}`): run `jocasta` to see it.",
 		deps.session

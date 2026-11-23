@@ -328,6 +328,12 @@ pub trait ShellExtension: Send {
     fn dock_key(&mut self, key: KeyEvent) -> Reply;
     /// A left click at (`column`, `row`) in the dock, in the client's cells: it picks and acts on the row there.
     fn dock_mouse(&mut self, column: u16, row: u16) -> Reply;
+    /// A mouse-wheel step at (`column`, `row`) in the dock, `step` 1 toward the end and -1 toward the start (0668): it
+    /// scrolls what the dock draws there. The default does nothing, so an extension without a scrolling box needs no
+    /// code.
+    fn dock_scroll(&mut self, _column: u16, _row: u16, _step: isize) -> Reply {
+        Reply::default()
+    }
     /// Whether a question is up: it takes every key.
     fn asking(&self) -> bool;
     /// Draws the question over `area` (the whole terminal); returns the part it covers.
@@ -379,6 +385,11 @@ pub(crate) fn shell_dock_key(key: KeyEvent) -> Reply {
 /// A left click at (`column`, `row`) in the dock: what picking the row there does.
 pub(crate) fn shell_dock_mouse(column: u16, row: u16) -> Reply {
     with_shell(|shell| shell.dock_mouse(column, row)).unwrap_or_default()
+}
+
+/// A wheel step at (`column`, `row`) in the dock: what scrolling there does.
+pub(crate) fn shell_dock_scroll(column: u16, row: u16, step: isize) -> Reply {
+    with_shell(|shell| shell.dock_scroll(column, row, step)).unwrap_or_default()
 }
 
 pub(crate) fn shell_asking() -> bool {

@@ -492,11 +492,187 @@ async fn a_check_ended_at_its_limit_ends_a_grandchild_whose_parent_already_exite
 		versions: Some(Arc::new(|_, _| async { String::new() }.boxed())),
 		timeout_ms: Some(4_000),
 		poll_ms: Some(20),
+		admission: None,
 	});
 	let run = r.run(&repo, &[check], &process_env(), None).await.unwrap().unwrap();
 	assert_eq!(run.results[0].exit, None);
 	assert!(std::fs::read_to_string(&run.results[0].log).unwrap().contains("jocasta: killed (0 minutes)"));
 	let sleeper: u32 = std::fs::read_to_string(&pid_file).expect("the sleeper's pid").trim().parse().unwrap();
 	assert!(crate::shared::proctree::tests::settles(|| !pid_alive(sleeper)).await);
+	r.stop().await;
+}
+
+const GIB: u64 = 1 << 30;
+
+/// A queue with `free_gib` of free memory, `reserve_gib` kept back and `cores` cores; `seen` are the commands with a
+/// record: (command, peak in GiB, cores).
+fn queue(free_gib: u64, reserve_gib: u64, cores: usize, seen: &[(&str, u64, f64)]) -> Arc<Admission> {
+	let costs = CheckCosts::in_memory();
+	for (command, peak, used) in seen {
+		costs.record(&CheckCosts::key(Path::new("project"), command), peak * GIB, *used, 0);
+	}
+	Arc::new(Admission::with(Arc::new(move || free_gib * GIB), cores, reserve_gib * GIB, costs))
+}
+
+type Waiter = tokio::task::JoinHandle<Option<Permit>>;
+
+/// `command` asks to run; the ask is answered once the queue lets it.
+fn ask(queue: &Arc<Admission>, command: &'static str) -> Waiter {
+	let queue = Arc::clone(queue);
+	tokio::spawn(async move { queue.admit(Path::new("project"), command).await })
+}
+
+/// Lets every ready task run (the tests' tasks only wait on the queue, never on the clock).
+async fn settle() {
+	for _ in 0..20 {
+		tokio::task::yield_now().await;
+	}
+}
+
+async fn permit(waiter: Waiter) -> Permit {
+	waiter.await.unwrap().expect("admitted")
+}
+
+fn load(queue: &Admission) -> (u32, u32) {
+	let load = queue.load();
+	(load.running, load.waiting)
+}
+
+#[tokio::test]
+async fn a_check_with_a_record_runs_beside_others_while_their_peaks_fit_in_free_memory_minus_the_reserve_0671() {
+	// 10 GiB free, 2 kept: 8 GiB of room.
+	let q = queue(10, 2, 16, &[("a", 3, 1.0), ("b", 4, 1.0), ("c", 2, 1.0)]);
+	let a = permit(ask(&q, "a")).await;
+	let _b = permit(ask(&q, "b")).await;
+	assert_eq!(load(&q), (2, 0));
+	// 3 + 4 + 2 = 9 GiB does not fit: c waits until a ends.
+	let c = ask(&q, "c");
+	settle().await;
+	assert!(!c.is_finished());
+	assert_eq!(load(&q), (2, 1));
+	drop(a);
+	let _c = permit(c).await;
+	assert_eq!(load(&q), (2, 0));
+}
+
+#[tokio::test]
+async fn the_cores_of_the_running_checks_and_the_new_one_must_fit_in_the_machines_cores_0671() {
+	let q = queue(100, 0, 2, &[("a", 1, 1.5), ("b", 1, 1.0), ("c", 1, 0.5)]);
+	let a = permit(ask(&q, "a")).await;
+	let b = ask(&q, "b");
+	settle().await;
+	// 1.5 + 1.0 > 2 cores, though memory is plenty.
+	assert!(!b.is_finished());
+	drop(a);
+	let _b = permit(b).await;
+	// 1.0 + 0.5 fits.
+	let _c = permit(ask(&q, "c")).await;
+}
+
+#[tokio::test]
+async fn the_queue_is_first_come_first_served_a_small_check_never_passes_a_bigger_one_before_it_0671() {
+	let q = queue(10, 2, 16, &[("a", 2, 1.0), ("b", 7, 1.0), ("c", 1, 1.0)]);
+	let a = permit(ask(&q, "a")).await;
+	let b = ask(&q, "b");
+	settle().await;
+	let c = ask(&q, "c");
+	settle().await;
+	// c would fit beside a (2 + 1 <= 8) but b, which does not (2 + 7 > 8), asked first.
+	assert!(!b.is_finished() && !c.is_finished());
+	assert_eq!(load(&q), (1, 2));
+	drop(a);
+	let _b = permit(b).await;
+	let _c = permit(c).await;
+	assert_eq!(load(&q), (2, 0));
+}
+
+#[tokio::test]
+async fn a_check_with_no_record_runs_alone_once_and_its_measurement_becomes_its_record_0671() {
+	let q = queue(100, 0, 16, &[("known", 1, 1.0)]);
+	let known = permit(ask(&q, "known")).await;
+	let fresh = ask(&q, "fresh");
+	settle().await;
+	// It waits for the running check to drain.
+	assert!(!fresh.is_finished());
+	drop(known);
+	let fresh = permit(fresh).await;
+	// Nothing starts while it runs, though memory and cores are plenty.
+	let other = ask(&q, "known");
+	settle().await;
+	assert!(!other.is_finished());
+	assert_eq!(load(&q), (1, 1));
+	fresh.record(GIB, 1.0);
+	drop(fresh);
+	let _other = permit(other).await;
+	// Now it has a record: it runs beside another.
+	let _again = permit(ask(&q, "fresh")).await;
+	assert_eq!(load(&q), (2, 0));
+}
+
+#[tokio::test]
+async fn nothing_running_admits_the_next_check_whatever_it_costs_0671() {
+	let q = queue(10, 2, 4, &[("huge", 100, 64.0)]);
+	let huge = permit(ask(&q, "huge")).await;
+	assert_eq!(load(&q), (1, 0));
+	drop(huge);
+	assert_eq!(load(&q), (0, 0));
+}
+
+#[tokio::test]
+async fn closing_the_queue_releases_the_waiters_and_admits_no_one_after_0671() {
+	let q = queue(10, 2, 4, &[("a", 1, 1.0)]);
+	let _a = permit(ask(&q, "fresh")).await;
+	let waiting = ask(&q, "a");
+	settle().await;
+	assert!(!waiting.is_finished());
+	q.close();
+	assert!(waiting.await.unwrap().is_none());
+	assert!(q.admit(Path::new("project"), "a").await.is_none());
+	assert_eq!(load(&q), (1, 0));
+}
+
+#[tokio::test]
+async fn a_wait_that_is_dropped_leaves_the_queue_0671() {
+	let q = queue(10, 2, 4, &[]);
+	let _first = permit(ask(&q, "first")).await;
+	let second = ask(&q, "second");
+	settle().await;
+	assert_eq!(load(&q), (1, 1));
+	second.abort();
+	let _ = second.await;
+	assert_eq!(load(&q), (1, 0));
+}
+
+#[tokio::test]
+async fn the_runner_records_what_a_check_cost_and_waiting_does_not_count_toward_its_timeout_0671() {
+	let j = temp_jocasta();
+	let work = temp_dir("checks");
+	let repo = make_repo(&work);
+	let dir = data_of(&j).join("checks");
+	let costs_file = dir.join("costs.json");
+	let r = CheckRunner::new(CheckRunnerOptions {
+		dir: dir.clone(),
+		versions: Some(Arc::new(|_, _| async { String::new() }.boxed())),
+		// Each check runs about 2 s; the second waits that long for the first, then must still have its own 3.5 s.
+		timeout_ms: Some(3_500),
+		poll_ms: Some(20),
+		admission: Some(Admission::with(Arc::new(|| u64::MAX), 64, 0, CheckCosts::load(costs_file.clone()))),
+	});
+	let one = [spec("one", &fake(work.path(), "one", "run|2000|0|one"))];
+	let two = [spec("two", &fake(work.path(), "two", "run|2000|0|two"))];
+	let env = process_env();
+	let (first, second) = tokio::join!(r.run(&repo, &one, &env, None), r.run(&repo, &two, &env, None));
+	// Neither has a record yet: one runs alone and the other waits, and neither was killed.
+	for run in [first.unwrap().unwrap(), second.unwrap().unwrap()] {
+		assert_eq!(run.results[0].exit, Some(0));
+	}
+	assert_eq!((r.load().running, r.load().waiting), (0, 0));
+	// Each run's measurement became its record.
+	let records = read_json_object(&costs_file).expect("the costs file");
+	assert_eq!(records.len(), 2);
+	for (_, cost) in records {
+		assert!(cost["peak_rss_bytes"].as_u64().unwrap() > 0);
+		assert_eq!(cost["runs"], 1);
+	}
 	r.stop().await;
 }

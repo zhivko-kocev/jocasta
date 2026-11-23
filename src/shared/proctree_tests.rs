@@ -585,3 +585,43 @@ fn process_started_at_is_this_processs_start_time_none_for_none_lc_4() {
 	assert!(started > now - 3_600_000);
 	assert_eq!(process_started_at(0), None);
 }
+
+#[test]
+fn this_process_has_resident_memory_and_its_tree_is_at_least_that_big_0671() {
+	let own = process_usage(std::process::id()).expect("this process's usage");
+	assert!(own.rss_bytes > 0);
+	assert!(tree_usage(std::process::id()).rss_bytes >= own.rss_bytes);
+	assert_eq!(tree_usage(u32::MAX), TreeUsage::default());
+}
+
+#[test]
+fn the_linux_proc_files_read_as_resident_bytes_and_cpu_ms_0671() {
+	let status = "Name:\tcargo\nVmPeak:\t  900 kB\nVmRSS:\t  2048 kB\nThreads:\t4\n";
+	assert_eq!(parse_status_rss(status), Some(2048 * 1024));
+	assert_eq!(parse_status_rss("Name:\tkthreadd\n"), None);
+	// utime 250 and stime 50 ticks; a `comm` with spaces and parentheses doesn't shift the fields.
+	let stat = "42 (a (weird) name) S 1 42 42 0 -1 4194560 100 0 0 0 250 50 0 0 20 0 1 0 12345 1000 200";
+	assert_eq!(parse_stat_cpu_ms(stat), Some(3000));
+	assert_eq!(parse_stat_cpu_ms("42 (short) S 1"), None);
+}
+
+#[test]
+fn ps_time_reads_with_and_without_hours_and_days_0671() {
+	assert_eq!(parse_ps_time("0:00.05"), Some(50));
+	assert_eq!(parse_ps_time("12:34.50"), Some(754_500));
+	assert_eq!(parse_ps_time("1:02:03.00"), Some(3_723_000));
+	assert_eq!(parse_ps_time("2-03:04:05"), Some(2 * 86_400_000 + 11_045_000));
+	assert_eq!(parse_ps_time("soon"), None);
+}
+
+#[test]
+fn ps_lines_read_as_usages_and_a_bad_line_is_left_out_0671() {
+	let text = "  101  20480   0:01.50\nnot a line\n  102   1024 1:00:00.00\n";
+	assert_eq!(
+		parse_ps_usage(text),
+		vec![
+			TreeUsage { rss_bytes: 20480 * 1024, cpu_ms: 1500 },
+			TreeUsage { rss_bytes: 1024 * 1024, cpu_ms: 3_600_000 },
+		]
+	);
+}

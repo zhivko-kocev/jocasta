@@ -26,6 +26,12 @@ impl ShellExtension for BossOnly {
     fn dock_mouse(&mut self, _column: u16, _row: u16) -> Reply {
         Reply::default()
     }
+    fn dock_scroll(&mut self, _column: u16, _row: u16, step: isize) -> Reply {
+        Reply {
+            send: vec![("scroll".to_owned(), step.to_string())],
+            ..Reply::default()
+        }
+    }
     fn asking(&self) -> bool {
         false
     }
@@ -143,4 +149,36 @@ fn the_boss_workspace_has_no_new_tab_button_and_ordinary_ones_do() {
     assert!(boss.hits.new_tab.is_empty());
     let other = state_on("ws_other");
     assert!(!other.hits.new_tab.is_empty());
+}
+
+/// 0668: a wheel step in the dock goes to the extension and the panes never see it; one outside is not the dock's.
+#[test]
+fn the_wheel_in_the_dock_reaches_the_extension_and_stops_there() {
+    let mut state = state_on(BOSS);
+    let dock = state.hits.dock;
+    assert!(!dock.is_empty());
+    let wheel = |kind, column, row| crossterm::event::MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: crossterm::event::KeyModifiers::NONE,
+    };
+    for (kind, step) in [
+        (crossterm::event::MouseEventKind::ScrollDown, 1),
+        (crossterm::event::MouseEventKind::ScrollUp, -1),
+    ] {
+        let mut outcome = ClientShellInput::default();
+        assert!(state.extension_takes_mouse(wheel(kind, dock.x, dock.y), &mut outcome));
+        assert_eq!(
+            outcome.requests,
+            vec![ClientMessage::EndpointControl {
+                kind: "scroll".to_owned(),
+                data: step.to_string(),
+            }]
+        );
+    }
+    let mut outcome = ClientShellInput::default();
+    let outside = wheel(crossterm::event::MouseEventKind::ScrollDown, 0, 0);
+    assert!(!state.extension_takes_mouse(outside, &mut outcome));
+    assert!(outcome.requests.is_empty());
 }

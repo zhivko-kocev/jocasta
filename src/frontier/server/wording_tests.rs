@@ -81,6 +81,9 @@ fn doors_name_him_and_the_asker() {
 	assert_eq!(person(Door::Key), Person { he: "you", his: "your", he_cap: "You", him: "you" });
 	assert_eq!(asker(Door::Cli, "thread new"), "A `jocasta thread new` command");
 	assert_eq!(asker(Door::Boss, "thread new"), "The boss");
+	// A question his own key opened (0670) is his, not the boss's.
+	assert_eq!(asker(Door::Key, "worktree remove"), "You");
+	assert_eq!((asks(Door::Key), asks(Door::Boss), asks(Door::Cli)), ("asked", "asks", "asks"));
 }
 
 #[test]

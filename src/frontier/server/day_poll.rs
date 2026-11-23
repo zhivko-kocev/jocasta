@@ -6,8 +6,8 @@ use tokio::sync::watch;
 use super::{
 	Day, EventPriority, Fault, Finish, PollerName, WEEKLY_REVIEW_DAY, WEEKLY_REVIEW_HOUR, event, finished, local, lock,
 };
-use crate::frontier::protocol::{ServerMessage, ToastLevel, ToastPriority, ToastReason, quota_high};
-use crate::frontier::server::quota::{omp_usage, quota_warning, read_quota};
+use crate::frontier::protocol::{QuotaSpan, ServerMessage, ToastLevel, ToastPriority, ToastReason, quota_high};
+use crate::frontier::server::quota::{account_warning, omp_usage_redacted, read_accounts, read_quota};
 use crate::shared::errors::{Error, Result};
 use crate::shared::events::queue::EventSource;
 use crate::shared::paths::data_dir;
@@ -205,19 +205,24 @@ impl Day {
 			}
 			state.quota_reading = true;
 		}
+		// Redacted: a full email never reaches the protocol (0669). A omp without `--redact` reads as no answer.
 		let usage = match &self.inner.usage {
 			Some(usage) => usage().await,
-			None => omp_usage().await,
+			None => omp_usage_redacted().await.ok_or_else(|| Error::other("omp usage gave no answer")),
 		};
-		let windows = usage.and_then(|text| read_quota(&text));
-		let windows = {
+		let read = usage.and_then(|text| Ok((read_quota(&text)?, read_accounts(&text))));
+		let accounts = {
 			let mut state = self.st();
 			state.quota_reading = false;
-			match windows {
-				Ok(windows) => {
-					state.quota_windows.clone_from(&windows);
+			match read {
+				Ok((windows, accounts)) => {
+					state.quota_windows = windows;
+					if let Some(read) = &accounts {
+						state.quota_accounts.clone_from(&read.accounts);
+						state.quota_capacity.clone_from(&read.capacity);
+					}
 					state.last_error.remove("quota");
-					windows
+					accounts.map(|read| read.accounts)
 				}
 				Err(error) => {
 					let message = format!("omp usage: {error}");
@@ -231,29 +236,35 @@ impl Day {
 				}
 			}
 		};
-		for q in windows {
-			let warn = {
-				let mut state = self.st();
-				if !quota_high(&q) {
-					state.quota_warned.retain(|window| *window != q.window);
-					false
-				} else if state.quota_warned.contains(&q.window) {
-					false
-				} else {
-					state.quota_warned.push(q.window);
-					true
+		let Some(accounts) = accounts else { return };
+		// One toast per account and window passing the warning, again only after it went back under (0669).
+		let mut high: Vec<(String, QuotaSpan)> = Vec::new();
+		let mut toasts = Vec::new();
+		{
+			let mut state = self.st();
+			for account in &accounts {
+				for q in account.five_h.iter().chain(&account.seven_d) {
+					if !quota_high(q) {
+						continue;
+					}
+					let key = (account.name.clone(), q.window);
+					if !state.quota_warned.contains(&key) {
+						toasts.push(account_warning(&account.name, q));
+					}
+					high.push(key);
 				}
-			};
-			if warn {
-				self.inner.hooks.send(ServerMessage::Toast {
-					reason: ToastReason::Event,
-					level: ToastLevel::Warning,
-					priority: Some(ToastPriority::Urgent),
-					text: quota_warning(&q),
-					pane_id: None,
-					url: None,
-				});
 			}
+			state.quota_warned = high;
+		}
+		for text in toasts {
+			self.inner.hooks.send(ServerMessage::Toast {
+				reason: ToastReason::Event,
+				level: ToastLevel::Warning,
+				priority: Some(ToastPriority::Urgent),
+				text,
+				pane_id: None,
+				url: None,
+			});
 		}
 	}
 

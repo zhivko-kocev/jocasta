@@ -209,6 +209,31 @@ pub enum ThreadState {
 	Idle,
 }
 
+/// Lines added and removed in a thread's worktree (0668).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThreadDiff {
+	pub added: u32,
+	pub removed: u32,
+}
+
+/// A PR's CI state (0668).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PrCi {
+	Pending,
+	Passing,
+	Failing,
+	Merged,
+	Closed,
+}
+
+/// A PR's number and CI state (0668).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrFacts {
+	pub number: u64,
+	pub ci: PrCi,
+}
+
 /// One thread row in `today` (0409, 0555): a herdr thread pane.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -230,6 +255,15 @@ pub struct RailItem {
 	pub cost: Option<f64>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub context: Option<u64>,
+	/// Lines added and removed in its worktree against trunk (0668).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub diff: Option<ThreadDiff>,
+	/// The last check: `Some(true)` passed, `Some(false)` failed, `None` none yet (0668).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub check: Option<bool>,
+	/// Ms with no write to its session file, only when stuck (0668).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub stuck_for: Option<i64>,
 }
 
 /// A `RailItem` whose pane may be gone: `Omit<RailItem, "paneId"> & { paneId?: string }`.
@@ -251,6 +285,9 @@ pub struct LandedItem {
 	pub cost: Option<f64>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub context: Option<u64>,
+	/// The PR a finished thread was sent as (0668).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub pr: Option<PrFacts>,
 }
 
 /// How long a thread has waited on him (0456), short: `25 min`, `3 h`, `2 d`; `1 min` at least.
@@ -302,6 +339,8 @@ pub enum NeedsYouKind {
 	Reviewed,
 	Reminder,
 	Disk,
+	/// A working thread whose session file was not written for a long while (0668).
+	Stuck,
 }
 
 /// One row of what awaits him (0432).
@@ -337,6 +376,15 @@ pub struct NextItem {
 	pub project: Option<String>,
 }
 
+/// A scheduled thread's next run (0673).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduledItem {
+	pub project: String,
+	pub brief: String,
+	pub at_ms: i64,
+}
+
 /// The `today` view (0300) as the rail shows it: Awaiting you, Landed, Underway, Next (0409).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -356,6 +404,9 @@ pub struct Today {
 	pub underway: Vec<RailItem>,
 	/// Inbox notes filed into projects' next work (0302), oldest first.
 	pub next: Vec<NextItem>,
+	/// The soonest scheduled threads (0673), at most 3.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub scheduled: Vec<ScheduledItem>,
 }
 
 /// One headline from brutalist.report (0429): title, source, when it was published and its link only.
@@ -537,6 +588,43 @@ pub struct QuotaWindow {
 	pub resets_at: Option<String>,
 }
 
+/// One logged-in account's windows (0669): its name is the redacted email, else the account id, else `#<credential>`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaAccount {
+	pub name: String,
+	#[serde(default, skip_serializing_if = "Option::is_none", rename = "5h")]
+	pub five_h: Option<QuotaWindow>,
+	#[serde(default, skip_serializing_if = "Option::is_none", rename = "7d")]
+	pub seven_d: Option<QuotaWindow>,
+}
+
+/// What is left of one window across the accounts (0669).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaCapacity {
+	pub window: QuotaSpan,
+	pub remaining: u32,
+	pub accounts: u32,
+}
+
+/// The check queue's load (0671).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChecksLoad {
+	pub running: u32,
+	pub waiting: u32,
+}
+
+/// The costliest thread of today (0668).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopThread {
+	pub title: String,
+	#[serde(serialize_with = "js_number")]
+	pub cost: f64,
+}
+
 /// The HUD figures (0403): the same ones `<data>/hud.txt` carries.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -555,6 +643,21 @@ pub struct Hud {
 	/// Whether quiet hours are on now (0298, 0581): `today`'s header says so.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub quiet: Option<bool>,
+	/// The mean of the recorded prior days' spend (0668, up to 7); null with none recorded.
+	#[serde(default, skip_serializing_if = "Option::is_none", serialize_with = "js_number_opt")]
+	pub spend_avg_7d: Option<f64>,
+	/// The thread with the highest cost today (0668).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub top_thread: Option<TopThread>,
+	/// Every logged-in account's 5h and 7d use (0669).
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub accounts: Vec<QuotaAccount>,
+	/// What is left per window across the accounts (0669).
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub capacity: Vec<QuotaCapacity>,
+	/// The check queue (0671); present only while a check runs or waits.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub checks: Option<ChecksLoad>,
 }
 
 /// Why a notification was raised.
@@ -585,6 +688,8 @@ pub enum ToastPriority {
 }
 
 /// Service → client.
+// A wire message: built, serialized and dropped at once, so its size on the stack doesn't matter.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase", rename_all_fields = "camelCase")]
 pub enum ServerMessage {
@@ -646,6 +751,10 @@ pub enum ClientMessage {
 	/// current `today` or dashboard, and http(s).
 	#[serde(rename = "link.open")]
 	LinkOpen { url: String },
+	/// A leftover's `x` key (0670): the service removes the worktree folder only when it is one of the current
+	/// `dashboard.leftovers`, and only behind his Allow.
+	#[serde(rename = "leftover.remove")]
+	LeftoverRemove { folder: PathBuf },
 }
 
 #[cfg(test)]
@@ -700,11 +809,25 @@ mod tests {
 					QuotaWindow { window: QuotaSpan::SevenDays, used: 1.0, resets_at: None },
 				],
 				quiet: Some(true),
+				spend_avg_7d: Some(4.5),
+				top_thread: Some(TopThread { title: "Fix login".to_owned(), cost: 2.0 }),
+				accounts: vec![QuotaAccount {
+					name: "zi*".to_owned(),
+					five_h: Some(QuotaWindow { window: QuotaSpan::FiveHours, used: 0.42, resets_at: None }),
+					seven_d: None,
+				}],
+				capacity: vec![QuotaCapacity { window: QuotaSpan::FiveHours, remaining: 2, accounts: 3 }],
+				checks: Some(ChecksLoad { running: 1, waiting: 2 }),
 			},
 			json!({
 				"running": 1, "blocked": 2, "awaiting": 3, "spendToday": null,
 				"quota": [{"window": "5h", "used": 0.796, "resetsAt": "2026-10-08T14:00:00.000Z"}, {"window": "7d", "used": 1}],
 				"quiet": true,
+				"spendAvg7d": 4.5,
+				"topThread": {"title": "Fix login", "cost": 2},
+				"accounts": [{"name": "zi*", "5h": {"window": "5h", "used": 0.42}}],
+				"capacity": [{"window": "5h", "remaining": 2, "accounts": 3}],
+				"checks": {"running": 1, "waiting": 2},
 			}),
 		)
 	}
@@ -720,6 +843,9 @@ mod tests {
 			since: Some(1_791_450_000_000),
 			cost: Some(1.25),
 			context: Some(48_000),
+			diff: Some(ThreadDiff { added: 84, removed: 12 }),
+			check: Some(false),
+			stuck_for: Some(660_000),
 		};
 		let today = Today {
 			date: "2026-10-08".to_owned(),
@@ -764,9 +890,15 @@ mod tests {
 				since: None,
 				cost: None,
 				context: None,
+				pr: Some(PrFacts { number: 7, ci: PrCi::Passing }),
 			}],
 			underway: vec![rail],
 			next: vec![NextItem { id: 4, text: "try the new parser".to_owned(), project: Some("acme-api".to_owned()) }],
+			scheduled: vec![ScheduledItem {
+				project: "acme-api".to_owned(),
+				brief: "dependency bumps".to_owned(),
+				at_ms: 1_791_500_000_000,
+			}],
 		};
 		let json = json!({
 			"date": "2026-10-08",
@@ -779,12 +911,14 @@ mod tests {
 				{"kind": "reviewed", "text": "Fix login — review ready", "paneId": "p1", "project": "acme-api", "time": "15:00",
 				 "since": "2026-10-08T09:00:00.000Z", "overlaps": ["Add SSO"]},
 			],
-			"landed": [{"title": "Old", "project": null, "line": "merged"}],
+			"landed": [{"title": "Old", "project": null, "line": "merged", "pr": {"number": 7, "ci": "passing"}}],
 			"underway": [{
 				"paneId": "p1", "title": "Fix login", "project": "acme-api", "line": "working", "overlaps": ["Add SSO"],
 				"state": "working", "since": 1_791_450_000_000_i64, "cost": 1.25, "context": 48000,
+				"diff": {"added": 84, "removed": 12}, "check": false, "stuckFor": 660_000,
 			}],
 			"next": [{"id": 4, "text": "try the new parser", "project": "acme-api"}],
+			"scheduled": [{"project": "acme-api", "brief": "dependency bumps", "atMs": 1_791_500_000_000_i64}],
 		});
 		(today, json)
 	}
@@ -992,11 +1126,15 @@ mod tests {
 	}
 
 	#[test]
-	fn the_clients_messages_are_a_focus_and_a_link() {
+	fn the_clients_messages_are_a_focus_a_link_and_a_leftover_removal() {
 		wire(&ClientMessage::PaneFocus { pane_id: "p1".to_owned() }, &json!({"type": "pane.focus", "paneId": "p1"}));
 		wire(
 			&ClientMessage::LinkOpen { url: "https://example.org".to_owned() },
 			&json!({"type": "link.open", "url": "https://example.org"}),
+		);
+		wire(
+			&ClientMessage::LeftoverRemove { folder: PathBuf::from("acme-api/fix-login") },
+			&json!({"type": "leftover.remove", "folder": "acme-api/fix-login"}),
 		);
 	}
 

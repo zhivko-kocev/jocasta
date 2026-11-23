@@ -32,9 +32,11 @@ pub mod projects_file;
 pub mod prompt;
 pub mod push_hook;
 pub mod route;
+pub mod schedules;
 pub mod schema;
 pub mod service_file;
 pub mod settings;
+pub mod spend_days;
 pub mod surface;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;

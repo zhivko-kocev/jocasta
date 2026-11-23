@@ -1,4 +1,5 @@
-//! `jocasta.yaml` in the config dir: Jocasta-only settings (`service.*`, `dashboard.*`, `pollers.*`; 0387).
+//! `jocasta.yaml` in the config dir: Jocasta-only settings (`service.*`, `dashboard.*`, `pollers.*`, `ntfy.*`,
+//! `checks.*`; 0387).
 //!
 //! The TypeScript validates the file with a typebox schema and reads the problems from the errors; the schema is code
 //! here ([`validate`]), reporting the same faults at the same paths.
@@ -50,6 +51,8 @@ fn poller_off(poller: &str) -> &'static str {
 
 const WEATHER_OFF: &str = "the weather is off";
 const NEWS_GONE: &str = "pollers.news.topics and pollers.news.limit are gone; use pollers.news.feeds (0442)";
+const NTFY_OFF: &str = "the phone check-in is off";
+const CHECKS_DEFAULT: &str = "the check queue uses the default memory reserve";
 
 fn rule(reason: &str, instead: &'static str, map: bool) -> KeyRule {
 	KeyRule { reason: reason.to_owned(), instead, map }
@@ -97,6 +100,14 @@ fn rule_of(key: &str) -> Option<KeyRule> {
 		),
 		"pollers.news.everyMinutes" => minutes_rule("news"),
 		"pollers.news.topics" | "pollers.news.limit" => rule(NEWS_GONE, poller_off("news"), false),
+		"ntfy" => rule("ntfy must be a mapping", NTFY_OFF, true),
+		"ntfy.server" => rule("ntfy.server must be an http:// or https:// URL", NTFY_OFF, false),
+		"ntfy.ownServer" => rule("ntfy.ownServer must be true or false", "the server is not treated as his own", false),
+		"ntfy.token" => rule("ntfy.token must be a non-empty string without spaces", "no token is used", false),
+		"checks" => rule("checks must be a mapping", CHECKS_DEFAULT, true),
+		"checks.memoryReserveGb" => {
+			rule("checks.memoryReserveGb must be a number from 0 to 256", CHECKS_DEFAULT, false)
+		}
 		_ => return None,
 	})
 }
@@ -217,10 +228,58 @@ fn validate(settings: &Map<String, Value>) -> Vec<Fault> {
 			"service" | "frontier" => check_service(name, value, &mut faults),
 			"dashboard" => check_dashboard(value, &mut faults),
 			"pollers" => check_pollers(value, &mut faults),
+			"ntfy" => check_ntfy(value, &mut faults),
+			"checks" => check_checks(value, &mut faults),
 			_ => faults.push(fault(&[], name, true)),
 		}
 	}
 	faults
+}
+
+/// `ntfy.server` (0672): an `http://` or `https://` URL without whitespace.
+fn is_ntfy_server(url: &str) -> bool {
+	["http://", "https://"].iter().any(|scheme| url.strip_prefix(scheme).is_some_and(|rest| !rest.is_empty()))
+		&& !url.chars().any(char::is_whitespace)
+}
+
+/// `ntfy.token` (0672): not empty, no whitespace.
+fn is_token(token: &str) -> bool {
+	!token.is_empty() && !token.chars().any(char::is_whitespace)
+}
+
+fn is_token_value(value: &Value) -> bool {
+	value.as_str().is_some_and(is_token)
+}
+
+fn check_ntfy(value: &Value, faults: &mut Vec<Fault>) {
+	let Some(map) = value.as_object() else { return faults.push(fault(&[], "ntfy", false)) };
+	for (name, value) in map {
+		let good = match name.as_str() {
+			"server" => value.as_str().is_some_and(is_ntfy_server),
+			"ownServer" => value.is_boolean(),
+			"token" => is_token_value(value),
+			_ => {
+				faults.push(fault(&["ntfy"], name, true));
+				continue;
+			}
+		};
+		if !good {
+			faults.push(fault(&["ntfy"], name, false));
+		}
+	}
+}
+
+fn check_checks(value: &Value, faults: &mut Vec<Fault>) {
+	let Some(map) = value.as_object() else { return faults.push(fault(&[], "checks", false)) };
+	for (name, value) in map {
+		match name.as_str() {
+			"memoryReserveGb" if !value.as_f64().is_some_and(|gb| (0.0..=256.0).contains(&gb)) => {
+				faults.push(fault(&["checks"], name, false));
+			}
+			"memoryReserveGb" => {}
+			_ => faults.push(fault(&["checks"], name, true)),
+		}
+	}
 }
 
 /// One thing wrong in `jocasta.yaml`: an unknown key (ignored) or a bad value at `key` (its feature falls back).
@@ -311,6 +370,23 @@ impl Settings {
 				problems.push((key, problem));
 			}
 		}
+		// `ntfy.ownServer` without a token (0672): the phone stays content-free; said once, at the key's line.
+		let own_without_token = self.map.get("ntfy").and_then(Value::as_object).is_some_and(|ntfy| {
+			ntfy.get("ownServer") == Some(&Value::Bool(true)) && !ntfy.get("token").is_some_and(is_token_value)
+		});
+		if own_without_token && !problems.iter().any(|(key, _)| key == "ntfy.token") {
+			let line = self.line_of(&["ntfy".to_owned(), "ownServer".to_owned()]);
+			let reason = "ntfy.ownServer is true but ntfy.token is not set".to_owned();
+			let problem = Problem {
+				key: "ntfy.token".to_owned(),
+				line,
+				reason,
+				instead: "pushes stay content-free".to_owned(),
+				unknown: false,
+				said: false,
+			};
+			problems.push(("ntfy.token".to_owned(), problem));
+		}
 		let mut sorted: Vec<Problem> = problems.into_iter().map(|(_, problem)| problem).collect();
 		sorted.sort_by_key(|problem| problem.line.unwrap_or(0));
 		sorted
@@ -391,6 +467,46 @@ pub fn service_setting(settings: &Settings, name: ServiceKey) -> Result<Option<V
 	let group = if sets(settings.get("service")) || !sets(settings.get("frontier")) { "service" } else { "frontier" };
 	check_settings(settings, &format!("{group}.{name}"))?;
 	Ok(settings.get(group).and_then(Value::as_object).and_then(|map| map.get(name)).cloned())
+}
+
+/// `ntfy.*` (0672): the phone check-in. `server` `None` = off.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NtfySettings {
+	pub server: Option<String>,
+	/// Marks the server as his own: with a token, pushes carry text and Allow buttons.
+	pub own_server: bool,
+	/// His ntfy access token: a secret, never logged.
+	pub token: Option<String>,
+}
+
+fn ntfy_of(settings: &Settings) -> NtfySettings {
+	let Some(group) = settings.get("ntfy").and_then(Value::as_object) else { return NtfySettings::default() };
+	let read = |name: &str| check_settings(settings, &format!("ntfy.{name}")).ok().and_then(|()| group.get(name));
+	NtfySettings {
+		server: read("server").and_then(Value::as_str).filter(|url| is_ntfy_server(url)).map(str::to_owned),
+		own_server: read("ownServer").and_then(Value::as_bool).unwrap_or(false),
+		token: read("token").and_then(Value::as_str).filter(|token| is_token(token)).map(str::to_owned),
+	}
+}
+
+/// The `ntfy` group of `jocasta.yaml` (0672); a bad value reads as unset ([`settings_problems`] says it).
+pub fn read_ntfy() -> NtfySettings {
+	read_settings().map(|settings| ntfy_of(&settings)).unwrap_or_default()
+}
+
+/// `checks.memoryReserveGb` (0671): memory kept free when admitting a check; 2 when unset or bad.
+pub fn read_check_reserve_gb() -> f64 {
+	const DEFAULT: f64 = 2.0;
+	let Ok(settings) = read_settings() else { return DEFAULT };
+	if check_settings(&settings, "checks.memoryReserveGb").is_err() {
+		return DEFAULT;
+	}
+	settings
+		.get("checks")
+		.and_then(|checks| checks.get("memoryReserveGb"))
+		.and_then(Value::as_f64)
+		.filter(|gb| (0.0..=256.0).contains(gb))
+		.unwrap_or(DEFAULT)
 }
 
 /// The last text read of each file and what it parsed to, so an unchanged file is parsed and validated once. Keyed by
@@ -726,5 +842,74 @@ mod tests {
 		let reasons = problems_of(&settings);
 		assert!(reasons.contains(&"unknown key zzz".to_owned()));
 		assert!(reasons.iter().any(|r| r.starts_with("pollers.news.topics and pollers.news.limit are gone")));
+	}
+
+	#[test]
+	fn ntfy_and_checks_settings_are_read_and_a_bad_value_falls_back_to_unset() {
+		let env = temp_jocasta();
+		assert_eq!(read_ntfy(), NtfySettings::default());
+		assert_eq!(read_check_reserve_gb(), 2.0);
+		write_settings(
+			&env,
+			&[
+				"ntfy:",
+				"  server: https://ntfy.example.org",
+				"  ownServer: true",
+				"  token: tk_example",
+				"checks:",
+				"  memoryReserveGb: 4.5",
+			]
+			.join("\n"),
+		);
+		assert_eq!(settings_problems(), Vec::<String>::new());
+		assert_eq!(
+			read_ntfy(),
+			NtfySettings {
+				server: Some("https://ntfy.example.org".to_owned()),
+				own_server: true,
+				token: Some("tk_example".to_owned()),
+			}
+		);
+		assert_eq!(read_check_reserve_gb(), 4.5);
+		write_settings(
+			&env,
+			&[
+				"ntfy:",
+				"  server: ntfy.example.org",
+				"  ownServer: maybe",
+				"  token: has space",
+				"checks:",
+				"  memoryReserveGb: 300",
+			]
+			.join("\n"),
+		);
+		assert_eq!(read_ntfy(), NtfySettings::default());
+		assert_eq!(read_check_reserve_gb(), 2.0);
+		let problems = settings_problems();
+		assert_eq!(problems.len(), 4);
+		assert!(problems[0].starts_with("jocasta.yaml:2: ntfy.server must be an http:// or https:// URL"));
+		assert!(problems[3].starts_with("jocasta.yaml:6: checks.memoryReserveGb must be a number from 0 to 256"));
+		write_settings(&env, "ntfy:\n  serv: x\nchecks: 3\n");
+		assert_eq!(
+			settings_problems(),
+			[
+				"jocasta.yaml:2: unknown key serv in ntfy; ignored",
+				"jocasta.yaml:3: checks must be a mapping; the check queue uses the default memory reserve",
+			]
+		);
+	}
+
+	#[test]
+	fn own_server_without_a_token_is_said_once_and_pushes_stay_content_free() {
+		let env = temp_jocasta();
+		write_settings(&env, &["ntfy:", "  server: https://ntfy.example.org", "  ownServer: true"].join("\n"));
+		assert_eq!(
+			settings_problems(),
+			["jocasta.yaml:3: ntfy.ownServer is true but ntfy.token is not set; pushes stay content-free"]
+		);
+		let ntfy = read_ntfy();
+		assert!(ntfy.own_server && ntfy.token.is_none());
+		write_settings(&env, &["ntfy:", "  server: https://ntfy.example.org", "  ownServer: false"].join("\n"));
+		assert_eq!(settings_problems(), Vec::<String>::new());
 	}
 }

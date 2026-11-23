@@ -12,6 +12,7 @@ use chrono::{Datelike, Local, TimeZone};
 use futures_util::FutureExt;
 use serde_json::{Value, json};
 
+use crate::frontier::protocol::{ClientMessage, ServerMessage};
 use crate::frontier::server::allow::{Answer, Confirm, Confirmation};
 use crate::frontier::server::day::{Clock, DayOptions};
 use crate::frontier::server::helpers::{
@@ -589,6 +590,67 @@ async fn e2e_0298_a_hand_commit_in_quiet_hours_is_held_not_lost_the_boss_gets_it
 		server.herdr.set_state(&boss, AgentState::Idle, None, true);
 		server.service.refresh().await;
 		assert_eq!(to_boss(what), 1);
+	})
+	.await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_leftover_removed_from_the_dock_ignores_an_unlisted_folder_waits_for_his_allow_and_answers_with_an_action_0670()
+ {
+	let j = temp_jocasta();
+	demo_project(j.root(), "demo").await;
+	let asks = Arc::new(Mutex::new(Vec::new()));
+	let answers = Arc::new(Mutex::new(VecDeque::<bool>::new()));
+	let confirm = {
+		let answers = answers.clone();
+		confirm_with(&asks, move || Answer {
+			allow: locked(&answers).pop_front().unwrap_or(true),
+			how: PopupEnd::Answered,
+		})
+	};
+	let options = ServerOptions { agent_wait_ms: Some(10_000), confirm: Some(confirm), ..ServerOptions::default() };
+	with_server(options, |server| async move {
+		// A thread whose workspace closed in herdr leaves its folder behind.
+		let started = start_thread(&server, ThreadOptions::default()).await;
+		let leftover = started.path;
+		let key = path_key(&leftover);
+		let workspace = server
+			.herdr
+			.state()
+			.pane_list
+			.iter()
+			.find(|p| p.cwd.as_deref().is_some_and(|cwd| path_key(cwd) == key))
+			.map(|p| p.workspace_id.clone())
+			.expect("the thread's workspace");
+		server.herdr.close_workspace(&workspace).await.unwrap();
+		server.service.refresh().await;
+		let remove = |folder: PathBuf| {
+			let server = &server;
+			async move {
+				let got = Mutex::new(Vec::new());
+				let message = ClientMessage::LeftoverRemove { folder };
+				server.service.handle(message, |answer| locked(&got).push(answer)).await;
+				got.into_inner().unwrap_or_else(PoisonError::into_inner)
+			}
+		};
+		let asked = locked(&asks).len();
+		// A folder no leftover lists is ignored: no question, no reply.
+		assert!(remove(leftover.parent().unwrap().to_path_buf()).await.is_empty());
+		assert_eq!(locked(&asks).len(), asked);
+		// Deny: the folder stays and the dock hears so.
+		locked(&answers).push_back(false);
+		assert_eq!(
+			remove(leftover.clone()).await,
+			[ServerMessage::Action { text: "You chose Deny; nothing removed.".to_owned(), is_error: true }]
+		);
+		let ask = locked(&asks).last().unwrap().clone();
+		assert!(ask.detail.starts_with(&format!("You asked to delete {}.", leftover.display())), "{}", ask.detail);
+		assert!(leftover.exists());
+		// Allow: removed, and the dock hears that too.
+		let done = remove(leftover.clone()).await;
+		let [ServerMessage::Action { text, is_error: false }] = done.as_slice() else { panic!("one action: {done:?}") };
+		assert!(text.starts_with(&format!("Removed {}", leftover.display())), "{text}");
+		assert!(!leftover.exists());
 	})
 	.await;
 }

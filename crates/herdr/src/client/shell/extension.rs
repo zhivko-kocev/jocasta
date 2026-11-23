@@ -198,6 +198,16 @@ impl ClientShellState {
                 let reply = crate::embed::shell_dock_mouse(mouse.column, mouse.row);
                 self.apply_reply(reply, outcome);
             }
+        } else if in_dock {
+            let step = match mouse.kind {
+                MouseEventKind::ScrollDown => Some(1),
+                MouseEventKind::ScrollUp => Some(-1),
+                _ => None,
+            };
+            if let Some(step) = step {
+                let reply = crate::embed::shell_dock_scroll(mouse.column, mouse.row, step);
+                self.apply_reply(reply, outcome);
+            }
         }
         in_dock
     }

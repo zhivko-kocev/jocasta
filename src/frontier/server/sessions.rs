@@ -985,6 +985,8 @@ struct Children {
 pub struct SessionIndex {
 	pub dir: PathBuf,
 	now: Clock,
+	/// How many days before today the ledger and the roll-over keep: 1 (yesterday) for the shared index.
+	horizon: i64,
 	headers: HashMap<PathBuf, SessionHeader>,
 	followed: HashMap<PathBuf, Followed>,
 	/// The local day of the last call.
@@ -1003,11 +1005,17 @@ pub struct SessionIndex {
 impl SessionIndex {
 	/// An index over `dir` (omp's sessions dir by default) on a clock (the wall clock by default).
 	pub fn new(dir: Option<PathBuf>, now: Option<Clock>) -> Self {
-		let dir = dir.unwrap_or_else(omp_sessions_dir);
+		Self::with_horizon(dir.unwrap_or_else(omp_sessions_dir), 1, now.unwrap_or_else(system_clock))
+	}
+
+	/// A throwaway index whose ledger keeps `days_back` prior days instead of yesterday only (0668: the 7-day spend
+	/// backfill); the shared index must not use it, as its roll-over would then keep that many days of sessions.
+	pub fn with_horizon(dir: PathBuf, days_back: i64, now: Clock) -> Self {
 		SessionIndex {
 			walker: SessionWalker::new(dir.clone()),
 			dir,
-			now: now.unwrap_or_else(system_clock),
+			now,
+			horizon: days_back,
 			headers: HashMap::new(),
 			followed: HashMap::new(),
 			day: None,
@@ -1310,7 +1318,7 @@ impl SessionIndex {
 			return;
 		}
 		let first = self.day.is_none();
-		let since = day_start(&day, -1);
+		let since = day_start(&day, -self.horizon);
 		self.day = Some(day);
 		locked(&self.ledger).forget_before(since);
 		self.past = None;

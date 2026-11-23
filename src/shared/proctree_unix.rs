@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use super::FolderProcess;
+use super::{FolderProcess, TreeUsage, parse_ps_usage, parse_stat_cpu_ms, parse_status_rss};
 use crate::shared::env;
 
 /// The system's own programs by their full paths: a process whose PATH holds none of them (a sandbox's, a stripped
@@ -99,6 +99,23 @@ pub fn parents(groups: Option<&mut HashMap<u32, u32>>) -> BTreeMap<u32, u32> {
 		}
 	}
 	parents
+}
+
+/// The memory and CPU time of each of `pids` that can be read. Linux reads `/proc/<pid>/status` and `stat`; macOS asks
+/// `ps` once (`rss` in KiB, `time` as `[dd-][hh:]mm:ss.cc`). A process that ended since the pid list is left out.
+pub fn usages(pids: &[u32]) -> Vec<TreeUsage> {
+	if cfg!(target_os = "linux") {
+		return pids
+			.iter()
+			.filter_map(|pid| {
+				let rss_bytes = parse_status_rss(&std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?)?;
+				let cpu_ms = parse_stat_cpu_ms(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)?;
+				Some(TreeUsage { rss_bytes, cpu_ms })
+			})
+			.collect();
+	}
+	let list = pids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+	parse_ps_usage(&output_of(PS, &["-o", "pid=,rss=,time=", "-p", &list], true))
 }
 
 /// The arguments of each of `pids` (the first is the program); one that can't be read is left out. Linux reads

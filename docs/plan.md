@@ -2247,6 +2247,13 @@ Proposals; each is confirmed in the slice that builds it. A slice that adds or r
 | 8 | the poller interface (`src/shared/pollers/`; 0301, 0356) | later sources (Gmail after v1, 0297) |
 | 8 | protocol step kinds (8.10, after v1, 0297) | every later feature adds its own steps |
 | the fork (0649) | `herdr::embed` in `crates/herdr` (`crates/herdr/FORK.md`): `ServerExtension` and `ServerHost` (the service in herdr's server: started, clients joining and leaving, `jocasta.` messages, key actions, herdr's events, a live handoff's turns), `ShellExtension` (the client's dock, questions and HUD), `Dirs`, `OMP_HOOK` | the Jocasta service (`src/frontier/server/embedded.rs`), the client's surface (`src/frontier/today/`, `src/frontier/ask/`), setup's omp snapshot |
+| the HUD round (0668) | `ShellExtension::dock_scroll(column, row, step)` (1 down, -1 up) with a default body, `embed::shell_dock_scroll`, and the wheel branch of `extension_takes_mouse` (`crates/herdr/FORK.md`) | the dock's NEWS box (`src/frontier/shell.rs`) |
+| the HUD round (0668) | `server/thread_facts.rs` (`ThreadFacts`: diff, last check, last write per open thread) | `status.rs::day_thread`, `review_flow.rs::run_checks`, the dock's UNDERWAY rows |
+| the HUD round (0668) | `shared/spend_days.rs` and `<data>/spend-days.json` (`{local-day: usd}`, the last 14 days; backfilled once at start from the last 8 days of omp session files) | `Day::spend_avg_7d`, the dock's `avg` |
+| the HUD round (0671) | `server/check_costs.rs` and `<data>/checks/costs.json` (peak memory and cores per project dir and command); `Admission` in `checks.rs`; setting `checks.memoryReserveGb` | `CheckRunner` (the queue), the dock's `checks:` line |
+| the HUD round (0672) | `server/phone.rs`, `<data>/ntfy-topics.json` (two generated topics), `<data>/ntfy-sent.json` (what was already pushed, pruned after 7 days); settings `ntfy.server`, `ntfy.ownServer`, `ntfy.token`; the `phone` line of `jocasta diagnose` | `popups.rs` (observer), `server.rs` (start and stop) |
+| the HUD round (0673) | `shared/schedules.rs`, `<data>/projects/<pid>/schedules.yml` and `schedules.state.json` | `Day::tick`, `ThreadStarts::start_scheduled`, the dock's NEXT |
+| the HUD round (0670) | `ClientMessage::LeftoverRemove` (`leftover.remove`, on `SHELL_FEED`), answered by `ServerMessage::Action` | the dock's `x` key, `service.rs::handle_one` |
 
 ### Migration ledger
 Recommended order; the build takes the next free number in phase order, and a skipped slice shifts the later numbers.

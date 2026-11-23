@@ -21,7 +21,7 @@ use crate::frontier::server::task_file::{CloseFacts, CloseHow, NewTask, TaskRepo
 use crate::frontier::server::thread::{ThreadRef, subject};
 use crate::frontier::server::thread_lifecycle::Awaiting;
 use crate::frontier::server::thread_start::{StartOptions, done_when_of, heavy_of};
-use crate::frontier::server::wording::{Door, asker, branch_slug, brief_title, person, quoted};
+use crate::frontier::server::wording::{Door, asker, asks, branch_slug, brief_title, person, quoted};
 use crate::frontier::server::worktrees::remove_checkout;
 use crate::shared::clock::now_ms;
 use crate::shared::day::{DayRef, day_label, hhmm, local_day};
@@ -713,7 +713,8 @@ impl Tools {
 		let base = leftover.folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
 		let ask = Confirmation {
 			message: format!("Remove the leftover worktree {base} of {}?", project.name),
-			detail: [format!("{} asks to delete {folder}.", asker(door, "worktree remove")), branch_line].join("\n"),
+			detail: [format!("{} {} to delete {folder}.", asker(door, "worktree remove"), asks(door)), branch_line]
+				.join("\n"),
 		};
 		c.allow.ask(&ask, "nothing removed", door).await?;
 		let failed = remove_checkout(&project.main_path, &leftover.folder, None).await;

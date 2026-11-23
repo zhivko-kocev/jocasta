@@ -134,6 +134,11 @@ terminal is sent (no write over the wide tail) rather than the test backend's co
   menu's "quit Jocasta" runs the `[[keys.command]]` entry for `jocasta.quit` exactly as its key does (0666).
 - `src/client/mod.rs` (the client's failure exit) and `src/lib.rs` (a launch that failed) end the process through
   `embed::exit`, which runs the exit hook first.
+- `src/embed.rs` (`ShellExtension::dock_scroll`, `shell_dock_scroll`) and `src/client/shell/extension.rs`
+  (`extension_takes_mouse`): the dock gets the mouse wheel (0668). A `ScrollUp` or `ScrollDown` over the dock goes to
+  the extension with the cell and the step, 1 down or -1 up (`dock_scroll(column, row, step)`; its default body does nothing, so an
+  extension without a scrolling box needs no code) and stops there, so the panes beside it never see it. Jocasta
+  scrolls its NEWS box with it. Test: `client/shell/tests/boss_guard.rs`.
 
 ### Vendored build dependency
 

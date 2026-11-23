@@ -29,6 +29,7 @@ use crate::frontier::server::health_route::health_route;
 use crate::frontier::server::herdr::{Herdr, HerdrOptions, Note, connect_herdr};
 use crate::frontier::server::native::{Native, NativeServer};
 use crate::frontier::server::page_routes::{LaunchCodes, PageParts, PageResponder, page_responder, whiteboard_reviews};
+use crate::frontier::server::phone::{Phone, PhoneOptions, Timing};
 use crate::frontier::server::popups::{ALLOW, AnswerTaken, Popup, Popups, allow_question};
 use crate::frontier::server::relay::{Relay, start_relay};
 use crate::frontier::server::routes::{Route, Served, ServerHandle, listen};
@@ -47,16 +48,20 @@ use crate::shared::errors::Result;
 use crate::shared::herdr_session::herdr_session;
 use crate::shared::link::open_in_browser;
 use crate::shared::log::{LogLevel, log};
+use crate::shared::paths::data_dir;
 use crate::shared::process::AbortSignal;
 use crate::shared::schema::open_catalog;
 use crate::shared::service_file::{ServiceFile, remove_service_file, write_service_file};
-use crate::shared::settings::{ServiceKey, read_settings, service_setting};
+use crate::shared::settings::{ServiceKey, read_ntfy, read_settings, service_setting};
 
 /// `service.port`'s default (0358).
 const DEFAULT_PORT: u16 = 47_400;
 
 /// How long the service's own stop may take on a failed start (the TypeScript's `ms: 30_000`).
 const SERVICE_UNDO_MS: u64 = 30_000;
+
+/// How long the phone check-in's stop may take.
+const PHONE_STOP_MS: u64 = 5_000;
 
 /// What sends a message to every state-feed client.
 type Broadcast = Arc<dyn Fn(ServerMessage) + Send + Sync>;
@@ -551,6 +556,36 @@ struct Rig<'a> {
 	asking: &'a Questions,
 	whiteboard: Option<&'a Arc<Whiteboard>>,
 	broadcast: &'a Broadcast,
+	phone: Option<&'a Arc<Phone>>,
+}
+
+/// The phone check-in (0672), when `ntfy.server` is set: it pushes what the service's `phone_facts` says.
+fn start_phone(service: &Arc<JocastaService>, popups: &Arc<Popups>) -> Option<Arc<Phone>> {
+	let ntfy = read_ntfy();
+	let facts = Arc::clone(service);
+	Phone::start(PhoneOptions {
+		ntfy,
+		popups: Arc::clone(popups),
+		facts: Arc::new(move || facts.phone_facts()),
+		data_dir: data_dir(),
+		timing: Timing::default(),
+	})
+}
+
+/// The step that stops the phone check-in.
+fn phone_stop(phone: &Arc<Phone>) -> StopStep {
+	let phone = Arc::clone(phone);
+	StopStep::new(
+		"the phone check-in",
+		Arc::new(move || {
+			let phone = Arc::clone(&phone);
+			Box::pin(async move {
+				phone.stop().await;
+				Ok(())
+			})
+		}),
+	)
+	.bounded(PHONE_STOP_MS)
 }
 
 /// The stopper: what stops, in what order, with the listening server read when it stops.
@@ -564,7 +599,12 @@ fn stopper_of(
 	let (herdr, session) = (Arc::clone(rig.herdr), rig.session.to_owned());
 	let (service, whiteboard) = (Arc::clone(rig.service), rig.whiteboard.cloned());
 	let (broadcast, listening) = (Arc::clone(rig.broadcast), Arc::clone(listening));
-	Arc::new(stopper(move |extra_stops| {
+	let phone = rig.phone.cloned();
+	Arc::new(stopper(move |mut extra_stops| {
+		// The phone check-in stops first of what else Jocasta started (0672).
+		if let Some(phone) = &phone {
+			extra_stops.insert(0, phone_stop(phone));
+		}
 		let slot = Arc::clone(&listening);
 		let server: StopRun = Arc::new(move || {
 			let handle = locked(&slot).clone();
@@ -780,6 +820,10 @@ async fn start_rest(
 	let (service, asking) = build_service(options, &herdr, &broadcast, whiteboard.as_ref(), opener)?;
 	// Its stop closes what it opened (the catalog, the day's stores) and herdr's connection.
 	undo.push(undo_service(&service));
+	let phone = start_phone(&service, &asking.popups);
+	if let Some(phone) = &phone {
+		undo.push(phone_stop(phone));
+	}
 	let rig = Rig {
 		tokens: &tokens,
 		herdr: &herdr,
@@ -788,6 +832,7 @@ async fn start_rest(
 		asking: &asking,
 		whiteboard: whiteboard.as_ref(),
 		broadcast: &broadcast,
+		phone: phone.as_ref(),
 	};
 	let stops = stopper_of(&rig, relay_stop(&relay), &listening, options.stop_bounds_ms);
 	let close = close_of(&rig, &stops, options.reattach.take());

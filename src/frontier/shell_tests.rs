@@ -4,8 +4,8 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::{Value, json};
 
 use super::*;
-use crate::frontier::protocol::PopupView;
-use crate::frontier::today::view::tests::{now as today_now, today};
+use crate::frontier::protocol::{Dashboard, Headline, Leftover, NewsList, PopupView};
+use crate::frontier::today::view::tests::{dashboard, now as today_now, today};
 use crate::frontier::tui::tests::buffer_rows;
 
 /// The tests' clock: the today fixtures' "now", moved by `later`.
@@ -99,7 +99,7 @@ fn the_docks_keys_pick_rows_go_to_a_thread_act_on_it_and_give_the_rest_back() {
 	// Esc gives the keys back; any other key goes on to herdr.
 	let released = shell.dock_key(key(KeyCode::Esc));
 	assert!(released.release && !released.pass);
-	assert!(shell.dock_key(char_key('x')).pass);
+	assert!(shell.dock_key(char_key('q')).pass);
 	assert!(shell.dock_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL)).pass);
 }
 
@@ -127,6 +127,121 @@ fn a_click_on_a_row_picks_it_and_does_what_enter_does_and_one_elsewhere_does_not
 	let header = shell.dock_mouse(5, 0);
 	assert!(header.send.is_empty() && !header.redraw);
 	assert!(shell.dock_mouse(0, line_of(&shell, "w2:p1")).send.is_empty());
+}
+
+const WORKTREE: &str = "D:/work/acme-api-wt";
+
+/// The dock with today's rows, eight headlines (Story 7 the newest) and one leftover worktree.
+fn loaded() -> JocastaShell {
+	let mut shell = with_today();
+	let items = (0..8)
+		.map(|i| Headline {
+			title: format!("Story {i}"),
+			source: "hn".to_owned(),
+			url: format!("https://example.org/s{i}"),
+			at: format!("2026-11-09T10:0{i}:00Z"),
+		})
+		.collect();
+	let dashboard = Dashboard {
+		news: vec![NewsList { heading: "Hacker News".to_owned(), items }],
+		leftovers: vec![Leftover {
+			project: "acme-api".to_owned(),
+			folder: WORKTREE.into(),
+			branch: None,
+			ahead: 0,
+			dirty: 1,
+		}],
+		..dashboard()
+	};
+	message(&mut shell, SHELL_FEED, &ServerMessage::Dashboard { dashboard });
+	drawn(&mut shell, 100, 40, true);
+	shell
+}
+
+#[test]
+fn x_on_a_picked_leftover_asks_the_service_to_remove_it_and_on_anything_else_says_there_is_none() {
+	let mut shell = loaded();
+	shell.today.selected = Some(WORKTREE.to_owned());
+	drawn(&mut shell, 100, 40, true);
+	let removal = shell.dock_key(char_key('x'));
+	assert!(removal.redraw && !removal.pass);
+	assert_eq!(sends(&removal), [(SHELL_FEED.to_owned(), json!({"type": "leftover.remove", "folder": WORKTREE}))]);
+	// Enter has nothing to open on a leftover.
+	assert!(shell.dock_key(key(KeyCode::Enter)).send.is_empty());
+	// A thread is not a leftover: nothing is sent, and the dock says so.
+	shell.today.selected = Some("w2:p1".to_owned());
+	drawn(&mut shell, 100, 40, true);
+	let refused = shell.dock_key(char_key('x'));
+	assert!(refused.send.is_empty() && !refused.pass);
+	assert_eq!(
+		shell.today.said.as_ref().map(|said| (said.text.as_str(), said.is_error)),
+		Some(("No leftover to remove.", true))
+	);
+}
+
+#[test]
+fn up_and_down_move_through_the_headlines_and_scroll_the_box_at_its_edges() {
+	let mut shell = loaded();
+	let first = shell.news.as_ref().expect("the box is drawn").keys[0].clone();
+	assert_eq!(first, "https://example.org/s7");
+	shell.today.selected = Some(first);
+	drawn(&mut shell, 100, 40, true);
+	// Down through the five shown: the box stays; one more scrolls it by one, the pick on the new last line.
+	for _ in 0..4 {
+		shell.dock_key(char_key('j'));
+		drawn(&mut shell, 100, 40, true);
+	}
+	assert_eq!((shell.today.news_top, shell.today.selected.as_deref()), (0, Some("https://example.org/s3")));
+	assert!(shell.dock_key(char_key('j')).redraw);
+	let rows = drawn(&mut shell, 100, 40, true);
+	assert_eq!((shell.today.news_top, shell.today.selected.as_deref()), (1, Some("https://example.org/s2")));
+	assert!(rows.iter().any(|row| row.contains("Story 2")) && !rows.iter().any(|row| row.contains("Story 7")));
+	// Up from the first shown scrolls back the other way; at the very first headline up leaves the box.
+	shell.today.selected = Some("https://example.org/s6".to_owned());
+	drawn(&mut shell, 100, 40, true);
+	shell.dock_key(char_key('k'));
+	drawn(&mut shell, 100, 40, true);
+	assert_eq!((shell.today.news_top, shell.today.selected.as_deref()), (0, Some("https://example.org/s7")));
+	shell.dock_key(char_key('k'));
+	assert_ne!(shell.today.selected.as_deref(), Some("https://example.org/s7"));
+	assert_eq!(shell.today.news_top, 0);
+	// Down at the last headline stays on it.
+	shell.today.selected = Some("https://example.org/s0".to_owned());
+	shell.today.news_top = 3;
+	drawn(&mut shell, 100, 40, true);
+	shell.dock_key(char_key('j'));
+	assert_eq!(shell.today.selected.as_deref(), Some("https://example.org/s0"));
+}
+
+#[test]
+fn the_wheel_over_the_news_box_scrolls_it_and_anywhere_else_does_nothing() {
+	let mut shell = loaded();
+	let lines = shell.news.as_ref().expect("the box is drawn").lines.clone();
+	let row = |line: usize| u16::try_from(line).unwrap();
+	// Over the box, one headline a step, held at both ends.
+	for expected in [1, 2, 3, 3] {
+		let before = shell.today.news_top;
+		let reply = shell.dock_scroll(5, row(lines.start + 1), 1);
+		assert_eq!(reply.redraw, expected != before, "from {before}");
+		drawn(&mut shell, 100, 40, true);
+		assert_eq!(shell.today.news_top, expected);
+	}
+	let up = shell.dock_scroll(5, row(lines.start), -1);
+	assert!(up.redraw);
+	assert_eq!(shell.today.news_top, 2);
+	drawn(&mut shell, 100, 40, true);
+	// Over the header, or left of the dock's text: nothing moves.
+	assert!(!shell.dock_scroll(5, 0, -1).redraw);
+	assert!(!shell.dock_scroll(0, row(lines.start), -1).redraw);
+	assert_eq!(shell.today.news_top, 2);
+	// A picked headline pushed out of view by the wheel moves to the box's edge.
+	shell.today.news_top = 0;
+	shell.today.selected = Some("https://example.org/s7".to_owned());
+	drawn(&mut shell, 100, 40, true);
+	shell.dock_scroll(5, row(lines.start), 1);
+	assert_eq!(shell.today.selected.as_deref(), Some("https://example.org/s6"));
+	drawn(&mut shell, 100, 40, true);
+	assert!(shell.picked().is_some_and(|pick| pick.news));
 }
 
 /// The silence test's own clock, so the others' stays still.

@@ -232,3 +232,29 @@ fn the_shipped_diagnose_skill_is_one_omp_finds_in_the_overlays_folder_name_and_d
 	assert_eq!(front_matter(&mise)["name"], "mise");
 	assert!(diagnose_overlay(Path::new("C:\\x\\skills")).contains("- \"C:\\\\x\\\\skills\""));
 }
+
+#[test]
+fn the_phone_line_names_the_server_the_mode_and_the_main_topic_never_the_token_and_is_absent_with_the_phone_off() {
+	use crate::frontier::server::phone::{TOPICS_FILE, topics};
+	use crate::shared::settings::NtfySettings;
+	let fixture = Fixture::new();
+	let data = fixture.data();
+	let ntfy = |own_server: bool, token: Option<&str>| NtfySettings {
+		server: Some("https://ntfy.example.org".to_owned()),
+		own_server,
+		token: token.map(str::to_owned),
+	};
+	assert_eq!(phone_line(&NtfySettings::default(), &data), None);
+	let before = phone_line(&ntfy(false, None), &data).unwrap();
+	assert_eq!(
+		before,
+		"phone: https://ntfy.example.org, public server, the topics are made when Jocasta starts (a secret: don't paste this output)"
+	);
+	let made = topics(&data);
+	assert!(data.join(TOPICS_FILE).exists());
+	let own = phone_line(&ntfy(true, Some("tk_example")), &data).unwrap();
+	assert!(own.contains("own server") && own.contains(&format!("main topic {}", made.main)));
+	assert!(!own.contains("tk_example") && !own.contains(&made.reply));
+	// An own server without a token is public.
+	assert!(phone_line(&ntfy(true, None), &data).unwrap().contains("public server"));
+}

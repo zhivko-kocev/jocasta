@@ -12,6 +12,10 @@
 //!   start time in it; a caller finding it waits for the result (joins), and a lock whose process is gone (or whose
 //!   pid now names a process started at another time), or held past the check's time plus a grace, is taken over. In
 //!   one process a second caller joins the first's run. A run's checks run one after another.
+//! - **Queue (0671):** with an [`Admission`], a check that has to run (no stored result, no run to join) waits for its
+//!   turn, by what it cost on earlier runs (`check_costs.rs`, `<data>/checks/costs.json`). The timeout starts once it
+//!   is admitted. A waiter in another process isn't queued here: its own deadline (the check's time plus a grace)
+//!   may pass while the holder is queued; all Jocasta checks run in this process.
 //! - **mise:** the project's check runs as `mise run -c <task>`, so a failing task doesn't abort its siblings; mise's
 //!   own artifact cache replays unchanged tasks underneath only when the project's `mise.toml` switches it on. Jocasta
 //!   never writes a project's files.
@@ -22,7 +26,7 @@
 //! Shared hits (a result reused, or a run joined, rather than run here) are counted for H8 (K11): one line per hit in
 //! `<data>/checks/hits.log`, which [`read_check_hits`] counts.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -39,6 +43,8 @@ use serde_json::Value;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
+use crate::frontier::protocol::ChecksLoad;
+use crate::frontier::server::check_costs::{CheckCosts, Sampler};
 use crate::shared::clock::now_ms;
 use crate::shared::day::local_day;
 use crate::shared::env;
@@ -46,8 +52,11 @@ use crate::shared::errors::{Error, Result};
 use crate::shared::fsx::{read_json_object, remove_tree_async, write_atomically};
 use crate::shared::git::{GitOptions, git_async};
 use crate::shared::log::{LogLevel, log};
+use crate::shared::paths::data_dir;
+use crate::shared::pollers::machine::available_memory_bytes;
 use crate::shared::process::{CREATE_NO_WINDOW, RunOptions, on_path, run_program, wrap_async};
 use crate::shared::proctree::{pid_alive, process_start};
+use crate::shared::settings::read_check_reserve_gb;
 
 /// One check to run: its gate name (`verify`, `done_when`, `done_when-2`) and its shell command.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,6 +133,8 @@ pub struct CheckRunnerOptions {
 	pub timeout_ms: Option<i64>,
 	/// How often a waiter looks for the running check's result; 250 ms.
 	pub poll_ms: Option<i64>,
+	/// The check queue (0671); `None` runs every check at once.
+	pub admission: Option<Admission>,
 }
 
 const CHECK_TIMEOUT_MS: i64 = 30 * 60_000;
@@ -428,6 +439,219 @@ pub fn checks_dir(data: &Path) -> PathBuf {
 	data.join("checks")
 }
 
+/// How long a waiting check goes without looking at the queue again when nothing in it changed: free memory moves on
+/// its own.
+const RECHECK_MS: u64 = 2_000;
+
+struct Running {
+	id: u64,
+	bytes: u64,
+	cores: f64,
+	/// A check with no record: it runs alone.
+	alone: bool,
+}
+
+#[derive(Default)]
+struct Queue {
+	last: u64,
+	running: Vec<Running>,
+	waiting: VecDeque<u64>,
+	closed: bool,
+}
+
+enum Turn {
+	Admitted,
+	Wait,
+	Closed,
+}
+
+/// The check queue (0671): which checks may run now, from what each has cost before.
+///
+/// - A check with a record is admitted when its recorded peak plus the peaks of the checks running fit in the free
+///   memory minus the reserve, and its cores plus theirs fit in the machine's cores. Otherwise it waits, first come
+///   first served: a later check never passes an earlier one.
+/// - A check with no record runs alone, once: it waits for the running checks to end and nothing starts while it
+///   runs; its measurement becomes the record.
+/// - Nothing running admits the head of the queue whatever it costs, so a check bigger than the machine still runs.
+/// - Free memory is read as it is when a waiter looks (on every change in the queue, and every [`RECHECK_MS`]), and
+///   the running checks' peaks are counted whole although part of them is already gone from it: the queue errs tight.
+pub struct Admission {
+	free_bytes: Arc<dyn Fn() -> u64 + Send + Sync>,
+	cores: usize,
+	reserve_bytes: u64,
+	costs: CheckCosts,
+	queue: Mutex<Queue>,
+	/// Bumped at every change of the queue, so a waiter looks again.
+	changed: watch::Sender<u64>,
+}
+
+/// A check's place in the queue while it waits; leaves it when the wait is dropped.
+struct Ticket<'a> {
+	admission: &'a Admission,
+	id: u64,
+	queued: bool,
+}
+
+impl Drop for Ticket<'_> {
+	fn drop(&mut self) {
+		if self.queued {
+			locked(&self.admission.queue).waiting.retain(|id| *id != self.id);
+			self.admission.changed.send_modify(|n| *n += 1);
+		}
+	}
+}
+
+/// A check's right to run; ends when dropped.
+pub struct Permit {
+	admission: Arc<Admission>,
+	id: u64,
+	key: String,
+}
+
+impl Permit {
+	/// Notes what the run cost; the next check admitted reads it.
+	pub fn record(&self, peak_rss_bytes: u64, avg_cores: f64) {
+		self.admission.costs.record(&self.key, peak_rss_bytes, avg_cores, now_ms());
+	}
+}
+
+impl Drop for Permit {
+	fn drop(&mut self) {
+		locked(&self.admission.queue).running.retain(|running| running.id != self.id);
+		self.admission.changed.send_modify(|n| *n += 1);
+	}
+}
+
+impl Admission {
+	/// The queue as the service runs it: the machine's free memory and cores, `checks.memoryReserveGb` kept free, and
+	/// the records in `<data>/checks/costs.json`. Where the platform can't tell the free memory, memory never holds a
+	/// check.
+	pub fn from_settings() -> Self {
+		let reserve = (read_check_reserve_gb() * 1_073_741_824.0) as u64;
+		let free: Arc<dyn Fn() -> u64 + Send + Sync> = Arc::new(|| available_memory_bytes().unwrap_or(u64::MAX));
+		let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+		Self::with(free, cores, reserve, CheckCosts::load(checks_dir(&data_dir()).join("costs.json")))
+	}
+
+	/// A queue with its numbers given (the tests').
+	pub fn with(
+		free_bytes: Arc<dyn Fn() -> u64 + Send + Sync>,
+		cores: usize,
+		reserve_bytes: u64,
+		costs: CheckCosts,
+	) -> Self {
+		Self {
+			free_bytes,
+			cores,
+			reserve_bytes,
+			costs,
+			queue: Mutex::new(Queue::default()),
+			changed: watch::channel(0).0,
+		}
+	}
+
+	/// Checks running and waiting now.
+	pub fn load(&self) -> ChecksLoad {
+		let queue = locked(&self.queue);
+		ChecksLoad { running: queue.running.len() as u32, waiting: queue.waiting.len() as u32 }
+	}
+
+	/// Releases every waiter (they get `None`) and admits no one after.
+	pub fn close(&self) {
+		locked(&self.queue).closed = true;
+		self.changed.send_modify(|n| *n += 1);
+	}
+
+	fn turn(&self, id: u64, key: &str) -> Turn {
+		let mut queue = locked(&self.queue);
+		if queue.closed {
+			return Turn::Closed;
+		}
+		if queue.waiting.front() != Some(&id) {
+			return Turn::Wait;
+		}
+		let cost = self.costs.get(key);
+		let fits = queue.running.is_empty()
+			|| cost.is_some_and(|cost| {
+				let held: u64 = queue.running.iter().map(|running| running.bytes).sum();
+				let busy: f64 = queue.running.iter().map(|running| running.cores).sum();
+				let room = (self.free_bytes)().saturating_sub(self.reserve_bytes);
+				!queue.running.iter().any(|running| running.alone)
+					&& held.saturating_add(cost.peak_rss_bytes) <= room
+					&& busy + cost.avg_cores <= self.cores as f64
+			});
+		if !fits {
+			return Turn::Wait;
+		}
+		queue.waiting.pop_front();
+		queue.running.push(Running {
+			id,
+			bytes: cost.map_or(0, |cost| cost.peak_rss_bytes),
+			cores: cost.map_or(0.0, |cost| cost.avg_cores),
+			alone: cost.is_none(),
+		});
+		drop(queue);
+		// The next in line may fit beside this one.
+		self.changed.send_modify(|n| *n += 1);
+		Turn::Admitted
+	}
+
+	/// Waits for `command`'s turn in `project`; `None` when the queue was closed. Dropping the wait leaves the queue.
+	pub async fn admit(self: &Arc<Self>, project: &Path, command: &str) -> Option<Permit> {
+		let key = CheckCosts::key(project, command);
+		let mut changes = self.changed.subscribe();
+		let id = {
+			let mut queue = locked(&self.queue);
+			if queue.closed {
+				return None;
+			}
+			queue.last += 1;
+			let id = queue.last;
+			queue.waiting.push_back(id);
+			id
+		};
+		let mut ticket = Ticket { admission: self, id, queued: true };
+		let mut said = false;
+		loop {
+			match self.turn(id, &key) {
+				Turn::Admitted => {
+					ticket.queued = false;
+					return Some(Permit { admission: Arc::clone(self), id, key });
+				}
+				Turn::Closed => return None,
+				Turn::Wait => {}
+			}
+			if !said {
+				said = true;
+				let load = self.load();
+				let (running, waiting) = (load.running, load.waiting);
+				let line = format!("`{command}` waits in the check queue ({running} running, {waiting} waiting)");
+				log(LogLevel::Info, "checks", &line, None);
+			}
+			tokio::select! {
+				_ = changes.changed() => {}
+				() = tokio::time::sleep(Duration::from_millis(RECHECK_MS)) => {}
+			}
+		}
+	}
+}
+
+/// The folder of the project a check's folder belongs to: the folder holding the repository's `.git` (a worktree's
+/// own folder is the project's), so the project's worktrees share one record. `cwd` itself outside git.
+async fn project_of(cwd: &Path) -> PathBuf {
+	let args = ["rev-parse", "--path-format=absolute", "--git-common-dir"];
+	let Ok(out) = git_async(cwd, &args, GIT_TIMEOUT_MS, GitOptions::default()).await else { return cwd.to_path_buf() };
+	let common = PathBuf::from(out.stdout.trim());
+	if out.code != Some(0) || !common.is_absolute() {
+		return cwd.to_path_buf();
+	}
+	let in_git_dir = common.file_name().is_some_and(|name| name == ".git");
+	match common.parent() {
+		Some(parent) if in_git_dir => parent.to_path_buf(),
+		_ => common,
+	}
+}
+
 type Flight = Shared<BoxFuture<'static, std::result::Result<CheckResult, String>>>;
 
 /// What one keyed run needs, owned so the run can outlive its first caller.
@@ -450,6 +674,8 @@ struct Inner {
 	/// Set by `stop`: every check running here ends its own tree (its job or group, 0641).
 	halt: watch::Sender<bool>,
 	stopped: AtomicBool,
+	/// The check queue; `None` runs every check at once.
+	admission: Option<Arc<Admission>>,
 }
 
 /// The check runner: one per service (or per test), runs checks keyed by git tree.
@@ -479,6 +705,7 @@ impl CheckRunner {
 			in_flight: Mutex::new(HashMap::new()),
 			halt: watch::channel(false).0,
 			stopped: AtomicBool::new(false),
+			admission: options.admission.map(Arc::new),
 		});
 		// Stored results age out (0582 PERF-11): once a day, at the service's first start that day and daily while it runs.
 		let first = Arc::clone(&inner);
@@ -504,6 +731,11 @@ impl CheckRunner {
 		self.inner.runs.load(Ordering::SeqCst)
 	}
 
+	/// The checks running and waiting in the queue; none without one.
+	pub fn load(&self) -> ChecksLoad {
+		self.inner.admission.as_ref().map_or(ChecksLoad { running: 0, waiting: 0 }, |admission| admission.load())
+	}
+
 	/// Resolves once the day's prune pass the runner started is done.
 	pub async fn pruning(&self) {
 		let handle = locked(&self.pruning).take();
@@ -513,10 +745,14 @@ impl CheckRunner {
 	}
 
 	/// Ends every check running here (their results aren't stored); later runs answer from stored results only.
+	/// Checks waiting in the queue are released.
 	pub async fn stop(&self) {
 		self.inner.stopped.store(true, Ordering::SeqCst);
 		self.prune_timer.abort();
 		self.inner.halt.send_replace(true);
+		if let Some(admission) = &self.inner.admission {
+			admission.close();
+		}
 		let flights: Vec<Flight> = locked(&self.inner.in_flight).values().cloned().collect();
 		futures_util::future::join_all(flights).await;
 	}
@@ -886,6 +1122,17 @@ impl Inner {
 		if self.stopped() {
 			return Err(Error::other(STOPPED));
 		}
+		// Waiting in the queue is not part of the check's time: the timeout and `ms` start once it is admitted.
+		let permit = match &self.admission {
+			Some(admission) => {
+				let project = project_of(&job.cwd).await;
+				Some(admission.admit(&project, &job.spec.command).await.ok_or_else(|| Error::other(STOPPED))?)
+			}
+			None => None,
+		};
+		if self.stopped() {
+			return Err(Error::other(STOPPED));
+		}
 		let spec = &job.spec;
 		let log_file = folder.join(format!("{}.log", file_name(&spec.name)));
 		let mut out = std::fs::File::create(&log_file)?;
@@ -893,12 +1140,24 @@ impl Inner {
 		let mut exit = None;
 		let mut timed_out = false;
 		match self.start(job, &out) {
-			Ok(child) => match self.finish(child).await {
-				Ok((code, ended)) => (exit, timed_out) = (code, ended),
-				Err(error) => write!(out, "\njocasta: couldn't run `{}`: {error}\n", spec.command)?,
-			},
+			Ok(child) => {
+				let sampler = permit.as_ref().and(child.id()).map(Sampler::start);
+				let ended = self.finish(child).await;
+				let measured = sampler.and_then(Sampler::stop);
+				match ended {
+					Ok((code, ended)) => {
+						(exit, timed_out) = (code, ended);
+						// Only a check that ran to its own end says what it costs.
+						if let (Some(permit), Some(measured), Some(_), false) = (&permit, measured, code, ended) {
+							permit.record(measured.peak_rss_bytes, measured.avg_cores);
+						}
+					}
+					Err(error) => write!(out, "\njocasta: couldn't run `{}`: {error}\n", spec.command)?,
+				}
+			}
 			Err(error) => write!(out, "\njocasta: couldn't run `{}`: {error}\n", spec.command)?,
 		}
+		drop(permit);
 		drop(out);
 		let ms = now_ms() - started;
 		if timed_out {

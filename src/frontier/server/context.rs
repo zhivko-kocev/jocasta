@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use crate::frontier::server::allow::AllowGate;
 use crate::frontier::server::boss::LaunchedPanes;
-use crate::frontier::server::checks::{CheckRunner, CheckRunnerOptions, checks_dir};
+use crate::frontier::server::checks::{Admission, CheckRunner, CheckRunnerOptions, checks_dir};
 use crate::frontier::server::day::{Day, SharedCatalog};
 use crate::frontier::server::events::{BossPane, Events};
 use crate::frontier::server::finish::Finisher;
@@ -28,6 +28,7 @@ use crate::frontier::server::service::ServiceOptions;
 use crate::frontier::server::sessions::SessionIndex;
 use crate::frontier::server::status::StatusViews;
 use crate::frontier::server::thread::ThreadRegistry;
+use crate::frontier::server::thread_facts::ThreadFacts;
 use crate::frontier::server::thread_lifecycle::ThreadLifecycle;
 use crate::frontier::server::thread_start::ThreadStarts;
 use crate::frontier::server::weekly_review::WeeklyReviews;
@@ -214,6 +215,8 @@ pub struct ServiceContext {
 	pub status: StatusViews,
 	pub starts: ThreadStarts,
 	pub weekly: WeeklyReviews,
+	/// Each open thread's diff, last check and last write, read on the refresh tick (0668).
+	pub thread_facts: ThreadFacts,
 }
 
 impl ServiceContext {
@@ -221,7 +224,11 @@ impl ServiceContext {
 	/// (it can't be built after the context: the context holds it). The options' `day` is already taken out of `options`.
 	pub fn new(link: &Link, catalog: SharedCatalog, options: ServiceOptions, day: Day) -> Arc<Self> {
 		let checks = options.checks.clone().unwrap_or_else(|| {
-			Arc::new(CheckRunner::new(CheckRunnerOptions { dir: checks_dir(&data_dir()), ..Default::default() }))
+			Arc::new(CheckRunner::new(CheckRunnerOptions {
+				dir: checks_dir(&data_dir()),
+				admission: Some(Admission::from_settings()),
+				..Default::default()
+			}))
 		});
 		let places_link = link.clone();
 		let synced_link = link.clone();
@@ -259,6 +266,7 @@ impl ServiceContext {
 			lifecycle: ThreadLifecycle::new(link.clone()),
 			starts: ThreadStarts::new(link.clone()),
 			weekly: WeeklyReviews::new(link.clone()),
+			thread_facts: ThreadFacts::new(),
 			catalog,
 			options,
 			day,

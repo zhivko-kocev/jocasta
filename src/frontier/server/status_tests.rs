@@ -392,6 +392,33 @@ async fn sidebar_tokens_per_thread_pane_and_project_workspace_the_hud_and_the_to
 }
 
 #[tokio::test]
+async fn the_boss_pane_carries_the_pin_token_renewed_with_the_rest_kept_when_it_is_the_only_pane_and_cleared_at_stop_0667()
+ {
+	let w = world(|_| {});
+	w.with_boss_idle();
+	w.ctx.status.report().await.unwrap();
+	assert_eq!(pane_reports(&w), [vec![json!("boss-1"), json!({"tokens": {"pin": "1"}, "ttlMs": 900_000})]]);
+	// Unchanged: not reported again.
+	w.ctx.status.report().await.unwrap();
+	assert_eq!(pane_reports(&w).len(), 1);
+	// Old enough to renew: reported again, not forgotten as a pane no thread holds.
+	{
+		let mut st = w.ctx.status.st();
+		for (_, reported) in &mut st.reported {
+			reported.at -= METADATA_RENEW_MS + 1;
+		}
+	}
+	w.ctx.status.report().await.unwrap();
+	assert_eq!(pane_reports(&w).len(), 2);
+	// Stopped: the pin is cleared with the pane's other tokens.
+	w.ctx.status.clear().await;
+	assert_eq!(
+		pane_reports(&w).last().unwrap(),
+		&vec![json!("boss-1"), json!({"tokens": {"model": null, "cost": null, "pin": null}})]
+	);
+}
+
+#[tokio::test]
 async fn a_reviewed_thread_s_state_labels_say_review_ready_and_a_waiting_plan_s_say_plan_ready() {
 	let w = world(|_| {});
 	let t = thread(&w, "1-1", "Readme line");

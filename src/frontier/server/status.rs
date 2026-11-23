@@ -18,12 +18,13 @@ use futures_util::future::{BoxFuture, Shared, join_all, try_join_all};
 use serde_json::json;
 
 use crate::frontier::protocol::{
-	Hud, Leftover, ServerMessage, ThreadState, ToastLevel, ToastPriority, ToastReason, Today,
+	Hud, Leftover, ServerMessage, ThreadState, ToastLevel, ToastPriority, ToastReason, Today, TopThread,
 };
 use crate::frontier::server::context::{Link, ServiceContext};
 use crate::frontier::server::day::DayThread;
 use crate::frontier::server::events::Toast;
 use crate::frontier::server::herdr::{AgentState, HerdrResult, PaneMetadata, STOP_PING_MS, Tokens, WorkspaceInfo};
+use crate::frontier::server::native::{PIN_TOKEN, PIN_VALUE};
 use crate::frontier::server::report::report_line;
 use crate::frontier::server::sessions::SessionIndex;
 use crate::frontier::server::spend::{SpendTracker, spend_settled, spend_today};
@@ -35,6 +36,16 @@ use crate::shared::clock::now_ms;
 use crate::shared::errors::{Error, Result};
 use crate::shared::ledger::{ThreadLedger, ledger_line, thread_ledger};
 use crate::shared::projects::{Project, list_projects};
+
+/// The costliest open thread of `today`'s UNDERWAY rows (0668); none while no row has a cost above zero.
+fn top_thread(today: &Today) -> Option<TopThread> {
+	today
+		.underway
+		.iter()
+		.filter_map(|row| row.cost.filter(|cost| *cost > 0.0).map(|cost| (row, cost)))
+		.max_by(|a, b| a.1.total_cmp(&b.1))
+		.map(|(row, cost)| TopThread { title: row.title.clone(), cost })
+}
 
 /// The sidebar tokens expire unless reported again within this time, so a stopped service leaves none (UX-13).
 const METADATA_TTL_MS: i64 = 15 * 60_000;
@@ -313,6 +324,12 @@ impl StatusViews {
 			counts[at].1.0 += u32::from(row.working);
 			counts[at].1.1 += u32::from(row.awaiting);
 		}
+		// The boss's row is pinned first in the Agents view by this token (0667); its pane is live for `forget_closed`.
+		if let Some(boss) = c.boss() {
+			let pane_id = boss.with(|boss| boss.pane_id.clone());
+			live.insert(format!("pane:{pane_id}"));
+			self.report_boss(&c, &pane_id).await;
+		}
 		self.forget_closed(&live, &mut counts);
 		for (workspace_id, (working, awaiting)) in counts {
 			self.report_workspace(&c, &workspace_id, working, awaiting).await;
@@ -354,6 +371,18 @@ impl StatusViews {
 		};
 		let send = || c.herdr.report_pane_metadata(&row.pane_id, &meta);
 		self.report_once(&format!("pane:{}", row.pane_id), value.to_string(), send).await;
+	}
+
+	/// The boss pane's `pin` token (0667), renewed like every sidebar token.
+	async fn report_boss(&self, c: &ServiceContext, pane_id: &str) {
+		let value = json!({"tokens": {(PIN_TOKEN): PIN_VALUE}, "ttlMs": METADATA_TTL_MS});
+		let meta = PaneMetadata {
+			tokens: Some(vec![(PIN_TOKEN.to_owned(), Some(PIN_VALUE.to_owned()))]),
+			ttl_ms: Some(METADATA_TTL_MS),
+			..PaneMetadata::default()
+		};
+		let send = || c.herdr.report_pane_metadata(pane_id, &meta);
+		self.report_once(&format!("pane:{pane_id}"), value.to_string(), send).await;
 	}
 
 	/// Drops what was reported of a closed workspace or pane, and counts a workspace still reported with no thread as
@@ -451,16 +480,19 @@ impl StatusViews {
 		if !matches!(ping, Ok(Ok(_))) {
 			return;
 		}
+		let boss = self.link.ctx().boss().map(|boss| boss.with(|boss| boss.pane_id.clone()));
 		let keys: Vec<String> = self.st().reported.iter().map(|(key, _)| key.clone()).collect();
+		let boss = &boss;
 		let clears = keys.iter().map(|key| {
 			let (kind, id) = key.split_once(':').unwrap_or((key, ""));
 			let herdr = &herdr;
 			async move {
 				if kind == "pane" {
-					let meta = PaneMetadata {
-						tokens: Some(vec![("model".to_owned(), None), ("cost".to_owned(), None)]),
-						..PaneMetadata::default()
-					};
+					let mut tokens = vec![("model".to_owned(), None), ("cost".to_owned(), None)];
+					if boss.as_deref() == Some(id) {
+						tokens.push((PIN_TOKEN.to_owned(), None));
+					}
+					let meta = PaneMetadata { tokens: Some(tokens), ..PaneMetadata::default() };
 					let _ = herdr.report_pane_metadata(id, &meta).await;
 				} else {
 					let tokens: Tokens = vec![("running".to_owned(), None)];
@@ -482,6 +514,12 @@ impl StatusViews {
 		let threads = c.threads.all();
 		let running = threads.iter().filter(|t| t.with(|t| t.state == AgentState::Working)).count();
 		let blocked = threads.iter().filter(|t| t.with(|t| t.shown == ThreadState::Blocked)).count();
+		let (accounts, capacity) = c.day.quota_accounts();
+		let spend_today = self.spend_today(&c);
+		// Today's total goes into the recorded days the 7-day average is the mean of (0668).
+		if let Some(spent) = spend_today {
+			c.day.record_spend(spent);
+		}
 		Hud {
 			running: u32::try_from(running).unwrap_or(u32::MAX),
 			// Waiting on him: herdr's blocked, and a plan waiting in omp's Plan Review (herdr says idle there).
@@ -489,9 +527,14 @@ impl StatusViews {
 			// Every row of Awaiting you, the count `today` and the HUD say (0432, 0581).
 			awaiting: u32::try_from(today.needs_you.len()).unwrap_or(u32::MAX),
 			// Counted once today's sessions were read; until then the HUD says "…".
-			spend_today: self.spend_today(&c),
+			spend_today,
 			// The subscription windows from `omp usage` (0456), once it answered.
 			quota: c.day.quota(),
+			spend_avg_7d: c.day.spend_avg_7d(),
+			top_thread: top_thread(today),
+			accounts,
+			capacity,
+			checks: Some(c.checks.load()).filter(|load| load.running + load.waiting > 0),
 			// today's header says quiet hours (0581).
 			quiet: Some(c.day.quiet()),
 		}
@@ -599,6 +642,8 @@ impl StatusViews {
 		let look = path.and_then(|path| self.try_sessions(|sessions| self.look_in(sessions, thread, &path)));
 		// The overlaps as last read; a read over a minute old is started again, never waited for (PERF-1).
 		let overlaps: Vec<String> = self.overlaps_known(thread).into_iter().map(|o| o.title).collect();
+		// The diff, last check and last write as `ThreadFacts` last read them (0668); a cheap, synchronous read.
+		let facts = c.thread_facts.get(&thread.with(|t| t.path.clone()));
 		thread.with(|t| DayThread {
 			pane_id: t.pane_id.clone(),
 			title: t.title.clone(),
@@ -610,6 +655,9 @@ impl StatusViews {
 			reviewed_at: t.review.as_ref().and_then(|review| review.result.as_ref()).and_then(|result| result.at),
 			cost: look.as_ref().and_then(|look| look.spend),
 			context: look.as_ref().and_then(|look| look.brief.context),
+			diff: facts.diff,
+			check: facts.check,
+			last_write_ms: facts.last_write_ms,
 		})
 	}
 

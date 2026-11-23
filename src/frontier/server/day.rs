@@ -21,8 +21,9 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::frontier::protocol::{
-	Activity, ActivityEvent, Leftover, Machine, NewsList, QuotaSpan, QuotaWindow, ServerMessage, ServiceHealth,
-	ThreadState, ToastLevel, ToastPriority, ToastReason, Weather,
+	Activity, ActivityEvent, Leftover, Machine, NewsList, PrFacts, QuotaAccount, QuotaCapacity, QuotaSpan, QuotaWindow,
+	ScheduledItem, ServerMessage, ServiceHealth, ThreadDiff, ThreadState, ToastLevel, ToastPriority, ToastReason,
+	Weather,
 };
 use crate::frontier::server::worklog::{GitPlaces, WorklogSession, worklog_path, write_worklog};
 use crate::shared::credentials::calendar_secret;
@@ -41,15 +42,17 @@ use crate::shared::pollers::settings::{PollerSettings, read_poller};
 use crate::shared::pollers::weather::Place;
 use crate::shared::process::AbortSignal;
 use crate::shared::projects::Project;
+use crate::shared::schedules::{Schedule, ScheduleState, read_schedules};
 use crate::shared::schema::open_me_db;
 use crate::shared::settings::{Settings, SettingsError, gone_settings, read_settings};
+use crate::shared::spend_days::{SpendDays, backfill};
 
 #[path = "day_poll.rs"]
 mod poll;
 #[path = "day_view.rs"]
 mod view;
 
-pub use view::parse_when;
+pub use view::{Landing, parse_when};
 
 const MINUTE: i64 = 60_000;
 /// The one reminder comes 30 minutes after an event was raised (0303).
@@ -75,6 +78,10 @@ const LEFTOVER_MINUTES: f64 = 10.0;
 /// The weekly review (0470) runs from this weekday (0 = Sunday) and hour on, once per project and week.
 const WEEKLY_REVIEW_DAY: u32 = 1;
 const WEEKLY_REVIEW_HOUR: u32 = 10;
+/// A working thread whose session file wasn't written for this long is stuck (0668).
+pub const STUCK_MS: i64 = 600_000;
+/// The scheduled runs `today` shows (0673).
+const SCHEDULED_SHOWN: usize = 3;
 
 /// The shared catalog database: the service and the day both use it.
 pub type SharedCatalog = Arc<Mutex<Connection>>;
@@ -144,6 +151,23 @@ pub struct DayThread {
 	/// Its session's cost (USD) and context (tokens), for `today` (0555).
 	pub cost: Option<f64>,
 	pub context: Option<u64>,
+	/// Lines added and removed against trunk, the last check's result and the last write to its session file, from
+	/// `ThreadFacts` (0668).
+	pub diff: Option<ThreadDiff>,
+	pub check: Option<bool>,
+	pub last_write_ms: Option<i64>,
+}
+
+/// What starting a scheduled thread came to (0673): started, or skipped with the reason he is told.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScheduleStart {
+	Started,
+	Skipped(String),
+}
+
+/// The first line of a brief, trimmed.
+fn first_line(text: &str) -> String {
+	text.lines().next().unwrap_or_default().trim().to_owned()
 }
 
 /// What the day service needs from the Jocasta service.
@@ -175,6 +199,14 @@ pub trait DayHooks: Send + Sync {
 	/// The weekly big-picture review of one project (0470): what merged in the past 7 days against its rules and
 	/// lessons, read-only. Resolves to the result's one line, or `None` when nothing merged that week.
 	fn weekly_review(&self, project: &Project) -> BoxFuture<'_, Result<Option<String>>>;
+	/// Starts one scheduled thread of a project (0673), by its name: the vet, the same-title check and the start.
+	fn start_scheduled(&self, _project: &str, _schedule: &Schedule) -> BoxFuture<'static, Result<ScheduleStart>> {
+		Box::pin(std::future::ready(Ok(ScheduleStart::Skipped("scheduled threads aren't started here".to_owned()))))
+	}
+	/// A PR's number and CI state from the cache (0668); a sync read, `None` until fetched.
+	fn pr_facts(&self, _url: &str) -> Option<PrFacts> {
+		None
+	}
 }
 
 /// The pollers, by the names `jocasta.yaml` and the failure lines give them.
@@ -297,13 +329,18 @@ struct State {
 	dashboard_sent: String,
 	/// The subscription windows (0456), as `omp usage` last reported them.
 	quota_windows: Vec<QuotaWindow>,
-	/// The windows past the warning whose toast went out; a window drops out once it is back under.
-	quota_warned: Vec<QuotaSpan>,
+	/// Every account's windows and what is left across them (0669), from the same read.
+	quota_accounts: Vec<QuotaAccount>,
+	quota_capacity: Vec<QuotaCapacity>,
+	/// The accounts' windows past the warning whose toast went out, by account name; one drops out once back under.
+	quota_warned: Vec<(String, QuotaSpan)>,
 	quota_reading: bool,
 	leftover_list: Vec<Leftover>,
 	leftovers_reading: Option<Done>,
 	/// The weekly reviews (0470) run or checked this week, by `<week>|<project id>`; running ones included.
 	weekly_done: HashSet<String>,
+	/// The scheduled starts queued last (0673); a new batch waits for it.
+	scheduling: Option<Done>,
 }
 
 struct Inner {
@@ -325,6 +362,8 @@ struct Inner {
 	calendar_secret: Option<Arc<dyn Fn() -> Option<String> + Send + Sync>>,
 	disk_free: Option<Arc<dyn Fn() -> f64 + Send + Sync>>,
 	usage: Option<Arc<dyn Fn() -> RunFuture + Send + Sync>>,
+	/// The recorded daily spend for the 7-day average (0668).
+	spend: SpendDays,
 	/// Each project's git email and origin for the worklogs, kept for one local day (CO-12).
 	places: GitPlaces,
 	stopped: AtomicBool,
@@ -389,11 +428,14 @@ impl Day {
 			worklog_so_far: None,
 			dashboard_sent: String::new(),
 			quota_windows: Vec::new(),
+			quota_accounts: Vec::new(),
+			quota_capacity: Vec::new(),
 			quota_warned: Vec::new(),
 			quota_reading: false,
 			leftover_list: Vec::new(),
 			leftovers_reading: None,
 			weekly_done: HashSet::new(),
+			scheduling: None,
 		};
 		Ok(Self {
 			inner: Arc::new(Inner {
@@ -412,6 +454,7 @@ impl Day {
 				calendar_secret: options.calendar_secret,
 				disk_free: options.disk_free,
 				usage: options.usage,
+				spend: SpendDays::open(),
 				places: GitPlaces::new(),
 				stopped: AtomicBool::new(false),
 				state: Mutex::new(state),
@@ -429,7 +472,8 @@ impl Day {
 		lock(&self.inner.state)
 	}
 
-	fn now_ms(&self) -> i64 {
+	/// Now, by the day's clock (epoch ms).
+	pub fn now_ms(&self) -> i64 {
 		(self.inner.clock)()
 	}
 
@@ -575,6 +619,7 @@ impl Day {
 			finished(so_far).await;
 		}
 		self.worklog_writing().await;
+		self.schedules_settled().await;
 	}
 
 	/// Settles once the worklogs queued so far are written (yesterday's at start, today's at day's end).
@@ -793,6 +838,7 @@ impl Day {
 		}
 		self.end_of_day(quiet);
 		self.guard("weekly review", || self.weekly_reviews(quiet));
+		self.guard("schedules", || self.schedules_due());
 		self.refresh_activity(None);
 		self.push_today()?;
 		self.push_dashboard();
@@ -932,6 +978,146 @@ impl Day {
 		}
 		self.refresh_activity(None);
 		self.push_dashboard();
+	}
+
+	// ---- the hud's trends, quota accounts and scheduled threads (0668, 0669, 0673) ----
+
+	/// Every account's windows and what is left across them (0669), as the last good `omp usage` read had them.
+	pub fn quota_accounts(&self) -> (Vec<QuotaAccount>, Vec<QuotaCapacity>) {
+		let state = self.st();
+		(state.quota_accounts.clone(), state.quota_capacity.clone())
+	}
+
+	/// Fills the daily spend record's prior days (0668) from omp's session files in `sessions_dir`, once at start;
+	/// a recorded day is never overwritten.
+	pub async fn backfill_spend(&self, sessions_dir: &Path) {
+		backfill(sessions_dir, self.now_ms(), &self.inner.spend).await;
+	}
+
+	/// Records today's spend so far for the 7-day average; the file is written at most once a minute and at rollover. A
+	/// failed write is said once.
+	pub fn record_spend(&self, spent_today: f64) {
+		let now = self.now_ms();
+		if let Err(error) = self.inner.spend.record(&local_day(now), spent_today, now) {
+			self.report_once("spend days", &format!("spend-days.json: {error}"), false);
+		}
+	}
+
+	/// The mean of the recorded prior days' spend, up to 7 (0668); `None` with none recorded.
+	pub fn spend_avg_7d(&self) -> Option<f64> {
+		self.inner.spend.average(&local_day(self.now_ms()))
+	}
+
+	/// The soonest 3 scheduled runs across `projects` (0673), soonest first. A project whose file can't be read shows
+	/// none here; the tick says why.
+	pub fn scheduled_next(&self, projects: &[Project]) -> Vec<ScheduledItem> {
+		let now = self.now_ms();
+		let mut items: Vec<ScheduledItem> = projects
+			.iter()
+			.flat_map(|project| {
+				read_schedules(&project.id).unwrap_or_default().into_iter().filter_map(move |schedule| {
+					schedule.next_run(now).map(|at_ms| ScheduledItem {
+						project: project.name.clone(),
+						brief: first_line(&schedule.brief),
+						at_ms,
+					})
+				})
+			})
+			.collect();
+		items.sort_by_key(|item| item.at_ms);
+		items.truncate(SCHEDULED_SHOWN);
+		items
+	}
+
+	/// The schedules whose latest slot passed since they last ran (0673): a missed run starts once however many slots
+	/// passed, a new schedule's baseline is its first-seen time, and `last` is written before the start, so a slot never
+	/// repeats (a start error isn't retried, a clock moved back finds no later slot). The starts run one after another
+	/// in a task ([`Day::schedules_settled`]); a bad file is said once and skipped.
+	fn schedules_due(&self) -> Result<()> {
+		if self.stopped() {
+			return Ok(());
+		}
+		let now = self.now_ms();
+		let mut due: Vec<(Project, Schedule)> = Vec::new();
+		for project in self.inner.hooks.projects() {
+			let key = format!("schedules {}", project.id);
+			let schedules = match read_schedules(&project.id) {
+				Ok(schedules) => {
+					self.st().last_error.remove(&key);
+					schedules
+				}
+				Err(reason) => {
+					self.report_once(&key, &format!("Schedules of {}: {reason}", project.name), false);
+					continue;
+				}
+			};
+			let mut state = ScheduleState::read(&project.id);
+			let mut started = Vec::new();
+			let mut changed = false;
+			for schedule in schedules {
+				let Some(baseline) = state.baseline(&schedule.id) else {
+					state.see(&schedule.id, now);
+					changed = true;
+					continue;
+				};
+				if schedule.latest_slot(now).is_some_and(|slot| slot > baseline) {
+					state.started(&schedule.id, now);
+					changed = true;
+					started.push(schedule);
+				}
+			}
+			// Written before any start: a slot that couldn't be recorded must not run again every minute.
+			if changed && let Err(error) = state.write(&project.id) {
+				self.report_once(&key, &format!("Schedules of {}: {error}", project.name), false);
+				continue;
+			}
+			due.extend(started.into_iter().map(|schedule| (project.clone(), schedule)));
+		}
+		if due.is_empty() {
+			return Ok(());
+		}
+		let (finish, done) = watch::channel(false);
+		let previous = self.st().scheduling.replace(done);
+		let this = self.clone();
+		tokio::spawn(async move {
+			let _finish = Finish(finish);
+			if let Some(previous) = previous {
+				finished(previous).await;
+			}
+			this.start_scheduled(due).await;
+		});
+		Ok(())
+	}
+
+	async fn start_scheduled(&self, due: Vec<(Project, Schedule)>) {
+		for (project, schedule) in due {
+			if self.stopped() {
+				return;
+			}
+			let brief = first_line(&schedule.brief);
+			match self.inner.hooks.start_scheduled(&project.name, &schedule).await {
+				Ok(ScheduleStart::Started) => {
+					self.record_event(&format!("{} — scheduled thread started: {brief}", project.name));
+				}
+				Ok(ScheduleStart::Skipped(why)) => self.inner.hooks.notify(
+					&format!("Scheduled thread \"{brief}\" in {} skipped: {why}", project.name),
+					ToastLevel::Warning,
+				),
+				Err(error) => self.report_once(
+					&format!("schedule {}:{}", project.id, schedule.id),
+					&format!("Scheduled thread \"{brief}\" in {} didn't start: {error}", project.name),
+					false,
+				),
+			}
+		}
+	}
+
+	/// Settles once the scheduled starts queued so far ended.
+	pub async fn schedules_settled(&self) {
+		let scheduling = self.st().scheduling.clone();
+		if let Some(scheduling) = scheduling {
+			finished(scheduling).await;
+		}
 	}
 }
 

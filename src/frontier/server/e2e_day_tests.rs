@@ -364,6 +364,7 @@ async fn today_0300_0409_calendar_with_links_0429_awaiting_you_landed_underway_n
 					text: "try the new parser".to_owned(),
 					project: Some("demo".to_owned())
 				}],
+				scheduled: vec![],
 			}
 		);
 

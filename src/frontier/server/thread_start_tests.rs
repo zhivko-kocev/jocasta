@@ -829,3 +829,61 @@ impl Drop for Var {
 		env_overlay::restore(self.0, self.1.take());
 	}
 }
+
+fn schedule(brief: &str, done_when: &[&str], heavy: bool) -> Schedule {
+	Schedule {
+		id: "0123456789ab".to_owned(),
+		brief: brief.to_owned(),
+		done_when: strings(done_when),
+		heavy,
+		days: vec![chrono::Weekday::Mon],
+		time: (9, 0),
+	}
+}
+
+#[tokio::test]
+async fn a_scheduled_start_opens_a_plan_mode_thread_titled_from_its_brief_through_the_keys_door_asking_nothing() {
+	let w = world();
+	w.project("demo");
+	w.allow.store(false, Ordering::SeqCst);
+	let given = schedule("Bump dependencies. Then test.", &["cargo test"], true);
+	assert_eq!(w.t.ctx.starts.start_scheduled("demo", &given).await.unwrap(), ScheduleStart::Started);
+	assert!(w.asked.lock().unwrap().is_empty());
+	let threads = w.t.ctx.threads.of_project(&w.project_id("demo"));
+	assert_eq!(threads.len(), 1);
+	assert_eq!(threads[0].with(|t| t.title.clone()), "Bump dependencies");
+	let task = threads[0].with(|t| t.task.clone()).expect("its task file");
+	assert_eq!(task.done_when, strings(&["cargo test"]));
+	assert_eq!(task.heavy, Some(true));
+}
+
+#[tokio::test]
+async fn a_scheduled_start_is_skipped_when_a_thread_with_its_title_is_open_in_the_project() {
+	let w = world();
+	w.project("demo");
+	let given = schedule("Bump dependencies.", &[], false);
+	assert_eq!(w.t.ctx.starts.start_scheduled("demo", &given).await.unwrap(), ScheduleStart::Started);
+	let again = w.t.ctx.starts.start_scheduled("demo", &given).await.unwrap();
+	assert!(
+		matches!(&again, ScheduleStart::Skipped(why) if why.contains("Bump dependencies") && why.contains("already open")),
+		"{again:?}"
+	);
+	assert_eq!(w.t.herdr.of("createWorktree").len(), 1);
+}
+
+#[tokio::test]
+async fn a_scheduled_start_whose_done_when_the_guard_asks_about_or_denies_is_skipped_with_the_reason_and_starts_nothing()
+ {
+	let w = world();
+	w.project("demo");
+	let asks = w.t.ctx.starts.start_scheduled("demo", &schedule("Publish.", &["npm publish"], false)).await.unwrap();
+	assert!(matches!(&asks, ScheduleStart::Skipped(why) if why.contains("npm publish")), "{asks:?}");
+	let denied =
+		w.t.ctx
+			.starts
+			.start_scheduled("demo", &schedule("Push.", &["git push --force origin main"], false))
+			.await
+			.unwrap();
+	assert!(matches!(&denied, ScheduleStart::Skipped(why) if why.contains("denied")), "{denied:?}");
+	assert!(w.asked.lock().unwrap().is_empty() && w.t.herdr.of("createWorktree").is_empty());
+}
