@@ -99,7 +99,6 @@ bench/lib/temp.rs undocumented-export mkdtemp
 bench/lib/threads.rs undocumented-export ThreadLine
 bench/tokscale_parity.rs undocumented-export ParityRow
 bench/tokscale_parity.rs undocumented-export SessionTotals
-bench/tokscale_parity.rs undocumented-export TOKSCALE_RELEASE
 bench/tokscale_parity.rs undocumented-export TOKSCALE_VERSION
 evals/a5.rs undocumented-export A5Input
 evals/a5.rs undocumented-export A5Report

@@ -863,7 +863,7 @@ fn the_shipped_config_yml_carries_the_decided_values_that_his_own_file_held_wher
 	assert_eq!(chains["slow"], chains["plan"]);
 	assert_eq!(chains["dictation"], json!([]));
 	assert_eq!(chains["speech"], json!([]));
-	assert_eq!(config["modelRoles"]["default"], "anthropic/claude-opus-5-5:high");
+	assert_eq!(config["modelRoles"]["default"], "anthropic/claude-opus-5-5:medium");
 }
 
 #[tokio::test]

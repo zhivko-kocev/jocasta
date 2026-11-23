@@ -79,12 +79,12 @@ recap:
   enabled: false
 # His Claude Code plugins stop loading into omp.
 disabledProviders: [claude-plugins]
-# His model roles (0590, 0591, 0618; the settings trials may change them): Opus 5.5 at high by default, Fable 5.2 for
-# planning and his `slow` role (heavy threads), Sonnet 5.5 for subagents, Haiku 5.5 for the small jobs, local models
-# for speech, dictation and `tiny`. Web search off parallel.ai (keyless Parallel sends the query, session id and model
-# name).
+# His model roles (0590, 0591, 0618, 0655): Opus 5.5 at medium by default (the task study's 22 passes as at high, for
+# 25% less), Fable 5.2 for planning and his `slow` role (heavy threads), Sonnet 5.5 for subagents, Haiku 5.5 for the
+# small jobs, local models for speech, dictation and `tiny`. Web search off parallel.ai (keyless Parallel sends the
+# query, session id and model name).
 modelRoles:
-  default: anthropic/claude-opus-5-5:high
+  default: anthropic/claude-opus-5-5:medium
   slow: anthropic/claude-fable-5-2:xhigh
   plan: anthropic/claude-fable-5-2:xhigh
   advisor: anthropic/claude-fable-5-2:medium

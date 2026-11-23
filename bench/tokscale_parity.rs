@@ -37,11 +37,12 @@ use jocasta::shared::ledger::{LedgerHarness, SessionRecord};
 use jocasta::shared::process::{RunOptions, on_path, run_program_sync};
 
 pub const TOKSCALE_VERSION: &str = "4.21.0";
-pub const TOKSCALE_RELEASE: &str = "https://github.com/junhoyeo/tokscale/releases/tag/v4.21.0";
+/// Where the check finds tokscale on his PC (0657): npm's package carries the Windows binary.
+pub const TOKSCALE_INSTALL: &str = "npm install --prefix D:/thesis/tools/tokscale tokscale@4.21.0";
 /// What a skipped check says.
 pub fn tokscale_missing() -> String {
 	format!(
-		"tokscale is not on PATH: the parity check is bench-only (0538); install tokscale {TOKSCALE_VERSION} from {TOKSCALE_RELEASE} in the VM"
+		"tokscale is not on PATH: the parity check is bench-only (0538); install tokscale {TOKSCALE_VERSION} with `{TOKSCALE_INSTALL}` and put its node_modules/.bin on the bench session's PATH (0657)"
 	)
 }
 

@@ -142,3 +142,12 @@ The plan's section 6 items, each with the default taken, are repeated here as th
 24. **`mcp.shared` and the other new omp settings** (not added to the snapshot): `mcp.shared` true, `mcp.idleStopMinutes` 5 (a shared server stops after idle), `mcp.evalNamespaces` false, `mcp.builtinTransforms` true, `pty.notify` on, `task.crossInstance` false, `providers.cacheWarmingStrategy` auto with `cacheWarmingCompactPercent` 60 and `cacheWarmingCompactTokens` 150000, `edit.magic.model` unset, `binja.installDir`/`binja.python`, `tools.commandDocs` catalog, `tools.commandInline` [], `tools.commandNotices` true. None sends data out by itself; cache warming costs tokens as before (`providers.cacheWarming` unchanged: idle). Jocasta's server stays handshake-era, so `mcp.shared` does not apply to it; recommend leaving all at their defaults and offering `providers.cacheWarmingStrategy` as a candidate for the next settings trials.
 25. **Composer predictions** (choice 99): pinned off in the snapshot to keep behaviour as it was. If he wants omp's suggested next message, delete `composer:` from `config/omp/config.yml`; recommend leaving it off while token cost is the thesis's measure. omp 19 also writes a `tool_approval_requested` custom entry for each approval request, a signal Jocasta could read instead of screen-scraping a prompt; not built.
 26. **`url` 2.5.9** (choice 104): on or after 2026-11-27, `cargo update -p url` (2.5.9 is then 7 days old) and delete RUSTSEC-2026-0592's line from `deny.toml`. Taking it sooner means waiving 0627's 7-day rule for one crate, which is his call.
+
+## His answers (2026-11-23)
+
+All 26 answered in the review, recorded as 0654–0658:
+- **Kept as built** (0654): 1, 2, 4–14, 16, 18, 22, 24, 25; 21 accepted, its false matches counted in the next trials; `ead47a10`'s history left as it is. 3 is his to run.
+- **17** (0655): normal threads and his plain omp on Opus 5.5 at medium (`config/omp/config.yml`'s `default`); the boss, heavy threads and every benchmark arm unchanged.
+- **26** (0656): taken now, `url` 2.5.9 with `form_urlencoded` 1.2.3, the RUSTSEC-2026-0592 line removed.
+- **19, 20, 15/23** (0657): H6, H8 and live-check on his PC; H9 and git-guard-check from the VM's results; opencode 1.18.22 and tokscale 4.21.0 in `D:/thesis/tools/` for the benchmarks only, A7 no longer held to the VM; an omp profile `bench` for the main run; Bun's global omp package at 19.1.0.
+- **His addition to 20** (0658): a one-off report on his omp sessions, in `D:/thesis/data/doctor/`.

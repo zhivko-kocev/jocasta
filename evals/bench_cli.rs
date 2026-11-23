@@ -28,7 +28,7 @@ use crate::lib::args::{
 };
 use crate::lib::launch::tool_command;
 use crate::lib::output::read_version;
-use crate::lib::sandbox::{BENCH_PTY_SESSION, VM_MACHINE, machine_name};
+use crate::lib::sandbox::BENCH_PTY_SESSION;
 use jocasta::shared::env;
 use jocasta::shared::errors::Result;
 use jocasta::shared::pathkey::{is_inside, resolve};
@@ -315,19 +315,11 @@ async fn run(argv: Vec<String>) -> Result<u8> {
 	}
 	let a7: Vec<String> =
 		plan.arm_names.iter().filter(|name| plan.variant(name).harness == Harness::Opencode).cloned().collect();
-	if !a7.is_empty() {
-		if machine_name().to_uppercase() != VM_MACHINE {
-			return Err(BenchUsageError::err(format!(
-				"{} runs in the VM {VM_MACHINE} only (0537), not on this machine",
-				a7.join(", ")
-			)));
-		}
-		if env::var_nonempty(A7_API_KEY_ENV).is_none() {
-			return Err(BenchUsageError::err(format!(
-				"{} needs A7's Anthropic API key in {A7_API_KEY_ENV} (0537)",
-				a7.join(", ")
-			)));
-		}
+	if !a7.is_empty() && env::var_nonempty(A7_API_KEY_ENV).is_none() {
+		return Err(BenchUsageError::err(format!(
+			"{} needs A7's Anthropic API key in {A7_API_KEY_ENV} (0537)",
+			a7.join(", ")
+		)));
 	}
 	let mut arms: Vec<Arm> = Vec::new();
 	for name in &plan.arm_names {
@@ -409,7 +401,7 @@ fn print_arm(plan: &Plan, name: &str) -> Result<()> {
 	}
 	if variant.harness == Harness::Opencode {
 		println!(
-			"  arm {name}: Anthropic API key from {A7_API_KEY_ENV} (as ANTHROPIC_API_KEY, opencode only), VM {VM_MACHINE} only, stops at ${} priced spend (0537)",
+			"  arm {name}: Anthropic API key from {A7_API_KEY_ENV} (as ANTHROPIC_API_KEY, opencode only), stops at ${} priced spend (0537)",
 			js_text(A7_SPEND_LIMIT_USD)
 		);
 	}

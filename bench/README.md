@@ -34,14 +34,14 @@ runs, how often and what is measured is fixed there, as amended for the harness-
 | Script | Model calls | Where |
 |---|---|---|
 | `h1-guard omp-verdicts`, `h1-guard evaluate` | none | anywhere with omp 19.1.0 installed (no command runs) |
-| `h1-guard live-check` | 31 cheap-model turns (30 picks and a canary; a few cents) | 0481's VM (an ACP client records omp's calls, 0585) |
-| `h1-guard git-guard-check` | none, but it runs the corpus's git lines (`--run`) | the VM `JOCASTA-CLEAN` only |
+| `h1-guard live-check` | 31 cheap-model turns (30 picks and a canary; a few cents) | his PC (its ACP client runs none of the picks, 0585, 0657) |
+| `h1-guard git-guard-check` | none, but it runs the corpus's git lines (`--run`) | the VM `JOCASTA-CLEAN` only; not rerun since the VM, its VM results stand (0657) |
 | `h7-longpath` | none | anywhere (git only, temp folders) |
 | `h2-toast`, `h3-recovery`, `h5-startup` | none, except `h2 --start` | a sandbox Jocasta |
 | `h4-isolation` | the `h4 plant` thread's turn | his PC, in a sandbox Jocasta (0502) |
-| `h6-memory`, `h8-parallel` | the threads' turns | 0481's VM |
-| `h9-footprint` | none | 0481's VM `JOCASTA-CLEAN` only (refused elsewhere) |
-| `tokscale-parity` | none | the VM, with tokscale 4.21.0 on PATH |
+| `h6-memory`, `h8-parallel` | the threads' turns | his PC, in a sandbox Jocasta (0657) |
+| `h9-footprint` | none | 0481's VM `JOCASTA-CLEAN` only (refused elsewhere); not rerun since the VM, its VM results stand (0657) |
+| `tokscale-parity` | none | his PC, with tokscale 4.21.0 from `D:/thesis/tools/tokscale` on the session's PATH (0657) |
 
 The scripts that act on a running Jocasta (H2–H6, H8) refuse to start without a sandbox (0502, 0576): its own data
 folder in `JOCASTA_DATA_DIR` (not the OS default), a herdr session in `JOCASTA_HERDR_SESSION` that isn't `jocasta` (or
@@ -53,8 +53,10 @@ threads still open in plan mode and wait for the operator's approval of their pl
 closes threads or removes worktrees: those ask him first (0484), so H6 and H8 wait for Enter between runs.
 
 Since 0652 the benchmarks run on his PC, on his own omp (19.1.0) and the Jocasta release built for the commit, and
-the VM is removed; its results are in `D:/thesis/data/vm-results/`. The scripts the table above ties to the VM have
-no machine until he decides where they run (`docs/research/fork-build.md`, For him 20).
+the VM is removed; its results are in `D:/thesis/data/vm-results/`. Since 0657 every script has its place in the table
+above; opencode 1.18.22 (A7, H5's and H6's competitor) and tokscale 4.21.0 are installed for the benchmarks only, in
+`D:/thesis/tools/opencode` and `D:/thesis/tools/tokscale`, and a bench session puts their `node_modules/.bin` on its
+PATH. The main run with A6 passes `--profile bench`: an omp profile whose `mcp.json` has no `jocasta` entry.
 
 Before the full runs (0588), each script runs once in a sandbox Jocasta, each into its own throwaway `--out` (checks,
 not results): every script's `--dry-run`, then `h3-recovery --runs 1` and `h5-startup --runs 1`; anything broken is
@@ -108,7 +110,7 @@ fixed before the long runs. The task benchmark refuses only an omp folder that w
     that decides a verdict as 18.20.2 had it; 19.1.0 changed only how an allow rule treats leading `NAME=value` words, and the guard has no allow
     rule, and its oracle's session stub must now answer `toolCommands` with nothing; checked from source, not yet by a run); and 18.14.0 rewrote
     the git guard (whose checkout git is in first; refusals for a failed save of uncommitted changes and for
-    submodule recursion), so `h1-guard git-guard-check --run` is run again in the VM before H1 reports measured refusals.
+    submodule recursion), so H1's measured refusals are the VM's on 18.13.1; with the VM gone `h1-guard git-guard-check --run` isn't run again (0657), and H1 reports them as such.
   - **The 0580 lines.** The guard's 0580 rules (combined force flags, trunk pushes, restore, update-ref and git's
     credentials, the graph's containers, omp's credentials and critical shapes, `gh repo edit --visibility`, the
     `*GIT*`/`*Git*` copies, merge and publish asks) each have labelled lines in the corpus's `dev` group, taken from
@@ -211,7 +213,7 @@ fixed before the long runs. The task benchmark refuses only an omp folder that w
   each seen in the VM on 2026-10-28: omp's prompt after 3.6 s, unsigned opencode's after 9.8 s cold while the VM was
   busy, and Claude Code's after 3.7 s (its footer reads "shift+tab to cycle" in its default auto mode, "? for
   shortcuts" in the others). Claude Code asks to trust each new folder, which a bench pane can't answer, so with it in
-  the tools H5 and H6 need `--cwd` at a folder trusted once (in the VM, `C:\jc\bench-cwd`); a real run without one
+  the tools H5 and H6 need `--cwd` at a folder trusted once (in the VM it was `C:\jc\bench-cwd`); a real run without one
   stops before any work. Writes `h5-startup.jsonl` and `h5-startup.json`.
 - **H6, `jocasta-bench h6-memory --out <dir> [--threads 0,1,4,8] [--project <name>] [--tools omp,claude,opencode]
   [--idle 120] [--turn]`.** Working set and private bytes of Jocasta's processes with 0–8 threads: the service's tree,
@@ -223,7 +225,7 @@ fixed before the long runs. The task benchmark refuses only an omp folder that w
 - **H7, `jocasta-bench h7-longpath --out <dir> [--lengths 100,…,240] [--root <dir>] [--home <dir>]
   [--location name=<template>]`.** Fixture repos whose deepest file has a relative path of L characters, checked out
   with `git worktree add` at Jocasta's `<parent>/<name>.wt/<slug>`, herdr's `<home>/.herdr/worktrees/<name>/<slug>`
-  and Claude Code's `<repo>/.claude/worktrees/<slug>` (confirm in the VM), with Git's default settings. vibe-kanban's
+  and Claude Code's `<repo>/.claude/worktrees/<slug>` (confirm on the machine that runs it), with Git's default settings. vibe-kanban's
   folder is added with `--location` once confirmed. Writes `h7-longpath.jsonl` and `h7-longpath.json` (the largest
   passing L per location).
 - **H8, `jocasta-bench h8-parallel --out <dir> --project <name> --repo <checkout> [--threads 2,4,8] [--layer on|off]
@@ -246,10 +248,11 @@ fixed before the long runs. The task benchmark refuses only an omp folder that w
 - **tokscale parity (0538), `jocasta-bench tokscale-parity --out <task-benchmark runDir>`.** The ledger's parser check,
   bench-only: per saved session of the run, the ledger's uncached input, cache read, cache write and output against
   `tokscale models --json --group-by client,session,model` (omp's saved folders passed as `TOKSCALE_EXTRA_DIRS`, in a
-  throwaway `TOKSCALE_CONFIG_DIR`; Claude Code's and opencode's records where they live in the VM). Tokens must match
-  exactly; dollars aren't compared. tokscale is pinned at v4.21.0 (2026-11-02, MIT), the Windows binary from
-  `https://github.com/junhoyeo/tokscale/releases/tag/v4.21.0`, approved for the VM only and not installed on his PC:
-  without it the script stops and `tokscale_parity_tests.rs`'s live case skips, saying so. Writes
+  throwaway `TOKSCALE_CONFIG_DIR`; Claude Code's and opencode's records where they live on the machine). Tokens must
+  match exactly; dollars aren't compared. tokscale is pinned at v4.21.0 (2026-11-02, MIT), the Windows binary of npm's
+  `tokscale@4.21.0` (its `@tokscale/cli-win32-x64-msvc` package; the GitHub release has no files), installed on his PC
+  for the benchmark only in `D:/thesis/tools/tokscale` (0657): without it on PATH the script stops and
+  `tokscale_parity_tests.rs`'s live case skips, saying so. Writes
   `tokscale-parity.jsonl` (rewritten on each check) and `tokscale-parity.json`; exits 1 on a mismatch and 2 when it
   compared nothing (`bench: no saved sessions to compare in <runDir>\sessions (results.jsonl names <n> trials)`).
 - **H9, `jocasta-bench h9-footprint --out <dir> --install "<command>" --uninstall "<command>" [--between "<command>"]
@@ -327,9 +330,9 @@ stopped its trials. The fixed choices:
   <n> <arm> trials not run` and exits 1.
 - **A7 (0537):** `a7.yaml` runs `opencode run --model anthropic/claude-opus-5-5 --variant high --auto --format json
   <prompt>` (high reasoning as the other arms; `--auto` approves its permission asks, as A4 bypasses Claude Code's;
-  check both flags against `opencode run --help` in the VM). Its only Anthropic sign-in is an API key: the bench reads
+  both flags checked against `opencode run --help` 1.18.22 on his PC on 2026-11-23). Its only Anthropic sign-in is an API key: the bench reads
   it from `JOCASTA_A7_ANTHROPIC_API_KEY` and gives it to opencode's process alone as `ANTHROPIC_API_KEY`; every trial's
-  environment drops both names otherwise. A7 runs only on the VM `JOCASTA-CLEAN`. Each attempt's spend is priced by the
+  environment drops both names otherwise. A7 ran only on the VM `JOCASTA-CLEAN` until 0657; it runs on his PC now. Each attempt's spend is priced by the
   ledger at the pinned table; once A7's sum reaches $150 (or an A7 request's model is missing from the table, so its
   spend can't be counted) no further A7 trial starts, the other arms run on, and the run exits 4. A trial already
   running can pass the sum by its own cost; the key's own $150 limit at Anthropic is the backstop.
@@ -372,7 +375,7 @@ stopped its trials. The fixed choices:
   running finish. Deleting the file goes on. The settings trials (`evals settings`) do the same with their `--dir`.
   A trial also starts only with 4 GB of memory available, as the settings trials' do.
 - **Trial roots:** each trial's root (overlay, `repo/`, `venv/`, `gvenv/`, the grading clone) is a short folder, `t`
-  and 6 characters, in `--work` (default the OS temp folder); in the VM a short root such as `C:\t` keeps pnpm/yarn
+  and 6 characters, in `--work` (default the OS temp folder); on Windows a short root such as `C:\t` keeps pnpm/yarn
   trees and Python under 260 characters. A layered arm's layer data is the exception: it goes in `%TEMP%\jl…` (see
   A6). Nothing in the root names the task (0508: agents list it); the trial's `setup.log` names the root.
 - **Trial repos:** the fixture is the base commit's tree, committed whole (files its own ignore rules match too, as
@@ -400,7 +403,7 @@ stopped its trials. The fixed choices:
   (must fail), then `gold.patch` applied and graded on a fresh clean clone 3 times (must pass each time). Tasks that
   fail are listed for a spare of the same language.
 - **Dry run:** the trial count and limit, the first 15 trials of the order, each arm's harness command line, whether
-  A6's layer can run here, A7's key, machine and limit, the pacer's rule, the ledger's
+  A6's layer can run here, A7's key and limit, the pacer's rule, the ledger's
   files, and the cache, trial-root and results paths; the main run's dry run also names the follow-up study's size.
 - **omp's own MCP servers (0587, 0652):** before any trial and in the dry run (not `--validate`), a run with a
   layered arm reads `mcp.json` and `.mcp.json` in the omp folder it uses (the `--profile`'s, else
@@ -408,7 +411,7 @@ stopped its trials. The fixed choices:
   turned off, or `jocasta` in `disabledServers` is there: omp keeps its folder's `jocasta` over the layer's own, so A6
   would lose `report_result` and `check`. Since 0652 the benchmarks run on his own omp folder, and the servers it
   turns on load in every omp arm alike, as his skills do.
-- **Smoke run in the VM (EVL-15; about 12 paid trials):** a dry run with `--only` one Python, one TypeScript/JavaScript
+- **Smoke run before the main run (EVL-15, 0588; about 12 paid trials; in the VM until 0652):** a dry run with `--only` one Python, one TypeScript/JavaScript
   and one Go task, `--arms a4,a6,a7,f-keep-context --reps 1 --work C:\t --timeout 90`, then the same for real
   (`JOCASTA_EVALS_REAL=1`, A7's key set). Check: `errors.jsonl` is empty; A6's and `f-keep-context`'s rows have
   `planReview` requested, answered and shut down; A7's rows have `ledger.sessions` of 1 or
@@ -450,7 +453,7 @@ first, A3 + the review turns, A4 Claude Code), `--profile <name>` for an omp pro
 in once), hidden graders (`hidden_checks` and a `hidden/` folder per case), and the same quota pacer (it waits while
 every Anthropic account has its 5-hour or 7-day window at 85% or more). `jocasta-bench evals compare <A> <B>` adds the paired
 statistics (task bootstrap, pass^3, McNemar, Wilcoxon on wall time, cost and tokens, Holm). A4's model id and
-permission flag are Claude Code's documented ones; confirm them against `claude --help` in the VM. A5:
+permission flag are Claude Code's documented ones, checked against `claude --help` on his PC on 2026-11-23. A5:
 `jocasta-bench evals a5 record --out <dir>` records the service's state feed (`/ws`, through `bench/lib/service_feed.rs`)
 during his sessions, and
 `jocasta-bench evals a5 report` counts interventions, attention minutes and the batch time from it and the session files.

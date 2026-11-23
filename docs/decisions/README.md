@@ -539,11 +539,11 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0530](0530-bugs-after-benchmarks-h3-restarts.md) | The reruns' three product bugs are fixed after the benchmarks, H3 starts a Jocasta that closed itself again, and H3 and H8 run attended | process | decided | program | 2026-11-02 | 0531, 0534 |
 | [0531](0531-h8-eight-threads-rerun-once-clean.md) | H8's 8-thread run runs once more on a clean sandbox, and running out of memory again is its result | process | decided | program | 2026-11-02 |  |
 | [0532](0532-harness-os-in-v1-before-benchmarks.md) | The harness-OS layer is v1, built before the benchmarks | product | v1 | program | 2026-11-08 |  |
-| [0533](0533-all-benchmarks-rerun-on-new-build.md) | Every benchmark runs again on the harness-OS build | process | decided | program | 2026-11-08 | 0625, 0652 |
+| [0533](0533-all-benchmarks-rerun-on-new-build.md) | Every benchmark runs again on the harness-OS build | process | decided | program | 2026-11-08 | 0625, 0652, 0657 |
 | [0534](0534-0530-bugs-fixed-in-new-build.md) | The reruns' three product bugs are fixed in the harness-OS build | process | decided | program | 2026-11-08 |  |
 | [0535](0535-omp-latest-at-build-time.md) | The harness-OS build pins the omp that is latest when its build starts | process | decided | program | 2026-11-08 | 0589 |
 | [0536](0536-omp-threads-driven-through-local-collab-relay.md) | Jocasta runs a local collab relay for thread state; it joins as a full guest only if a spike shows it's worth keeping | product | v1 | program | 2026-11-08 |  |
-| [0537](0537-omp-only-competitors-bare.md) | Jocasta runs omp threads only; opencode and Claude Code are benchmarked bare | product | decided | program | 2026-11-08 | 0574 |
+| [0537](0537-omp-only-competitors-bare.md) | Jocasta runs omp threads only; opencode and Claude Code are benchmarked bare | product | decided | program | 2026-11-08 | 0574, 0657 |
 | [0538](0538-k1-cost-ledger.md) | K1: the cost ledger is a projection of the session files, on omp's cost, shown through thread_status | product | v1 | program | 2026-11-08 | 0546, 0576, 0582 |
 | [0539](0539-k4-report-result-and-k3-decisions.md) | K4 and K3: threads hand in a structured report through report_result, and its decisions go to Graphiti and lesson offers | product | v1 | program | 2026-11-08 | 0577, 0603 |
 | [0540](0540-k2-task-file-done-when-and-brief-review.md) | K2: a task file per thread, its brief and done-when given at launch, and done_when checked in the review | product | v1 | program | 2026-11-08 | 0577, 0580, 0621 |
@@ -596,7 +596,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0587](0587-bench-refuses-omp-folder-mcp-servers.md) | The task benchmark refuses an omp folder that gives its omp arms MCP servers | benchmark | v1 | program | 2026-11-09 | 0652 |
 | [0588](0588-benchmark-scripts-run-once-first.md) | Each benchmark script runs once before the full runs | benchmark | v1 | program | 2026-11-09 |  |
 | [0589](0589-omp-18-18-6.md) | Jocasta moves to omp 18.18.6 | product, benchmark | v1 | program | 2026-11-10 | 0600 |
-| [0590](0590-models-per-role-after-fable-5-2.md) | Models per role after Fable 5.2: the boss on Fable, heavy threads on his slow role | product, benchmark | v1 | program | 2026-11-10 |  |
+| [0590](0590-models-per-role-after-fable-5-2.md) | Models per role after Fable 5.2: the boss on Fable, heavy threads on his slow role | product, benchmark | v1 | program | 2026-11-10 | 0655 |
 | [0591](0591-subagents-on-sonnet-memory-and-graph-unchanged.md) | Subagents on Sonnet 5.5; memory notes and the graph unchanged | product | v1 | program | 2026-11-10 | 0603 |
 | [0592](0592-compaction-handoff-first.md) | Compaction: handoff first, shake and the image method last | product | v1 | program | 2026-11-10 |  |
 | [0593](0593-his-settings-pass.md) | His /settings pass: the values in his config and in Jocasta's | product | v1 | program | 2026-11-10 | 0616, 0619 |
@@ -657,5 +657,10 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0649](0649-herdr-fork-one-binary-one-server.md) | The herdr fork: one binary, one server | product | v1 | fork build | 2026-11-18 |  |
 | [0650](0650-omp-snapshot-replaces-his-omp-files.md) | The omp snapshot: setup writes Jocasta's omp files over his | product | v1 | fork build | 2026-11-18 |  |
 | [0651](0651-snapshot-settings-from-trials-on-omp-18-22-2.md) | The snapshot's settings come from trials on omp 18.22.2 | product, benchmark | v1 | fork build | 2026-11-19 | 0653 |
-| [0652](0652-benchmarks-on-his-pc-vm-removed.md) | The benchmarks run on his PC on his own omp; the VM is removed | process | v1 | fork build | 2026-11-18 |  |
+| [0652](0652-benchmarks-on-his-pc-vm-removed.md) | The benchmarks run on his PC on his own omp; the VM is removed | process | v1 | fork build | 2026-11-18 | 0657 |
 | [0653](0653-omp-19-1-0-pinned.md) | omp 19.1.0 is the pinned omp | product, benchmark | v1 | fork build | 2026-11-21 |  |
+| [0654](0654-fork-build-review.md) | His review of the fork build: what stays as built | process, product | v1 | fork build | 2026-11-23 |  |
+| [0655](0655-normal-threads-on-opus-5-5-medium.md) | Normal threads on Opus 5.5 at medium | product | v1 | fork build | 2026-11-23 |  |
+| [0656](0656-url-2-5-9-before-its-seventh-day.md) | url 2.5.9 enters the lock before its seventh day | process | v1 | fork build | 2026-11-23 |  |
+| [0657](0657-vm-benchmarks-after-the-vm.md) | The VM's benchmarks after the VM | benchmark, process | v1 | fork build | 2026-11-23 |  |
+| [0658](0658-session-report-from-his-omp-history.md) | A report on his omp sessions: where the tokens went, what could be deterministic | process | v1 | fork build | 2026-11-23 |  |
