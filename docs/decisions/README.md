@@ -448,7 +448,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0439](0439-dashboard-column-follows-mode.md) | The dashboard's column follows the window's mode | product | decided | program | 2026-10-15 | 0548, 0557 |
 | [0440](0440-polish-small-calls.md) | Polish round: small calls | product | decided | program | 2026-10-15 | 0466, 0467 |
 | [0441](0441-live-checks-own-herdr-session.md) | Live checks in their own herdr session | process | decided | program | 2026-10-15 |  |
-| [0442](0442-news-hacker-news-lwn-gaming.md) | News: Hacker News and LWN in full, gaming 10 | product | decided | program | 2026-10-15 | 0555, 0581 |
+| [0442](0442-news-hacker-news-lwn-gaming.md) | News: Hacker News and LWN in full, gaming 10 | product | decided | program | 2026-10-15 | 0555, 0581, 0668 |
 | [0443](0443-machine-services-every-10s.md) | Machine and services refresh every 10 s | product | decided | program | 2026-10-15 | 0555 |
 | [0444](0444-graphiti-on-demand-on-dashboard.md) | Graphiti on the dashboard says it runs on demand | product | decided | program | 2026-10-15 |  |
 | [0445](0445-thread-worktrees-beside-project.md) | Thread worktrees beside the project | product | decided | program | 2026-10-15 | 0455, 0457, 0581 |
@@ -462,7 +462,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0453](0453-proof-before-done.md) | Proof before done | product | decided | program | 2026-10-23 | 0473, 0513, 0583, 0610, 0611 |
 | [0454](0454-merge-after-main-moved.md) | Merging after main moved: bring it in, re-test, re-review | product | decided | program | 2026-10-23 |  |
 | [0455](0455-reused-title-new-branch.md) | A reused title gets a new branch | product | decided | program | 2026-10-23 |  |
-| [0456](0456-dashboard-hud-threads-quota.md) | What the dashboard and HUD show about threads and quota | product | decided | program | 2026-10-23 | 0554 |
+| [0456](0456-dashboard-hud-threads-quota.md) | What the dashboard and HUD show about threads and quota | product | decided | program | 2026-10-23 | 0554, 0669 |
 | [0457](0457-worktree-include-and-thread-env.md) | Worktree setup: copied files and per-thread variables | product | decided | program | 2026-10-23 | 0473, 0477 |
 | [0458](0458-herdr-no-manifest-check.md) | herdr fetches no detection files | product | decided | program | 2026-10-23 |  |
 | [0459](0459-lessons-at-plan-and-review.md) | Lessons, read at plan and review time, in v1 | product | decided | program | 2026-10-23 | 0471, 0484 |
@@ -558,13 +558,13 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0549](0549-nothing-runs-without-jocasta.md) | Nothing runs without Jocasta: no Keep in the background, autostart off by default, paused work resumes on the next start | product | v1 | program | 2026-11-08 | 0552, 0557, 0563 |
 | [0550](0550-omp-updates-off-and-setup-files-now.md) | omp stops updating itself until the benchmarks end, and setup's omp files are written on his PC now | process | decided | program | 2026-11-08 |  |
 | [0551](0551-jocasta-pane-drawn-with-opentui.md) | The `jocasta` pane is drawn with OpenTUI and holds today, the thread keys and his answers | product | v1 | program | 2026-11-09 | 0581, 0625, 0634 |
-| [0552](0552-no-companion-app.md) | No companion app: the service is a plain Bun process, diagrams open in the browser, dictation stays without spoken replies, and questions are answered in herdr | product | v1 | program | 2026-11-09 | 0553, 0556, 0563, 0578, 0583, 0584, 0649 |
-| [0553](0553-jocasta-is-a-herdr-plugin.md) | Jocasta is a herdr plugin: `today` beside the boss, questions in a popup, after a spike | product | v1 | program | 2026-11-09 | 0558, 0578, 0649 |
-| [0554](0554-herdr-keys-pings-and-settings.md) | herdr's keys, pings and settings for Jocasta | product | v1 | program | 2026-11-09 | 0569, 0578, 0581 |
-| [0555](0555-today-pane-contents.md) | The `today` pane's contents: what needs him first, no greeting or Presence, the extras where they fit, no screen hotkeys | product | v1 | program | 2026-11-09 | 0581 |
+| [0552](0552-no-companion-app.md) | No companion app: the service is a plain Bun process, diagrams open in the browser, dictation stays without spoken replies, and questions are answered in herdr | product | v1 | program | 2026-11-09 | 0553, 0556, 0563, 0578, 0583, 0584, 0649, 0672 |
+| [0553](0553-jocasta-is-a-herdr-plugin.md) | Jocasta is a herdr plugin: `today` beside the boss, questions in a popup, after a spike | product | v1 | program | 2026-11-09 | 0558, 0578, 0649, 0667 |
+| [0554](0554-herdr-keys-pings-and-settings.md) | herdr's keys, pings and settings for Jocasta | product | v1 | program | 2026-11-09 | 0569, 0578, 0581, 0667 |
+| [0555](0555-today-pane-contents.md) | The `today` pane's contents: what needs him first, no greeting or Presence, the extras where they fit, no screen hotkeys | product | v1 | program | 2026-11-09 | 0581, 0668, 0670 |
 | [0556](0556-dictation-through-omp-stt.md) | Dictation goes through omp's own speech-to-text in the boss pane, started from anywhere with Right Ctrl | product | v1 | program | 2026-11-09 |  |
 | [0557](0557-settings-review.md) | The settings review: the app-only settings go, everything else stays | product | v1 | program | 2026-11-09 | 0584 |
-| [0558](0558-herdr-plugin-spike-and-answer-code.md) | The herdr plugin works on Windows; a popup doesn't stop socket keys, so Allow takes a typed code | product | v1 | program | 2026-11-09 | 0568, 0578 |
+| [0558](0558-herdr-plugin-spike-and-answer-code.md) | The herdr plugin works on Windows; a popup doesn't stop socket keys, so Allow takes a typed code | product | v1 | program | 2026-11-09 | 0568, 0578, 0672 |
 | [0559](0559-mise-cache-spike.md) | mise's task cache keeps passing checks; Jocasta keys results by git tree, keeps failures and runs one check per tree | product | v1 | program | 2026-11-09 | 0582 |
 | [0560](0560-pitchfork-spike.md) | pitchfork isn't kept: dev servers stay plain background processes | product | dropped | program | 2026-11-09 |  |
 | [0561](0561-relay-spike.md) | The local relay works: thread state comes from omp's host pipes, panes refuse to start unless the relay is loopback, and no full guest | product | v1 | program | 2026-11-09 |  |
@@ -587,7 +587,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0578](0578-allow-popup-and-local-api.md) | The Allow popup and the service's local API | product, security | v1 | program | 2026-11-09 |  |
 | [0579](0579-install-folder-is-jocastas-alone.md) | The install folder is Jocasta's alone | product | v1 | program | 2026-11-09 |  |
 | [0580](0580-guard-covers-more-shapes.md) | The guard covers more shapes, and done_when goes through it | product, security | v1 | program | 2026-11-09 | 0613 |
-| [0581](0581-today-keys-wording-and-canvas.md) | today, the keys, the wording and the canvas | product, ux | v1 | program | 2026-11-09 | 0660, 0662 |
+| [0581](0581-today-keys-wording-and-canvas.md) | today, the keys, the wording and the canvas | product, ux | v1 | program | 2026-11-09 | 0660, 0662, 0670 |
 | [0582](0582-starting-recovering-and-counting-cost.md) | Starting, recovering and counting cost | product | v1 | program | 2026-11-09 | 0649 |
 | [0583](0583-boss-manual-and-shipped-prompt-texts.md) | The boss manual and shipped prompt texts | product, prompts | v1 | program | 2026-11-09 | 0608, 0611, 0616, 0619, 0621 |
 | [0584](0584-setup-settings-tests-names-and-stale-files.md) | Setup, settings, tests, names and stale files | product, process | v1 | program | 2026-11-09 |  |
@@ -669,6 +669,13 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0661](0661-bundled-conpty-runtime.md) | The Windows build ships Microsoft's ConPTY runtime, as herdr's does | product | v1 | fork build | 2026-11-23 |  |
 | [0662](0662-a-silent-service-is-shown-and-cut.md) | A service that stops answering is shown in the dock, and the boss's calls to it end | product | v1 | fork build | 2026-11-23 |  |
 | [0663](0663-omp-19-1-1-pinned.md) | omp 19.1.1 is the pinned omp | product, benchmark | v1 | fork build | 2026-11-23 |  |
-| [0664](0664-the-sidebar-strip-keeps-only-menu.md) | The sidebar's top strip keeps only `menu` | product, ux | v1 | fork build | 2026-11-23 |  |
+| [0664](0664-the-sidebar-strip-keeps-only-menu.md) | The sidebar's top strip keeps only `menu` | product, ux | v1 | fork build | 2026-11-23 | 0667 |
 | [0665](0665-jocasta-owns-the-workspaces.md) | Jocasta owns the workspaces | product, ux | v1 | fork build | 2026-11-23 |  |
 | [0666](0666-herdrs-leftovers-pruned.md) | herdr's leftovers pruned, the menu and help in Jocasta's words | product, ux | v1 | fork build | 2026-11-23 |  |
+| [0667](0667-the-boss-row-pinned-in-the-sidebar.md) | The boss's row pinned first in the sidebar | product, ux | v1 | HUD round | 2026-11-23 |  |
+| [0668](0668-the-dock-news-box-and-thread-facts.md) | The dock: a five-line news box, and each thread's diff, check, PR and stuck state | product, ux | v1 | HUD round | 2026-11-23 |  |
+| [0669](0669-quota-for-every-account.md) | Quota for every logged-in account | product, ux | v1 | HUD round | 2026-11-23 |  |
+| [0670](0670-leftover-worktrees-in-the-dock.md) | Leftover worktrees in the dock, removed behind his Allow | product, ux | v1 | HUD round | 2026-11-23 |  |
+| [0671](0671-the-check-queue-learns-what-checks-cost.md) | The check queue learns what each check costs | product | v1 | HUD round | 2026-11-23 |  |
+| [0672](0672-phone-check-in-through-ntfy.md) | Phone check-in through ntfy, with Allow from the phone | product | v1 | HUD round | 2026-11-23 |  |
+| [0673](0673-scheduled-threads.md) | Scheduled threads | product | v1 | HUD round | 2026-11-23 |  |
