@@ -1139,3 +1139,82 @@ async fn setup_prints_one_note_when_git_is_older_than_2_54_or_missing_none_for_2
 		assert!(note_for(Some(current)).await.1.is_empty());
 	}
 }
+
+/// What setup did on a machine with the old graph's compose file.
+struct GraphRun {
+	code: i32,
+	text: String,
+	asked: Vec<String>,
+	docker: Vec<Vec<String>>,
+	compose: PathBuf,
+}
+
+/// Runs setup on a machine with the old graph's compose file; `docker info` succeeds as `engine_runs` says, and every
+/// other `docker` call succeeds.
+async fn setup_with_graph(engine_runs: bool, answers: &[Option<&str>]) -> (Harness, GraphRun) {
+	let h = Harness::new();
+	let compose = h.paths.jocasta_config_dir.join("compose.yaml");
+	put(&compose, "name: jocasta-demo\nservices: {}\n");
+	put(&h.paths.jocasta_config_dir.join("containers").join("graphiti").join("Dockerfile"), "FROM scratch\n");
+	let calls = Arc::new(Mutex::new(Vec::new()));
+	let mut deps = h.deps();
+	let log = calls.clone();
+	deps.docker = Some(Arc::new(move |argv: Vec<String>| {
+		let code = if argv[1] == "info" && !engine_runs { 1 } else { 0 };
+		log.lock().unwrap().push(argv);
+		Box::pin(async move { Ok(RunOutput { code, output: String::new() }) })
+	}));
+	let io = TestIo::new(answers);
+	let code = run_setup(&h.paths, &deps, &io).await.unwrap();
+	let docker = calls.lock().unwrap().clone();
+	(h, GraphRun { code, text: io.text(), asked: io.asked(), docker, compose })
+}
+
+fn graph_gone(h: &Harness, run: &GraphRun) -> bool {
+	!run.compose.exists() && !h.paths.jocasta_config_dir.join("containers").exists()
+}
+
+fn docker_argv(args: &[&str], compose: &Path) -> Vec<String> {
+	let mut argv: Vec<String> = ["docker", "compose", "-f"].map(str::to_owned).to_vec();
+	argv.push(compose.display().to_string());
+	argv.extend(args.iter().map(|arg| (*arg).to_owned()));
+	argv
+}
+
+const LATER_COMMAND: &str = "docker compose -p jocasta-demo down --rmi all --volumes";
+
+#[tokio::test]
+async fn an_install_with_the_old_graph_takes_its_containers_down_and_its_images_and_volume_go_only_on_his_yes() {
+	let (h, kept) = setup_with_graph(true, &[Some("y"), Some("n")]).await;
+	assert_eq!(kept.code, 0);
+	assert_eq!(kept.docker, [vec!["docker".to_owned(), "info".to_owned()], docker_argv(&["down"], &kept.compose)]);
+	assert_eq!(
+		kept.asked.last().map(String::as_str),
+		Some("Also remove the old graph's images and volume (Graphiti and FalkorDB)? [y/N] ")
+	);
+	assert!(graph_gone(&h, &kept));
+	assert!(kept.text.contains(LATER_COMMAND));
+	assert!(h.marker("0016-graphiti-removed").is_some());
+
+	let (h, gone) = setup_with_graph(true, &[Some("y"), Some("y")]).await;
+	assert_eq!(
+		gone.docker,
+		[
+			vec!["docker".to_owned(), "info".to_owned()],
+			docker_argv(&["down"], &gone.compose),
+			docker_argv(&["down", "--rmi", "all", "--volumes"], &gone.compose),
+		]
+	);
+	assert!(graph_gone(&h, &gone));
+	assert!(!gone.text.contains("docker compose -p"));
+}
+
+#[tokio::test]
+async fn an_install_with_the_old_graph_while_docker_isnt_running_asks_nothing_more_removes_the_files_and_names_the_command()
+ {
+	let (h, stopped) = setup_with_graph(false, &[Some("y")]).await;
+	assert_eq!(stopped.asked, ["Write these changes? [y/N] "]);
+	assert_eq!(stopped.docker, [vec!["docker".to_owned(), "info".to_owned()]]);
+	assert!(graph_gone(&h, &stopped));
+	assert!(stopped.text.contains(LATER_COMMAND));
+}

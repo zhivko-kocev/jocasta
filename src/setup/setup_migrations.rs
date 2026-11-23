@@ -1,18 +1,22 @@
 //! The numbered migrations, in the order they apply. A new one takes the next number; numbers are never reused.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 
 use super::snapshot::plan_snapshot;
 use super::steps::{SetupChange, Step, folder_undo, json, mcp_step, owned_step, shown};
-use super::{HerdrCheck, SetupDeps, SetupIo, SetupPaths, TOKYO_NIGHT_SCHEME, default_herdr_check};
+use super::{
+	HerdrCheck, RunOutput, RunProgram, SetupDeps, SetupIo, SetupPaths, TOKYO_NIGHT_SCHEME, answered_yes,
+	default_herdr_check,
+};
 use crate::frontier::server::whiteboard::WHITEBOARD_ENV;
 use crate::setup::markers::{Marker, Undo, fingerprint, markers_dir};
 use crate::setup::mise::MISE_FRAGMENT;
-use crate::shared::errors::Result;
+use crate::shared::errors::{Error, Result};
 use crate::shared::fsx::remove_tree;
+use crate::shared::yaml::parse_value;
 
 /// Servers by name.
 pub(super) type Servers = Map<String, Value>;
@@ -50,9 +54,9 @@ const BOSS_MCP_TIMEOUT_MS: u64 = 2_100_000;
 /// Said under what `herdr config check` reported when it found issues.
 const IGNORED_KEYS_NOTE: &str = "herdr ignores the keys named above: fix them in the shipped template or report them.";
 
-/// The migrations, in the order they apply. Numbers 1, 3, 4, 6, 9–13 and 15–17 were the merges into omp's files and
+/// The migrations, in the order they apply. Numbers 1, 3, 4, 6, 9–13, 15 and 17 were the merges into omp's files and
 /// the clean-ups of earlier versions: the omp snapshot (19) replaced them, and their markers are ignored.
-pub(super) static MIGRATIONS: [Migration; 6] = [
+pub(super) static MIGRATIONS: [Migration; 7] = [
 	Migration {
 		// The boss's tools only in its own folder (0392: project-level MCP config), with omp's request timeout past
 		// their own bounds (0577); whiteboard's tools for drawing (0393, 0607) on the service's whiteboard state,
@@ -87,6 +91,14 @@ pub(super) static MIGRATIONS: [Migration; 6] = [
 		refresh: None,
 		servers: None,
 		plan: plan_mise_config,
+	},
+	Migration {
+		// Graphiti and its containers are gone (0603): Jocasta's compose file marks an install that still has them.
+		id: 16,
+		slug: "graphiti-removed",
+		refresh: None,
+		servers: None,
+		plan: plan_graphiti_removed,
 	},
 	Migration {
 		// The `jocasta` herdr plugin is gone (fork plan phase 5): herdr's client draws `today` and the questions itself.
@@ -244,6 +256,85 @@ fn plan_mise_config(c: &mut PlanContext) -> Result<Option<Step>> {
 		vec![Undo::File { path: shown(&path) }],
 	)
 	.map(Some)
+}
+
+/// The question before the old graph's images and volume go.
+const GRAPH_IMAGES_QUESTION: &str = "Also remove the old graph's images and volume (Graphiti and FalkorDB)? [y/N] ";
+
+fn plan_graphiti_removed(c: &mut PlanContext) -> Result<Option<Step>> {
+	let file = c.paths.jocasta_config_dir.join("compose.yaml");
+	if !file.exists() {
+		return Ok(None);
+	}
+	let containers = c.paths.jocasta_config_dir.join("containers");
+	let docker = c.deps.docker.clone();
+	let mut step = Step::new(&file, fingerprint("graphiti-removed"), Vec::new());
+	step.change = Some(SetupChange {
+		title: "Graphiti is gone: its containers come down and their compose file is removed".to_owned(),
+		path: shown(&file),
+		diff: vec![format!("- {}", file.display()), format!("- {}", containers.display())],
+		kept: Vec::new(),
+		apply: Box::new(move |io| Box::pin(remove_graphiti(file, containers, docker, io))),
+	});
+	Ok(Some(step))
+}
+
+/// Takes the containers of the Compose project `file` names down while Docker's engine runs, then removes the file and
+/// the build context beside it (0603). Whether the old graph's images and volume go too is asked once; whatever stays is
+/// named with the one command that removes it later, which is the whole answer when Docker isn't running.
+async fn remove_graphiti(
+	file: PathBuf,
+	containers: PathBuf,
+	docker: Option<RunProgram>,
+	io: &dyn SetupIo,
+) -> Result<()> {
+	let project = parse_value(&fs::read_to_string(&file)?)
+		.ok()
+		.and_then(|value| value.get("name")?.as_str().map(str::to_owned))
+		.unwrap_or_else(|| "jocasta".to_owned());
+	let mut everything_gone = false;
+	if let Some(docker) = &docker
+		&& engine_runs(docker).await
+	{
+		compose(docker, &file, &["down"]).await?;
+		if answered_yes(io.ask(GRAPH_IMAGES_QUESTION).await.as_deref()) {
+			compose(docker, &file, &["down", "--rmi", "all", "--volumes"]).await?;
+			everything_gone = true;
+		}
+	}
+	remove_tree(&file)?;
+	remove_tree(&containers)?;
+	if !everything_gone {
+		io.print(&format!(
+			"The old graph's images and volume stay; remove them with: docker compose -p {project} down --rmi all --volumes"
+		));
+	}
+	Ok(())
+}
+
+/// Whether Docker's engine runs now: `docker info` succeeds only then.
+async fn engine_runs(docker: &RunProgram) -> bool {
+	matches!(docker(vec!["docker".to_owned(), "info".to_owned()]).await, Ok(RunOutput { code: 0, .. }))
+}
+
+/// `docker compose -f <file> <args>`; a failure stops setup with what Docker said.
+async fn compose(docker: &RunProgram, file: &Path, args: &[&str]) -> Result<()> {
+	let argv = ["docker", "compose", "-f"]
+		.into_iter()
+		.map(str::to_owned)
+		.chain(std::iter::once(file.display().to_string()))
+		.chain(args.iter().map(|arg| (*arg).to_owned()))
+		.collect();
+	let out = docker(argv).await?;
+	if out.code != 0 {
+		return Err(Error::other(format!(
+			"docker compose {} exited {}: {}",
+			args.join(" "),
+			out.code,
+			out.output.trim()
+		)));
+	}
+	Ok(())
 }
 
 fn plan_herdr_plugin_gone(c: &mut PlanContext) -> Result<Option<Step>> {

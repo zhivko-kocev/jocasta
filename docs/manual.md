@@ -45,6 +45,7 @@ Setup's changes are numbered migrations (0466). Each one shows its diff and is w
 - `~/.jocasta/agent/herdr.toml` for session `jocasta`; setup then runs `herdr config check` on it and prints what it reports, and a failed check doesn't stop setup (0401, 0440, 0466, 0554, 0608);
 - the Windows Terminal scheme Tokyo Night, from Jocasta's palette (0401, 0474);
 - with mise on PATH, mise's machine file `~/.config/mise/conf.d/jocasta.toml` (pinned hunk and gh; your own `config.toml` wins; 0476, 0562);
+- from an install that still has the old graph (`~/.jocasta/agent/compose.yaml`), Graphiti's and FalkorDB's containers taken down when Docker runs, with one question whether their images and volume go too, and the compose file and `containers\` removed (migration 16, 0603); whatever stays is named with the one command that removes it;
 - the old `jocasta` herdr plugin's folder `~/.jocasta/agent/herdr-plugin/` and its marker removed (migration 18, 0649): herdr's client draws `today` and the questions now; a herdr installed apart from Jocasta keeps the link setup made before, until `herdr plugin unlink jocasta` there;
 - a note when git is older than 2.54 or missing: the question about pushes to main, master and develop needs it, and a pane's pushes there go unasked until you update git (0613);
 - the calendar's secret address from `JOCASTA_CALENDAR_ICAL_SECRET` into Windows Credential Manager (0430).

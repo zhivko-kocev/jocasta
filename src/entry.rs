@@ -161,6 +161,7 @@ async fn run_setup_route(refresh: Option<String>, calendar_env: Option<String>) 
 			.collect();
 		Box::pin(run(argv))
 	}));
+	deps.docker = Some(run_program_dep());
 	let io = ConsoleIo::new();
 	match refresh {
 		None => run_setup(&paths, &deps, &io).await,

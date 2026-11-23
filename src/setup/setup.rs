@@ -113,6 +113,9 @@ pub struct SetupDeps {
 	pub git_version: Option<Arc<dyn Fn() -> BoxFuture<'static, Option<String>> + Send + Sync>>,
 	/// `herdr server reload-config` for Jocasta's session, after a herdr.toml refresh (0467); `None` reloads nothing.
 	pub reload_herdr: Option<ReloadHerdr>,
+	/// Runs `docker` for migration 16's old containers (0603); `None` runs nothing, as when Docker's engine is down:
+	/// the files still go and the one command that removes the rest is named.
+	pub docker: Option<RunProgram>,
 }
 
 /// How setup asks herdr's server to read its config again.
@@ -127,6 +130,7 @@ impl Clone for SetupDeps {
 			check_herdr_config: self.check_herdr_config.clone(),
 			git_version: self.git_version.clone(),
 			reload_herdr: self.reload_herdr.clone(),
+			docker: self.docker.clone(),
 		}
 	}
 }
@@ -134,7 +138,15 @@ impl Clone for SetupDeps {
 impl SetupDeps {
 	/// Deps with herdr and nothing else.
 	pub fn new(herdr: PathBuf) -> Self {
-		Self { herdr, mise: None, calendar: None, check_herdr_config: None, git_version: None, reload_herdr: None }
+		Self {
+			herdr,
+			mise: None,
+			calendar: None,
+			check_herdr_config: None,
+			git_version: None,
+			reload_herdr: None,
+			docker: None,
+		}
 	}
 }
 
