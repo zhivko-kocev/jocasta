@@ -19,10 +19,11 @@ use crate::shared::paths::{catalog_path, data_dir};
 /// its cwd folder is gone (0440 (4)); v8 drops v3's `thread_runtime`, which nothing read or wrote: a thread's state
 /// comes from omp and herdr (0547); v9 the `history` index of 0603 (`src/frontier/server/history.ts`): `indexed` is 1
 /// once the summary's lines are in it, and every summary of a known project is marked 0 so the next scan builds the
-/// index from them.
+/// index from them; v10 the private sources of 0680 and 0681: the event queue accepts `mail`, `jira` and `azure-portal`
+/// and keeps their real line and link in `private_text` and `private_url`.
 ///
 /// v1's `threads` columns are 0126's, with `kind` limited to `'home'` for this file (0125, 0126).
-pub const CATALOG_MIGRATIONS: [&str; 9] = [
+pub const CATALOG_MIGRATIONS: [&str; 10] = [
 	r"CREATE TABLE projects (
   id         TEXT PRIMARY KEY,
   identity   TEXT NOT NULL UNIQUE,
@@ -113,6 +114,31 @@ DROP INDEX summaries_unsent;
 ALTER TABLE summaries RENAME COLUMN sent TO indexed;
 CREATE INDEX summaries_unindexed ON summaries(indexed) WHERE indexed = 0;
 UPDATE summaries SET indexed = 0 WHERE project_id IS NOT NULL;",
+	// v10 (0680, 0681): the three private sources (mail, jira, azure-portal) and the columns that hold their real line and
+	// link; `text` and `url` of such an event hold fixed words and nothing. SQLite can't widen a CHECK, so the table is
+	// rebuilt with its rows.
+	r"CREATE TABLE events_v10 (
+  id           INTEGER PRIMARY KEY,
+  source_id    TEXT NOT NULL UNIQUE,
+  source       TEXT NOT NULL CHECK (source IN ('github','azure','calendar','thread','machine','inbox','mail','jira','azure-portal')),
+  kind         TEXT NOT NULL,
+  priority     TEXT NOT NULL CHECK (priority IN ('urgent','normal','low')),
+  text         TEXT NOT NULL,
+  url          TEXT,
+  project_id   TEXT,
+  thread_id    TEXT,
+  created_at   TEXT NOT NULL,
+  raised_at    TEXT,
+  reminded_at  TEXT,
+  resolved_at  TEXT,
+  private_text TEXT,
+  private_url  TEXT
+) STRICT;
+INSERT INTO events_v10 (id, source_id, source, kind, priority, text, url, project_id, thread_id, created_at, raised_at, reminded_at, resolved_at)
+  SELECT id, source_id, source, kind, priority, text, url, project_id, thread_id, created_at, raised_at, reminded_at, resolved_at FROM events;
+DROP TABLE events;
+ALTER TABLE events_v10 RENAME TO events;
+CREATE INDEX events_open ON events(resolved_at, priority, id);",
 ];
 
 /// `me.db` migrations (appendix I ledger): v1 the inbox (0302): notes for a project's next work and timed reminders.

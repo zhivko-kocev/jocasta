@@ -106,6 +106,8 @@ The lightweight program (2026-11-24, records 0674–0688): after four question r
 
 Phase 4 of the lightweight program (2026-11-24, records 0678, 0679): built. HTML briefs served on loopback (`src/frontier/brief/`), the thread brief built by code at review and opened from the Done toast with its Finish and Send buttons, the reviewer's findings handed in through `review_note` and checked against the committed file, the boss's `show` drawing a brief from a spec; whiteboard, its canvas page, Node and hunk are removed (setup migration 21 cleans old installs). Still to do live: open a real brief in a browser and see the animations and the Done toast's link.
 
+Phase 5 of the lightweight program (2026-11-24, records 0680, 0681, 0687, 0688): built, `mise run check` green. Thread dependencies and the running limit, the PR review workspace and red-CI fix threads, the Gmail, Jira and Azure private sources behind `Private<T>`/`HumanView` and the tree check, fenced outside text, the morning and weekly briefs with the dock's `b` key and BRIEFS rows, and the canary test (`e2e_privacy_tests.rs`, which found the ntfy topics missing from the bridge's secrets). Still to do live: a real Gmail app-password login, a real Jira poll, the first PR comment published through `gh` and `az`, and the morning brief at 06:00 in a browser.
+
 Update this file when a slice's records are written, when its build lands, and when a grilling session stops (name the next slice); keep `AGENTS.md`'s one current-state line in step.
 
 Phase 1 (the bridge, 0675) is built in the working tree, not yet green: library and extension done, test suite and bench callers not migrated; see the BridgeBuilder report.

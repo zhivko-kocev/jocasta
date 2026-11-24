@@ -87,9 +87,9 @@ impl Mode {
 }
 
 /// What one gh call left: its exit code (`None` when it didn't answer in time) and its output, trimmed.
-struct GhRun {
-	code: Option<i32>,
-	out: String,
+pub(super) struct GhRun {
+	pub(super) code: Option<i32>,
+	pub(super) out: String,
 }
 
 /// Whether git printed something: the TypeScript's truthiness of `gitOut`'s result.
@@ -424,9 +424,15 @@ impl Finisher {
 			url: None,
 		})?;
 		self.journal_finished(thread, &t, "merge").await;
+		// What waits for this thread's work in trunk has it now (0687), before the thread leaves the registry.
+		if let Some(task) = &t.task {
+			c.pending.thread_merged(&task.id);
+		}
 		let merged = format!("Merged {name} into {trunk} as {commit} ({} squashed)", commits_said(ahead));
 		let commit_id = (!full.is_empty()).then(|| full.to_owned());
-		if let Some(removed) = self.remove_thread(thread, CloseHow::Merged, commit_id).await? {
+		let removed = self.remove_thread(thread, CloseHow::Merged, commit_id).await?;
+		c.pending.tick_soon();
+		if let Some(removed) = removed {
 			return Ok(format!("{merged}, but {removed}."));
 		}
 		if git_async(main, &["branch", "-D", &t.branch], GIT_MS, GitOptions::default()).await?.code != Some(0) {
@@ -521,7 +527,7 @@ impl Finisher {
 
 	/// Runs gh in `cwd` (never prompting, at most a minute, CO-8); `None` when gh isn't installed, `code: None` when it
 	/// didn't answer in time.
-	async fn gh(&self, args: &[&str], cwd: &Path) -> Option<GhRun> {
+	pub(super) async fn gh(&self, args: &[&str], cwd: &Path) -> Option<GhRun> {
 		let c = self.link.ctx();
 		let mut env: HashMap<String, String> = crate::shared::env::vars()
 			.into_iter()
@@ -543,7 +549,7 @@ impl Finisher {
 
 	/// Runs az in `cwd` (never prompting, at most a minute); `None` when az isn't installed, `code: None` when it
 	/// didn't answer in time.
-	async fn az(&self, args: &[&str], cwd: &Path) -> Option<GhRun> {
+	pub(super) async fn az(&self, args: &[&str], cwd: &Path) -> Option<GhRun> {
 		let c = self.link.ctx();
 		let mut argv = c.options.az.clone().unwrap_or_else(|| vec!["az".to_owned()]);
 		argv.extend(args.iter().map(|arg| (*arg).to_owned()));
@@ -806,7 +812,12 @@ impl Finisher {
 		let c = self.link.ctx();
 		let t = thread.get();
 		self.journal_finished(thread, &t, "pr").await;
+		// What waits for this thread waits for its PR to merge (0687).
+		if let Some(task) = &t.task {
+			c.pending.thread_pr_open(&task.id, url);
+		}
 		let removed = self.remove_thread(thread, CloseHow::Pr, head).await?;
+		c.pending.tick_soon();
 		let landing = Landing { pane_id: &t.pane_id, title: &t.title, project_id: &t.project.id, line: "PR open", url };
 		c.day.landed(&landing)?;
 		let how = match &removed {

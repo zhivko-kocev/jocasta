@@ -2,6 +2,10 @@
 //! before the drift agent runs. A thread counts as finished when it closed merged or as a PR in the 7 days before now; a
 //! removed thread, and one closed before 0621 (no close time), are left out.
 
+use std::collections::HashSet;
+
+use serde_json::Value;
+
 use crate::frontier::server::task_file::{CloseHow, TaskRecord};
 
 const WEEK_MS: i64 = 7 * 24 * 3_600_000;
@@ -88,6 +92,103 @@ pub fn production_lines(records: &[TaskRecord], now: i64) -> String {
 		format!("Passed the first review: {passed} of {}", finished.len()),
 	]
 	.join("\n")
+}
+
+/// The week's numbers as the journal tells them (0688, 0680): what the weekly brief shows beside 0621's production lines.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct WeeklyNumbers {
+	/// `finished` lines.
+	pub finished: usize,
+	/// `gate` lines with a non-zero exit (a gate that ran and has no exit code counts as failed) and all `gate` lines.
+	pub gates_failed: usize,
+	pub gates: usize,
+	/// Threads with a `sent_back` line, and threads with a `review_ready` line.
+	pub sent_back: usize,
+	pub reviewed: usize,
+	pub stuck: usize,
+	pub over_budget: usize,
+	/// Median and total of the `finished` lines' `cost_usd`; none when no line had one.
+	pub cost_median: Option<f64>,
+	pub cost_total: Option<f64>,
+	/// Median of the `finished` lines' `wall_ms`.
+	pub wall_median_ms: Option<f64>,
+}
+
+/// `numerator` of `denominator` as `3 of 12 (25%)`, `none` for no denominator.
+fn rate(numerator: usize, denominator: usize) -> String {
+	if denominator == 0 {
+		return "none".to_owned();
+	}
+	let percent = (numerator as f64 / denominator as f64 * 100.0).round();
+	format!("{numerator} of {denominator} ({percent}%)")
+}
+
+impl WeeklyNumbers {
+	/// The numbers as labelled rows, in the order the brief shows them.
+	pub fn rows(&self) -> Vec<(String, String)> {
+		let cost = |value: Option<f64>| value.map_or_else(|| "not known".to_owned(), usd);
+		vec![
+			("Threads finished".to_owned(), self.finished.to_string()),
+			("Gate fail rate".to_owned(), rate(self.gates_failed, self.gates)),
+			("Sent back after review".to_owned(), rate(self.sent_back, self.reviewed)),
+			("Stuck".to_owned(), self.stuck.to_string()),
+			("Over budget".to_owned(), self.over_budget.to_string()),
+			("Cost a finished thread, median".to_owned(), cost(self.cost_median)),
+			("Cost of the finished threads, total".to_owned(), cost(self.cost_total)),
+			(
+				"Wall time a finished thread, median".to_owned(),
+				self.wall_median_ms.map_or_else(|| "not known".to_owned(), duration),
+			),
+		]
+	}
+}
+
+/// The numbers of the journal's `lines` whose `at` is in `from_ms..to_ms` (0688): threads finished, the gate-fail rate,
+/// the sent-back rate (threads sent back over threads with a review ready), the `stuck` and `over_budget` counts and the
+/// median and total cost and median wall time of what finished. A line that isn't JSON or has no `at` is skipped.
+pub fn weekly_numbers<S: AsRef<str>>(lines: impl IntoIterator<Item = S>, from_ms: i64, to_ms: i64) -> WeeklyNumbers {
+	let mut numbers = WeeklyNumbers::default();
+	let (mut costs, mut walls): (Vec<f64>, Vec<f64>) = (Vec::new(), Vec::new());
+	let (mut sent_back, mut reviewed): (HashSet<String>, HashSet<String>) = (HashSet::new(), HashSet::new());
+	for line in lines {
+		let Ok(value) = serde_json::from_str::<Value>(line.as_ref()) else { continue };
+		let in_week = value.get("at").and_then(Value::as_i64).is_some_and(|at| (from_ms..to_ms).contains(&at));
+		if !in_week {
+			continue;
+		}
+		let text = |key: &str| value.get(key).and_then(Value::as_str).unwrap_or_default();
+		let thread = format!("{}/{}", text("project"), text("thread"));
+		match text("kind") {
+			"finished" => {
+				numbers.finished += 1;
+				costs.extend(value.get("cost_usd").and_then(Value::as_f64));
+				walls.extend(value.get("wall_ms").and_then(Value::as_f64));
+			}
+			"gate" => {
+				numbers.gates += 1;
+				numbers.gates_failed += usize::from(value.get("exit").and_then(Value::as_i64) != Some(0));
+			}
+			"sent_back" => {
+				sent_back.insert(thread);
+			}
+			"review_ready" => {
+				reviewed.insert(thread);
+			}
+			"stuck" => numbers.stuck += 1,
+			"over_budget" => numbers.over_budget += 1,
+			_ => {}
+		}
+	}
+	numbers.sent_back = sent_back.len();
+	numbers.reviewed = reviewed.len();
+	if !costs.is_empty() {
+		numbers.cost_median = Some(median(&costs));
+		numbers.cost_total = Some(costs.iter().sum());
+	}
+	if !walls.is_empty() {
+		numbers.wall_median_ms = Some(median(&walls));
+	}
+	numbers
 }
 
 #[cfg(test)]

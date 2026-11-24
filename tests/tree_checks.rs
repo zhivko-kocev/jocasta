@@ -7,6 +7,10 @@
 //!   without parameters that only calls `self.<path>()`;
 //! - `undocumented-export`: a `pub` item, or a `pub` method of an inherent `impl`, without a doc comment.
 //!
+//! A fourth check holds 0681's one-way doors: `HumanView::for_his_eyes()`, the proof that code draws for his eyes, may be
+//! called only under `src/frontier/today/` and `src/frontier/brief/`, and `Private::for_storage` only by the event
+//! queue; any other caller fails the test with its file and line.
+//!
 //! Only the product's code counts: the walk follows `mod` declarations from the crate roots, so a `#[cfg(test)]` module
 //! and its files are never read, and trait impls (their signatures are the trait's) are skipped.
 
@@ -16,8 +20,9 @@ use std::path::{Path, PathBuf};
 
 use syn::visit::{self, Visit};
 use syn::{
-	Attribute, BinOp, Block, Expr, ExprBinary, ExprIf, ExprPath, FnArg, ImplItemFn, ItemConst, ItemEnum, ItemFn,
-	ItemImpl, ItemMod, ItemStatic, ItemStruct, ItemTrait, ItemType, ItemUnion, Pat, Signature, Stmt, Type, Visibility,
+	Attribute, BinOp, Block, Expr, ExprBinary, ExprIf, ExprMethodCall, ExprPath, FnArg, ImplItemFn, ItemConst,
+	ItemEnum, ItemFn, ItemImpl, ItemMod, ItemStatic, ItemStruct, ItemTrait, ItemType, ItemUnion, Pat, Signature, Stmt,
+	Type, Visibility,
 };
 
 /// The crate roots the module walk starts from, relative to the package.
@@ -443,4 +448,118 @@ fn each_check_finds_its_case_and_a_commented_branch_free_working_function_passes
 		]
 	);
 	assert!(children.is_empty());
+}
+
+/// Where each of 0681's one-way doors may be used: the function's name, and the files (or folders, ending in `/`) that
+/// may use it. `src/shared/private.rs` defines both and tests them.
+const DOORS: [(&str, &[&str]); 2] = [
+	("for_his_eyes", &["src/frontier/today/", "src/frontier/brief/", "src/shared/private.rs"]),
+	("for_storage", &["src/shared/events/queue.rs", "src/shared/private.rs"]),
+];
+
+/// Whether a function named `name` is called or named in a file.
+struct Names<'a> {
+	name: &'a str,
+	found: bool,
+}
+
+impl<'ast> Visit<'ast> for Names<'_> {
+	fn visit_path(&mut self, path: &'ast syn::Path) {
+		self.found |= path.segments.last().is_some_and(|segment| segment.ident == self.name);
+		visit::visit_path(self, path);
+	}
+
+	fn visit_expr_method_call(&mut self, call: &'ast ExprMethodCall) {
+		self.found |= call.method == self.name;
+		visit::visit_expr_method_call(self, call);
+	}
+}
+
+/// The `.rs` files under `dir`, as paths relative to `root` with `/`.
+fn rust_files(root: &Path, dir: &Path, out: &mut Vec<String>) {
+	let Ok(entries) = fs::read_dir(dir) else { return };
+	for entry in entries.flatten() {
+		let path = entry.path();
+		if path.is_dir() {
+			rust_files(root, &path, out);
+		} else if path.extension().is_some_and(|ext| ext == "rs") {
+			let relative = path.strip_prefix(root).expect("a file inside the package");
+			out.push(relative.to_string_lossy().replace('\\', "/"));
+		}
+	}
+}
+
+/// Every use of a door outside the files that may use it, as `<file>:<line>: <name>`. `syn` finds the files that
+/// name the function (a call, a path or a method, whatever the alias in front of it); the lines come from the text.
+fn door_violations(root: &Path) -> Vec<String> {
+	let mut files = Vec::new();
+	for dir in ["src", "bench", "evals", "tests"] {
+		rust_files(root, &root.join(dir), &mut files);
+	}
+	files.sort();
+	let mut found = Vec::new();
+	for file in files {
+		let source = fs::read_to_string(root.join(&file)).expect("reading a source file");
+		for (name, allowed) in DOORS {
+			if allowed.iter().any(|allowed| file == *allowed || (allowed.ends_with('/') && file.starts_with(allowed))) {
+				continue;
+			}
+			if !source.contains(name) {
+				continue;
+			}
+			let tree = syn::parse_file(&source).unwrap_or_else(|error| panic!("{file} doesn't parse: {error}"));
+			let mut names = Names { name, found: false };
+			names.visit_file(&tree);
+			if !names.found {
+				continue;
+			}
+			for (at, line) in source.lines().enumerate() {
+				if line.contains(name) && !line.trim_start().starts_with("//") {
+					found.push(format!("{file}:{}: {name}", at + 1));
+				}
+			}
+		}
+	}
+	found
+}
+
+#[test]
+fn no_code_outside_the_doors_asks_for_a_human_view_or_a_private_value_for_storage() {
+	let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+	let found = door_violations(root);
+	assert!(
+		found.is_empty(),
+		"0681: `HumanView::for_his_eyes()` belongs only to src/frontier/today/ and src/frontier/brief/, `for_storage` only to \
+		 the event queue:\n{}",
+		found.join("\n")
+	);
+}
+
+#[test]
+fn a_door_used_in_a_file_that_may_not_names_that_file_and_line_while_the_allowed_files_pass() {
+	let temp = jocasta::shared::testing::temp_dir("doors");
+	let write = |file: &str, text: &str| {
+		let path = temp.path().join(file);
+		fs::create_dir_all(path.parent().unwrap()).unwrap();
+		fs::write(path, text).unwrap();
+	};
+	let call = "fn show() {\n\t// HumanView::for_his_eyes() in a comment is fine.\n\tlet view = HumanView::for_his_eyes();\n}\n";
+	write("src/frontier/server/tools.rs", call);
+	write("src/frontier/today/view.rs", call);
+	write("src/frontier/brief/model.rs", call);
+	write("src/shared/private.rs", call);
+	// An alias in front of it doesn't hide it.
+	write("src/frontier/server/day.rs", "use x::HumanView as H;\nfn f() {\n\tlet _ = H::for_his_eyes();\n}\n");
+	write("src/shared/events/queue.rs", "fn f(p: &P) {\n\tp.for_storage();\n}\n");
+	write("src/frontier/server/day_view.rs", "fn f(p: &P) {\n\tp.map(P::for_storage);\n}\n");
+	// A file that only mentions the name in a string or a comment never parses into a use.
+	write("src/shared/log.rs", "fn f() {\n\tlet _ = \"for_his_eyes\";\n}\n");
+	assert_eq!(
+		door_violations(temp.path()),
+		[
+			"src/frontier/server/day.rs:3: for_his_eyes",
+			"src/frontier/server/day_view.rs:2: for_storage",
+			"src/frontier/server/tools.rs:3: for_his_eyes",
+		]
+	);
 }

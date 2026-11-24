@@ -827,7 +827,11 @@ impl StatusViews {
 		let c = self.link.ctx();
 		let reads = FileReads::default();
 		if let Some(wanted) = wanted.filter(|wanted| !wanted.is_empty()) {
-			let thread = c.threads.find(wanted)?;
+			let thread = match c.threads.find(wanted) {
+				Ok(thread) => thread,
+				// A start that waits (0687) is named like a thread.
+				Err(error) => return c.pending.find(wanted).map(|pending| pending.line()).ok_or(error),
+			};
 			let report = thread.with(|t| t.task.as_ref().and_then(|task| task.report.clone()));
 			let task = thread.with(|t| t.task.as_ref().map(|task| (task.project_id.clone(), task.id.clone())));
 			let spent = self.ledger_said(&thread).await;
@@ -852,12 +856,16 @@ impl StatusViews {
 			.into_iter()
 			.filter(|t| project.is_none_or(|project| t.with(|t| t.project.id == project.id)))
 			.collect();
-		if threads.is_empty() {
+		// Starts that wait for other threads or for room (0687), after the threads.
+		let waiting: Vec<String> =
+			c.pending.list(project.map(|project| project.id.as_str())).iter().map(|pending| pending.line()).collect();
+		if threads.is_empty() && waiting.is_empty() {
 			return Ok(
 				project.map_or_else(|| "No threads.".to_owned(), |project| format!("No threads in {}.", project.name))
 			);
 		}
-		let lines = try_join_all(threads.iter().map(|t| self.status_line(t, &reads))).await?;
+		let mut lines = try_join_all(threads.iter().map(|t| self.status_line(t, &reads))).await?;
+		lines.extend(waiting);
 		Ok(lines.join("\n"))
 	}
 

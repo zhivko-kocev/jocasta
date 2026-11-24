@@ -486,6 +486,10 @@ impl ReviewFlow {
 	/// `thread_finish` asked for after main moved (0454) merges when it passed, else says why not.
 	pub async fn ready(&self, thread: &ThreadRef) -> Result<()> {
 		let c = self.link.ctx();
+		// A pull request's review has no tests, report or handoff to wait for: its notes become its brief (0680).
+		if thread.with(|t| t.task.as_ref().is_some_and(|task| task.pr.is_some())) {
+			return crate::frontier::server::pr_review::ready(&c, thread).await;
+		}
 		let found = self.found(thread).await?;
 		thread.with(|t| {
 			c.journal.thread("review_ready", t, json!({ "notes": found.notes, "blocking": found.blocking }));

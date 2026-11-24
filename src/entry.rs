@@ -19,14 +19,14 @@ use crate::frontier::server::launch::{service_health, service_state};
 use crate::frontier::server::pane_launch::pane_omp_program;
 use crate::setup::diagnose::{DiagnoseDeps, ServiceInfo, run_diagnose};
 use crate::setup::setup::{
-	RunOutput, RunProgram, SetupDeps, SetupIo, default_calendar_store, default_setup_paths, mise_config_dir,
-	refresh_setup, run_setup, setup_check, setup_undo,
+	RunOutput, RunProgram, SetupDeps, SetupIo, default_calendar_store, default_secret_store, default_setup_paths,
+	mise_config_dir, refresh_setup, run_setup, setup_check, setup_undo,
 };
 use crate::setup::uninstall::{
 	UninstallDeps, UninstallPaths, processes_under, read_install_record, remove_after_exit, remove_run_value_for,
 	remove_user_path_entry, run_uninstall,
 };
-use crate::shared::credentials::{CALENDAR_CREDENTIAL, delete_credential, read_credential, take_calendar_env};
+use crate::shared::credentials::{delete_credential, read_credential, take_calendar_env, take_source_envs};
 use crate::shared::env;
 use crate::shared::errors::{Error, Result};
 use crate::shared::git::git;
@@ -146,6 +146,7 @@ async fn run_setup_route(refresh: Option<String>, calendar_env: Option<String>) 
 	let mut deps = SetupDeps::new(herdr.clone());
 	deps.mise = on_path("mise", None);
 	deps.calendar = default_calendar_store(calendar_env);
+	deps.secrets = default_secret_store();
 	deps.git_version = Some(Arc::new(|| {
 		Box::pin(async {
 			let out = run(vec!["git".to_owned(), "--version".to_owned()]).await.ok()?;
@@ -189,7 +190,7 @@ async fn run_uninstall_route() -> Result<i32> {
 		herdr: herdr_program()?,
 		session,
 		run: run_program_dep(),
-		setup_undo: setup_undo(&setup, read_credential(CALENDAR_CREDENTIAL).is_some()),
+		setup_undo: setup_undo(&setup, |target| read_credential(target).is_some()),
 		remove_path_entry: Arc::new(remove_user_path_entry),
 		remove_run_value: Arc::new(remove_run_value_for),
 		delete_credential: Arc::new(delete_credential),
@@ -410,6 +411,7 @@ fn run_herdr(args: &[String]) -> ExitCode {
 	crate::frontier::shell::register();
 	if serves(args, env::var(SERVICE_ENV).as_deref()) {
 		take_calendar_env();
+		take_source_envs();
 		// SAFETY: before any thread starts, as `std::env::remove_var` requires.
 		unsafe { std::env::remove_var(SERVICE_ENV) };
 		register();
@@ -456,6 +458,7 @@ pub fn main() -> ExitCode {
 	// The calendar's secret never reaches herdr's server, omp or anything else this command starts (SEC-5, 0430); taken
 	// before any thread starts.
 	let calendar_env = take_calendar_env();
+	take_source_envs();
 	let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
 		Ok(runtime) => runtime,
 		Err(error) => {

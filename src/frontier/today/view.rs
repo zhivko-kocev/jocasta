@@ -1,20 +1,22 @@
 //! What the `today` pane draws (0551, 0555, 0581, 0634, 0667–0673), as plain coloured lines from the service's feed: a
 //! header (date, time, quiet hours, a broken service, weather, CPU and memory, quota, today's spend with its 7-day
 //! average and costliest thread, the check queue), NEEDS YOU, UNDERWAY (thread, state, check, diff, time, cost,
-//! context), LANDED TODAY (with its PR), CALENDAR, QUOTA (every account), LEFTOVERS, then NEXT (scheduled threads and his
-//! notes) and the NEWS box while rows remain, his last key's outcome and a key line. No greeting, no Presence. Tokyo
-//! Night from the one palette file (0474). Pure: `main.rs` draws the lines through the shared shell (`../tui.rs`).
+//! context), LANDED TODAY (with its PR), CALENDAR, MAIL, JIRA and AZURE (0680, once their pollers run), BRIEFS (0680: the morning
+//! and weekly brief once built, Enter opens one), QUOTA (every account), LEFTOVERS, then NEXT (scheduled threads and his notes) and the NEWS box while rows remain, his last key's
+//! outcome and a key line. No greeting, no Presence. Tokyo Night from the one palette file (0474). Pure: `main.rs` draws
+//! the lines through the shared shell (`../tui.rs`).
 
 use chrono::DateTime;
 
 use std::ops::Range;
 
 use crate::frontier::protocol::{
-	Dashboard, Hud, NeedsYouKind, PrCi, QuotaAccount, QuotaCapacity, QuotaSpan, QuotaWindow, ServiceState, ThreadState,
-	Today, js_number_text, quota_high, quota_percent, wait_label,
+	Dashboard, Hud, NeedsYouKind, PrCi, PrivateSection, QuotaAccount, QuotaCapacity, QuotaSpan, QuotaWindow,
+	ServiceState, ThreadState, Today, js_number_text, quota_high, quota_percent, wait_label,
 };
 use crate::frontier::tui::{Line, Segment, TOKYO_NIGHT, columns, cut, fit, line_columns, wrap};
 use crate::shared::day::{DayRef, day_label, hhmm, weekday};
+use crate::shared::private::HumanView;
 
 /// What his last key did, or why not, and when (epoch ms): it shows for [`SAID_MS`].
 #[derive(Debug, Clone, PartialEq)]
@@ -53,6 +55,8 @@ pub struct Pick {
 	pub news: bool,
 	/// A leftover's folder, as the service listed it.
 	pub leftover: Option<String>,
+	/// The kind of the NEEDS YOU row it is (0680): the dock's `R` acts on a review request, `F` on a red pipeline.
+	pub kind: Option<NeedsYouKind>,
 }
 
 /// The NEWS box as drawn (0668), for the wheel and for up/down at its edges.
@@ -86,11 +90,23 @@ pub const NEWS_LINES: usize = 5;
 pub const SAID_MS: i64 = 60_000;
 
 /// The pane's keys, most important first: the key line drops the last ones that don't fit (0581, UX-7, UX-16). `x`
-/// (0670) and `X` (0686) drop first.
-const KEYS: [&str; 8] =
-	["↑↓ pick", "Enter go/open", "f Finish", "s Stop", "r Review", "n New", "X Stop all", "x Remove"];
+/// (0670) and `X` (0686) drop first, then `F` and `R` (0680).
+const KEYS: [&str; 11] = [
+	"↑↓ pick",
+	"Enter go/open",
+	"f Finish",
+	"s Stop",
+	"r Review",
+	"n New",
+	"b Brief",
+	"R PR",
+	"F CI",
+	"X Stop all",
+	"x Remove",
+];
 /// The keys joined as the key line shows them when they all fit.
-pub const KEY_LINE: &str = "↑↓ pick · Enter go/open · f Finish · s Stop · r Review · n New · X Stop all · x Remove";
+pub const KEY_LINE: &str =
+	"↑↓ pick · Enter go/open · f Finish · s Stop · r Review · n New · b Brief · R PR · F CI · X Stop all · x Remove";
 
 /// The title of a row keeps at least this many columns before its facts give way (0581, UX-4).
 const MIN_TITLE: i64 = 18;
@@ -383,6 +399,7 @@ fn pick_of(pane_id: Option<&str>, url: Option<&str>) -> Option<Pick> {
 			url: None,
 			news: false,
 			leftover: None,
+			kind: None,
 		});
 	}
 	url.filter(|u| !u.is_empty()).map(|url| Pick {
@@ -391,6 +408,7 @@ fn pick_of(pane_id: Option<&str>, url: Option<&str>) -> Option<Pick> {
 		url: Some(url.to_string()),
 		news: false,
 		leftover: None,
+		kind: None,
 	})
 }
 
@@ -422,7 +440,7 @@ fn needs_you_rows(state: &TodayState, today: &Today, now: i64, width: usize) -> 
 			.map(|at| Segment::new(wait_label(now - at), P.fg3))
 			.into_iter()
 			.collect();
-		let pick = pick_of(n.pane_id.as_deref(), n.url.as_deref());
+		let pick = pick_of(n.pane_id.as_deref(), n.url.as_deref()).map(|p| Pick { kind: Some(n.kind), ..p });
 		// A review request's glyph already says it opens; any other row with only a link gets the mark.
 		let tail = pick.as_ref().is_some_and(|p| p.url.is_some()).then(link).filter(|_| n.kind != NeedsYouKind::Review);
 		out.push(row(&spread(&[Segment::new(text, colour)], &wait, width.saturating_sub(2), tail), pick, state, width));
@@ -443,7 +461,7 @@ fn state_label(state: ThreadState) -> &'static str {
 /// UNDERWAY: one row per thread at work, with its state, check, diff, age, cost and context.
 fn underway_rows(state: &TodayState, today: &Today, now: i64, width: usize) -> Vec<Row> {
 	let mut out = vec![Row::plain(heading("UNDERWAY", width))];
-	if today.underway.is_empty() {
+	if today.underway.is_empty() && today.queued.is_empty() {
 		out.push(Row::plain(quiet(&["no thread at work", "n starts one"], width)));
 	}
 	for u in &today.underway {
@@ -489,6 +507,11 @@ fn underway_rows(state: &TodayState, today: &Today, now: i64, width: usize) -> V
 			state,
 			width,
 		));
+	}
+	// Starts that wait for other threads or for room (0687), after the threads at work.
+	for line in &today.queued {
+		let colour = if line.starts_with("blocked:") { P.red } else { P.fg3 };
+		out.push(row(&[Segment::new(line.as_str(), colour)], None, state, width));
 	}
 	out
 }
@@ -549,6 +572,50 @@ fn calendar_rows(state: &TodayState, today: &Today, now: i64, width: usize) -> V
 		let line = [Segment::new(format!("{when} "), P.cyan), Segment::new(c.title.clone(), P.fg)];
 		let tail = pick.is_some().then(link);
 		out.push(row(&spread(&line, &[], width.saturating_sub(2), tail), pick, state, width));
+	}
+	out
+}
+
+/// MAIL, JIRA or AZURE (0680): the private sources' rows, drawn for his eyes only (0681: this is one of the two places that
+/// may ask for a [`HumanView`]). The section is not there while its poller isn't configured; a failed round shows its
+/// line, and an empty one says so.
+fn private_rows(
+	state: &TodayState,
+	section: Option<&PrivateSection>,
+	heading_text: &str,
+	nothing: &str,
+	width: usize,
+) -> Vec<Row> {
+	let Some(section) = section else { return Vec::new() };
+	let view = HumanView::for_his_eyes();
+	let mut out = vec![Row::plain(heading(heading_text, width))];
+	if let Some(error) = &section.error {
+		out.push(Row::plain(fit(&[Segment::plain("  "), Segment::new(error.as_str(), P.yellow)], width)));
+	}
+	if section.rows.is_empty() && section.error.is_none() {
+		out.push(Row::plain(quiet(&[nothing], width)));
+	}
+	for item in &section.rows {
+		let url = item.url.as_ref().map(|url| url.reveal(&view).as_str());
+		let pick = pick_of(None, url);
+		let tail = pick.is_some().then(link);
+		let line = [Segment::new(item.text.reveal(&view).as_str(), P.fg)];
+		out.push(row(&spread(&line, &[], width.saturating_sub(2), tail), pick, state, width));
+	}
+	out
+}
+
+/// BRIEFS (0680): the morning brief of today and the weekly brief of this week, once built; Enter opens one. The section
+/// is not there while none is built. Nothing opens by itself.
+fn brief_rows(state: &TodayState, today: &Today, width: usize) -> Vec<Row> {
+	if today.briefs.is_empty() {
+		return Vec::new();
+	}
+	let mut out = vec![Row::plain(heading("BRIEFS", width))];
+	for brief in &today.briefs {
+		let line = [Segment::new(brief.label.as_str(), P.fg)];
+		let pick = pick_of(None, Some(&brief.url));
+		out.push(row(&spread(&line, &[], width.saturating_sub(2), Some(link())), pick, state, width));
 	}
 	out
 }
@@ -620,7 +687,7 @@ fn leftover_rows(state: &TodayState, width: usize) -> Vec<Row> {
 	for l in leftovers {
 		let folder = l.folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
 		let key = l.folder.to_string_lossy().into_owned();
-		let pick = Pick { key: key.clone(), pane_id: None, url: None, news: false, leftover: Some(key) };
+		let pick = Pick { key: key.clone(), pane_id: None, url: None, news: false, leftover: Some(key), kind: None };
 		out.push(row(&[Segment::new(format!("{}/{folder}", l.project), P.fg2)], Some(pick), state, width));
 	}
 	out
@@ -634,6 +701,10 @@ fn body(state: &TodayState, now: i64, width: usize, room: usize) -> Vec<Row> {
 	rows.extend(underway_rows(state, today, now, width));
 	rows.extend(landed_rows(state, today, width));
 	rows.extend(calendar_rows(state, today, now, width));
+	rows.extend(private_rows(state, today.mail.as_ref(), "MAIL", "no unread mail", width));
+	rows.extend(private_rows(state, today.jira.as_ref(), "JIRA", "no open issues", width));
+	rows.extend(private_rows(state, today.azure.as_ref(), "AZURE", "nothing failed in the last 24 hours", width));
+	rows.extend(brief_rows(state, today, width));
 	rows.extend(quota_rows(state, now, width));
 	let capacity = capacity_rows(state, width);
 	let leftovers = leftover_rows(state, width);

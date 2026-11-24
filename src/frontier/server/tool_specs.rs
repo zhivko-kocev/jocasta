@@ -181,6 +181,14 @@ fn boss_thread_tools() -> Vec<ToolSpec> {
 							"description": "Cost cap in dollars for this thread (its omp stops at it; you are asked whether to raise it). Leave it out for the default cap",
 						}),
 					),
+					(
+						"after",
+						json!({
+							"type": "array",
+							"items": { "type": "string" },
+							"description": "Threads this one waits for, by title or branch, or a waiting start by its title: it is made when their work is in trunk, branching from trunk as it is then, with no turn of yours. Leave it out to start now (it also waits for room while threads.maxRunning threads run)",
+						}),
+					),
 				],
 				&["project", "title", "brief"],
 			),
@@ -197,7 +205,7 @@ fn boss_thread_tools() -> Vec<ToolSpec> {
 		),
 		tool(
 			"thread_stop",
-			"Stop a thread's current run.\nOne Escape into its pane: the run ends, the thread keeps its worktree and work, and thread_send starts it again.",
+			"Stop a thread's current run.\nOne Escape into its pane: the run ends, the thread keeps its worktree and work, and thread_send starts it again. A start that waits (thread_start's after, or the running limit) is removed instead; what waits for a stopped thread is blocked.",
 			schema(vec![("thread", thread())], &["thread"]),
 		),
 		tool(

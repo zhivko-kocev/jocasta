@@ -5,16 +5,18 @@ use chrono::{DateTime, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, Tim
 use regex::Regex;
 use rusqlite::params;
 
-use super::{ACTIVITY_ROWS, Day, DayThread, EventPriority, STUCK_MS, WORKLOG_SO_FAR_MS, event, iso, local, lock};
+use super::{
+	ACTIVITY_ROWS, Day, DayThread, EventPriority, PollerName, STUCK_MS, WORKLOG_SO_FAR_MS, event, iso, local, lock,
+};
 use crate::frontier::protocol::{
 	Activity, ActivityEvent, ActivitySummary, CalendarEntry, Dashboard, LandedItem, NeedsYou, NeedsYouKind, NextItem,
-	RailItem, ServerMessage, ThreadState, Today, wait_label,
+	PrivateRow, PrivateSection, RailItem, ServerMessage, ThreadState, Today, wait_label,
 };
 use crate::frontier::server::worklog::{WorklogWritten, commits_async, project_day, project_day_line, write_worklog};
 use crate::shared::day::{DayRef, day_label, day_start, hhmm, local_day, midnight_of};
 use crate::shared::errors::{Error, Result};
 use crate::shared::events::inbox::{InboxItem, InboxWhere};
-use crate::shared::events::queue::EventSource;
+use crate::shared::events::queue::{EventRow, EventSource};
 use crate::shared::pollers::calendar::Meeting;
 use crate::shared::projects::Project;
 
@@ -335,14 +337,16 @@ impl Day {
 			)
 			.collect();
 		let mut needs_you = Vec::new();
-		for row in self.queue(|queue| queue.open())? {
+		let open = self.queue(|queue| queue.open())?;
+		for row in &open {
 			let kind = match row.kind.as_str() {
 				"review" => NeedsYouKind::Review,
 				"pipeline" => NeedsYouKind::Pipeline,
 				"disk" => NeedsYouKind::Disk,
 				_ => continue,
 			};
-			needs_you.push(NeedsYou { url: row.url.clone().filter(|url| !url.is_empty()), ..needs(kind, row.text) });
+			needs_you
+				.push(NeedsYou { url: row.url.clone().filter(|url| !url.is_empty()), ..needs(kind, row.text.clone()) });
 		}
 		let threads = self.inner.hooks.threads();
 		self.threads_awaiting(&threads, &mut needs_you);
@@ -394,10 +398,27 @@ impl Day {
 				.collect(),
 			next,
 			scheduled,
+			queued: self.inner.hooks.queued(),
+			mail: self.private_section(PollerName::Gmail, EventSource::Mail, &open),
+			jira: self.private_section(PollerName::Jira, EventSource::Jira, &open),
+			azure: self.private_section(PollerName::AzurePortal, EventSource::AzurePortal, &open),
+			briefs: self.inner.hooks.briefs(now),
 		})
 	}
 
 	/// The blocked threads, then the reviewed ones, as Awaiting-you rows.
+	/// A private source's section of `today` (0680): there once its poller ran a round, with the rows of its open events
+	/// and its last round's failure line.
+	fn private_section(&self, poller: PollerName, source: EventSource, open: &[EventRow]) -> Option<PrivateSection> {
+		let error = self.st().private_rounds.get(&poller)?.clone();
+		let rows = open
+			.iter()
+			.filter(|row| row.source == source)
+			.filter_map(|row| Some(PrivateRow { text: row.private_text.clone()?, url: row.private_url.clone() }))
+			.collect();
+		Some(PrivateSection { rows, error })
+	}
+
 	fn threads_awaiting(&self, threads: &[DayThread], needs_you: &mut Vec<NeedsYou>) {
 		let now = self.now_ms();
 		// A blocked thread says since when it waits (UX-4, 0581): its last state change.
@@ -535,7 +556,7 @@ impl Day {
 					format!("{said}{waited}{overlaps}")
 				})
 				.collect();
-		Ok([
+		let mut lines = vec![
 			format!("TODAY · {label}"),
 			row("Calendar", t.calendar.iter().map(|c| format!("{} {}", c.time, c.title)).collect()),
 			row("Awaiting you", awaiting),
@@ -552,7 +573,11 @@ impl Day {
 			),
 			row(
 				"Underway",
-				t.underway.iter().map(|r| thread(r.project.as_ref(), &r.title, r.overlaps.as_ref())).collect(),
+				t.underway
+					.iter()
+					.map(|r| thread(r.project.as_ref(), &r.title, r.overlaps.as_ref()))
+					.chain(t.queued.iter().cloned())
+					.collect(),
 			),
 			row(
 				"Next",
@@ -568,8 +593,10 @@ impl Day {
 					})
 					.collect(),
 			),
-		]
-		.join("\n"))
+		];
+		// The private sources reach the boss as counts only (0681): never a subject, summary or resource.
+		lines.splice(2..2, private_lines(&t));
+		Ok(lines.join("\n"))
 	}
 
 	// ---- inbox (0302) ----
@@ -641,6 +668,22 @@ impl Day {
 		)
 		.await
 	}
+}
+
+/// The boss's lines for the private sources (0681): `mail: 3 unread`, `jira: 5 open`, `azure: 2 failed`, or the section's
+/// failure line; none for a source that isn't configured.
+fn private_lines(today: &Today) -> Vec<String> {
+	let line = |section: &Option<PrivateSection>, what: &str, name: &str| {
+		let section = section.as_ref()?;
+		Some(match &section.error {
+			Some(error) => error.clone(),
+			None => format!("{name}: {} {what}", section.rows.len()),
+		})
+	};
+	[line(&today.mail, "unread", "mail"), line(&today.jira, "open", "jira"), line(&today.azure, "failed", "azure")]
+		.into_iter()
+		.flatten()
+		.collect()
 }
 
 fn landed_item(rail: RailItem) -> LandedItem {

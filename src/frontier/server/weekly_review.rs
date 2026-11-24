@@ -21,6 +21,7 @@ use crate::shared::env;
 use crate::shared::errors::{Error, Result};
 use crate::shared::fsx::write_atomically;
 use crate::shared::install::shipped_config_dir;
+use crate::shared::log::{LogLevel, log};
 use crate::shared::paths::project_dir;
 use crate::shared::process::{RunOptions, run_program};
 use crate::shared::proctree::{end_processes, process_id_of, processes_in};
@@ -201,6 +202,7 @@ impl WeeklyReviews {
 			return Err(Error::other(format!("the big-picture review of {} gave no result ({why})", week.range)));
 		};
 		let plural = if week.merged == 1 { "" } else { "s" };
+		keep_drift(&project.id, &drift);
 		Ok(Some(format!("{} ({} commit{plural}): {drift}{}", week.range, week.merged, scorecard.report)))
 	}
 
@@ -349,6 +351,18 @@ fn keep_for_week(dir: &Path, text: &str) -> Result<Option<(String, String)>> {
 	};
 	write_atomically(&dir.join(format!("{week}.txt")), text, None)?;
 	Ok(last)
+}
+
+/// Keeps the drift agent's one line as this ISO week's `<week>.txt` in the project's `drift` folder, for the weekly brief
+/// (0680) to show; a failed write is logged, never the review's failure.
+fn keep_drift(project_id: &str, drift: &str) {
+	let dir = project_dir(project_id).join("drift");
+	let kept = fs::create_dir_all(&dir)
+		.map_err(Error::from)
+		.and_then(|()| write_atomically(&dir.join(format!("{}.txt", iso_week())), format!("{drift}\n"), None));
+	if let Err(error) = kept {
+		log(LogLevel::Warn, "weekly", &format!("the drift review of {project_id} wasn't kept: {error}"), None);
+	}
 }
 
 /// Lines as one line for the prompt (` | ` between them): omp's argv carries no newline.

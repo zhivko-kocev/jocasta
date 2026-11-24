@@ -112,3 +112,62 @@ fn a_spend_tie_rounds_up_as_javascripts_to_fixed_does() {
 	assert_eq!(to_fixed(2.5), "2.50");
 	assert_eq!(to_fixed(0.1), "0.10");
 }
+
+fn line(at: i64, kind: &str, thread: &str, rest: serde_json::Value) -> String {
+	let mut value = serde_json::json!({ "at": at, "kind": kind, "project": "p1", "thread": thread });
+	value.as_object_mut().unwrap().extend(rest.as_object().unwrap().clone());
+	value.to_string()
+}
+
+#[test]
+fn the_weeks_numbers_come_from_the_journal_lines_inside_the_window_only() {
+	let from = NOW - 7 * 24 * HOUR;
+	let at = from + HOUR;
+	let gate = |exit: serde_json::Value| line(at, "gate", "t-1", serde_json::json!({ "depth": "full", "exit": exit }));
+	let lines = vec![
+		line(at, "finished", "t-1", serde_json::json!({ "mode": "merge", "cost_usd": 4.0, "wall_ms": 60_000 })),
+		line(at, "finished", "t-2", serde_json::json!({ "mode": "pr", "cost_usd": 10.0, "wall_ms": 180_000 })),
+		line(at, "finished", "t-3", serde_json::json!({ "mode": "pr", "cost_usd": null, "wall_ms": null })),
+		gate(serde_json::json!(0)),
+		gate(serde_json::json!(0)),
+		gate(serde_json::json!(1)),
+		gate(serde_json::json!(null)),
+		line(at, "review_ready", "t-1", serde_json::json!({})),
+		line(at, "review_ready", "t-2", serde_json::json!({})),
+		line(at, "review_ready", "t-2", serde_json::json!({})),
+		line(at, "sent_back", "t-2", serde_json::json!({})),
+		line(at, "sent_back", "t-2", serde_json::json!({})),
+		line(at, "stuck", "t-2", serde_json::json!({ "gate": "quick" })),
+		line(at, "over_budget", "t-3", serde_json::json!({})),
+		// Outside the window, and not journal lines at all.
+		line(from - 1, "finished", "t-9", serde_json::json!({ "cost_usd": 99.0 })),
+		line(NOW + HOUR, "stuck", "t-9", serde_json::json!({})),
+		"not json".to_owned(),
+		"{\"kind\":\"stuck\"}".to_owned(),
+	];
+	let numbers = weekly_numbers(&lines, from, NOW);
+	assert_eq!(
+		numbers,
+		WeeklyNumbers {
+			finished: 3,
+			gates_failed: 2,
+			gates: 4,
+			sent_back: 1,
+			reviewed: 2,
+			stuck: 1,
+			over_budget: 1,
+			cost_median: Some(7.0),
+			cost_total: Some(14.0),
+			wall_median_ms: Some(120_000.0),
+		}
+	);
+	let rows = numbers.rows();
+	assert_eq!(rows[1], ("Gate fail rate".to_owned(), "2 of 4 (50%)".to_owned()));
+	assert_eq!(rows[2], ("Sent back after review".to_owned(), "1 of 2 (50%)".to_owned()));
+	assert_eq!(rows[5].1, "$7.00");
+	assert_eq!(rows[7].1, "2 min");
+	// A week with nothing in it says so instead of dividing by zero.
+	let empty = weekly_numbers(Vec::<String>::new(), from, NOW);
+	assert_eq!(empty.rows()[1].1, "none");
+	assert_eq!(empty.rows()[5].1, "not known");
+}

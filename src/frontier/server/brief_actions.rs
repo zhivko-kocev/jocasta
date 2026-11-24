@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use crate::frontier::brief::model::Brief;
 use crate::frontier::brief::store;
 use crate::frontier::server::context::ServiceContext;
+use crate::frontier::server::pr_actions;
 use crate::frontier::server::thread::ThreadRef;
 use crate::frontier::server::thread_brief::{BriefExtras, refresh};
 use crate::frontier::server::tools::Tools;
@@ -24,9 +24,13 @@ fn thread_of(c: &Arc<ServiceContext>, id: &str) -> Result<ThreadRef> {
 		.ok_or_else(|| Error::user("That thread isn't open any more; its brief is a record, not a control."))
 }
 
-/// Runs `action` (`{"op":"finish","mode":"merge"|"pr"}` or `{"op":"send","text":…}`) on the thread of brief `id`; the
-/// brief as it is after.
-pub async fn act(c: &Arc<ServiceContext>, tools: &Tools, id: &str, action: &Value) -> Result<Brief> {
+/// Runs `action` on the brief `id`: a thread brief's `{"op":"finish","mode":"merge"|"pr"}` or `{"op":"send","text":…}`
+/// on its thread, a pull request brief's `edit`, `reword` or `publish` (`pr_actions.rs`); the brief as it is after,
+/// whole (a `reword` adds its suggestion).
+pub async fn act(c: &Arc<ServiceContext>, tools: &Tools, id: &str, action: &Value) -> Result<Value> {
+	if id.starts_with("pr-") {
+		return pr_actions::act(c, id, action).await;
+	}
 	let thread = thread_of(c, id)?;
 	let op = action.get("op").and_then(Value::as_str).unwrap_or("");
 	match op {
@@ -50,7 +54,8 @@ pub async fn act(c: &Arc<ServiceContext>, tools: &Tools, id: &str, action: &Valu
 	if c.threads.includes(&thread) {
 		refresh(c, &thread, &BriefExtras::default()).await;
 	}
-	store::load(id).ok_or_else(|| Error::user("That brief is gone."))
+	let brief = store::load(id).ok_or_else(|| Error::user("That brief is gone."))?;
+	serde_json::to_value(brief).map_err(|error| Error::other(error.to_string()))
 }
 
 /// The id of the stored brief a link is (`http://127.0.0.1:<port>/brief/<id>`, as the Done toast carries), when it is

@@ -1,8 +1,10 @@
 //! Windows Credential Manager (0430): generic credentials read and written through `advapi32.dll`'s `CredReadW`,
 //! `CredWriteW` and `CredDeleteW` (windows-sys). The calendar's secret iCal URL lives in target `jocasta/calendar-ical`;
 //! the env var `JOCASTA_CALENDAR_ICAL_SECRET` stays a fallback (0301), taken out of this process's environment at the
-//! service's start so no child (herdr and its panes, omp) inherits it (SEC-5). Off Windows there is no
-//! store: reads find nothing and writes refuse.
+//! service's start so no child (herdr and its panes, omp) inherits it (SEC-5). The Gmail app password
+//! (`jocasta/gmail-app-password`, `JOCASTA_GMAIL_APP_PASSWORD`) and the Jira token (`jocasta/jira-token`,
+//! `JOCASTA_JIRA_TOKEN`) are kept the same way (0680). Off Windows there is no store: reads find nothing and writes
+//! refuse.
 
 use std::sync::Mutex;
 
@@ -14,6 +16,16 @@ pub const CALENDAR_CREDENTIAL: &str = "jocasta/calendar-ical";
 
 /// The env var the calendar secret may still come from (0301, now a fallback).
 pub const CALENDAR_ENV: &str = "JOCASTA_CALENDAR_ICAL_SECRET";
+
+/// The Gmail app password's target and env fallback (0680): the mail poller's secret, never model text (0681).
+pub const GMAIL_CREDENTIAL: &str = "jocasta/gmail-app-password";
+/// The env var the Gmail app password may come from instead (0680).
+pub const GMAIL_ENV: &str = "JOCASTA_GMAIL_APP_PASSWORD";
+
+/// The Jira API token's target and env fallback (0680).
+pub const JIRA_CREDENTIAL: &str = "jocasta/jira-token";
+/// The env var the Jira API token may come from instead (0680).
+pub const JIRA_ENV: &str = "JOCASTA_JIRA_TOKEN";
 
 /// `CRED_MAX_CREDENTIAL_BLOB_SIZE`.
 #[cfg(windows)]
@@ -119,38 +131,73 @@ pub fn delete_credential(_target: &str) -> bool {
 	false
 }
 
-/// The env fallback, once taken out of the environment.
-static CALENDAR_ENV_TAKEN: Mutex<Option<String>> = Mutex::new(None);
+/// An env fallback, once taken out of the environment.
+struct EnvSecret {
+	name: &'static str,
+	taken: Mutex<Option<String>>,
+}
 
-/// Moves `JOCASTA_CALENDAR_ICAL_SECRET` out of the environment into this module (SEC-5) and returns it: every process
-/// started afterwards (herdr's server and so every pane, omp) inherits an environment without it. The
-/// service and the `jocasta` command call it before they start anything; later calls return the value taken.
-pub fn take_calendar_env() -> Option<String> {
-	let mut taken = CALENDAR_ENV_TAKEN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-	if let Some(value) = env::var(CALENDAR_ENV) {
-		let trimmed = value.trim();
-		*taken = (!trimmed.is_empty()).then(|| trimmed.to_owned());
-		remove_from_environment();
+impl EnvSecret {
+	const fn new(name: &'static str) -> Self {
+		Self { name, taken: Mutex::new(None) }
 	}
-	taken.clone()
+
+	/// Moves the variable out of the environment into this slot (SEC-5) and returns it: every process started afterwards
+	/// (herdr's server and so every pane, omp) inherits an environment without it. Later calls return the value taken.
+	fn take(&self) -> Option<String> {
+		let mut taken = self.taken.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+		if let Some(value) = env::var(self.name) {
+			let trimmed = value.trim();
+			*taken = (!trimmed.is_empty()).then(|| trimmed.to_owned());
+			remove_from_environment(self.name);
+		}
+		taken.clone()
+	}
+}
+
+static CALENDAR_TAKEN: EnvSecret = EnvSecret::new(CALENDAR_ENV);
+static GMAIL_TAKEN: EnvSecret = EnvSecret::new(GMAIL_ENV);
+static JIRA_TAKEN: EnvSecret = EnvSecret::new(JIRA_ENV);
+
+/// Moves `JOCASTA_CALENDAR_ICAL_SECRET` out of the environment into this module (SEC-5) and returns it. The service and
+/// the `jocasta` command call it before they start anything; later calls return the value taken.
+pub fn take_calendar_env() -> Option<String> {
+	CALENDAR_TAKEN.take()
+}
+
+/// The same for the mail and Jira secrets (0680): `JOCASTA_GMAIL_APP_PASSWORD` and `JOCASTA_JIRA_TOKEN`, taken wherever
+/// the calendar's is.
+pub fn take_source_envs() {
+	GMAIL_TAKEN.take();
+	JIRA_TAKEN.take();
 }
 
 #[cfg(not(test))]
-fn remove_from_environment() {
+fn remove_from_environment(name: &str) {
 	// SAFETY: called at the service's and the command's start, before they start a thread or a program, as
 	// `std::env::remove_var` requires.
-	unsafe { std::env::remove_var(CALENDAR_ENV) };
+	unsafe { std::env::remove_var(name) };
 }
 
 /// Under test the variable lives in the overlay of [`env`], so that is where it goes.
 #[cfg(test)]
-fn remove_from_environment() {
-	env::overlay::set(CALENDAR_ENV, None);
+fn remove_from_environment(name: &str) {
+	env::overlay::set(name, None);
 }
 
 /// The calendar's secret iCal URL (0430): Credential Manager first, else the env var (0301); `None` when neither.
 pub fn calendar_secret() -> Option<String> {
 	read_credential(CALENDAR_CREDENTIAL).or_else(take_calendar_env)
+}
+
+/// The Gmail app password (0680): Credential Manager first, else the env var taken at start; `None` when neither.
+pub fn gmail_secret() -> Option<String> {
+	read_credential(GMAIL_CREDENTIAL).or_else(|| GMAIL_TAKEN.take())
+}
+
+/// The Jira API token (0680): Credential Manager first, else the env var taken at start; `None` when neither.
+pub fn jira_secret() -> Option<String> {
+	read_credential(JIRA_CREDENTIAL).or_else(|| JIRA_TAKEN.take())
 }
 
 #[cfg(test)]
@@ -165,6 +212,17 @@ mod tests {
 		assert_eq!(take_calendar_env().as_deref(), Some("https://calendar.example/secret.ics"));
 		assert_eq!(env::var(CALENDAR_ENV), None);
 		assert_eq!(take_calendar_env().as_deref(), Some("https://calendar.example/secret.ics"));
+	}
+
+	#[test]
+	fn the_mail_and_jira_env_fallbacks_leave_the_environment_once_taken() {
+		let mut temp = temp_jocasta();
+		temp.set_var(GMAIL_ENV, Some("abcd efgh ijkl mnop"));
+		temp.set_var(JIRA_ENV, Some("jira-token-value"));
+		take_source_envs();
+		assert_eq!((env::var(GMAIL_ENV), env::var(JIRA_ENV)), (None, None));
+		assert_eq!(GMAIL_TAKEN.take().as_deref(), Some("abcd efgh ijkl mnop"));
+		assert_eq!(JIRA_TAKEN.take().as_deref(), Some("jira-token-value"));
 	}
 
 	#[test]

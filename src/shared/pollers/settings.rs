@@ -34,6 +34,28 @@ pub struct NewsSettings {
 	pub every_minutes: f64,
 }
 
+/// `pollers.gmail` (0680): `address` is the account the app password belongs to; the poller runs only with it set.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GmailSettings {
+	pub address: Option<String>,
+	pub every_minutes: f64,
+}
+
+/// `pollers.jira` (0680): the poller runs only with `site` and `email` set.
+#[derive(Debug, Clone, PartialEq)]
+pub struct JiraSettings {
+	pub site: Option<String>,
+	pub email: Option<String>,
+	pub every_minutes: f64,
+}
+
+/// `pollers.azurePortal` (0680): `present` is whether the key is in the file; the poller runs only then.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AzurePortalSettings {
+	pub present: bool,
+	pub every_minutes: f64,
+}
+
 /// One brutalist.report feed (0442): a source (`hn`) or a topic (`gaming`), with at most `limit` headlines.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -55,6 +77,10 @@ const DEFAULT_GITHUB_MINUTES: f64 = 2.0;
 const DEFAULT_AZURE_DEVOPS_MINUTES: f64 = 5.0;
 const DEFAULT_CALENDAR_MINUTES: f64 = 10.0;
 const DEFAULT_NEWS_MINUTES: f64 = 15.0;
+/// 0680's intervals: Gmail 5, Jira 10, Azure portal 15 minutes.
+const DEFAULT_GMAIL_MINUTES: f64 = 5.0;
+const DEFAULT_JIRA_MINUTES: f64 = 10.0;
+const DEFAULT_AZURE_PORTAL_MINUTES: f64 = 15.0;
 
 /// 0442: every Hacker News and LWN link, the newest 10 gaming headlines.
 fn default_feeds() -> Vec<NewsFeed> {
@@ -109,6 +135,46 @@ impl PollerSettings for CalendarSettings {
 
 	fn from_pollers(pollers: &Map<String, Value>) -> Self {
 		Self { every_minutes: minutes(group(pollers, Self::NAME), DEFAULT_CALENDAR_MINUTES) }
+	}
+}
+
+fn text_of(group: Option<&Map<String, Value>>, key: &str) -> Option<String> {
+	group
+		.and_then(|map| map.get(key))
+		.and_then(Value::as_str)
+		.map(str::trim)
+		.filter(|text| !text.is_empty())
+		.map(str::to_owned)
+}
+
+impl PollerSettings for GmailSettings {
+	const NAME: &'static str = "gmail";
+
+	fn from_pollers(pollers: &Map<String, Value>) -> Self {
+		let own = group(pollers, Self::NAME);
+		Self { address: text_of(own, "address"), every_minutes: minutes(own, DEFAULT_GMAIL_MINUTES) }
+	}
+}
+
+impl PollerSettings for JiraSettings {
+	const NAME: &'static str = "jira";
+
+	fn from_pollers(pollers: &Map<String, Value>) -> Self {
+		let own = group(pollers, Self::NAME);
+		Self {
+			site: text_of(own, "site"),
+			email: text_of(own, "email"),
+			every_minutes: minutes(own, DEFAULT_JIRA_MINUTES),
+		}
+	}
+}
+
+impl PollerSettings for AzurePortalSettings {
+	const NAME: &'static str = "azurePortal";
+
+	fn from_pollers(pollers: &Map<String, Value>) -> Self {
+		let own = group(pollers, Self::NAME);
+		Self { present: pollers.contains_key(Self::NAME), every_minutes: minutes(own, DEFAULT_AZURE_PORTAL_MINUTES) }
 	}
 }
 
@@ -306,5 +372,54 @@ mod tests {
 		// The other pollers read their own keys and run.
 		assert_eq!(read_poller::<CalendarSettings>(&settings).unwrap(), CalendarSettings { every_minutes: 10.0 });
 		assert_eq!(read_poller::<NewsSettings>(&settings).unwrap().every_minutes, 15.0);
+	}
+
+	#[test]
+	fn the_three_private_sources_read_their_keys_with_0680s_defaults() {
+		let none = settings_of(json!({}));
+		assert_eq!(read_poller::<GmailSettings>(&none).unwrap(), GmailSettings { address: None, every_minutes: 5.0 });
+		assert_eq!(
+			read_poller::<JiraSettings>(&none).unwrap(),
+			JiraSettings { site: None, email: None, every_minutes: 10.0 }
+		);
+		assert_eq!(
+			read_poller::<AzurePortalSettings>(&none).unwrap(),
+			AzurePortalSettings { present: false, every_minutes: 15.0 }
+		);
+		let set = settings_of(json!({ "pollers": {
+			"gmail": { "address": "someone@example.org", "everyMinutes": 7 },
+			"jira": { "site": "https://example.atlassian.net", "email": "someone@example.org" },
+			"azurePortal": {},
+		} }));
+		assert_eq!(
+			read_poller::<GmailSettings>(&set).unwrap(),
+			GmailSettings { address: Some("someone@example.org".to_owned()), every_minutes: 7.0 }
+		);
+		assert_eq!(
+			read_poller::<JiraSettings>(&set).unwrap(),
+			JiraSettings {
+				site: Some("https://example.atlassian.net".to_owned()),
+				email: Some("someone@example.org".to_owned()),
+				every_minutes: 10.0
+			}
+		);
+		assert_eq!(
+			read_poller::<AzurePortalSettings>(&set).unwrap(),
+			AzurePortalSettings { present: true, every_minutes: 15.0 }
+		);
+	}
+
+	#[test]
+	fn a_bad_private_source_value_turns_off_that_source_naming_the_key() {
+		let bad = settings_of(json!({ "pollers": {
+			"gmail": { "address": "nobody" },
+			"jira": { "site": "http://example.atlassian.net" },
+			"azurePortal": { "everyMinutes": 0 },
+		} }));
+		assert!(read_poller::<GmailSettings>(&bad).unwrap_err().message.contains("pollers.gmail.address"));
+		assert!(read_poller::<JiraSettings>(&bad).unwrap_err().message.contains("pollers.jira.site"));
+		assert!(
+			read_poller::<AzurePortalSettings>(&bad).unwrap_err().message.contains("pollers.azurePortal.everyMinutes")
+		);
 	}
 }

@@ -16,6 +16,8 @@ use crate::frontier::server::day::ScheduleStart;
 use crate::frontier::server::herdr::{AgentState, Env, PaneInfo, Prepare, WorktreeOptions};
 use crate::frontier::server::overlay::ensure_overlay;
 use crate::frontier::server::pane_launch::{THREAD_FLAGS, after_overlay, thread_budget};
+use crate::frontier::server::pending::{After, PendingArgs, door_name, running_threads};
+use crate::frontier::server::pr_review::{self, PrTarget};
 use crate::frontier::server::task_file::{NewTask, TaskRecord, new_task, task_dir};
 use crate::frontier::server::thread::{Thread, ThreadPlan, ThreadRef, subject};
 use crate::frontier::server::thread_lifecycle::StateSource;
@@ -32,6 +34,7 @@ use crate::shared::pathkey::same_dir;
 use crate::shared::poll::wait_for;
 use crate::shared::projects::Project;
 use crate::shared::schedules::Schedule;
+use crate::shared::settings::read_max_running;
 
 /// How long `thread_start` waits for omp to come up in the new pane before sending the brief.
 const AGENT_WAIT_MS: i64 = 20_000;
@@ -70,6 +73,15 @@ pub fn budget_of(value: Option<&Value>, door: Door) -> Result<Option<f64>> {
 		.ok_or_else(|| Error::user(format!("{}: budget is a number of dollars, 1 or more.", start_prefix(door))))
 }
 
+/// `after` as given (0687): absent, or a list of thread references; anything else is a refusal named by the door.
+pub fn after_of(value: Option<&Value>, door: Door) -> Result<Vec<String>> {
+	let Some(value) = value.filter(|value| !value.is_null()) else { return Ok(Vec::new()) };
+	value
+		.as_array()
+		.and_then(|items| items.iter().map(|item| item.as_str().map(str::to_owned)).collect::<Option<Vec<_>>>())
+		.ok_or_else(|| Error::user(format!("{}: after is a list of threads.", start_prefix(door))))
+}
+
 /// The shipped guard's rules (0450, 0580), read once: every `done_when` is checked against them before it's stored.
 fn shipped_guard() -> Result<&'static [GuardRule]> {
 	static RULES: OnceLock<Vec<GuardRule>> = OnceLock::new();
@@ -81,27 +93,45 @@ fn shipped_guard() -> Result<&'static [GuardRule]> {
 	Ok(RULES.get_or_init(|| rules))
 }
 
-/// A thread start's outcome: its text, and whether it went all the way.
+/// A thread start's outcome: its text, whether it went all the way, and the task id of the thread it made (none for
+/// a start that waits, 0687).
 #[derive(Debug, Clone, Default)]
 pub struct Started {
 	pub text: String,
 	pub done: bool,
+	pub task_id: Option<String>,
 }
 
 /// What a start is given beyond its project, title and brief: the door it came through (the boss's by default), the
-/// commands that must pass (0540), whether the thread is heavy (0590) and its cost cap in dollars (0686).
+/// commands that must pass (0540), whether the thread is heavy (0590), its cost cap in dollars (0686), the threads and
+/// waiting starts it comes after (0687) and whether it is the queue's own start of one that waited.
 #[derive(Debug, Clone)]
 pub struct StartOptions {
 	pub door: Door,
 	pub done_when: Vec<String>,
 	pub heavy: bool,
 	pub budget: Option<f64>,
+	pub after: Vec<String>,
+	pub from_queue: bool,
+	/// The commit the worktree starts at instead of trunk's tip: a pull request's head, or a failing branch's (0680).
+	pub start_at: Option<String>,
+	/// The pull request a review thread reviews (0680): the thread starts in phase Review.
+	pub pr: Option<PrTarget>,
 }
 
 impl StartOptions {
-	/// A start through `door` with no `done_when`, not heavy, with the default cost cap.
+	/// A start through `door` with no `done_when`, not heavy, with the default cost cap, after nothing.
 	pub fn new(door: Door) -> Self {
-		Self { door, done_when: Vec::new(), heavy: false, budget: None }
+		Self {
+			door,
+			done_when: Vec::new(),
+			heavy: false,
+			budget: None,
+			after: Vec::new(),
+			from_queue: false,
+			start_at: None,
+			pr: None,
+		}
 	}
 }
 
@@ -143,6 +173,25 @@ struct State {
 	focused: Option<Project>,
 	/// The project the last thread start went into (0581, UX-15): the New thread form's third choice.
 	last_started_in: Option<Project>,
+	/// Starts that passed the running limit and aren't registered as threads yet (0687).
+	starting: usize,
+}
+
+/// A start's place among the running (0687): held from the limit check until the thread is registered.
+struct Starting<'a>(&'a ThreadStarts);
+
+impl Drop for Starting<'_> {
+	fn drop(&mut self) {
+		let mut st = self.0.st();
+		st.starting = st.starting.saturating_sub(1);
+	}
+}
+
+/// What the running limit says of a start.
+enum Admission<'a> {
+	Go(Starting<'a>),
+	/// It waits; this many threads run.
+	Wait(usize),
 }
 
 /// `thread-start.ts`'s `ThreadStarts`.
@@ -236,7 +285,9 @@ impl ThreadStarts {
 		let title = brief_title(&schedule.brief);
 		c.places.sync().await;
 		let project = c.places.find(project_name)?;
-		if c.threads.of_project(&project.id).iter().any(|thread| thread.with(|t| t.title == title)) {
+		if c.threads.of_project(&project.id).iter().any(|thread| thread.with(|t| t.title == title))
+			|| c.pending.has_title(&project.id, &title)
+		{
 			return Ok(ScheduleStart::Skipped(format!(
 				"a thread named \"{title}\" is already open in {}",
 				project.name
@@ -253,7 +304,7 @@ impl ThreadStarts {
 			}
 			Err(denied) => return Ok(ScheduleStart::Skipped(denied.to_string())),
 		}
-		let options = StartOptions { door: Door::Key, done_when: checks, heavy: schedule.heavy, budget: None };
+		let options = StartOptions { done_when: checks, heavy: schedule.heavy, ..StartOptions::new(Door::Key) };
 		self.start_with(&project.name, &title, &schedule.brief, options).await?;
 		Ok(ScheduleStart::Started)
 	}
@@ -289,17 +340,43 @@ impl ThreadStarts {
 		if checks.iter().any(|command| command.is_empty() || command.contains(['\r', '\n'])) {
 			return Err(Error::user(format!("{prefix}: each done_when is one command on one line.")));
 		}
+		let after = if options.from_queue { Vec::new() } else { c.pending.resolve_after(&options.after, prefix)? };
 		let prompted = Self::vet_done_when(prefix, &checks, options.door)?;
 		let request =
 			Request { title, brief, checks, door: options.door, heavy: options.heavy, budget: options.budget };
 		// A boss's start in a project other than the one of the last project pane he focused, or with a done_when the
 		// guard asks about, waits for his Allow (0484, 0492, 0580); one he started with his own key and form, or with
-		// `jocasta thread new`, needs none: the thread waits at its plan for him (0544).
-		self.confirm(&project, &request, prompted).await?;
+		// `jocasta thread new`, needs none: the thread waits at its plan for him (0544). The queue's own start of one
+		// that waited asked at its `thread_start`.
+		if !options.from_queue {
+			self.confirm(&project, &request, prompted).await?;
+		}
+		// With `after`, or with `threads.maxRunning` threads running already, nothing is made: the start waits (0687).
+		let admitted = if options.from_queue { Admission::Go(self.reserve()) } else { self.admit(&after) };
+		let slot = match admitted {
+			Admission::Go(slot) => slot,
+			Admission::Wait(running) => {
+				let args = PendingArgs {
+					project: project.name.clone(),
+					title: js_trim(title).to_owned(),
+					brief: brief.to_owned(),
+					done_when: request.checks.clone(),
+					heavy: request.heavy,
+					budget: request.budget,
+					door: door_name(request.door).to_owned(),
+					start_at: options.start_at.clone(),
+					pr: options.pr.clone(),
+				};
+				let text = c.pending.enqueue(&project.id, args, after, running)?;
+				return Ok(Started { text, done: true, task_id: None });
+			}
+		};
 		let overlay = ensure_overlay(&project.id).await?;
 		let mut command = c.panes.pane_omp().to_vec();
 		command.extend(["--config".to_owned(), overlay.display().to_string()]);
 		let trunk = c.places.trunk(&project).await?;
+		// The worktree starts at trunk, or at the commit a pull request review or a CI fix names (0680).
+		let start_at = options.start_at.clone().or_else(|| trunk.clone());
 		// Its task file (0540), whose brief and done-when its omp appends to the system prompt at every launch.
 		let base = match &trunk {
 			Some(trunk) => git_out(&project.main_path, &["rev-parse", "--short", trunk]).await?,
@@ -315,6 +392,7 @@ impl ThreadStarts {
 				heavy: request.heavy.then_some(true),
 				budget: request.budget,
 				base,
+				pr: options.pr.clone(),
 				..NewTask::default()
 			},
 			None,
@@ -336,7 +414,7 @@ impl ThreadStarts {
 			fresh: &fresh,
 			main_env: &main_env,
 			key: &key,
-			trunk: trunk.as_deref(),
+			trunk: start_at.as_deref(),
 		};
 		let mut place = None;
 		let created = match self.one_after_another(&launch, &mut place).await {
@@ -356,7 +434,35 @@ impl ThreadStarts {
 		task.path = created.path.display().to_string();
 		task.branch.clone_from(&branch);
 		let thread = Self::register(&project, &task, &created, &branch);
+		// Registered now: it counts as running from here, so its place among the starts under way is given up (0687).
+		self.link.ctx().threads.add(thread.clone());
+		drop(slot);
 		self.finished_start(&thread, &request, &created, &key).await
+	}
+
+	/// The running limit's say on a start (0687): it waits when it has `after`, or `threads.maxRunning` threads run
+	/// already (open and not asleep, with the starts under way).
+	fn admit(&self, after: &[After]) -> Admission<'_> {
+		let c = self.link.ctx();
+		let limit = read_max_running();
+		let mut st = self.st();
+		let running = running_threads(&c) + st.starting;
+		if !after.is_empty() || (limit > 0 && running as u64 >= limit) {
+			return Admission::Wait(running);
+		}
+		st.starting += 1;
+		Admission::Go(Starting(self))
+	}
+
+	/// A place among the starts under way for the queue's own start: it was admitted when it was picked.
+	fn reserve(&self) -> Starting<'_> {
+		self.st().starting += 1;
+		Starting(self)
+	}
+
+	/// How many starts passed the running limit and aren't registered yet.
+	pub fn starting(&self) -> usize {
+		self.st().starting
 	}
 
 	/// His own Allow-less doors check each `done_when` against the shipped guard (0580): Jocasta runs it itself, outside
@@ -546,7 +652,7 @@ impl ThreadStarts {
 	) -> Result<Started> {
 		let c = self.link.ctx();
 		let project = thread.with(|t| t.project.clone());
-		c.threads.add(thread.clone());
+		let task_id = thread.with(|t| t.task.as_ref().map(|task| task.id.clone()));
 		c.launched.add(&created.pane_id, &created.path.to_string_lossy(), Some(key))?;
 		self.st().last_started_in = Some(project);
 		c.status.write_task(thread);
@@ -560,21 +666,34 @@ impl ThreadStarts {
 		} else {
 			format!("Started {label} on {branch}")
 		};
-		// The commit step is in `prompt.md`'s When you finish (0577); with the layer off there is none, so it ends the brief.
-		let commit = if c.layer { String::new() } else { format!("\n{COMMIT_LINE}") };
-		// What code already knows, so the thread doesn't spend turns on git for it (0685).
-		let facts = c.review.start_facts(thread).await;
-		let said = format!("{}\n\n{LESSONS_LINE}{commit}\n\n{facts}", request.brief.trim_end());
+		// A pull request review is already in its Review phase when its brief goes in (0680): the brief is the whole
+		// prompt, with the facts code read; it hands notes in and plans nothing.
+		let pr = thread.with(|t| t.task.as_ref().and_then(|task| task.pr.clone()));
+		let said = if pr.is_some() {
+			pr_review::begin(&c, thread).await?;
+			request.brief.trim_end().to_owned()
+		} else {
+			// The commit step is in `prompt.md`'s When you finish (0577); with the layer off there is none, so it ends the brief.
+			let commit = if c.layer { String::new() } else { format!("\n{COMMIT_LINE}") };
+			// What code already knows, so the thread doesn't spend turns on git for it (0685).
+			let facts = c.review.start_facts(thread).await;
+			format!("{}\n\n{LESSONS_LINE}{commit}\n\n{facts}", request.brief.trim_end())
+		};
 		if !self.agent_up(&created.pane_id).await? {
 			let wait = ((self.agent_wait_ms() as f64) / 1000.0 + 0.5).floor() as i64;
 			return Ok(Started {
 				text: format!("{started}, but omp didn't come up in its pane within {wait} s; the brief wasn't sent."),
 				done: false,
+				task_id,
 			});
 		}
 		// Through the bridge (0675): omp takes it as a user message, so there is no paste to lose and no Enter to send.
 		if let Err(error) = c.bridge.prompt(&created.pane_id, c.bridge.seal(&said), Deliver::FollowUp).await {
-			return Ok(Started { text: format!("{started}, but the brief couldn't be sent: {error}"), done: false });
+			return Ok(Started {
+				text: format!("{started}, but the brief couldn't be sent: {error}"),
+				done: false,
+				task_id,
+			});
 		}
 		// A heavy thread says so (0590): it runs on his slow role, his strongest model.
 		let slow = if heavy {
@@ -582,12 +701,14 @@ impl ThreadStarts {
 		} else {
 			String::new()
 		};
-		let text = if request.door == Door::Boss {
+		let text = if let Some(pr) = &pr {
+			format!("{started}: reviewing {}; its notes become a brief when the review is done.{slow}", pr.url)
+		} else if request.door == Door::Boss {
 			format!("{started}. It opens in plan mode and waits for his approval of its plan in its pane.{slow}")
 		} else {
 			format!("{started}: it plans first; approve its plan in its pane.{slow}")
 		};
-		Ok(Started { text, done: true })
+		Ok(Started { text, done: true, task_id })
 	}
 
 	/// Takes back what a failed start made (SVC-7): the workspace herdr opened in its worktree, the worktree and the

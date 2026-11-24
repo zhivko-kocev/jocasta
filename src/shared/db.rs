@@ -261,4 +261,36 @@ mod tests {
 	fn pragma_count(db: &Connection) -> i64 {
 		db.query_row("SELECT count(*) AS n FROM history", [], |row| row.get(0)).unwrap()
 	}
+
+	#[test]
+	fn catalog_v10_widens_the_events_sources_for_the_private_ones_and_keeps_the_rows_it_had() {
+		let temp = temp_jocasta();
+		let path = temp.root().join("catalog.db");
+		let v9 = open_db(&path, &CATALOG_MIGRATIONS[..9], None).unwrap();
+		v9.execute(
+			"INSERT INTO events (source_id, source, kind, priority, text, created_at) VALUES ('github:review:acme/api#1', 'github', 'review', 'normal', 'review requested', 't')",
+			[],
+		)
+		.unwrap();
+		drop(v9);
+		let catalog = open_db(&path, &CATALOG_MIGRATIONS, None).unwrap();
+		let kept: (String, Option<String>, Option<String>) = catalog
+			.query_row("SELECT text, private_text, private_url FROM events", [], |row| {
+				Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+			})
+			.unwrap();
+		assert_eq!(kept, ("review requested".to_owned(), None, None));
+		for source in ["mail", "jira", "azure-portal"] {
+			catalog
+				.execute(
+					"INSERT INTO events (source_id, source, kind, priority, text, created_at, private_text) VALUES (?1, ?2, 'k', 'low', 'words', 't', 'real line')",
+					rusqlite::params![format!("{source}:1"), source],
+				)
+				.unwrap();
+		}
+		catalog
+			.execute("INSERT INTO events (source_id, source, kind, priority, text, created_at) VALUES ('x', 'nope', 'k', 'low', 'w', 't')", [])
+			.unwrap_err();
+		assert_eq!(pragma::<i64>(&catalog, "user_version"), 10);
+	}
 }

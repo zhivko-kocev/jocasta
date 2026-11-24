@@ -4,6 +4,7 @@
 
 pub mod layout;
 pub mod model;
+pub mod morning;
 pub mod routes;
 pub mod store;
 

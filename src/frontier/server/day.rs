@@ -21,12 +21,12 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::frontier::protocol::{
-	Activity, ActivityEvent, Leftover, Machine, NewsList, PrFacts, QuotaAccount, QuotaCapacity, QuotaSpan, QuotaWindow,
-	ScheduledItem, ServerMessage, ServiceHealth, ThreadDiff, ThreadState, ToastLevel, ToastPriority, ToastReason,
-	Weather,
+	Activity, ActivityEvent, BriefLink, Leftover, Machine, NewsList, PrFacts, QuotaAccount, QuotaCapacity, QuotaSpan,
+	QuotaWindow, ScheduledItem, ServerMessage, ServiceHealth, ThreadDiff, ThreadState, ToastLevel, ToastPriority,
+	ToastReason, Weather,
 };
 use crate::frontier::server::worklog::{GitPlaces, WorklogSession, worklog_path, write_worklog};
-use crate::shared::credentials::calendar_secret;
+use crate::shared::credentials::{calendar_secret, gmail_secret, jira_secret};
 use crate::shared::day::{day_start, local_day};
 use crate::shared::errors::{Error, Result};
 use crate::shared::events::inbox::Inbox;
@@ -36,8 +36,12 @@ use crate::shared::log::{LogLevel, log};
 use crate::shared::paths::data_dir;
 use crate::shared::pollers::calendar::{Fetched, Meeting};
 use crate::shared::pollers::cli::{CliCommand, RunCli, RunFuture, SystemCli};
+use crate::shared::pollers::gmail::Endpoint;
 use crate::shared::pollers::machine::{CpuTimes, cpu_times, sample_machine};
-use crate::shared::pollers::settings::{AzureDevOpsSettings, CalendarSettings, GithubSettings, NewsSettings};
+use crate::shared::pollers::settings::{
+	AzureDevOpsSettings, AzurePortalSettings, CalendarSettings, GithubSettings, GmailSettings, JiraSettings,
+	NewsSettings,
+};
 use crate::shared::pollers::settings::{PollerSettings, read_poller};
 use crate::shared::pollers::weather::Place;
 use crate::shared::process::AbortSignal;
@@ -114,6 +118,21 @@ pub struct DayOptions {
 	pub disk_free: Option<Arc<dyn Fn() -> f64 + Send + Sync>>,
 	/// `omp usage --json`'s output (0456).
 	pub usage: Option<Arc<dyn Fn() -> RunFuture + Send + Sync>>,
+	/// The private sources' secrets and servers (0680).
+	pub sources: Option<SourceSeams>,
+}
+
+/// What stands in for the private sources' secrets and servers (0680): tests only; the service runs with the defaults.
+#[derive(Default)]
+pub struct SourceSeams {
+	/// The Gmail app password, instead of Credential Manager and the env var.
+	pub gmail_secret: Option<Arc<dyn Fn() -> Option<String> + Send + Sync>>,
+	/// The Jira API token, instead of Credential Manager and the env var.
+	pub jira_secret: Option<Arc<dyn Fn() -> Option<String> + Send + Sync>>,
+	/// A plain-TCP IMAP server (`host:port`), instead of Gmail's over TLS.
+	pub imap_endpoint: Option<String>,
+	/// The Jira site, instead of `pollers.jira.site`.
+	pub jira_site: Option<String>,
 }
 
 /// How a delivered event reaches the boss pane (0299, 0405): urgent at once, normal when the boss is idle.
@@ -212,6 +231,20 @@ pub trait DayHooks: Send + Sync {
 	fn pr_facts(&self, _url: &str) -> Option<PrFacts> {
 		None
 	}
+	/// The lines of the thread starts that wait (0687), oldest first.
+	fn queued(&self) -> Vec<String> {
+		Vec::new()
+	}
+	/// The rows of `today`'s BRIEFS at `now` (0680): the morning brief of this day and the weekly brief of this week,
+	/// each once it is stored.
+	fn briefs(&self, _now: i64) -> Vec<BriefLink> {
+		Vec::new()
+	}
+	/// Builds the weekly brief of the week that began on `monday` (`YYYY-MM-DD`, 0680): when the review is due, and again
+	/// after a project's review answered.
+	fn weekly_brief(&self, _monday: &str) -> BoxFuture<'_, ()> {
+		Box::pin(std::future::ready(()))
+	}
 }
 
 /// The pollers, by the names `jocasta.yaml` and the failure lines give them.
@@ -222,10 +255,13 @@ pub enum PollerName {
 	Calendar,
 	News,
 	Weather,
+	Gmail,
+	Jira,
+	AzurePortal,
 }
 
 impl PollerName {
-	/// `github`, `azureDevOps`, `calendar`, `news`, `weather`.
+	/// `github`, `azureDevOps`, `calendar`, `news`, `weather`, `gmail`, `jira`, `azurePortal`.
 	pub fn name(self) -> &'static str {
 		match self {
 			Self::Github => "github",
@@ -233,6 +269,19 @@ impl PollerName {
 			Self::Calendar => "calendar",
 			Self::News => "news",
 			Self::Weather => "weather",
+			Self::Gmail => "gmail",
+			Self::Jira => "jira",
+			Self::AzurePortal => "azurePortal",
+		}
+	}
+
+	/// What its `today` section is called in a failure line (0680): `mail`, `jira`, `azure`; `None` for the other pollers.
+	fn private_label(self) -> Option<&'static str> {
+		match self {
+			Self::Gmail => Some("mail"),
+			Self::Jira => Some("jira"),
+			Self::AzurePortal => Some("azure"),
+			_ => None,
 		}
 	}
 }
@@ -342,6 +391,9 @@ struct State {
 	quota_reading: bool,
 	leftover_list: Vec<Leftover>,
 	leftovers_reading: Option<Done>,
+	/// The private sources (0680) that ran a round, each with its last round's failure line; their `today` sections exist
+	/// from the first round on.
+	private_rounds: HashMap<PollerName, Option<String>>,
 	/// The weekly reviews (0470) run or checked this week, by `<week>|<project id>`; running ones included.
 	weekly_done: HashSet<String>,
 	/// The scheduled starts queued last (0673); a new batch waits for it.
@@ -367,6 +419,7 @@ struct Inner {
 	calendar_secret: Option<Arc<dyn Fn() -> Option<String> + Send + Sync>>,
 	disk_free: Option<Arc<dyn Fn() -> f64 + Send + Sync>>,
 	usage: Option<Arc<dyn Fn() -> RunFuture + Send + Sync>>,
+	sources: SourceSeams,
 	/// The recorded daily spend for the 7-day average (0668).
 	spend: SpendDays,
 	/// Each project's git email and origin for the worklogs, kept for one local day (CO-12).
@@ -439,6 +492,7 @@ impl Day {
 			quota_reading: false,
 			leftover_list: Vec::new(),
 			leftovers_reading: None,
+			private_rounds: HashMap::new(),
 			weekly_done: HashSet::new(),
 			scheduling: None,
 		};
@@ -459,6 +513,7 @@ impl Day {
 				calendar_secret: options.calendar_secret,
 				disk_free: options.disk_free,
 				usage: options.usage,
+				sources: options.sources.unwrap_or_default(),
 				spend: SpendDays::open(),
 				places: GitPlaces::new(),
 				stopped: AtomicBool::new(false),
@@ -545,6 +600,25 @@ impl Day {
 			&& !news.feeds.is_empty()
 		{
 			self.poll_every(PollerName::News, news.every_minutes);
+		}
+		// The private sources (0680) run once configured: an address (and its secret), a site and email (and theirs), or the key.
+		if let Some(gmail) = self.poller::<GmailSettings>(&settings)
+			&& gmail.address.is_some()
+			&& self.gmail_password().is_some()
+		{
+			self.poll_every(PollerName::Gmail, gmail.every_minutes);
+		}
+		if let Some(jira) = self.poller::<JiraSettings>(&settings)
+			&& jira.site.is_some()
+			&& jira.email.is_some()
+			&& self.jira_token().is_some()
+		{
+			self.poll_every(PollerName::Jira, jira.every_minutes);
+		}
+		if let Some(azure) = self.poller::<AzurePortalSettings>(&settings)
+			&& azure.present
+		{
+			self.poll_every(PollerName::AzurePortal, azure.every_minutes);
 		}
 		// Reads `dashboard.weather` each round: hidden until set, picked up within 30 minutes once he sets it.
 		self.poll_every(PollerName::Weather, WEATHER_MINUTES);
@@ -633,6 +707,19 @@ impl Day {
 		if let Some(writing) = writing {
 			finished(writing).await;
 		}
+	}
+
+	fn gmail_password(&self) -> Option<String> {
+		self.inner.sources.gmail_secret.as_ref().map_or_else(gmail_secret, |secret| secret())
+	}
+
+	fn jira_token(&self) -> Option<String> {
+		self.inner.sources.jira_secret.as_ref().map_or_else(jira_secret, |secret| secret())
+	}
+
+	/// Where the mail round connects: Gmail, or the tests' server.
+	fn imap_endpoint(&self) -> Endpoint {
+		self.inner.sources.imap_endpoint.clone().map_or_else(Endpoint::default, Endpoint::plain)
 	}
 
 	fn secret(&self) -> Option<String> {
@@ -1157,6 +1244,8 @@ fn event(
 		url: None,
 		project_id: None,
 		thread_id: None,
+		private_text: None,
+		private_url: None,
 	}
 }
 
@@ -1182,3 +1271,7 @@ mod stop_tests;
 #[cfg(test)]
 #[path = "day_settings_tests.rs"]
 mod settings_tests;
+
+#[cfg(test)]
+#[path = "day_sources_tests.rs"]
+mod sources_tests;

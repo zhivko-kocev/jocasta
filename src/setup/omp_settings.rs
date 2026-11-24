@@ -60,6 +60,8 @@ mod tests {
 	use serde_json::json;
 
 	use super::*;
+	use crate::shared::install::shipped_config_dir;
+	use crate::shared::yaml::parse_value;
 
 	#[test]
 	fn the_shipped_fence_also_names_windows_own_folders() {
@@ -90,5 +92,16 @@ mod tests {
 		assert_eq!(js_number(&Number::from_f64(-0.0).unwrap()), "-0");
 		assert_eq!(js_number(&Number::from_f64(1.5).unwrap()), "1.5");
 		assert_eq!(js_number(&Number::from(3)), "3");
+	}
+
+	/// 0681's pins: what keeps text from leaving the machine. Changing one of these is a decision, so it is a record.
+	#[test]
+	fn the_shipped_omp_config_keeps_the_four_privacy_pins() {
+		let shipped = std::fs::read_to_string(shipped_config_dir(None).join("omp").join("config.yml")).unwrap();
+		let config = parse_value(&shipped).unwrap();
+		assert_eq!(config["secrets"]["enabled"], json!(true), "secrets.enabled");
+		assert_eq!(config["telemetry"]["otlpExportEnabled"], json!(false), "telemetry.otlpExportEnabled");
+		assert_eq!(config["spotlight"]["experiment"]["enabled"], json!(false), "spotlight.experiment.enabled");
+		assert_eq!(config["collab"]["autoStart"], json!("off"), "collab.autoStart");
 	}
 }

@@ -15,6 +15,7 @@ use futures_util::future::{BoxFuture, Shared as SharedFuture, join_all};
 use crate::frontier::protocol::ThreadState;
 use crate::frontier::server::boss::{DefaultClosed, close_herdr_default};
 use crate::frontier::server::context::{Finishing, Link, ServiceContext, Shared};
+use crate::frontier::server::day_briefs;
 use crate::frontier::server::herdr::{AgentState, HerdrSnapshot, PaneInfo};
 use crate::frontier::server::pane_launch::{OmpBackoff, Respawn};
 use crate::frontier::server::task_file::find_task;
@@ -270,6 +271,8 @@ impl Inner {
 		self.step("the thread panes' omp", self.thread_omps(tick)).await;
 		self.step("project panes", self.project_panes(tick)).await;
 		self.step("pane sleep", c.sleep.tick(snapshot)).await;
+		// Starts that wait go when their turn comes (0687).
+		c.pending.tick_soon();
 		// The dock's workspace and the Agents view (0553), healed like the boss pane (0518, 0549).
 		if let Some(dock) = c.options.dock.clone() {
 			let boss_id = c.boss().map(|boss| boss.with(|boss| boss.pane_id.clone()));
@@ -289,6 +292,7 @@ impl Inner {
 				Ok::<_, Error>(())
 			})
 			.await;
+			self.step("morning brief", day_briefs::morning_if_due(c)).await;
 		}
 		self.step("sidebar and HUD", c.status.report()).await;
 	}

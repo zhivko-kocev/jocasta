@@ -120,7 +120,7 @@ pub struct CheckFact {
 }
 
 /// The first line of every facts block (0685).
-fn facts_heading(sha: &str) -> String {
+pub(super) fn facts_heading(sha: &str) -> String {
 	format!("Facts as of {sha} (computed by Jocasta; don't re-run git status, git log or git diff --stat for them):")
 }
 

@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::frontier::server::pr_review::PrTarget;
 use crate::frontier::server::report::{ThreadReport, report_line};
 use crate::frontier::server::review_proof::ReviewProof;
 use crate::frontier::server::sessions::TestsResult;
@@ -166,6 +167,10 @@ pub struct TaskRecord {
 	/// (or its double for a heavy thread) applies at launch.
 	#[serde(default, skip_serializing_if = "Option::is_none", serialize_with = "js_number")]
 	pub budget: Option<f64>,
+	/// The pull request a review thread reviews (0680): its page, its SHAs and what Jocasta read of it when it started.
+	/// Absent for every other thread; a review thread's prompt has no When you finish section.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub pr: Option<PrTarget>,
 	/// `t-` and 4 hex digits, unique in the project.
 	pub id: String,
 	/// Absent while it is open, and on a record closed before 0621.
@@ -191,6 +196,7 @@ pub struct NewTask {
 	pub parent: Option<String>,
 	pub heavy: Option<bool>,
 	pub budget: Option<f64>,
+	pub pr: Option<PrTarget>,
 }
 
 /// `<data>/projects/<pid>/threads`.
@@ -238,6 +244,7 @@ pub fn new_task(fields: NewTask, now: Option<i64>) -> TaskRecord {
 		done_when: fields.done_when,
 		heavy: fields.heavy,
 		budget: fields.budget,
+		pr: fields.pr,
 		id,
 		close: None,
 		extra: serde_json::Map::new(),

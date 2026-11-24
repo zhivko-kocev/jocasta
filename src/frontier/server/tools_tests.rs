@@ -1102,7 +1102,7 @@ async fn a_briefs_send_goes_through_thread_send_and_returns_the_updated_brief() 
 	thread_brief::refresh(&w.t.ctx, &thread, &thread_brief::BriefExtras::default()).await.unwrap();
 	let action = json!({"op": "send", "text": "  Go on.  "});
 	let brief = brief_actions::act(&w.t.ctx, &w.tools, "thread-task-1", &action).await.unwrap();
-	assert_eq!(brief.id, "thread-task-1");
+	assert_eq!(brief["id"], "thread-task-1");
 	assert_eq!(w.prompts_to("t-1"), ["Go on."]);
 	// His click on the brief is his own word: the Allow gate asks only the boss and the commands.
 	assert!(asked(&log).is_empty());

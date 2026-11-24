@@ -6,10 +6,12 @@ pub mod bridge;
 pub mod brief_actions;
 pub mod check_costs;
 pub mod checks;
+pub mod ci_fix;
 pub mod close;
 pub mod context;
 pub mod cost_cap;
 pub mod day;
+pub mod day_briefs;
 pub mod door_routes;
 #[cfg(test)]
 mod e2e_allow_tests;
@@ -25,6 +27,8 @@ mod e2e_keys_tests;
 mod e2e_pane_check_tests;
 #[cfg(test)]
 mod e2e_plans_tests;
+#[cfg(test)]
+mod e2e_privacy_tests;
 #[cfg(test)]
 mod e2e_push_gate_tests;
 #[cfg(test)]
@@ -58,9 +62,12 @@ pub mod omp_processes;
 pub mod overlay;
 pub mod page_routes;
 pub mod pane_launch;
+pub mod pending;
 pub mod phone;
 pub mod places;
 pub mod popups;
+pub mod pr_actions;
+pub mod pr_review;
 pub mod production;
 pub mod ptt;
 pub mod ptt_hold;
@@ -92,6 +99,7 @@ pub mod thread_start;
 pub mod tool_specs;
 pub mod tools;
 pub mod watcher;
+pub mod weekly_brief;
 pub mod weekly_review;
 pub mod wording;
 pub mod worklog;

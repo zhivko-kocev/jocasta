@@ -23,11 +23,10 @@ use tokio::sync::{OnceCell, watch};
 use tokio::task::JoinHandle;
 
 use crate::frontier::brief::BriefLinks;
-use crate::frontier::brief::model::Brief;
 use crate::frontier::brief::routes::BriefActions;
 use crate::frontier::protocol::{
-	ClientMessage, Dashboard, Hud, Leftover, PrFacts, ServerMessage, ServiceHealth, ServiceName, ServiceState,
-	ToastLevel, ToastReason, Today,
+	BriefLink, ClientMessage, Dashboard, Hud, Leftover, PrFacts, ServerMessage, ServiceHealth, ServiceName,
+	ServiceState, ToastLevel, ToastReason, Today,
 };
 use crate::frontier::server::allow::Confirm;
 use crate::frontier::server::asker::{Ask, Notifier};
@@ -35,6 +34,7 @@ use crate::frontier::server::boss::fresh_session;
 use crate::frontier::server::bridge::{Bridge, BridgeService, PaneAgent, PaneEvent, Resolved, Role};
 use crate::frontier::server::brief_actions::{self, brief_of_link};
 use crate::frontier::server::checks::CheckRunner;
+use crate::frontier::server::ci_fix;
 use crate::frontier::server::close::CloseService;
 use crate::frontier::server::context::{Link, ServiceContext};
 use crate::frontier::server::cost_cap;
@@ -45,6 +45,7 @@ use crate::frontier::server::herdr::{AgentState, Herdr, HerdrSnapshot, StopWatch
 use crate::frontier::server::keys::{FinishHow, KeyFinishable, KeyOutcome, Keys, NewThreadForm};
 use crate::frontier::server::phone::PhoneFacts;
 use crate::frontier::server::popups::Counts;
+use crate::frontier::server::pr_review;
 use crate::frontier::server::ptt_hold::STT_TOGGLE_KEY;
 use crate::frontier::server::push_gate::PushGate;
 use crate::frontier::server::refresh::Refresher;
@@ -56,6 +57,7 @@ use crate::frontier::server::tools::{Caller, ToolReply, Tools};
 use crate::frontier::server::watcher::{Watcher, WatcherOptions, start_watcher};
 use crate::frontier::server::wording::Door;
 use crate::frontier::server::worklog::WorklogSession;
+use crate::frontier::server::{day_briefs, weekly_brief};
 use crate::shared::day::{day_start, midnight_of};
 use crate::shared::errors::{Error, Result};
 use crate::shared::fsx::same_token;
@@ -128,6 +130,9 @@ pub struct ServiceOptions {
 	/// `Some(false)` (test seam): the minute tick never starts a weekly review (0470), so no test spawns omp; the boss's
 	/// tool still can.
 	pub weekly_reviews: Option<bool>,
+	/// `Some(false)` (test seam): the refresh tick builds no morning brief and the due weekly review no weekly brief
+	/// (0680); his `b` key still builds the morning brief.
+	pub auto_briefs: Option<bool>,
 	/// Asks him Allow or Deny (0484): a question through the service's question API (0519, 0552), with how it ended
 	/// (0578: his answer, three wrong codes, the popup closed, another reader). The signal aborts once the answer isn't
 	/// wanted any more (the wait ran out, the service is stopping) and the question goes. Without it every ask counts as
@@ -184,6 +189,7 @@ impl ServiceOptions {
 			weekly_review_ms: None,
 			scorecard_ms: None,
 			weekly_reviews: None,
+			auto_briefs: None,
 			confirm: None,
 			confirm_wait_ms: None,
 			boss_key: None,
@@ -201,6 +207,11 @@ impl ServiceOptions {
 	/// Whether the minute tick may start a weekly review (`weeklyReviews !== false`).
 	pub fn weekly_reviews_on(&self) -> bool {
 		self.weekly_reviews != Some(false)
+	}
+
+	/// Whether the tick builds the morning brief and the weekly brief by itself (`autoBriefs !== false`).
+	pub fn auto_briefs_on(&self) -> bool {
+		self.auto_briefs != Some(false)
 	}
 
 	/// Whether a task end without a report is steered to hand one in first (`askReport !== false`).
@@ -334,6 +345,19 @@ impl DayHooks for ServiceHooks {
 
 	fn pr_facts(&self, url: &str) -> Option<PrFacts> {
 		self.link.ctx().thread_facts.pr_facts(url)
+	}
+
+	fn queued(&self) -> Vec<String> {
+		self.link.ctx().pending.rows()
+	}
+
+	fn briefs(&self, now: i64) -> Vec<BriefLink> {
+		day_briefs::links(&self.link.ctx(), now)
+	}
+
+	fn weekly_brief(&self, monday: &str) -> BoxFuture<'_, ()> {
+		let (c, monday) = (self.link.ctx(), monday.to_owned());
+		Box::pin(async move { weekly_brief::build_weekly(&c, &monday).await })
 	}
 }
 
@@ -865,14 +889,44 @@ impl JocastaService {
 	/// One message from a client (SEC-NET-5: `pane.focus` and `link.open` only; the type of any other fails to read, so
 	/// it never gets here); `reply` answers that client only. Refusals come back as `error`.
 	pub async fn handle(&self, message: ClientMessage, reply: impl Fn(ServerMessage)) {
-		if let ClientMessage::LeftoverRemove { folder } = message {
-			if let Some(answer) = self.remove_leftover(&folder).await {
-				reply(answer);
+		let message = match message {
+			ClientMessage::LeftoverRemove { folder } => {
+				if let Some(answer) = self.remove_leftover(&folder).await {
+					reply(answer);
+				}
+				return;
 			}
-			return;
-		}
+			ClientMessage::PrReview { url } => {
+				reply(self.started_by_code(pr_review::start(&self.ctx, &url)).await);
+				return;
+			}
+			ClientMessage::CiFix { url } => {
+				reply(self.started_by_code(ci_fix::start(&self.ctx, &url)).await);
+				return;
+			}
+			ClientMessage::BriefMorning => {
+				// His `b` (0680): today's morning brief, built from what the day holds now, then opened.
+				let done = self.track(day_briefs::open_morning(&self.ctx)).await;
+				reply(match done {
+					Ok(text) => ServerMessage::Action { text, is_error: false },
+					Err(error) => ServerMessage::Action { text: error.to_string(), is_error: true },
+				});
+				return;
+			}
+			other => other,
+		};
 		if let Err(error) = self.handle_one(message).await {
 			reply(ServerMessage::Error { message: error.to_string() });
+		}
+	}
+
+	/// His `R` on a review request or `F` on a red pipeline (0680): the review thread or the fix thread, started by code
+	/// with no turn of the boss. Only a link an open event of the row's kind carries is acted on; the answer is an
+	/// action, started or refused.
+	async fn started_by_code(&self, start: impl Future<Output = Result<String>>) -> ServerMessage {
+		match self.track(start).await {
+			Ok(text) => ServerMessage::Action { text, is_error: false },
+			Err(error) => ServerMessage::Action { text: error.to_string(), is_error: true },
 		}
 	}
 
@@ -892,7 +946,10 @@ impl JocastaService {
 	async fn handle_one(&self, message: ClientMessage) -> Result<()> {
 		match message {
 			// Answered in `handle`, which replies with an action.
-			ClientMessage::LeftoverRemove { .. } => {}
+			ClientMessage::LeftoverRemove { .. }
+			| ClientMessage::PrReview { .. }
+			| ClientMessage::CiFix { .. }
+			| ClientMessage::BriefMorning => {}
 			ClientMessage::PaneFocus { pane_id } => self.ctx.herdr.focus(&pane_id).await?,
 			ClientMessage::LinkOpen { url } => {
 				// A brief's link (the Done toast's) opens its page with a fresh launch code (0678).
@@ -912,7 +969,7 @@ impl JocastaService {
 }
 
 impl BriefActions for JocastaService {
-	fn act(&self, id: String, action: Value) -> BoxFuture<'static, Result<Brief>> {
+	fn act(&self, id: String, action: Value) -> BoxFuture<'static, Result<Value>> {
 		let (ctx, tools) = (Arc::clone(&self.ctx), self.tools.clone());
 		Box::pin(async move { brief_actions::act(&ctx, &tools, &id, &action).await })
 	}

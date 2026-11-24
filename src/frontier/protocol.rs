@@ -10,6 +10,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize, Serializer};
 
+use crate::shared::private::Private;
+
 /// The WebSocket path.
 pub const WS_PATH: &str = "/ws";
 /// The query parameter a browser page opens with: `http://127.0.0.1:<port>/?t=<code>`, a one-time launch code the
@@ -403,6 +405,24 @@ pub struct ScheduledItem {
 	pub at_ms: i64,
 }
 
+/// One row of a private source's section (0680, 0681): the real line and link, as `Private` values only `today/` and
+/// `brief/` read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrivateRow {
+	pub text: Private<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub url: Option<Private<String>>,
+}
+
+/// A private source's section of `today` (0680): MAIL, JIRA or AZURE. It exists once the poller is configured; `error` is
+/// its last round's failure as one line (`mail: sign-in refused; run jocasta setup`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrivateSection {
+	pub rows: Vec<PrivateRow>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub error: Option<String>,
+}
+
 /// The `today` view (0300) as the rail shows it: Awaiting you, Landed, Underway, Next (0409).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -425,6 +445,30 @@ pub struct Today {
 	/// The soonest scheduled threads (0673), at most 3.
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub scheduled: Vec<ScheduledItem>,
+	/// Thread starts that wait for other threads or for room (0687), oldest first: `waiting: <title> · after <names>`,
+	/// `queued: <title>` or `blocked: <title>`.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub queued: Vec<String>,
+	/// MAIL, JIRA and AZURE (0680), after the calendar: absent while their poller isn't configured. The boss's `today`
+	/// shows them as counts only (0681).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub mail: Option<PrivateSection>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub jira: Option<PrivateSection>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub azure: Option<PrivateSection>,
+	/// The briefs built by code for today and this week (0680): `morning brief` and `weekly brief`, each a row Enter opens.
+	/// A brief is listed once it is stored; nothing opens by itself.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub briefs: Vec<BriefLink>,
+}
+
+/// One row of `today`'s BRIEFS: its label and the brief's page link (`http://127.0.0.1:<port>/brief/<id>`), which
+/// `link.open` opens with a fresh launch code (0678).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BriefLink {
+	pub label: String,
+	pub url: String,
 }
 
 /// One headline from brutalist.report (0429): title, source, when it was published and its link only.
@@ -772,6 +816,17 @@ pub enum ClientMessage {
 	/// `dashboard.leftovers`, and only behind his Allow.
 	#[serde(rename = "leftover.remove")]
 	LeftoverRemove { folder: PathBuf },
+	/// His `R` on a `review` row of `today` (0680): the service starts the review thread of that pull request, only
+	/// when `url` is the link of an open `review` event.
+	#[serde(rename = "pr.review")]
+	PrReview { url: String },
+	/// His `F` on a `pipeline` row of `today` (0680): the service starts the fix thread of that red run, only when
+	/// `url` is the link of an open `pipeline` event.
+	#[serde(rename = "ci.fix")]
+	CiFix { url: String },
+	/// His `b` in the dock (0680): the service builds today's morning brief again and opens it.
+	#[serde(rename = "brief.morning")]
+	BriefMorning,
 }
 
 #[cfg(test)]
@@ -919,6 +974,11 @@ mod tests {
 				brief: "dependency bumps".to_owned(),
 				at_ms: 1_791_500_000_000,
 			}],
+			queued: Vec::new(),
+			mail: None,
+			jira: None,
+			azure: None,
+			briefs: Vec::new(),
 		};
 		let json = json!({
 			"date": "2026-10-08",

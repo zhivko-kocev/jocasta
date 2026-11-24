@@ -252,6 +252,8 @@ impl PaneSleeps {
 			});
 			c.threads.add(thread);
 		}
+		// A sleeping thread isn't running: room for a start that waits (0687).
+		c.pending.tick_soon();
 		Ok(())
 	}
 

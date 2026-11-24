@@ -16,6 +16,7 @@ ignore = [
 	{ id = "RUSTSEC-2026-0370", reason = "zvariant is unmaintained (moved into zbus 6); herdr's zbus 5 depends on it" },
 	{ id = "RUSTSEC-2026-0371", reason = "zbus_names is unmaintained (moved into zbus 6); herdr's zbus 5 depends on it" },
 	{ id = "RUSTSEC-2026-0372", reason = "zvariant_derive is unmaintained (moved into zbus 6); herdr's zbus 5 depends on it" },
+	{ id = "RUSTSEC-2026-0441", reason = "pin-utils is unmaintained, no fix; async-imap 0.12.0 depends on it (0680)" },
 ]
 
 [licenses]

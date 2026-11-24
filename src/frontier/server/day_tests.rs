@@ -269,6 +269,8 @@ fn urgent(source_id: &str, kind: &str, text: &str) -> NewEvent {
 		url: None,
 		project_id: None,
 		thread_id: None,
+		private_text: None,
+		private_url: None,
 	}
 }
 
@@ -462,6 +464,11 @@ async fn today_has_the_calendar_with_links_awaiting_you_and_next_and_a_meeting_i
 				project: Some("demo".to_owned())
 			}],
 			scheduled: vec![],
+			queued: vec![],
+			mail: None,
+			jira: None,
+			azure: None,
+			briefs: vec![],
 		}
 	);
 

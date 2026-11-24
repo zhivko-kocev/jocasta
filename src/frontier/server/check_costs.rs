@@ -90,6 +90,14 @@ impl CheckCosts {
 		locked(&self.records).get(key).copied()
 	}
 
+	/// Every record with its key (`<project folder> :: <command>`), the biggest peak first.
+	pub fn all(&self) -> Vec<(String, CheckCost)> {
+		let mut all: Vec<(String, CheckCost)> =
+			locked(&self.records).iter().map(|(key, cost)| (key.clone(), *cost)).collect();
+		all.sort_by(|a, b| b.1.peak_rss_bytes.cmp(&a.1.peak_rss_bytes).then_with(|| a.0.cmp(&b.0)));
+		all
+	}
+
 	/// Folds one run's measurement into `key`'s record and writes the file. A failed write is logged.
 	pub fn record(&self, key: &str, peak_rss_bytes: u64, avg_cores: f64, at: i64) {
 		let json = {

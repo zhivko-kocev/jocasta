@@ -25,6 +25,7 @@ pub mod pathkey;
 pub mod paths;
 pub mod poll;
 pub mod pollers;
+pub mod private;
 pub mod process;
 pub mod proctree;
 pub mod project_cli;

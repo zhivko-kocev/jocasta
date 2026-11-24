@@ -97,14 +97,18 @@ pub fn thread_budget(task: &TaskRecord) -> Option<f64> {
 	Some(if task.heavy == Some(true) { setting * 2.0 } else { setting })
 }
 
-/// What a thread's omp loads after the project's overlay (0590, 0686): `config/heavy.yml` for a heavy thread, which makes
-/// its `default` role his `slow` one, and `--max-cost <budget>` for any thread with a cost cap. Its first launch and every
-/// relaunch take it from here; none for the boss and project panes (no task).
+/// What a thread's omp loads after the project's overlay (0590, 0686, 0680): `config/heavy.yml` for a heavy thread, which
+/// makes its `default` role his `slow` one, `config/review.yml` for a pull-request review (plan mode off at startup) and
+/// `--max-cost <budget>` for any thread with a cost cap. Its first launch and every relaunch take it from here; none for
+/// the boss and project panes (no task).
 pub fn after_overlay(task: Option<&TaskRecord>) -> Vec<String> {
 	let Some(task) = task else { return Vec::new() };
 	let mut argv = Vec::new();
 	if task.heavy == Some(true) {
 		argv.extend(["--config".to_owned(), shipped("heavy.yml")]);
+	}
+	if task.pr.is_some() {
+		argv.extend(["--config".to_owned(), shipped("review.yml")]);
 	}
 	if let Some(budget) = thread_budget(task) {
 		argv.extend(["--max-cost".to_owned(), js_number_text(budget)]);
@@ -444,7 +448,9 @@ impl PaneLauncher {
 			return Ok(command.to_vec());
 		};
 		let c = self.link.ctx();
-		let file = launch_prompt(task, self.config().pane_prompt.as_deref(), c.layer)?.display().to_string();
+		// A review thread hands in notes, not a report: its prompt is the brief alone (0680).
+		let layer = c.layer && task.pr.is_none();
+		let file = launch_prompt(task, self.config().pane_prompt.as_deref(), layer)?.display().to_string();
 		if let Some(at) = command.iter().position(|arg| arg == "--append-system-prompt") {
 			return Ok(command
 				.iter()

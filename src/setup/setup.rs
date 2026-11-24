@@ -26,7 +26,10 @@ use serde_json::{Map, Value, json};
 
 use crate::frontier::tui::TOKYO_NIGHT;
 use crate::setup::markers::{Marker, Undo, read_marker, recorded_undo, write_marker};
-use crate::shared::credentials::{CALENDAR_CREDENTIAL, CALENDAR_ENV, read_credential, write_credential};
+use crate::shared::credentials::{
+	CALENDAR_CREDENTIAL, CALENDAR_ENV, GMAIL_CREDENTIAL, JIRA_CREDENTIAL, gmail_secret, jira_secret, read_credential,
+	write_credential,
+};
 use crate::shared::env;
 use crate::shared::errors::{Error, Result};
 use crate::shared::herdr_session::herdr_program;
@@ -34,7 +37,9 @@ use crate::shared::install::{self_command, shipped_config_dir};
 use crate::shared::log::{LogLevel, log};
 use crate::shared::pathkey::{path_key, same_path};
 use crate::shared::paths::{config_dir, data_dir, omp_agent_dir};
+use crate::shared::pollers::settings::{GmailSettings, JiraSettings, read_poller};
 use crate::shared::process::{RunOptions, on_path, run_program};
+use crate::shared::settings::read_settings;
 
 #[path = "setup_migrations.rs"]
 mod migrations;
@@ -93,6 +98,16 @@ pub trait CalendarStore: Send + Sync {
 	fn env_secret(&self) -> Option<String>;
 }
 
+/// The store of the mail and Jira secrets (0680): Windows Credential Manager targets `jocasta/gmail-app-password` and
+/// `jocasta/jira-token`.
+pub trait SecretStore: Send + Sync {
+	/// Whether the store holds `target`'s secret.
+	fn stored(&self, target: &str) -> bool;
+	/// Whether the env fallback (`JOCASTA_GMAIL_APP_PASSWORD`, `JOCASTA_JIRA_TOKEN`) holds it instead.
+	fn env_holds(&self, target: &str) -> bool;
+	fn save(&self, target: &str, secret: &str) -> Result<()>;
+}
+
 pub struct SetupDeps {
 	/// The program that runs herdr's words: this `jocasta`.
 	pub herdr: PathBuf,
@@ -100,6 +115,8 @@ pub struct SetupDeps {
 	pub mise: Option<PathBuf>,
 	/// The calendar secret's store; `None` where there is none (off Windows).
 	pub calendar: Option<Arc<dyn CalendarStore>>,
+	/// The mail and Jira secrets' store (0680); `None` where there is none (off Windows): setup asks for neither.
+	pub secrets: Option<Arc<dyn SecretStore>>,
 	/// `herdr config check` on a config file (herdr, path), for setup's check of the herdr.toml it wrote (0608);
 	/// `run_program` by default.
 	#[allow(clippy::type_complexity)]
@@ -124,6 +141,7 @@ impl Clone for SetupDeps {
 			herdr: self.herdr.clone(),
 			mise: self.mise.clone(),
 			calendar: self.calendar.clone(),
+			secrets: self.secrets.clone(),
 			check_herdr_config: self.check_herdr_config.clone(),
 			git_version: self.git_version.clone(),
 			reload_herdr: self.reload_herdr.clone(),
@@ -139,6 +157,7 @@ impl SetupDeps {
 			herdr,
 			mise: None,
 			calendar: None,
+			secrets: None,
 			check_herdr_config: None,
 			git_version: None,
 			reload_herdr: None,
@@ -199,6 +218,31 @@ impl CalendarStore for CredentialStore {
 	fn env_secret(&self) -> Option<String> {
 		self.from_env.clone()
 	}
+}
+
+struct CredentialSecrets;
+
+impl SecretStore for CredentialSecrets {
+	fn stored(&self, target: &str) -> bool {
+		read_credential(target).is_some()
+	}
+
+	fn env_holds(&self, target: &str) -> bool {
+		!self.stored(target)
+			&& match target {
+				GMAIL_CREDENTIAL => gmail_secret().is_some(),
+				_ => jira_secret().is_some(),
+			}
+	}
+
+	fn save(&self, target: &str, secret: &str) -> Result<()> {
+		write_credential(target, secret)
+	}
+}
+
+/// Credential Manager as the mail and Jira secrets' store; `None` off Windows.
+pub fn default_secret_store() -> Option<Arc<dyn SecretStore>> {
+	cfg!(windows).then(|| Arc::new(CredentialSecrets) as Arc<dyn SecretStore>)
 }
 
 /// Credential Manager as the calendar's store, with the env value taken at start; `None` off Windows.
@@ -308,8 +352,9 @@ impl SetupUndo {
 
 /// How to undo what setup added on this machine (0468): only what the markers of this build's migrations recorded (a
 /// step without its marker isn't setup's to undo; a marker of a migration the omp snapshot replaced is ignored), the
-/// latest migration first, and the calendar's secret while it is stored. Reads only.
-pub fn setup_undo(paths: &SetupPaths, calendar_stored: bool) -> Vec<SetupUndo> {
+/// latest migration first, and the secrets of the calendar, Gmail and Jira (0680) while `stored` says they are in the
+/// store: those of Gmail and Jira go whoever saved them. Reads only.
+pub fn setup_undo(paths: &SetupPaths, stored: impl Fn(&str) -> bool) -> Vec<SetupUndo> {
 	let mut written: Vec<(String, Map<String, Value>, String)> = Vec::new();
 	for migration in &MIGRATIONS {
 		let marker = read_marker(&paths.jocasta_config_dir, &marker_name(migration));
@@ -324,18 +369,29 @@ pub fn setup_undo(paths: &SetupPaths, calendar_stored: bool) -> Vec<SetupUndo> {
 			}
 		}
 	}
-	let names: Vec<String> =
-		std::iter::once("calendar".to_owned()).chain(MIGRATIONS.iter().rev().map(marker_name)).collect();
+	let names: Vec<String> = ["calendar", "gmail", "jira"]
+		.map(str::to_owned)
+		.into_iter()
+		.chain(MIGRATIONS.iter().rev().map(marker_name))
+		.collect();
 	let mut undo: Vec<SetupUndo> = Vec::new();
 	for item in recorded_undo(&paths.jocasta_config_dir, &names) {
 		match item {
-			Undo::Credential { .. } if !calendar_stored => {}
+			Undo::Credential { target } if !stored(&target) => {}
 			Undo::Mcp { path, servers } => {
 				let found = written.iter().find(|(key, ..)| *key == path_key(Path::new(&path)));
 				let (writes, wrote) = found.map_or((Map::new(), String::new()), |(_, w, f)| (w.clone(), f.clone()));
 				undo.push(SetupUndo::Mcp(McpUndo { path, servers, writes, wrote }));
 			}
 			other => undo.push(SetupUndo::Other(other)),
+		}
+	}
+	// The mail and Jira secrets go with Jocasta whoever saved them (0680), so a hand-made credential doesn't stay behind.
+	for target in [GMAIL_CREDENTIAL, JIRA_CREDENTIAL] {
+		let listed =
+			undo.iter().any(|item| matches!(item, SetupUndo::Other(Undo::Credential { target: t }) if t == target));
+		if !listed && stored(target) {
+			undo.push(SetupUndo::Other(Undo::Credential { target: target.to_owned() }));
 		}
 	}
 	// A file in a folder that goes whole goes with it; folders go after files, so one setup may not have made goes
@@ -554,7 +610,66 @@ pub async fn run_setup(paths: &SetupPaths, deps: &SetupDeps, io: &dyn SetupIo) -
 		io.print("Done: run `jocasta` to open Jocasta.");
 	}
 	ask_calendar(paths, deps.calendar.as_deref(), io).await?;
+	ask_sources(paths, deps.secrets.as_deref(), io).await?;
 	Ok(0)
+}
+
+/// What setup asks for one private source's secret (0680).
+struct SourceSecret {
+	/// The marker's name and the credential target.
+	marker: &'static str,
+	target: &'static str,
+	question: &'static str,
+	skipped: &'static str,
+}
+
+/// The mail and Jira secrets (0680), asked once per setup the way the calendar's is, when the source is set up in
+/// `jocasta.yaml` (`pollers.gmail.address`, `pollers.jira.site` and `email`) and neither Credential Manager nor the env
+/// var has its secret: typed off the screen (SEC-LOC-12), Enter skips.
+async fn ask_sources(paths: &SetupPaths, store: Option<&dyn SecretStore>, io: &dyn SetupIo) -> Result<()> {
+	let Some(store) = store else { return Ok(()) };
+	let Ok(settings) = read_settings() else { return Ok(()) };
+	let gmail = read_poller::<GmailSettings>(&settings).is_ok_and(|gmail| gmail.address.is_some());
+	let jira = read_poller::<JiraSettings>(&settings).is_ok_and(|jira| jira.site.is_some() && jira.email.is_some());
+	let wanted = [
+		(
+			gmail,
+			SourceSecret {
+				marker: "gmail",
+				target: GMAIL_CREDENTIAL,
+				question: "Your Gmail app password, for the unread mail in today (Enter to skip): ",
+				skipped: "No mail: run `jocasta setup` again to add the app password.",
+			},
+		),
+		(
+			jira,
+			SourceSecret {
+				marker: "jira",
+				target: JIRA_CREDENTIAL,
+				question: "Your Jira API token, for your open issues in today (Enter to skip): ",
+				skipped: "No Jira: run `jocasta setup` again to add the API token.",
+			},
+		),
+	];
+	for (on, source) in wanted {
+		if !on || store.stored(source.target) || store.env_holds(source.target) {
+			continue;
+		}
+		let answer = io.ask_secret(source.question).await.map(|answer| answer.trim().to_owned()).unwrap_or_default();
+		if answer.is_empty() {
+			io.print(source.skipped);
+			continue;
+		}
+		store.save(source.target, &answer)?;
+		let marker = Marker {
+			fingerprint: source.target.to_owned(),
+			undo: vec![Undo::Credential { target: source.target.to_owned() }],
+			applied_at: now_iso(),
+		};
+		write_marker(&paths.jocasta_config_dir, source.marker, &marker)?;
+		io.print(&format!("saved in Windows Credential Manager as {}", source.target));
+	}
+	Ok(())
 }
 
 /// The calendar's secret iCal address (0430), asked once per setup when neither Credential Manager nor the env var has

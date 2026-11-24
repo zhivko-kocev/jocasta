@@ -240,6 +240,8 @@ async fn parallel_thread_starts_in_one_project_dont_race_on_its_overlay_one_writ
 	use crate::shared::paths::project_dir;
 	let j = temp_jocasta();
 	let project = demo_project(j.root(), "demo").await;
+	// Five starts at once: the running limit (0687) isn't what this test is about.
+	fs::write(crate::shared::paths::config_dir().join("jocasta.yaml"), "threads:\n  maxRunning: 0\n").unwrap();
 	let options = ServerOptions { agent_wait_ms: Some(0), ..ServerOptions::default() };
 	with_server(options, |server| async move {
 		let overlay = overlay_file(&project.id);

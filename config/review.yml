@@ -1,0 +1,5 @@
+# A pull-request review thread's omp (0680): Jocasta loads this file after the project's overlay, only in a review
+# thread's pane. The thread reviews and hands its notes in through `review_note`; it plans nothing, so the overlay's
+# plan mode on startup (`plan.defaultOnStartup: true`) is turned off here.
+plan:
+  defaultOnStartup: false

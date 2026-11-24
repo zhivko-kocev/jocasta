@@ -12,7 +12,6 @@ use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::response::Response;
 use serde_json::{Value, json};
 
-use crate::frontier::brief::model::Brief;
 use crate::frontier::brief::store;
 use crate::frontier::server::routes::{BoxFuture, host_allowed, json_response, text_response};
 use crate::shared::errors::{Error, Result};
@@ -34,7 +33,7 @@ const MAX_ACTION_BODY: usize = 1 << 20;
 
 /// What runs a brief's actions: the brief's id and the action as the page sent it; the updated brief, or the refusal.
 pub trait BriefActions: Send + Sync {
-	fn act(&self, id: String, action: Value) -> BoxFuture<Result<Brief>>;
+	fn act(&self, id: String, action: Value) -> BoxFuture<Result<Value>>;
 }
 
 /// The routes of `/brief/…`.
@@ -136,7 +135,7 @@ impl BriefRoutes {
 			return error_response(StatusCode::BAD_REQUEST, "the action isn't JSON");
 		};
 		match self.actions.act(id.to_owned(), action).await {
-			Ok(brief) => json_response(StatusCode::OK, &serde_json::to_value(&brief).unwrap_or(Value::Null)),
+			Ok(answer) => json_response(StatusCode::OK, &answer),
 			Err(Error::User { message, .. }) => error_response(StatusCode::BAD_REQUEST, &message),
 			Err(other) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &other.to_string()),
 		}

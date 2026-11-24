@@ -87,6 +87,8 @@ fn event(source_id: &str, source: EventSource, kind: &str, priority: EventPriori
 		url: None,
 		project_id: None,
 		thread_id: None,
+		private_text: None,
+		private_url: None,
 	}
 }
 
@@ -365,6 +367,11 @@ async fn today_0300_0409_calendar_with_links_0429_awaiting_you_landed_underway_n
 					project: Some("demo".to_owned())
 				}],
 				scheduled: vec![],
+				queued: vec![],
+				mail: None,
+				jira: None,
+				azure: None,
+				briefs: vec![],
 			}
 		);
 

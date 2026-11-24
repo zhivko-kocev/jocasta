@@ -123,6 +123,8 @@ fn unvoted_reviews(prs: &[AzPr], base: &str, user: &str) -> Vec<NewEvent> {
 			)),
 			project_id: None,
 			thread_id: None,
+			private_text: None,
+			private_url: None,
 		});
 	}
 	events
@@ -167,6 +169,8 @@ fn red_pipelines(runs: &[AzRun], base: &str, name: &str, user: &str) -> Vec<NewE
 			url: Some(format!("{base}/{}/_build/results?buildId={}", encode_uri_component(name), r.id)),
 			project_id: None,
 			thread_id: None,
+			private_text: None,
+			private_url: None,
 		});
 	}
 	events
@@ -299,6 +303,8 @@ mod tests {
 			url: url.map(str::to_owned),
 			project_id: None,
 			thread_id: None,
+			private_text: None,
+			private_url: None,
 		}
 	}
 

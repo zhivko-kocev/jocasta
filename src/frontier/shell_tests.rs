@@ -377,3 +377,43 @@ fn the_third_wrong_code_shows_its_note_for_two_seconds_and_the_box_draws_over_th
 	assert!(shell.message(SHELL_GONE, "\"q1\"").redraw);
 	assert!(!shell.asking());
 }
+
+#[test]
+fn uppercase_r_starts_the_picked_review_request_and_uppercase_f_needs_a_red_pipeline_0680() {
+	let mut shell = with_today();
+	drawn(&mut shell, 100, 34, true);
+	shell.dock_key(char_key('j'));
+	drawn(&mut shell, 100, 34, true);
+	let review = shell.dock_key(char_key('R'));
+	assert!(review.redraw && !review.pass);
+	assert_eq!(
+		sends(&review),
+		[(SHELL_FEED.to_owned(), json!({"type": "pr.review", "url": "https://example.org/web/pull/12"}))]
+	);
+	// The picked row is a review request, not a red pipeline: nothing is sent and the dock says what to pick.
+	let refused = shell.dock_key(char_key('F'));
+	assert!(refused.send.is_empty() && !refused.pass);
+	assert_eq!(
+		shell.today.said.as_ref().map(|said| (said.text.as_str(), said.is_error)),
+		Some(("Pick a red pipeline first.", true))
+	);
+	// Lowercase `r` and `f` stay Review and Finish on a thread.
+	assert!(!sends(&shell.dock_key(char_key('r'))).iter().any(|(_, data)| data["type"] == "pr.review"));
+}
+
+#[test]
+fn lowercase_b_asks_the_service_for_the_morning_brief_and_says_so_0680() {
+	let mut shell = with_today();
+	drawn(&mut shell, 100, 34, true);
+	let key = shell.dock_key(char_key('b'));
+	assert!(key.redraw && !key.pass);
+	assert_eq!(sends(&key), [(SHELL_FEED.to_owned(), json!({"type": "brief.morning"}))]);
+	assert_eq!(
+		shell.today.said.as_ref().map(|said| (said.text.as_str(), said.is_error)),
+		Some(("Building the morning brief…", false))
+	);
+	// The service's answer is said the way every action's is.
+	let opened = ServerMessage::Action { text: "Morning brief opened.".to_owned(), is_error: false };
+	shell.message(SHELL_FEED, &serde_json::to_string(&opened).unwrap());
+	assert_eq!(shell.today.said.as_ref().map(|said| said.text.as_str()), Some("Morning brief opened."));
+}

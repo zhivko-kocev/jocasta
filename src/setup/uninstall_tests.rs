@@ -12,6 +12,7 @@ use serde_json::json;
 use super::*;
 use crate::setup::markers::markers_dir;
 use crate::setup::setup::{CalendarStore, HerdrCheck, RunOutput, SetupDeps, SetupPaths, run_setup, setup_undo};
+use crate::shared::credentials::CALENDAR_CREDENTIAL;
 use crate::shared::testing::{TempDir, TempJocasta, temp_dir, temp_jocasta};
 
 type Calls = Arc<Mutex<Vec<String>>>;
@@ -189,7 +190,7 @@ impl Machine {
 			herdr: PathBuf::from("herdr.exe"),
 			session: "jocasta-test".to_owned(),
 			run,
-			setup_undo: setup_undo(&self.setup, true),
+			setup_undo: setup_undo(&self.setup, |target| target == CALENDAR_CREDENTIAL),
 			remove_path_entry: Arc::new(move |entry| {
 				path_calls.lock().unwrap().push(format!("path {}", entry.display()));
 				Ok(true)
@@ -704,7 +705,7 @@ async fn a_folder_setup_didnt_make_stays_only_setups_file_in_it_goes() {
 	fs::remove_dir_all(&skill).unwrap();
 	put(&skill.join("notes.md"), "his");
 	setup_run(&m.setup, Some("mise.exe"), false).await;
-	let undo = setup_undo(&m.setup, false);
+	let undo = setup_undo(&m.setup, |_| false);
 	let file = skill.join("SKILL.md").to_string_lossy().into_owned();
 	assert!(
 		undo.iter().any(|u| matches!(u, SetupUndo::Other(Undo::Restore { path, backup: None, .. }) if *path == file))

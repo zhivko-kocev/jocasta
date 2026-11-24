@@ -24,6 +24,7 @@ use crate::frontier::server::herdr::Herdr;
 use crate::frontier::server::journal::Journal;
 use crate::frontier::server::omp_processes::OmpTracker;
 use crate::frontier::server::pane_launch::PaneLauncher;
+use crate::frontier::server::pending::PendingQueue;
 use crate::frontier::server::places::{Places, PlacesHooks};
 use crate::frontier::server::review_flow::ReviewFlow;
 use crate::frontier::server::service::ServiceOptions;
@@ -219,6 +220,8 @@ pub struct ServiceContext {
 	pub lifecycle: ThreadLifecycle,
 	pub status: StatusViews,
 	pub starts: ThreadStarts,
+	/// Thread starts that wait for other threads or for room (0687).
+	pub pending: PendingQueue,
 	pub weekly: WeeklyReviews,
 	/// Panes whose omp sleeps (0676).
 	pub sleep: PaneSleeps,
@@ -275,6 +278,7 @@ impl ServiceContext {
 			finisher: Finisher::new(link.clone()),
 			lifecycle: ThreadLifecycle::new(link.clone()),
 			starts: ThreadStarts::new(link.clone()),
+			pending: PendingQueue::new(link.clone()),
 			weekly: WeeklyReviews::new(link.clone()),
 			sleep: PaneSleeps::new(link.clone()),
 			thread_facts: ThreadFacts::new(),

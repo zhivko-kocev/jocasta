@@ -1432,6 +1432,24 @@ const FOLD_MULTI: [(u32, &str); 332] = [
 	(0x1F10A, "9-"),
 ];
 
+/// `text` from outside (a PR's words, a CI log) as a block of data for a task file (0681): terminal escapes stripped,
+/// control characters other than newline and tab dropped, at most `max_lines` lines kept (`… <n> more lines` after
+/// them), every line prefixed with `│ ` and the whole wrapped in `<external source="<source>">`…`</external>`. Every
+/// inner line starts with `│ `, so none can begin with a service line's lead (`SERVICE_LINE_STARTS`) or close the block.
+pub fn fence_external(source: &str, text: &str, max_lines: usize) -> String {
+	let source: String = source.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')).collect();
+	let clean = crate::frontier::tui::strip_ansi(text);
+	let lines: Vec<String> =
+		clean.lines().map(|line| line.chars().filter(|c| !c.is_control() || *c == '\t').collect()).collect();
+	let more = lines.len().saturating_sub(max_lines);
+	let mut out = vec![format!("<external source=\"{source}\">")];
+	out.extend(lines.iter().take(max_lines).map(|line| format!("│ {line}")));
+	if more > 0 {
+		out.push(format!("│ … {more} more lines"));
+	}
+	out.push("</external>".to_owned());
+	out.join("\n")
+}
 #[cfg(test)]
 #[path = "wording_tests.rs"]
 mod tests;

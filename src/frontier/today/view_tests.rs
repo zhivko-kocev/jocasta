@@ -4,11 +4,13 @@ use chrono::{DateTime, Local, SecondsFormat, TimeZone};
 
 use super::*;
 use crate::frontier::protocol::{
-	Activity, CalendarEntry, ChecksLoad, Disk, Headline, LandedItem, Leftover, Machine, NeedsYou, NewsList, NextItem,
-	PrFacts, RailItem, Ram, ScheduledItem, ServiceHealth, ServiceName, ThreadDiff, TopThread, Weather,
+	Activity, BriefLink, CalendarEntry, ChecksLoad, Disk, Headline, LandedItem, Leftover, Machine, NeedsYou, NewsList,
+	NextItem, PrFacts, PrivateRow, PrivateSection, RailItem, Ram, ScheduledItem, ServiceHealth, ServiceName,
+	ThreadDiff, TopThread, Weather,
 };
 use crate::frontier::tui::render_lines;
 use crate::frontier::tui::tests::draw_rows;
+use crate::shared::private::Private;
 
 fn at(y: i32, month: u32, d: u32, h: u32, m: u32) -> i64 {
 	Local.with_ymd_and_hms(y, month, d, h, m, 0).single().expect("a real local time").timestamp_millis()
@@ -122,6 +124,11 @@ pub(crate) fn today() -> Today {
 			project: Some("acme-api".to_string()),
 		}],
 		scheduled: Vec::new(),
+		queued: Vec::new(),
+		mail: None,
+		jira: None,
+		azure: None,
+		briefs: Vec::new(),
 	}
 }
 
@@ -217,9 +224,17 @@ fn today_header_needs_you_first_with_kind_glyphs_underway_landed_calendar_his_no
 	assert!(has(&shown, "  acme-api: look at the slow search endpoint (#7)"));
 	assert!(has(&shown, "  Hacker News: A headline ↗"));
 	assert_eq!(shown.len(), 34);
-	assert_eq!(shown.last().unwrap(), KEY_LINE);
+	// At 100 columns the last key (`x Remove`) has dropped off the right.
+	assert_eq!(
+		shown.last().unwrap(),
+		"↑↓ pick · Enter go/open · f Finish · s Stop · r Review · n New · b Brief · R PR · F CI · X Stop all"
+	);
+	assert!(KEY_LINE.starts_with(shown.last().unwrap().as_str()));
 	assert_eq!(KEY_LINE, KEYS.join(" · "));
-	assert_eq!(KEY_LINE, "↑↓ pick · Enter go/open · f Finish · s Stop · r Review · n New · X Stop all · x Remove");
+	assert_eq!(
+		KEY_LINE,
+		"↑↓ pick · Enter go/open · f Finish · s Stop · r Review · n New · b Brief · R PR · F CI · X Stop all · x Remove"
+	);
 	// No greeting.
 	let all = shown.join("\n").to_lowercase();
 	assert!(!["good morning", "good afternoon", "good evening"].iter().any(|g| all.contains(g)));
@@ -247,7 +262,14 @@ fn today_rows_enter_acts_on_in_drawn_order_threads_go_to_their_pane_link_rows_op
 	);
 	assert_eq!(
 		picks[0],
-		Pick { key: "w2:p1".to_string(), pane_id: Some("w2:p1".to_string()), url: None, news: false, leftover: None }
+		Pick {
+			key: "w2:p1".to_string(),
+			pane_id: Some("w2:p1".to_string()),
+			url: None,
+			news: false,
+			leftover: None,
+			kind: Some(NeedsYouKind::Blocked)
+		}
 	);
 	assert_eq!(
 		picks[1],
@@ -257,6 +279,7 @@ fn today_rows_enter_acts_on_in_drawn_order_threads_go_to_their_pane_link_rows_op
 			url: Some("https://example.org/web/pull/12".to_string()),
 			news: false,
 			leftover: None,
+			kind: Some(NeedsYouKind::Review),
 		}
 	);
 	// A picked link row carries the marker like a thread.
@@ -701,6 +724,7 @@ fn leftovers_show_one_pickable_row_each_and_no_section_while_there_are_none() {
 			url: None,
 			news: false,
 			leftover: Some("D:/work/acme-api-wt".to_string()),
+			kind: None,
 		}
 	);
 	assert!(frame.rows.iter().any(|(_, key)| key == "D:/work/acme-api-wt"));
@@ -724,7 +748,12 @@ fn every_section_at_heights_10_20_and_40_keeps_needs_you_and_underway_and_fits()
 		assert_eq!(shown.len(), height);
 		assert!(fits(&state, 100, height), "height {height}");
 		assert!(has(&shown, "NEEDS YOU") && has(&shown, "UNDERWAY"), "height {height}");
-		assert_eq!(shown.last().unwrap(), KEY_LINE);
+		// The keys drop from the right as the dock narrows: at 100 columns the last one no longer fits.
+		let keys = shown.last().unwrap();
+		assert!(
+			KEY_LINE.starts_with(keys.as_str()) && keys.starts_with("↑↓ pick") && keys.contains("b Brief"),
+			"{keys}"
+		);
 	}
 	// 10 and 20 rows have no room for NEXT and NEWS; 40 has every section, in the budget's order.
 	assert!(!has(&lines(&state, 100, 20), "NEWS") && !has(&lines(&state, 100, 20), "NEXT"));
@@ -734,4 +763,59 @@ fn every_section_at_heights_10_20_and_40_keeps_needs_you_and_underway_and_fits()
 		.map(|h| position(&shown, h).unwrap_or_else(|| panic!("{h} missing in {shown:#?}")))
 		.collect();
 	assert!(order.windows(2).all(|w| w[0] < w[1]), "{order:?}");
+}
+
+fn private_row(text: &str, url: Option<&str>) -> PrivateRow {
+	PrivateRow { text: Private::from(text.to_owned()), url: url.map(|url| Private::from(url.to_owned())) }
+}
+
+#[test]
+fn today_draws_mail_jira_and_azure_after_the_calendar_only_once_their_pollers_ran_with_their_failure_line_and_links() {
+	// Not configured: not there at all.
+	let shown = lines(&up(Some(today()), Some(hud()), None), 100, 40);
+	assert!(!["MAIL", "JIRA", "AZURE"].iter().any(|heading| has(&shown, heading)));
+
+	let mut with = today();
+	with.mail = Some(PrivateSection {
+		rows: vec![private_row("Jane Doe: Café menu", Some("https://mail.google.com/mail/u/0/#inbox/1a2b3c01"))],
+		error: None,
+	});
+	with.jira = Some(PrivateSection { rows: Vec::new(), error: None });
+	with.azure = Some(PrivateSection {
+		rows: Vec::new(),
+		error: Some("azure: az account list failed: not signed in".to_owned()),
+	});
+	let state = up(Some(with), Some(hud()), None);
+	let shown = lines(&state, 100, 40);
+	let at = |row: &str| position(&shown, row).unwrap_or_else(|| panic!("{row} in {shown:#?}"));
+	assert!(at("CALENDAR") < at("MAIL") && at("MAIL") < at("JIRA") && at("JIRA") < at("AZURE"));
+	assert_eq!(shown[at("MAIL") + 1], "  Jane Doe: Café menu ↗");
+	assert_eq!(shown[at("JIRA") + 1], "  no open issues");
+	assert_eq!(shown[at("AZURE") + 1], "  azure: az account list failed: not signed in");
+	// Enter opens the mail row's link.
+	let picks = render(&state, now(), 100, 40).picks;
+	assert!(picks.iter().any(|pick| pick.url.as_deref() == Some("https://mail.google.com/mail/u/0/#inbox/1a2b3c01")));
+}
+
+#[test]
+fn today_draws_the_briefs_after_the_private_sources_only_once_built_and_enter_opens_the_picked_one_0680() {
+	let shown = lines(&up(Some(today()), Some(hud()), None), 100, 40);
+	assert!(!has(&shown, "BRIEFS"));
+
+	let mut with = today();
+	with.briefs = vec![
+		BriefLink { label: "morning brief".to_owned(), url: "http://127.0.0.1:7/brief/morning-2026-11-09".to_owned() },
+		BriefLink { label: "weekly brief".to_owned(), url: "http://127.0.0.1:7/brief/weekly-2026-W46".to_owned() },
+	];
+	with.mail = Some(PrivateSection { rows: Vec::new(), error: None });
+	let state = up(Some(with), Some(hud()), None);
+	let shown = lines(&state, 100, 40);
+	let at = |row: &str| position(&shown, row).unwrap_or_else(|| panic!("{row} in {shown:#?}"));
+	assert!(at("MAIL") < at("BRIEFS"));
+	assert_eq!(shown[at("BRIEFS") + 1], "  morning brief ↗");
+	assert_eq!(shown[at("BRIEFS") + 2], "  weekly brief ↗");
+	let picks = render(&state, now(), 100, 40).picks;
+	let opened: Vec<&str> = picks.iter().filter_map(|pick| pick.url.as_deref()).collect();
+	assert!(opened.contains(&"http://127.0.0.1:7/brief/morning-2026-11-09"), "{opened:?}");
+	assert!(opened.contains(&"http://127.0.0.1:7/brief/weekly-2026-W46"), "{opened:?}");
 }

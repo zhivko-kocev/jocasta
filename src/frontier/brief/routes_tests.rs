@@ -3,7 +3,7 @@
 use axum::body::to_bytes;
 
 use super::*;
-use crate::frontier::brief::model::Section;
+use crate::frontier::brief::model::{Brief, Section};
 use crate::shared::testing::temp_jocasta;
 
 const PORT: u16 = 47400;
@@ -11,7 +11,7 @@ const PORT: u16 = 47400;
 struct Echo;
 
 impl BriefActions for Echo {
-	fn act(&self, id: String, action: Value) -> BoxFuture<Result<Brief>> {
+	fn act(&self, id: String, action: Value) -> BoxFuture<Result<Value>> {
 		Box::pin(async move {
 			if action["op"] == "refuse" {
 				return Err(Error::user("not now"));
@@ -19,7 +19,7 @@ impl BriefActions for Echo {
 			let mut brief = store::load(&id).expect("stored");
 			brief.subtitle = action["op"].as_str().unwrap_or_default().to_owned();
 			store::save(&brief)?;
-			Ok(brief)
+			Ok(serde_json::to_value(&brief).unwrap())
 		})
 	}
 }

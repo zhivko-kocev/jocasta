@@ -125,7 +125,92 @@ function renderDiff(s) {
 	return box;
 }
 
-function renderCards(s) {
+// The buttons under a pull-request note (0680): save his wording, ask for another, publish. A reworded suggestion shows
+// beside the note and is stored only when he accepts it.
+async function postAct(id, body) {
+	const res = await fetch(`/brief/${encodeURIComponent(id)}/act`, {
+		method: "POST",
+		credentials: "same-origin",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(body),
+	});
+	const data = await res.json().catch(() => null);
+	if (!res.ok) throw new Error(data?.error || `request failed (${res.status})`);
+	return data;
+}
+
+function noteControls(c, ctx) {
+	const bar = el("div", "card-actions");
+	const text = el("textarea");
+	text.rows = 3;
+	text.value = c.edited != null && c.edited !== "" ? c.edited : c.text;
+	text.setAttribute("aria-label", "Comment text");
+	const save = el("button", null, "Save");
+	const instruction = el("input");
+	instruction.type = "text";
+	instruction.setAttribute("aria-label", "How should the comment change?");
+	instruction.setAttribute("placeholder", "Reword: shorter, kinder, ...");
+	const reword = el("button", null, "Reword");
+	const publish = el("button", "primary", "Publish");
+	const status = el("p", "status muted");
+	status.setAttribute("aria-live", "polite");
+	const banner = el("p", "banner");
+	banner.setAttribute("role", "alert");
+	banner.hidden = true;
+	const btns = [save, reword, publish];
+	for (const b of btns) b.type = "button";
+	publish.disabled = !c.proof?.ok || c.verdict === "skip";
+	async function run(body, waiting) {
+		for (const b of btns) b.disabled = true;
+		banner.hidden = true;
+		status.textContent = waiting;
+		try {
+			const data = await postAct(ctx.brief.id, body);
+			ctx.suggestion = data.suggestion || null;
+			ctx.rerender(data);
+		} catch (err) {
+			banner.textContent = err?.message ? err.message : String(err);
+			banner.hidden = false;
+			status.textContent = "";
+			for (const b of btns) b.disabled = false;
+			publish.disabled = !c.proof?.ok || c.verdict === "skip";
+		}
+	}
+	save.addEventListener("click", () => {
+		const t = text.value.trim();
+		if (t) void run({ op: "edit", card: c.id, text: t }, "Saving...");
+	});
+	reword.addEventListener("click", () => {
+		const t = instruction.value.trim();
+		if (t) void run({ op: "reword", card: c.id, instruction: t }, "Asking for another wording...");
+	});
+	publish.addEventListener("click", () => void run({ op: "publish", card: c.id }, "Publishing..."));
+	const edit = el("div", "action-send");
+	edit.append(text, save);
+	const ask = el("div", "action-send");
+	ask.append(instruction, reword);
+	bar.append(edit, ask);
+	const s = ctx.suggestion;
+	if (s && s.card === c.id) {
+		const box = el("div", "suggestion");
+		box.append(el("p", "muted", "Suggested wording:"));
+		box.append(el("p", "card-text", s.text));
+		const accept = el("button", null, "Accept");
+		const dismiss = el("button", null, "Dismiss");
+		accept.type = dismiss.type = "button";
+		accept.addEventListener("click", () => void run({ op: "edit", card: c.id, text: s.text }, "Saving..."));
+		dismiss.addEventListener("click", () => {
+			ctx.suggestion = null;
+			ctx.rerender(ctx.brief);
+		});
+		box.append(accept, dismiss);
+		bar.append(box);
+	}
+	bar.append(publish, status, banner);
+	return bar;
+}
+
+function renderCards(s, ctx) {
 	const box = el("div", "cards");
 	for (const c of s.cards || []) {
 		const card = el("article", `card sev-${String(c.severity).toLowerCase()}`);
@@ -143,6 +228,8 @@ function renderCards(s) {
 			p.append(link(c.published.url, "Published"));
 			if (c.published.at_ms) p.append(el("span", "muted", ` ${new Date(c.published.at_ms).toLocaleString()}`));
 			card.append(p);
+		} else if (ctx?.brief?.kind === "pr") {
+			card.append(noteControls(c, ctx));
 		}
 		box.append(card);
 	}
@@ -470,6 +557,8 @@ function renderActions(brief, onBrief) {
 // ---- page ----
 
 function renderBrief(root, brief, ctx) {
+	ctx.brief = brief;
+	ctx.rerender = (b) => renderBrief(root, b, ctx);
 	for (const f of ctx.cleanups.splice(0)) f();
 	ctx.afterAttach.length = 0;
 	const frag = document.createDocumentFragment();

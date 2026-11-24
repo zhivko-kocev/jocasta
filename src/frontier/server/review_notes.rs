@@ -155,7 +155,7 @@ fn line_of(values: &Map<String, Value>, tool: &str) -> Result<usize> {
 }
 
 /// The file's text at `head`, untrimmed (`git show <head>:<file>`); `None` when the commit has no such file.
-async fn git_out_raw(cwd: &Path, head: &str, file: &str) -> Result<Option<String>> {
+pub(super) async fn git_out_raw(cwd: &Path, head: &str, file: &str) -> Result<Option<String>> {
 	use crate::shared::git::{GitOptions, git_async};
 	let run = git_async(cwd, &["show", &format!("{head}:{file}")], 30_000, GitOptions::default()).await?;
 	Ok((run.code == Some(0)).then_some(run.stdout))

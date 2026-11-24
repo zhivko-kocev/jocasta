@@ -801,6 +801,11 @@ impl ThreadLifecycle {
 			ctx.day.thread_unblocked(&pane_id)?;
 		}
 		ctx.status.forget(thread);
+		// What waited for this thread's work in trunk won't get it (0687); its room is free for a start that waits.
+		if let Some(task_id) = thread.with(|t| t.task.as_ref().map(|task| task.id.clone())) {
+			ctx.pending.block_waiting_on(&task_id, "stopped").await;
+		}
+		ctx.pending.tick_soon();
 		let day = Arc::clone(&ctx);
 		ctx.calls.spawn(async move { day.day.refresh_leftovers().await });
 		ctx.events.thread(thread, "closed; its worktree and branch stay", ToastPriority::Normal, None).await;

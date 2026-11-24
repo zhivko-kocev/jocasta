@@ -70,7 +70,7 @@ fn decode_uri_component(text: &str) -> Option<String> {
 }
 
 /// The URL path percent-decoded; a stray `%` (`50%-off`) leaves it as written rather than failing.
-fn decoded(path: &str) -> String {
+pub fn decoded(path: &str) -> String {
 	decode_uri_component(path).unwrap_or_else(|| path.to_owned())
 }
 

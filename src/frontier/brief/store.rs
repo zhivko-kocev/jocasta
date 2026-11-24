@@ -35,6 +35,11 @@ pub fn save(brief: &Brief) -> Result<()> {
 	write_atomically(&file_of(&brief.id)?, text, None)
 }
 
+/// Whether a brief with this id is stored.
+pub fn exists(id: &str) -> bool {
+	file_of(id).is_ok_and(|file| file.is_file())
+}
+
 /// The brief with this id, or `None` when none is stored (or the file isn't a brief).
 pub fn load(id: &str) -> Option<Brief> {
 	let text = std::fs::read_to_string(file_of(id).ok()?).ok()?;

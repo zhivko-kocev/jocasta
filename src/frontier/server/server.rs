@@ -30,7 +30,7 @@ use crate::frontier::server::health_route::health_route;
 use crate::frontier::server::herdr::{Herdr, HerdrOptions, Note, connect_herdr};
 use crate::frontier::server::native::{Native, NativeServer};
 use crate::frontier::server::page_routes::{LaunchCodes, PageParts, PageResponder, page_responder};
-use crate::frontier::server::phone::{Phone, PhoneOptions, Timing};
+use crate::frontier::server::phone::{Phone, PhoneOptions, Timing, topics};
 use crate::frontier::server::popups::{ALLOW, AnswerTaken, Popup, Popups, allow_question};
 use crate::frontier::server::routes::{Route, Served, ServerHandle, listen};
 use crate::frontier::server::service::{Changed, Heal, JocastaService, ServiceOptions};
@@ -38,7 +38,7 @@ use crate::frontier::server::stop_sequence::{
 	StopBounds, StopParts, StopRun, StopService, StopStep, StopWhen, Stopper, stop_steps, stopper, undo_start,
 };
 use crate::frontier::server::thread_keys::{ActionService, KeyParts, ThreadKeys};
-use crate::shared::credentials::{calendar_secret, take_calendar_env};
+use crate::shared::credentials::{calendar_secret, gmail_secret, jira_secret, take_calendar_env, take_source_envs};
 use crate::shared::errors::Result;
 use crate::shared::herdr_session::herdr_session;
 use crate::shared::link::open_in_browser;
@@ -98,6 +98,8 @@ pub struct ServerOptions {
 	pub scorecard_ms: Option<i64>,
 	/// `Some(false)`: the minute tick never starts a weekly review (0470).
 	pub weekly_reviews: Option<bool>,
+	/// `Some(false)`: the tick builds no morning or weekly brief by itself (0680).
+	pub auto_briefs: Option<bool>,
 	/// Asks him Allow or Deny (0484); his question through this server's question API by default.
 	pub confirm: Option<Confirm>,
 	/// How long an ask waits for his answer.
@@ -156,6 +158,7 @@ impl ServerOptions {
 		service.weekly_review_ms = self.weekly_review_ms;
 		service.scorecard_ms = self.scorecard_ms;
 		service.weekly_reviews = self.weekly_reviews;
+		service.auto_briefs = self.auto_briefs;
 		service.confirm_wait_ms = self.confirm_wait_ms;
 		service.boss_key = self.boss_key.take();
 		service.bridge = self.bridge.clone();
@@ -366,6 +369,7 @@ struct Questions {
 pub async fn start_server(mut options: ServerOptions) -> Result<JocastaServer> {
 	// The calendar's secret leaves this process's environment before anything is spawned (SEC-5, 0430).
 	take_calendar_env();
+	take_source_envs();
 	let tokens = Tokens { api: random_hex(), page: random_hex() };
 	let bridge = options.bridge.get_or_insert_with(Bridge::new).clone();
 	bridge.set_secrets(secrets_of(&tokens));
@@ -379,14 +383,26 @@ pub async fn start_server(mut options: ServerOptions) -> Result<JocastaServer> {
 	}
 }
 
-/// What the bridge blanks from everything a model reads (0681): the calendar URL, both tokens and the ntfy server and
-/// token.
+/// What the bridge blanks from everything a model reads (0681): the calendar URL, the Gmail app password and the Jira
+/// token (0680), both tokens, the ntfy server and token and the phone's two topics.
 fn secrets_of(tokens: &Tokens) -> Secrets {
 	let ntfy = read_ntfy();
+	// The phone's two topics are its passwords on a public server; the same ones the phone starts with.
+	let topics = ntfy.server.is_some().then(|| topics(&data_dir()));
 	Secrets::new(
-		[calendar_secret(), Some(tokens.api.clone()), Some(tokens.page.clone()), ntfy.server, ntfy.token]
-			.into_iter()
-			.flatten(),
+		[
+			calendar_secret(),
+			gmail_secret(),
+			jira_secret(),
+			Some(tokens.api.clone()),
+			Some(tokens.page.clone()),
+			ntfy.server,
+			ntfy.token,
+			topics.as_ref().map(|topics| topics.main.clone()),
+			topics.map(|topics| topics.reply),
+		]
+		.into_iter()
+		.flatten(),
 	)
 }
 

@@ -307,6 +307,13 @@
 									"type": "number",
 									"minimum": 1,
 									"description": "Cost cap in dollars for this thread (its omp stops at it; you are asked whether to raise it). Leave it out for the default cap"
+								},
+								"after": {
+									"type": "array",
+									"items": {
+										"type": "string"
+									},
+									"description": "Threads this one waits for, by title or branch, or a waiting start by its title: it is made when their work is in trunk, branching from trunk as it is then, with no turn of yours. Leave it out to start now (it also waits for room while threads.maxRunning threads run)"
 								}
 							},
 							"required": ["project", "title", "brief"],
@@ -348,7 +355,7 @@
 					},
 					{
 						"name": "thread_stop",
-						"description": "Stop a thread's current run.\nOne Escape into its pane: the run ends, the thread keeps its worktree and work, and thread_send starts it again.",
+						"description": "Stop a thread's current run.\nOne Escape into its pane: the run ends, the thread keeps its worktree and work, and thread_send starts it again. A start that waits (thread_start's after, or the running limit) is removed instead; what waits for a stopped thread is blocked.",
 						"inputSchema": {
 							"type": "object",
 							"properties": {

@@ -25,7 +25,7 @@ use crate::frontier::server::review_notes::{REVIEW_NOTE, ReviewNotes, checked_ca
 use crate::frontier::server::task_file::{CloseFacts, CloseHow, NewTask, TaskReport, close_task, find_task, new_task};
 use crate::frontier::server::thread::{ThreadRef, subject};
 use crate::frontier::server::thread_lifecycle::Awaiting;
-use crate::frontier::server::thread_start::{StartOptions, budget_of, done_when_of, heavy_of};
+use crate::frontier::server::thread_start::{StartOptions, after_of, budget_of, done_when_of, heavy_of};
 use crate::frontier::server::wording::{Door, asker, asks, branch_slug, brief_title, person, quoted};
 use crate::frontier::server::worktrees::remove_checkout;
 use crate::shared::clock::now_ms;
@@ -286,7 +286,7 @@ impl Tools {
 				let thread = c.threads.find(&args.text("thread")?)?;
 				c.finisher.finish(&thread, &args.text("how")?, Door::Boss).await
 			}
-			"thread_stop" => self.stop(&c.threads.find(&args.text("thread")?)?, Door::Boss).await,
+			"thread_stop" => self.stop_named(&args.text("thread")?, Door::Boss).await,
 			REPORT_RESULT => self.report_result(call.pane_id.as_deref(), call.args.values, call.unkeyed).await,
 			REVIEW_NOTE => self.review_note(call.pane_id.as_deref(), args, call.unkeyed).await,
 			"check" => c.review.check_tool(call.pane_id.as_deref(), call.unkeyed).await,
@@ -370,8 +370,9 @@ impl Tools {
 		let done_when = done_when_of(args.values.get("done_when"), door)?;
 		let heavy = heavy_of(args.values.get("heavy"), door)?;
 		let budget = budget_of(args.values.get("budget"), door)?;
-		let started =
-			self.c.starts.start_with(&project, &title, &brief, StartOptions { door, done_when, heavy, budget }).await?;
+		let after = after_of(args.values.get("after"), door)?;
+		let options = StartOptions { door, done_when, heavy, budget, after, ..StartOptions::new(door) };
+		let started = self.c.starts.start_with(&project, &title, &brief, options).await?;
 		Ok(started.text)
 	}
 
@@ -552,7 +553,7 @@ impl Tools {
 				let thread = c.threads.find(&args.text("thread")?)?;
 				self.send(&thread, &args.text("text")?, Door::Cli).await
 			}
-			"thread stop" => self.stop(&c.threads.find(&args.text("thread")?)?, Door::Cli).await,
+			"thread stop" => self.stop_named(&args.text("thread")?, Door::Cli).await,
 			"thread finish" => {
 				let thread = c.threads.find(&args.text("thread")?)?;
 				c.finisher.finish(&thread, &args.text("how")?, Door::Cli).await
@@ -653,6 +654,19 @@ impl Tools {
 		Ok(format!("Sent to {name}."))
 	}
 
+	/// `thread_stop` and `jocasta thread stop` by name: an open thread's run is stopped; a start that waits (0687) is
+	/// removed, and what waited for it is blocked.
+	async fn stop_named(&self, wanted: &str, door: Door) -> Result<String> {
+		let c = &self.c;
+		match c.threads.find(wanted) {
+			Ok(thread) => self.stop(&thread, door).await,
+			Err(error) => match c.pending.remove(wanted).await? {
+				Some(removed) => Ok(format!("Removed the waiting start {}.", removed.title)),
+				None => Err(error),
+			},
+		}
+	}
+
 	/// `thread_stop` and `jocasta thread stop` (0544): one Escape into its omp; the command waits for his Allow first.
 	pub async fn stop(&self, thread: &ThreadRef, door: Door) -> Result<String> {
 		let name = thread.with(|t| subject(t));
@@ -674,6 +688,11 @@ impl Tools {
 		}
 		let pane_id = thread.with(|t| t.pane_id.clone());
 		self.c.lifecycle.abort_turn(&pane_id).await?;
+		// What waits for this thread's work in trunk won't get it from a thread he stopped (0687).
+		if let Some(task_id) = thread.with(|t| t.task.as_ref().map(|task| task.id.clone())) {
+			self.c.pending.block_waiting_on(&task_id, "stopped").await;
+		}
+		self.c.pending.tick_soon();
 		Ok(format!("Stopped {name}'s run."))
 	}
 

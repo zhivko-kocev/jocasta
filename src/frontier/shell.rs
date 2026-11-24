@@ -19,8 +19,9 @@ use ratatui::widgets::{Block, Borders, Clear, Widget};
 
 use crate::frontier::ask::view::{AskState, Key, ask_lines, ask_state, exhausted_note, paste, press, wrong_note};
 use crate::frontier::protocol::{
-	AnswerReply, ClientMessage, PluginAction, PopupAnswer, SHELL_ACTION, SHELL_ANSWER, SHELL_ANSWERED, SHELL_BOSS,
-	SHELL_FEED, SHELL_GONE, SHELL_QUESTION, ServerMessage, ShellAction, ShellAnswer, ShellAnswered, ShellQuestion,
+	AnswerReply, ClientMessage, NeedsYouKind, PluginAction, PopupAnswer, SHELL_ACTION, SHELL_ANSWER, SHELL_ANSWERED,
+	SHELL_BOSS, SHELL_FEED, SHELL_GONE, SHELL_QUESTION, ServerMessage, ShellAction, ShellAnswer, ShellAnswered,
+	ShellQuestion,
 };
 use crate::frontier::server::wording::money;
 use crate::frontier::today::view::{NewsBox, Pick, SAID_MS, Said, TodayState, not_answering, render};
@@ -214,6 +215,25 @@ impl JocastaShell {
 		Reply { redraw: true, ..Reply::default() }
 	}
 
+	/// `R` on a review request or `F` on a red pipeline (0680): asks the service to start the review or the fix thread
+	/// of the picked row's link; any other row says what to pick.
+	fn start_from_row(&mut self, kind: NeedsYouKind) -> Reply {
+		let url = self.picked().filter(|pick| pick.kind == Some(kind)).and_then(|pick| pick.url.clone());
+		let Some(url) = url else {
+			let wanted = if kind == NeedsYouKind::Review { "a review request" } else { "a red pipeline" };
+			self.say(&format!("Pick {wanted} first."), true);
+			return Reply { redraw: true, ..Reply::default() };
+		};
+		let message = if kind == NeedsYouKind::Review {
+			self.say("Starting the review…", false);
+			ClientMessage::PrReview { url }
+		} else {
+			self.say("Starting the fix…", false);
+			ClientMessage::CiFix { url }
+		};
+		Reply { send: vec![sent(SHELL_FEED, &message)], redraw: true, ..Reply::default() }
+	}
+
 	/// His key on a thread: Finish, Stop, Review, or New thread (which needs no thread, C10).
 	fn act(&mut self, action: PluginAction) -> Reply {
 		let pane_id = self.picked().and_then(|pick| pick.pane_id.clone()).filter(|id| !id.is_empty());
@@ -378,7 +398,24 @@ impl ShellExtension for JocastaShell {
 			let action = ShellAction { action: PluginAction::StopAll, pane_id: None };
 			return Reply { send: vec![sent(SHELL_ACTION, &action)], redraw: true, ..Reply::default() };
 		}
+		// Uppercase `R` and `F` (0680) before `r` and `f`, whose names they share (`r` Review and `f` Finish act on a
+		// thread): the service starts a review thread on a picked review request, a fix thread on a picked red pipeline.
+		if key.sequence == "R" {
+			return self.start_from_row(NeedsYouKind::Review);
+		}
+		if key.sequence == "F" {
+			return self.start_from_row(NeedsYouKind::Pipeline);
+		}
 		match key.name.as_str() {
+			// `b` (0680): the service builds today's morning brief again and opens it.
+			"b" => {
+				self.say("Building the morning brief…", false);
+				return Reply {
+					send: vec![sent(SHELL_FEED, &ClientMessage::BriefMorning)],
+					redraw: true,
+					..Reply::default()
+				};
+			}
 			"up" | "k" => self.step(-1),
 			"down" | "j" => self.step(1),
 			"return" | "enter" => return self.enter(),

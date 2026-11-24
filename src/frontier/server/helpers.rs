@@ -280,6 +280,8 @@ pub(crate) fn with_test_defaults(mut options: ServerOptions, herdr: &Arc<FakeHer
 	options.mise.get_or_insert(None);
 	// Never his omp: the minute tick starts no weekly review (0470); a review would spawn a real `omp -p`.
 	options.weekly_reviews.get_or_insert(false);
+	// Never a brief of the day's real clock in the test's data folder: the tick builds none unless a test says so.
+	options.auto_briefs.get_or_insert(false);
 	// Never his omp's path: panes run `omp` by name, as where none is on PATH (`pane_omp_program` names the one found).
 	options.omp.get_or_insert_with(|| vec!["omp".to_owned()]);
 	options.ask_report.get_or_insert(false);

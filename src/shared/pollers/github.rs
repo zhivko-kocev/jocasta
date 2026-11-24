@@ -255,6 +255,8 @@ pub async fn poll_github(run: &dyn RunCli) -> Result<PollRound> {
 			url,
 			project_id: None,
 			thread_id: None,
+			private_text: None,
+			private_url: None,
 		});
 	}
 	let query = format!("query={}", prs_query());
@@ -307,6 +309,8 @@ pub async fn poll_github(run: &dyn RunCli) -> Result<PollRound> {
 			url,
 			project_id: None,
 			thread_id: None,
+			private_text: None,
+			private_url: None,
 		});
 	}
 	let observed = move |source_id: &str| match source_id.strip_prefix("github:pipeline:") {
@@ -375,6 +379,8 @@ mod tests {
 			url: url.map(str::to_owned),
 			project_id: None,
 			thread_id: None,
+			private_text: None,
+			private_url: None,
 		}
 	}
 

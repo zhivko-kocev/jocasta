@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::shared::clock::now_ms;
 use crate::shared::errors::Result;
+use crate::shared::private::Private;
 
 /// Where an event came from (0298).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -20,9 +21,28 @@ pub enum EventSource {
 	Thread,
 	Machine,
 	Inbox,
+	/// Gmail over IMAP (0680): private (0681).
+	Mail,
+	/// Jira's REST API (0680): private.
+	Jira,
+	/// Azure's failed operations through `az` (0680): private.
+	#[serde(rename = "azure-portal")]
+	AzurePortal,
 }
 
 impl EventSource {
+	const ALL: [Self; 9] = [
+		Self::Github,
+		Self::Azure,
+		Self::Calendar,
+		Self::Thread,
+		Self::Machine,
+		Self::Inbox,
+		Self::Mail,
+		Self::Jira,
+		Self::AzurePortal,
+	];
+
 	pub fn as_str(self) -> &'static str {
 		match self {
 			Self::Github => "github",
@@ -31,13 +51,14 @@ impl EventSource {
 			Self::Thread => "thread",
 			Self::Machine => "machine",
 			Self::Inbox => "inbox",
+			Self::Mail => "mail",
+			Self::Jira => "jira",
+			Self::AzurePortal => "azure-portal",
 		}
 	}
 
 	fn parse(text: &str) -> Option<Self> {
-		[Self::Github, Self::Azure, Self::Calendar, Self::Thread, Self::Machine, Self::Inbox]
-			.into_iter()
-			.find(|source| source.as_str() == text)
+		Self::ALL.into_iter().find(|source| source.as_str() == text)
 	}
 }
 
@@ -81,6 +102,30 @@ pub struct NewEvent {
 	pub project_id: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub thread_id: Option<String>,
+	/// The real line and link of a private source (0681), for his screens only: `text` and `url` of such an event hold
+	/// fixed words and nothing, so every reader of them is safe.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub private_text: Option<Private<String>>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub private_url: Option<Private<String>>,
+}
+
+impl NewEvent {
+	/// An event of a private source (0681): `words` is its fixed text, `text` and `url` the real line and link.
+	pub fn private(source_id: String, source: EventSource, kind: &str, words: &str, line: (String, String)) -> Self {
+		Self {
+			source_id,
+			source,
+			kind: kind.to_owned(),
+			priority: EventPriority::Low,
+			text: words.to_owned(),
+			url: None,
+			project_id: None,
+			thread_id: None,
+			private_text: Some(Private::from(line.0)),
+			private_url: Some(Private::from(line.1)),
+		}
+	}
 }
 
 /// One round of a poller that owns kinds of events (SHR-8): its current events, the source ids it could see (open events
@@ -103,6 +148,10 @@ pub struct EventRow {
 	pub url: Option<String>,
 	pub project_id: Option<String>,
 	pub thread_id: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub private_text: Option<Private<String>>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub private_url: Option<Private<String>>,
 	pub created_at: String,
 	pub raised_at: Option<String>,
 	pub reminded_at: Option<String>,
@@ -129,6 +178,8 @@ impl EventRow {
 			url: row.get("url")?,
 			project_id: row.get("project_id")?,
 			thread_id: row.get("thread_id")?,
+			private_text: row.get::<_, Option<String>>("private_text")?.map(Private::from),
+			private_url: row.get::<_, Option<String>>("private_url")?.map(Private::from),
 			created_at: row.get("created_at")?,
 			raised_at: row.get("raised_at")?,
 			reminded_at: row.get("reminded_at")?,
@@ -164,13 +215,26 @@ impl<'a> EventQueue<'a> {
 	pub fn add(&self, event: &NewEvent) -> Result<Option<EventRow>> {
 		if let Some(old) = self.by_source(&event.source_id)? {
 			if old.resolved_at.is_none() {
+				// A private source's line may change while its cause stays (a Jira issue's status): kept fresh, silently.
+				if old.private_text != event.private_text || old.private_url != event.private_url {
+					self.db.execute(
+						"UPDATE events SET private_text = ?, private_url = ? WHERE id = ?",
+						params![
+							event.private_text.as_ref().map(Private::for_storage),
+							event.private_url.as_ref().map(Private::for_storage),
+							old.id
+						],
+					)?;
+				}
 				return Ok(None);
 			}
 			self.db.execute("DELETE FROM events WHERE id = ?", params![old.id])?;
 		}
 		let row = self.db.query_row(
-			"INSERT INTO events (source_id, source, kind, priority, text, url, project_id, thread_id, created_at)
-			 VALUES (:source_id, :source, :kind, :priority, :text, :url, :project_id, :thread_id, :created_at) RETURNING *",
+			"INSERT INTO events (source_id, source, kind, priority, text, url, project_id, thread_id, private_text,
+			 private_url, created_at)
+			 VALUES (:source_id, :source, :kind, :priority, :text, :url, :project_id, :thread_id, :private_text,
+			 :private_url, :created_at) RETURNING *",
 			named_params! {
 				":source_id": event.source_id,
 				":source": event.source.as_str(),
@@ -180,6 +244,8 @@ impl<'a> EventQueue<'a> {
 				":url": event.url,
 				":project_id": event.project_id,
 				":thread_id": event.thread_id,
+				":private_text": event.private_text.as_ref().map(Private::for_storage),
+				":private_url": event.private_url.as_ref().map(Private::for_storage),
 				":created_at": iso((self.now)()),
 			},
 			EventRow::from_row,
@@ -272,7 +338,7 @@ mod tests {
 			"CREATE TABLE events (
   id          INTEGER PRIMARY KEY,
   source_id   TEXT NOT NULL UNIQUE,
-  source      TEXT NOT NULL CHECK (source IN ('github','azure','calendar','thread','machine','inbox')),
+  source      TEXT NOT NULL CHECK (source IN ('github','azure','calendar','thread','machine','inbox','mail','jira','azure-portal')),
   kind        TEXT NOT NULL,
   priority    TEXT NOT NULL CHECK (priority IN ('urgent','normal','low')),
   text        TEXT NOT NULL,
@@ -282,7 +348,9 @@ mod tests {
   created_at  TEXT NOT NULL,
   raised_at   TEXT,
   reminded_at TEXT,
-  resolved_at TEXT
+  resolved_at TEXT,
+  private_text TEXT,
+  private_url  TEXT
 ) STRICT;
 CREATE INDEX events_open ON events(resolved_at, priority, id);",
 		)
@@ -300,6 +368,8 @@ CREATE INDEX events_open ON events(resolved_at, priority, id);",
 			url: Some(format!("https://github.com/acme/api/pull/{n}")),
 			project_id: None,
 			thread_id: None,
+			private_text: None,
+			private_url: None,
 		}
 	}
 
@@ -381,5 +451,39 @@ CREATE INDEX events_open ON events(resolved_at, priority, id);",
 		assert_eq!(event["sourceId"], "github:review:acme/api#1");
 		assert_eq!(event["priority"], "normal");
 		assert!(event.get("projectId").is_none());
+	}
+
+	#[test]
+	fn a_private_event_keeps_fixed_words_in_text_and_the_real_line_in_its_private_columns_which_refresh_while_it_is_open()
+	 {
+		let db = catalog();
+		let queue = EventQueue::new(&db);
+		let issue = |status: &str| {
+			NewEvent::private(
+				"jira:ACME-12".to_owned(),
+				EventSource::Jira,
+				"issue",
+				"open issue",
+				(format!("ACME-12 Rotate keys · {status}"), "https://example.atlassian.net/browse/ACME-12".to_owned()),
+			)
+		};
+		let row = queue.add(&issue("To Do")).unwrap().unwrap();
+		assert_eq!(
+			(row.source, row.priority, row.text.as_str(), row.url.clone()),
+			(EventSource::Jira, EventPriority::Low, "open issue", None)
+		);
+		assert_eq!(row.private_text, Some(Private::from("ACME-12 Rotate keys · To Do".to_owned())));
+		assert_eq!(row.private_url, Some(Private::from("https://example.atlassian.net/browse/ACME-12".to_owned())));
+		// Its status moved while it stayed open: not new, but the line is fresh.
+		assert_eq!(queue.add(&issue("In Progress")).unwrap(), None);
+		let again = queue.by_source("jira:ACME-12").unwrap().unwrap();
+		assert_eq!(again.private_text, Some(Private::from("ACME-12 Rotate keys · In Progress".to_owned())));
+		assert_eq!(again.id, row.id);
+		// Gone from the poller's set: resolved with its private line kept out of every public field.
+		queue.sync(EventSource::Jira, &["issue"], &[], None).unwrap();
+		assert!(queue.open().unwrap().is_empty());
+		let json = serde_json::to_string(&NewEvent { private_text: None, private_url: None, ..issue("x") }).unwrap();
+		assert!(!json.contains("Rotate"), "{json}");
+		assert!(format!("{row:?}").contains("Private(..)") && !format!("{row:?}").contains("Rotate"));
 	}
 }

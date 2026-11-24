@@ -12,11 +12,14 @@ use crate::shared::errors::{Error, Result};
 use crate::shared::events::queue::EventSource;
 use crate::shared::paths::data_dir;
 use crate::shared::pollers::azure::{AZURE_KINDS, poll_azure};
+use crate::shared::pollers::azure_portal::{AZURE_PORTAL_KINDS, poll_azure_portal};
 use crate::shared::pollers::calendar::{poll_calendar, poll_calendar_with};
 use crate::shared::pollers::github::{GITHUB_KINDS, poll_github};
+use crate::shared::pollers::gmail::{GMAIL_KINDS, poll_gmail};
+use crate::shared::pollers::jira::{JIRA_KINDS, poll_jira};
 use crate::shared::pollers::machine::{cpu_times, sample_machine};
 use crate::shared::pollers::news::{NEWS_ENDPOINT, poll_news_at};
-use crate::shared::pollers::settings::{AzureDevOpsSettings, NewsSettings, read_poller};
+use crate::shared::pollers::settings::{AzureDevOpsSettings, GmailSettings, JiraSettings, NewsSettings, read_poller};
 use crate::shared::pollers::weather::{
 	FORECAST_ENDPOINT, GEOCODING_ENDPOINT, find_place_at, poll_weather_at, read_weather_place,
 };
@@ -56,6 +59,15 @@ impl Day {
 				if name == PollerName::Weather {
 					state.weather_error = Some(message.clone());
 				}
+				// A private source's section says its failure itself (0680): `mail: sign-in refused; run jocasta setup`.
+				if let Some(label) = name.private_label() {
+					let line = if message.starts_with(&format!("{label}:")) {
+						message.clone()
+					} else {
+						format!("{label}: {message}")
+					};
+					state.private_rounds.insert(name, Some(line));
+				}
 			}
 			let shown = if matches!(name, PollerName::News | PollerName::Weather) {
 				message
@@ -63,6 +75,9 @@ impl Day {
 				format!("Poller {} failed: {message}", name.name())
 			};
 			self.report_once(name.name(), &shown, fault.said());
+			if name.private_label().is_some() {
+				self.guard("today", || self.push_today());
+			}
 		}
 		if !self.stopped() {
 			self.push_dashboard();
@@ -98,6 +113,12 @@ impl Day {
 				state.news_error = None;
 			}
 			PollerName::Weather => self.poll_weather().await?,
+			PollerName::Gmail => self.poll_mail().await?,
+			PollerName::Jira => self.poll_jira().await?,
+			PollerName::AzurePortal => self.poll_azure_portal().await?,
+		}
+		if name.private_label().is_some() {
+			self.st().private_rounds.insert(name, None);
 		}
 		self.st().last_error.remove(name.name());
 		if !self.stopped() {
@@ -126,6 +147,45 @@ impl Day {
 			self.push_today()?;
 		}
 		Ok(true)
+	}
+
+	/// One mail round (0680): his unread mail, private (0681); its events are `Low`, so only `today` shows them.
+	async fn poll_mail(&self) -> std::result::Result<(), Fault> {
+		let settings = read_settings()?;
+		let gmail = read_poller::<GmailSettings>(&settings).map_err(Fault::Settings)?;
+		let address = gmail.address.ok_or_else(|| Error::other("mail: no address; set pollers.gmail.address"))?;
+		let password =
+			self.gmail_password().ok_or_else(|| Error::other("mail: no app password; `jocasta setup` saves it"))?;
+		let round = self.abortable(poll_gmail(&self.imap_endpoint(), &address, &password)).await?;
+		self.ingest(EventSource::Mail, &GMAIL_KINDS, &round)?;
+		Ok(())
+	}
+
+	/// One Jira round (0680): his open issues, private (0681).
+	async fn poll_jira(&self) -> std::result::Result<(), Fault> {
+		let settings = read_settings()?;
+		let jira = read_poller::<JiraSettings>(&settings).map_err(Fault::Settings)?;
+		let site = self.inner.sources.jira_site.clone().or(jira.site);
+		let site = site.ok_or_else(|| Error::other("jira: no site; set pollers.jira.site"))?;
+		let email = jira.email.ok_or_else(|| Error::other("jira: no email; set pollers.jira.email"))?;
+		let token = self.jira_token().ok_or_else(|| Error::other("jira: no token; `jocasta setup` saves it"))?;
+		let round = self.abortable(poll_jira(&site, &email, &token)).await?;
+		self.ingest(EventSource::Jira, &JIRA_KINDS, &round)?;
+		Ok(())
+	}
+
+	/// One Azure portal round (0680): the operations that failed in the last 24 hours, private (0681).
+	async fn poll_azure_portal(&self) -> std::result::Result<(), Fault> {
+		let round = poll_azure_portal(&self.inner.run).await?;
+		self.ingest(EventSource::AzurePortal, &AZURE_PORTAL_KINDS, &round)?;
+		if !round.failures.is_empty() {
+			self.report_once(
+				"azurePortal",
+				&format!("Poller azurePortal failed: {}", round.failures.join("; ")),
+				false,
+			);
+		}
+		Ok(())
 	}
 
 	/// Ends `work` when the day stops: its fetches abort with it.
@@ -325,6 +385,10 @@ impl Day {
 			return Ok(());
 		}
 		let week = (now.date_naive() - Days::days(i64::from(back))).format("%Y-%m-%d").to_string();
+		// The weekly brief is built once the review is due (0680), and again as each project's review answers.
+		if self.st().weekly_done.insert(format!("{week}|brief")) {
+			self.build_weekly_brief(&week);
+		}
 		for project in self.inner.hooks.projects() {
 			let key = format!("{week}|{}", project.id);
 			let source_id = format!("weekly-review:{}:{week}", project.id);
@@ -336,6 +400,12 @@ impl Day {
 			tokio::spawn(async move { day.weekly_review(&project, &source_id).await });
 		}
 		Ok(())
+	}
+
+	/// Builds the brief of the week that began on `monday`, off the tick.
+	fn build_weekly_brief(&self, monday: &str) {
+		let (day, monday) = (self.clone(), monday.to_owned());
+		tokio::spawn(async move { day.inner.hooks.weekly_brief(&monday).await });
 	}
 
 	/// One project's weekly review; a failure is said once and the week isn't tried again until a restart.
@@ -364,12 +434,20 @@ impl Day {
 		);
 		review.project_id = Some(project.id.clone());
 		self.raise(&review)?;
+		self.build_weekly_brief(&weekly_monday(self.now_ms()));
 		// Delivered once, never reminded of; in quiet hours it stays open until they end.
 		if self.queue(|queue| queue.by_source(source_id))?.is_some_and(|row| row.raised_at.is_some()) {
 			self.queue(|queue| queue.resolve(source_id))?;
 		}
 		Ok(())
 	}
+}
+
+/// The Monday of `at`'s week as `YYYY-MM-DD`, local time.
+fn weekly_monday(at: i64) -> String {
+	let now = local(at);
+	let back = (now.weekday().num_days_from_sunday() + 7 - WEEKLY_REVIEW_DAY) % 7;
+	(now.date_naive() - Days::days(i64::from(back))).format("%Y-%m-%d").to_string()
 }
 
 /// A round under way: leaves `rounds` when it ends, however it ends.

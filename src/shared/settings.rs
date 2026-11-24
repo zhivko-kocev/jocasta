@@ -30,6 +30,8 @@ static QUIET_HOURS: LazyLock<Regex> = LazyLock::new(|| {
 	Regex::new(r"^\s*([01]?[0-9]|2[0-3]):[0-5][0-9]-([01]?[0-9]|2[0-3]):[0-5][0-9]\s*$").expect("a valid pattern")
 });
 static ORG_URL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"^https://[^\s"%]+$"#).expect("a valid pattern"));
+static MAIL_ADDRESS: LazyLock<Regex> =
+	LazyLock::new(|| Regex::new(r"^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$").expect("a valid pattern"));
 static FEED_NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new("^[a-z]+$").expect("a valid pattern"));
 
 /// What a bad value at a key means: the reason, and what Jocasta does instead (0584). `map` marks a mapping key.
@@ -45,6 +47,9 @@ fn poller_off(poller: &str) -> &'static str {
 		"github" => "the GitHub poller is off",
 		"azureDevOps" => "the Azure DevOps poller is off",
 		"calendar" => "the calendar poller is off",
+		"gmail" => "the mail poller is off",
+		"jira" => "the Jira poller is off",
+		"azurePortal" => "the Azure portal poller is off",
 		_ => "the news poller is off",
 	}
 }
@@ -54,6 +59,8 @@ const NEWS_GONE: &str = "pollers.news.topics and pollers.news.limit are gone; us
 const NTFY_OFF: &str = "the phone check-in is off";
 const CHECKS_DEFAULT: &str = "the check queue uses the default memory reserve";
 const COST_DEFAULT: &str = "using the default cost cap, $75 a thread";
+const RUNNING_DEFAULT: &str = "using the default running limit, 4 threads";
+const THREADS_DEFAULT: &str = "using the default cost cap and running limit";
 
 fn rule(reason: &str, instead: &'static str, map: bool) -> KeyRule {
 	KeyRule { reason: reason.to_owned(), instead, map }
@@ -98,6 +105,23 @@ fn rule_of(key: &str) -> Option<KeyRule> {
 		"pollers.azureDevOps.everyMinutes" => minutes_rule("azureDevOps"),
 		"pollers.calendar" => poller_map("calendar"),
 		"pollers.calendar.everyMinutes" => minutes_rule("calendar"),
+		"pollers.gmail" => poller_map("gmail"),
+		"pollers.gmail.address" => {
+			rule("pollers.gmail.address must be a mail address like someone@example.org", poller_off("gmail"), false)
+		}
+		"pollers.gmail.everyMinutes" => minutes_rule("gmail"),
+		"pollers.jira" => poller_map("jira"),
+		"pollers.jira.site" => rule(
+			"pollers.jira.site must be an https:// address like https://example.atlassian.net",
+			poller_off("jira"),
+			false,
+		),
+		"pollers.jira.email" => {
+			rule("pollers.jira.email must be a mail address like someone@example.org", poller_off("jira"), false)
+		}
+		"pollers.jira.everyMinutes" => minutes_rule("jira"),
+		"pollers.azurePortal" => poller_map("azurePortal"),
+		"pollers.azurePortal.everyMinutes" => minutes_rule("azurePortal"),
 		"pollers.news" => poller_map("news"),
 		"pollers.news.feeds" => rule(
 			"pollers.news.feeds must be a list of {source: <name>} or {topic: <name>} (a-z), each with an optional limit from 1 to 200",
@@ -114,10 +138,15 @@ fn rule_of(key: &str) -> Option<KeyRule> {
 		"checks.memoryReserveGb" => {
 			rule("checks.memoryReserveGb must be a number from 0 to 256", CHECKS_DEFAULT, false)
 		}
-		"threads" => rule("threads must be a mapping", COST_DEFAULT, true),
+		"threads" => rule("threads must be a mapping", THREADS_DEFAULT, true),
 		"threads.maxCostUsd" => {
 			rule("threads.maxCostUsd must be a number of dollars, 0 or more (0 = no cap)", COST_DEFAULT, false)
 		}
+		"threads.maxRunning" => rule(
+			"threads.maxRunning must be a whole number of threads, 0 or more (0 = no limit)",
+			RUNNING_DEFAULT,
+			false,
+		),
 		_ => return None,
 	})
 }
@@ -213,6 +242,16 @@ fn check_poller(poller: &str, value: &Value, faults: &mut Vec<Fault>) {
 					faults.push(fault(&base, name, false));
 				}
 			}
+			("gmail", "address") | ("jira", "email") => {
+				if !value.as_str().is_some_and(|address| MAIL_ADDRESS.is_match(address)) {
+					faults.push(fault(&base, name, false));
+				}
+			}
+			("jira", "site") => {
+				if !value.as_str().is_some_and(|site| ORG_URL.is_match(site)) {
+					faults.push(fault(&base, name, false));
+				}
+			}
 			("news", "feeds") => {
 				if !value.as_array().is_some_and(|feeds| feeds.iter().all(is_feed)) {
 					faults.push(fault(&base, name, false));
@@ -229,7 +268,9 @@ fn check_pollers(value: &Value, faults: &mut Vec<Fault>) {
 	let Some(map) = value.as_object() else { return faults.push(fault(&[], "pollers", false)) };
 	for (name, value) in map {
 		match name.as_str() {
-			"github" | "azureDevOps" | "calendar" | "news" => check_poller(name, value, faults),
+			"github" | "azureDevOps" | "calendar" | "news" | "gmail" | "jira" | "azurePortal" => {
+				check_poller(name, value, faults)
+			}
 			_ => faults.push(fault(&["pollers"], name, true)),
 		}
 	}
@@ -306,6 +347,8 @@ fn check_threads(value: &Value, faults: &mut Vec<Fault>) {
 				faults.push(fault(&["threads"], name, false));
 			}
 			"maxCostUsd" => {}
+			"maxRunning" if value.as_u64().is_none() => faults.push(fault(&["threads"], name, false)),
+			"maxRunning" => {}
 			_ => faults.push(fault(&["threads"], name, true)),
 		}
 	}
@@ -551,6 +594,16 @@ pub fn read_max_cost_usd() -> f64 {
 		.and_then(Value::as_f64)
 		.filter(|dollars| *dollars >= 0.0)
 		.unwrap_or(DEFAULT)
+}
+
+/// `threads.maxRunning` (0687): how many threads may run at once; 4 when unset or bad, 0 = no limit.
+pub fn read_max_running() -> u64 {
+	const DEFAULT: u64 = 4;
+	let Ok(settings) = read_settings() else { return DEFAULT };
+	if check_settings(&settings, "threads.maxRunning").is_err() {
+		return DEFAULT;
+	}
+	settings.get("threads").and_then(|threads| threads.get("maxRunning")).and_then(Value::as_u64).unwrap_or(DEFAULT)
 }
 
 /// `service.paneIdleMinutes` (0676): minutes a pane's omp idles before it sleeps; 15 when unset or bad, 0 = never.
@@ -986,5 +1039,23 @@ mod tests {
 		assert_eq!(settings_problems().len(), 1);
 		write_settings(&env, "threads:\n  maxCostUsd: lots\n");
 		assert_eq!(read_max_cost_usd(), 75.0);
+	}
+
+	#[test]
+	fn threads_max_running_is_4_unless_set_0_is_no_limit_and_a_bad_value_falls_back_0687() {
+		let env = temp_jocasta();
+		assert_eq!(read_max_running(), 4);
+		write_settings(&env, "threads:\n  maxRunning: 2\n  maxCostUsd: 10\n");
+		assert_eq!(settings_problems(), Vec::<String>::new());
+		assert_eq!(read_max_running(), 2);
+		write_settings(&env, "threads:\n  maxRunning: 0\n");
+		assert_eq!(read_max_running(), 0);
+		write_settings(&env, "threads:\n  maxRunning: -1\n");
+		assert_eq!(read_max_running(), 4);
+		assert_eq!(settings_problems().len(), 1);
+		write_settings(&env, "threads:\n  maxRunning: 2.5\n");
+		assert_eq!(read_max_running(), 4);
+		write_settings(&env, "threads:\n  maxRunning: many\n");
+		assert_eq!(read_max_running(), 4);
 	}
 }

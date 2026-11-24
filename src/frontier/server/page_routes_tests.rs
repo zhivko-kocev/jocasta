@@ -83,7 +83,7 @@ async fn the_request_helpers_cookie_by_name_the_earlier_run_page_for_a_browser()
 struct NoActions;
 
 impl BriefActions for NoActions {
-	fn act(&self, _id: String, _action: serde_json::Value) -> BoxFuture<Result<Brief>> {
+	fn act(&self, _id: String, _action: serde_json::Value) -> BoxFuture<Result<serde_json::Value>> {
 		Box::pin(async { Err(crate::shared::errors::Error::user("no actions here")) })
 	}
 }

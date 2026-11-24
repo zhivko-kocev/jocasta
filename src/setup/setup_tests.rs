@@ -248,7 +248,7 @@ impl Harness {
 	}
 
 	fn undo(&self, calendar_stored: bool) -> Vec<SetupUndo> {
-		setup_undo(&self.paths, calendar_stored)
+		setup_undo(&self.paths, |target| calendar_stored && target == CALENDAR_CREDENTIAL)
 	}
 }
 
@@ -1001,6 +1001,97 @@ async fn with_no_calendar_secret_anywhere_setup_asks_once_enter_skips_an_address
 	setup_with_calendar(&h, &given, &[Some("webcal://calendar.example/secret.ics")]).await;
 	assert_eq!(given.saved(), ["webcal://calendar.example/secret.ics"]);
 	assert!(h.marker("calendar").is_some());
+}
+
+/// A fake store for the mail and Jira secrets (0680).
+#[derive(Default)]
+struct Secrets {
+	saved: Mutex<Vec<(String, String)>>,
+	in_env: Vec<&'static str>,
+}
+
+impl SecretStore for Secrets {
+	fn stored(&self, target: &str) -> bool {
+		self.saved.lock().unwrap().iter().any(|(saved, _)| saved == target)
+	}
+
+	fn env_holds(&self, target: &str) -> bool {
+		self.in_env.contains(&target)
+	}
+
+	fn save(&self, target: &str, secret: &str) -> Result<()> {
+		self.saved.lock().unwrap().push((target.to_owned(), secret.to_owned()));
+		Ok(())
+	}
+}
+
+fn write_yaml(text: &str) {
+	let file = crate::shared::settings::settings_file();
+	fs::create_dir_all(file.parent().unwrap()).unwrap();
+	fs::write(file, text).unwrap();
+}
+
+#[tokio::test]
+async fn setup_asks_for_the_mail_and_jira_secrets_only_where_their_pollers_are_set_up_and_marks_what_it_saves() {
+	let _j = temp_jocasta();
+	let h = Harness::new();
+	let run = async |store: &Arc<Secrets>, secret: &str| {
+		let mut io = TestIo::new(&[Some("y")]);
+		io.secret_answer = Some(secret.to_owned());
+		let mut deps = SetupDeps::new(PathBuf::from("herdr.exe"));
+		deps.secrets = Some(store.clone());
+		run_setup(&h.paths, &deps, &io).await.unwrap();
+		(io.text(), io.secrets.lock().unwrap().clone())
+	};
+	// Neither source is set up: nothing is asked.
+	let store = Arc::new(Secrets::default());
+	let (_, asked) = run(&store, "never used").await;
+	assert!(asked.is_empty());
+	// Both are: each secret is asked for, off the screen, and saved under its own target with a marker.
+	write_yaml(
+		"pollers:\n  gmail:\n    address: someone@example.org\n  jira:\n    site: https://example.atlassian.net\n    email: someone@example.org\n",
+	);
+	let (text, asked) = run(&store, "app-password-1").await;
+	assert_eq!(
+		asked,
+		[
+			"Your Gmail app password, for the unread mail in today (Enter to skip): ",
+			"Your Jira API token, for your open issues in today (Enter to skip): ",
+		]
+	);
+	assert_eq!(
+		*store.saved.lock().unwrap(),
+		[
+			("jocasta/gmail-app-password".to_owned(), "app-password-1".to_owned()),
+			("jocasta/jira-token".to_owned(), "app-password-1".to_owned()),
+		]
+	);
+	assert!(!text.contains("app-password-1"));
+	assert_eq!(h.marker("gmail").unwrap().undo, [Undo::Credential { target: "jocasta/gmail-app-password".to_owned() }]);
+	assert_eq!(h.marker("jira").unwrap().undo, [Undo::Credential { target: "jocasta/jira-token".to_owned() }]);
+	// Stored: a second run asks nothing. In the env: neither is asked.
+	let (_, asked) = run(&store, "again").await;
+	assert!(asked.is_empty());
+	let env =
+		Arc::new(Secrets { in_env: vec!["jocasta/gmail-app-password", "jocasta/jira-token"], ..Secrets::default() });
+	let (_, asked) = run(&env, "again").await;
+	assert!(asked.is_empty());
+}
+
+#[tokio::test]
+async fn uninstall_lists_the_mail_and_jira_credentials_whoever_saved_them_while_they_are_stored() {
+	let h = Harness::new();
+	let stored = |target: &str| target == "jocasta/gmail-app-password" || target == "jocasta/jira-token";
+	let undo = setup_undo(&h.paths, stored);
+	for target in ["jocasta/gmail-app-password", "jocasta/jira-token"] {
+		assert!(
+			undo.iter().any(|item| matches!(item, SetupUndo::Other(Undo::Credential { target: t }) if t == target)),
+			"{target}"
+		);
+	}
+	assert!(
+		!setup_undo(&h.paths, |_| false).iter().any(|item| matches!(item, SetupUndo::Other(Undo::Credential { .. })))
+	);
 }
 
 #[tokio::test]
