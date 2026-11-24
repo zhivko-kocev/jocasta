@@ -102,4 +102,6 @@ Open items carried forward, each tied to the slice that decides it:
 
   H3 and H5 end trees with `killTree`, so these are worth a look before the benchmarks.
 
+The lightweight program (2026-11-24, records 0674–0688): after four question rounds Zhivko approved a lighter, faster, token-cheaper Jocasta that keeps the Rust stack and leaves everything omp does to omp. The records are written: the program, its order and the footprint budget that only ratchets down (0674); one omp extension and one local pipe instead of MCP, the relay, hosts and the `pane-check` role (0675); process diet (0676); deterministic loops (0677, 0682, 0685, 0686, 0688); animated HTML briefs, with whiteboard and hunk removed (0678, 0679); day flows with private Gmail, Jira and Azure sources (0680, 0681); thread dependencies and a running limit (0687); the harness contract (0684); and an own shell on `alacritty_terminal` that is built only if its spike passes (0683). The build starts at phase 0 and runs unattended, each phase ending with `mise run check` and `mise run footprint` green. Next slice: phase 0, `bench/footprint.rs` and the first `bench/footprint-budget.json` on today's tree.
+
 Update this file when a slice's records are written, when its build lands, and when a grilling session stops (name the next slice); keep `AGENTS.md`'s one current-state line in step.

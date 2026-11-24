@@ -41,6 +41,7 @@ runs, how often and what is measured is fixed there, as amended for the harness-
 | `h4-isolation` | the `h4 plant` thread's turn | his PC, in a sandbox Jocasta (0502) |
 | `h6-memory`, `h8-parallel` | the threads' turns | his PC, in a sandbox Jocasta (0657) |
 | `h9-footprint` | none | 0481's VM `JOCASTA-CLEAN` only (refused elsewhere); not rerun since the VM, its VM results stand (0657) |
+| `footprint` | none (a stub agent stands in for omp) | his PC with no Jocasta running (`mise run footprint`; 0674) |
 | `tokscale-parity` | none | his PC, with tokscale 4.21.0 from `D:/thesis/tools/tokscale` on the session's PATH (0657) |
 
 The scripts that act on a running Jocasta (H2–H6, H8) refuse to start without a sandbox (0502, 0576): its own data

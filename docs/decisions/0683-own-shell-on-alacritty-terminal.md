@@ -1,0 +1,43 @@
+# 0683 Own shell on `alacritty_terminal`, gated by a spike
+
+- Status: v1
+- Kind: product
+- Phase/slice: lightweight program
+- Amends: 0649, 0659–0666
+- Date: 2026-11-24
+
+## Question
+Can Jocasta replace the trimmed herdr fork with its own shell, and when?
+
+## Facts
+Measured 2026-11-24:
+- `crates/herdr/src` + `crates/herdr/crates`: 248,846 + 12,331 lines (plus Zig, ghostty-vt, vendored portable-pty).
+- herdr at runtime (state-of-the-art §6): 16 MB with no panes, 27.6 MB with 16 shells, 0.16% of a core idle.
+- One working omp: 405 MB working set, 947 MB private. Outside Jocasta's panes: `__omp_worker_mnemopi_embed` 1,033 MB, `__omp_worker_tiny_inference` 641 MB.
+- `jocasta --version` starts in 70.4 ms median (the `pane-check` role pays this at every turn end). A named-pipe JSON round trip takes 39 µs median, 53 µs p95.
+- `target/release/jocasta.exe`: 47,279,616 bytes. Whiteboard's `node.exe … desktop-host.js` (41 MB) outlived Jocasta's Stop by hours. One PR-review thread cost $70.25.
+- `alacritty_terminal` 0.26.0 (2026-04-06) passes the 7-day rule; it may bring `windows-sys` 0.59 beside 0.61.2.
+- Losses accepted with the fork's removal: plugins, kitty graphics, live handoff, hand-made splits, copy mode, the settings overlay, restored screen history. Closing the terminal window ends Jocasta and its panes; threads come back through `--restore` at the next start (0549).
+
+## Options
+| Option | Pros | Cons |
+|---|---|---|
+| Keep the fork | Works today; no risk | 248,846 + 12,331 lines, Zig, a second process and runtime weight |
+| Own shell on `alacritty_terminal` in the same process, tabs only, after a spike | One process; code and memory fall; a surface of Jocasta's own | Risk on keys, paste, resize, throughput; work |
+| Own terminal emulator | Full control | Far too much work |
+
+## Recommendation
+Own shell, but only if the spike passes.
+
+## Choice
+His answer of 2026-11-24. This record is the install approval for `alacritty_terminal` 0.26.0 (`=0.26.0`); a `skip` for `windows-sys@0.59` in `deny.toml` cites this record if `cargo deny` reports the duplicate.
+- Spike gate: a throwaway package at `target/spikes/own-shell/` (outside the workspace) with one window, two tabs each running omp 19.1.1, results in `docs/research/own-shell-spike.md`, on Windows and WSL Ubuntu, with 8 checks: (1) Enter, Shift+Enter, Ctrl+C, Esc, arrows, Home/End, Alt+letter, Ctrl+arrows as in Windows Terminal; (2) kitty keyboard mode honoured, F9 press and release reach omp; (3) bracketed paste of 10 kB arrives once, unaltered; (4) mouse wheel and click in omp, selection and copy in the shell; (5) resize while omp streams leaves no garbling after the next frame; (6) wide characters, emoji, truecolor, omp's ask form and plan review; (7) 50 MB of output at least half the fork's throughput; (8) idle with 4 panes for 60 s, CPU and RSS no higher than the fork's phase-5 numbers.
+- The phase 6 build happens only if all 8 rows pass (rows 1–6 failing without a fix inside the spike, or 7–8 failing, stops it). Otherwise the fork stays, phases 0–5 are the program, herdr's hook, `herdr.toml` and Zig stay, and the result is appended here.
+- Build on pass: rename `Herdr` to `Surface`; `src/frontier/shell/` (`pty.rs`, `term.rs`, `keys.rs`, `app.rs`, `tabs.rs`, `sidebar.rs`; scrollback 10,000 lines; tabs only; draw only on damage); `own_surface.rs` implements `Surface` in-process, one `jocasta` process; agent status in the sidebar from `bridge.agent`; herdr's omp hook and `herdr.toml` removed by a migration; the bench ported to the pipe's `cli` messages with a new `pane_text {pane}`; `crates/herdr/`, `portable-pty`, `zig` and `config/herdr.toml` deleted; `mise run footprint` must show `processes` 1 and no number over the phase-5 budget; the new budget is committed.
+
+## Reason
+Lighter surface, if it proves itself.
+
+## Consequences
+- Amends 0649 (one binary, one server) and 0659–0666 (sidebar, ConPTY runtime, strip and workspace choices) on pass.
+- Nothing in phases 0–5 depends on phase 6.

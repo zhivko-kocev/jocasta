@@ -17,6 +17,7 @@ use lib::args::{ScriptArgs, finish_script, run_script};
 #[path = "../evals/mod.rs"]
 mod evals;
 
+mod footprint;
 #[path = "h1-guard/mod.rs"]
 mod h1_guard;
 mod h2_toast;
@@ -73,6 +74,10 @@ enum Command {
 	/// H9 (0482): install footprint.
 	#[command(name = "h9-footprint", disable_help_flag = true)]
 	H9Footprint(ScriptArgs),
+	/// The footprint budget (0674): Jocasta's own processes, memory, CPU, startup and binary against a budget that
+	/// only goes down.
+	#[command(disable_help_flag = true)]
+	Footprint(ScriptArgs),
 	/// Runs the evals on his daily omp; the subcommands are the other eval scripts.
 	Evals(EvalsArgs),
 }
@@ -117,12 +122,17 @@ async fn main() -> ExitCode {
 		}
 	}
 	jocasta::shared::env::use_real_environment();
+	// The footprint bench's stub agent is this binary named `omp`.
+	if let Some(code) = footprint::stub_agent() {
+		return code;
+	}
 	match Cli::parse().command {
 		Some(Command::H1Guard { command }) => h1_guard::run(command),
 		Some(Command::TokscaleParity(script)) => finish_script(tokscale_parity::main(&script.args)),
 		Some(Command::H2Toast(script)) => h2_toast::main(script.args).await,
 		Some(Command::H3Recovery(script)) => h3_recovery::main(script.args).await,
 		Some(Command::H4Isolation(script)) => h4_isolation::main(script.args).await,
+		Some(Command::Footprint(script)) => footprint::main(script.args).await,
 		Some(Command::H5Startup(script)) => h5_startup::main(script.args).await,
 		Some(Command::H6Memory(script)) => h6_memory::main(script.args).await,
 		Some(Command::H7Longpath(script)) => h7_longpath::main(script.args).await,

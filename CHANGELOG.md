@@ -578,3 +578,6 @@
   - **0672:** phone check-in through ntfy (`ntfy.server`, `ntfy.ownServer`, `ntfy.token`): content-free pushes (a kind and a count) on a public server; on your own server with a token, full text with single-use Allow and Deny buttons; generated topics, shown by `jocasta diagnose`.
   - **0673:** scheduled threads from `<data>/projects/<pid>/schedules.yml`, started once per missed run through the Key door in plan mode; the soonest 3 show in NEXT.
   - Docs: manual "Daily use" and "Config", plan appendix I rows, `crates/herdr/FORK.md` (the `dock_scroll` seam).
+
+### The lightweight program (2026-11-24, records 0674–0688)
+- **Phase 0, the footprint budget (0674, 0676):** `jocasta-bench footprint [--write-budget]` (`mise run footprint`) starts the release `jocasta` as its server in a throwaway sandbox with four projects, the boss and four panes on a stub agent (the bench binary named `omp`), idles 60 s and reports Jocasta's own processes, idle memory and CPU, startup to `/health`, the binary's size and (from the bridge) its round trip; omp's processes are listed and never budgeted. Three runs: `--write-budget` keeps each number's worst in `bench/footprint-budget.json`, the comparison each number's median against it with 5% slack. Baseline: 9 processes, 166 MB, 2.2% of a core, 80 ms, 45 MB.

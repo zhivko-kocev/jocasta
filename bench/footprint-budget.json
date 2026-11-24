@@ -1,0 +1,8 @@
+{
+	"processes": 9.0,
+	"idle_rss_mb": 166.13,
+	"idle_cpu_pct": 2.21,
+	"startup_ms": 80.19,
+	"binary_mb": 45.09,
+	"bridge_ms": null
+}

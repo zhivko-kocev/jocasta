@@ -54,6 +54,12 @@ run = ["cargo build --release --locked --bin jocasta --bin jocasta-bench", "bun 
 description = "the eval runner (jocasta-bench evals; 0636)"
 run = "cargo run --locked --release --bin jocasta-bench -- evals"
 
+# The footprint budget (0674, 0676): the release build's own processes, idle memory and CPU, startup, binary size and
+# bridge round trip against bench/footprint-budget.json, which only goes down. Not part of `check`.
+[tasks.footprint]
+description = "the release build against the footprint budget (jocasta-bench footprint [--write-budget])"
+run = ["cargo build --release --locked --bin jocasta --bin jocasta-bench", "target/release/jocasta-bench footprint"]
+
 [tasks.smoke]
 # One test at a time: the service's collab relay has one fixed port (0561), so two services at once would refuse the second.
 description = "the opt-in smoke on this machine: throwaway herdr sessions, one at a time"
