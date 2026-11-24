@@ -4,7 +4,6 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
-use crate::frontier::server::relay::{RELAY_PORT, relay_url, share_url};
 use crate::shared::testing::temp_jocasta;
 use crate::shared::yaml::parse_value;
 
@@ -85,6 +84,8 @@ async fn workspace_jocasta_is_made_first_made_first_again_after_he_closes_it_wit
 			shipped.join("boss.yml").display().to_string(),
 			"--config".to_owned(),
 			shipped.join("guard.yml").display().to_string(),
+			"-e".to_owned(),
+			shipped.join("bridge-extension.ts").display().to_string(),
 		]
 	);
 	let launched = LaunchedPanes::new(None);
@@ -209,55 +210,10 @@ fn a_heavy_threads_heavy_yml_makes_its_default_role_his_slow_role_and_sets_nothi
 }
 
 #[test]
-fn the_boss_session_hosts_in_jocastas_relay_and_its_share_stays_on_this_machine() {
+fn the_boss_session_has_no_collab_relay_and_its_share_stays_on_a_dead_loopback_port() {
 	let settings = shipped_yaml("boss.yml");
-	assert_eq!(settings["collab"], json!({"autoStart": "control", "relayUrl": relay_url(RELAY_PORT)}));
-	assert_eq!(settings["share"], json!({"serverUrl": share_url(RELAY_PORT)}));
-}
-
-type Checked = Arc<Mutex<Vec<(Vec<String>, PathBuf, Env)>>>;
-
-fn refuse(checked: &Checked) -> BossCheck {
-	let checked = checked.clone();
-	Box::new(move |command, cwd, env| {
-		checked.lock().unwrap().push((command, cwd, env));
-		Box::pin(async { Err(Error::other("not loopback")) })
-	})
-}
-
-#[tokio::test]
-async fn the_boss_omp_isnt_started_when_its_check_refuses_it_made_or_respawned() {
-	let _j = temp_jocasta();
-	let herdr = FakeHerdr::new();
-	let command = command();
-	let launched = LaunchedPanes::new(None);
-	let checked = Checked::default();
-	let env1 = [("JOCASTA_BOSS_KEY", "run-1")];
-	let mut options = ensure(&launched);
-	options.env = env_of(&env1);
-	options.check = Some(refuse(&checked));
-	let error = ensure_boss_pane(&herdr, options).await.unwrap_err();
-	assert!(error.to_string().contains("not loopback"), "{error}");
-	{
-		let checked = checked.lock().unwrap();
-		assert_eq!(checked.len(), 1);
-		let (c, cwd, env) = &checked[0];
-		assert_eq!((c, cwd), (&command, &boss_home()));
-		let as_json: Value = env.iter().map(|(name, value)| (name.clone(), json!(value))).collect::<Map<_, _>>().into();
-		assert_eq!(keyed(&as_json), expected_env(&env1));
-	}
-	assert!(herdr.of("ensureWorkspace").is_empty());
-	// Started once the check passes; restored as a shell, the respawn is refused the same way.
-	let mut options = ensure(&launched);
-	options.check = Some(Box::new(|_, _, _| Box::pin(async { Ok(()) })));
-	ensure_boss_pane(&herdr, options).await.unwrap();
-	launched.seen(&herdr.panes().await.unwrap()).unwrap();
-	herdr.restore();
-	let mut options = ensure(&launched);
-	options.check = Some(refuse(&checked));
-	let error = ensure_boss_pane(&herdr, options).await.unwrap_err();
-	assert!(error.to_string().contains("not loopback"), "{error}");
-	assert!(herdr.of("respawn").is_empty());
+	assert!(settings.get("collab").is_none(), "{settings}");
+	assert_eq!(settings["share"], json!({"serverUrl": "http://127.0.0.1:47499/s"}));
 }
 
 #[tokio::test]
@@ -444,27 +400,6 @@ fn panes_json_keeps_only_well_formed_entries_a_broken_one_never_throws_on_a_refr
 		..PaneInfo::default()
 	};
 	launched.seen(&[pane]).unwrap();
-}
-
-#[test]
-fn the_boss_start_says_when_omps_mcp_json_in_its_folder_has_no_jocasta_server_naming_jocasta_setup() {
-	let j = temp_jocasta();
-	let home = j.root().join("boss-home");
-	let file = home.join(".omp").join("mcp.json");
-	// No file at all: the sandbox before setup.
-	let missing = boss_tools_missing(Some(&home)).unwrap();
-	assert!(missing.contains(&file.display().to_string()));
-	assert!(missing.contains("`jocasta setup`"));
-	fs::create_dir_all(home.join(".omp")).unwrap();
-	let write = |servers: Value| fs::write(&file, json!({"mcpServers": servers}).to_string()).unwrap();
-	write(json!({"whiteboard": {"type": "stdio", "command": "node"}}));
-	assert!(boss_tools_missing(Some(&home)).unwrap().contains("no \"jocasta\" MCP server"));
-	write(json!({"jocasta": {"type": "stdio", "command": "jocasta", "args": ["mcp", "--boss"], "enabled": false}}));
-	assert!(boss_tools_missing(Some(&home)).is_some());
-	fs::write(&file, "{ not json").unwrap();
-	assert!(boss_tools_missing(Some(&home)).is_some());
-	write(json!({"jocasta": {"type": "stdio", "command": "jocasta", "args": ["mcp", "--boss"], "timeout": 300_000}}));
-	assert_eq!(boss_tools_missing(Some(&home)), None);
 }
 
 fn workspace(id: &str, label: &str) -> WorkspaceInfo {

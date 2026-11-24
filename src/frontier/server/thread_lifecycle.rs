@@ -6,13 +6,12 @@
 //! one lock that is never held across an `.await` and never while a part is called.
 
 use std::collections::{HashMap, VecDeque};
-use std::path::Path;
-use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use regex::Regex;
-
 use crate::frontier::protocol::{ServerMessage, ThreadState, ToastLevel, ToastPriority, ToastReason};
+use crate::frontier::server::bridge::Deliver;
 use crate::frontier::server::context::{Link, ServiceContext};
 use crate::frontier::server::events::Holds;
 use crate::frontier::server::herdr::{AgentState, PaneInfo};
@@ -24,7 +23,7 @@ use crate::frontier::server::thread::{
 use crate::frontier::server::wording::{LESSON_OFFER, PLAN_REVIEW_COMMAND, REPORT_STEER, quoted};
 use crate::frontier::server::worktrees::git_out;
 use crate::shared::clock::now_ms;
-use crate::shared::errors::Result;
+use crate::shared::errors::{Error, Result};
 
 /// How long a plan-mode turn's end waits for the session to show a proposed plan: omp writes the `propose` result
 /// through a buffered writer, so herdr's idle event can come before it is in the file.
@@ -33,22 +32,6 @@ const PLAN_SETTLE_MS: i64 = 2_000;
 const PLAN_POLL_MS: u64 = 100;
 /// After a line goes into the boss pane, its idle pane state is herdr's lag, not the end of the turn it started.
 const BOSS_PROMPT_GRACE_MS: i64 = 10_000;
-
-/// omp's Plan Review on a pane's screen (0494): "Approve and keep context", "Refine plan" (omp 19.1.1
-/// `interactive-mode.ts:6841` builds the label, pi-tui `plan-review-overlay.ts:1650-1665` draws it; "Refine plan"
-/// (`:8113`) shows only while the plan has comments).
-static PLAN_REVIEW_SCREEN: LazyLock<Regex> =
-	LazyLock::new(|| Regex::new(r"Approve and keep context|Refine plan").expect("the Plan Review pattern"));
-
-/// Any other omp picker on a pane's screen (0494, 0589): a select's footer reads "… navigate … select … cancel"
-/// (pi-tui `overlays/hook-selector.ts:323`); an `ask` form (omp ≥ 18.18.3, pi-tui `html-form/dialog.ts`) ends each
-/// choice group with `○ Other: type your own` (`:1719`) and its footer reads "⏎ choose · ↑/↓ move · ⇥ next field ·
-/// ⎋ cancel" (`:1575-1581`); older omps' question picker ended with "Other (type your own)". `\b` is ASCII, as
-/// JavaScript's is.
-static PICKER_SCREEN: LazyLock<Regex> = LazyLock::new(|| {
-	Regex::new(r"Other \(type your own\)|(?-u:\b)Other: |(?-u:\b)navigate(?-u:\b).*(?-u:\b)cancel(?-u:\b)|(?-u:\b)next field(?-u:\b).*(?-u:\b)cancel(?-u:\b)")
-		.expect("the picker pattern")
-});
 
 /// Where a state change came from: herdr's own event, omp's host registry (both pushed: the refresh tick's reconcile
 /// never overrides them), or a read of herdr's pane list.
@@ -570,7 +553,7 @@ impl ThreadLifecycle {
 			t.report_asked = true;
 			t.pane_id.clone()
 		});
-		match ctx.herdr.prompt(&pane_id, REPORT_STEER).await {
+		match ctx.bridge.prompt(&pane_id, ctx.bridge.seal(REPORT_STEER), Deliver::FollowUp).await {
 			Ok(()) => true,
 			Err(error) => {
 				ctx.warn(error);
@@ -695,9 +678,10 @@ impl ThreadLifecycle {
 	}
 
 	/// Shows omp's Plan Review again in a reopened thread whose plan awaits him (0494): omp resumes the plan from its
-	/// session but not the picker, so `/plan-review` is typed into its pane once its omp is idle. Typing while a picker
-	/// is open would pick its default, "Approve and execute" (B1), so the pane's screen is read first: the Plan Review
-	/// already open ends the wait; a question waits for a later look.
+	/// session but not the picker, so `/plan-review` is sent to its omp once idle, and the extension opens it
+	/// (`ctx.openPlanReview()`, 0675). Opening one while a dialog is open would pick its default, "Approve and execute"
+	/// (B1), so the omp's own report of an open dialog is read first: the Plan Review already open ends the wait; another
+	/// dialog waits for a later look.
 	pub async fn reopen_plan_review(&self, thread: &ThreadRef) -> Result<()> {
 		let ctx = self.link.ctx();
 		let (idle, pane_id, has_session) =
@@ -705,21 +689,38 @@ impl ThreadLifecycle {
 		if !idle || self.busy(&pane_id) || !has_session || !self.plan_waits_now(thread).await {
 			return Ok(());
 		}
-		let screen = ctx.herdr.screen(&pane_id).await?;
+		let Some(agent) = ctx.bridge.agent(&pane_id) else { return Ok(()) };
 		let open = ctx.threads.get(&pane_id).is_some_and(|open| open.same(thread));
 		if !open || !thread.with(|t| t.plan.as_ref().is_some_and(|plan| plan.reopened)) {
 			return Ok(());
 		}
-		if PLAN_REVIEW_SCREEN.is_match(&screen) {
-			thread.with(|t| plan_of(t).reopened = false);
-			return Ok(());
-		}
-		if PICKER_SCREEN.is_match(&screen) {
+		if agent.input_open {
+			if agent.input_kind.as_deref() == Some("plan") {
+				thread.with(|t| plan_of(t).reopened = false);
+			}
 			return Ok(());
 		}
 		thread.with(|t| plan_of(t).reopened = false);
-		ctx.herdr.prompt(&pane_id, PLAN_REVIEW_COMMAND).await?;
+		ctx.bridge.prompt(&pane_id, ctx.bridge.seal(PLAN_REVIEW_COMMAND), Deliver::Steer).await?;
 		Ok(())
+	}
+
+	/// Ends the turn of the omp in `pane_id` (0675): its `abort` message; an omp that can't abort (0684) has its process
+	/// tree ended instead and its pane starts it again with `--restore`, so the session goes on from where it was.
+	pub async fn abort_turn(&self, pane_id: &str) -> Result<()> {
+		let ctx = self.link.ctx();
+		if ctx.bridge.abort(pane_id)? {
+			return Ok(());
+		}
+		let Some(thread) = ctx.threads.get(pane_id) else {
+			return Err(Error::user(format!("omp in {pane_id} can't be stopped from Jocasta; check the pin")));
+		};
+		let session =
+			ctx.bridge.session(pane_id).map(PathBuf::from).or_else(|| thread.with(|t| t.session_path.clone()));
+		if let Some(session) = session {
+			ctx.launched.pause(pane_id, &session.display().to_string())?;
+		}
+		self.relaunch(&thread).await
 	}
 
 	/// Whether the thread waits on him now, before anything is typed into its pane (B1): a question (herdr's blocked) or

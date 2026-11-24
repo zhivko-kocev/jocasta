@@ -8,7 +8,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use serde_json::Value;
 
@@ -17,7 +16,6 @@ use crate::frontier::protocol::ServerMessage;
 use crate::frontier::server::context::{TestContext, test_context};
 use crate::frontier::server::herdr::AgentState::{Idle, Unknown, Working};
 use crate::frontier::server::herdr::WorkspaceInfo;
-use crate::frontier::server::service::RelayUrlOf;
 use crate::shared::git::git;
 use crate::shared::pathkey::real_path;
 use crate::shared::paths::projects_file;
@@ -27,14 +25,6 @@ fn sh(dir: &Path, args: &[&str]) -> String {
 	let mut full = vec!["-c", "user.name=Test", "-c", "user.email=test@example.com"];
 	full.extend_from_slice(args);
 	git(dir, &full).unwrap().unwrap_or_else(|| panic!("git {args:?} failed in {}", dir.display()))
-}
-
-/// A relay URL that is public for a folder named `public_for` and loopback for any other.
-fn relay(public_for: &'static str) -> RelayUrlOf {
-	Arc::new(move |_, cwd, _| {
-		let public = cwd.file_name().is_some_and(|name| name == public_for);
-		Box::pin(async move { Ok(if public { "wss://relay.example.org" } else { "ws://127.0.0.1:47499" }.to_owned()) })
-	})
 }
 
 struct World {
@@ -67,11 +57,10 @@ fn add_pane(t: &TestContext, (pane_id, workspace_id, label): (&str, &str, &str),
 	t.ctx.launched.add(pane_id, &cwd.display().to_string(), Some(&format!("key-{pane_id}"))).unwrap();
 }
 
-async fn world(public_relay_for: &'static str) -> World {
+async fn world() -> World {
 	let t = test_context(|options| {
 		options.mise = Some(None);
 		options.hunk = Some(None);
-		options.relay_url_of = Some(relay(public_relay_for));
 	});
 	let dir = temp_dir("refresh");
 	let base = real_path(dir.path());
@@ -165,7 +154,7 @@ fn command_of(call: &Value) -> Vec<String> {
 
 #[tokio::test]
 async fn panes_herdr_restored_as_shells_while_the_service_runs_get_omp_again_with_their_flags_0431() {
-	let w = world("none").await;
+	let w = world().await;
 	w.up();
 	// The refresh tick notes each new pane's terminal and finds the thread.
 	w.tick().await;
@@ -185,9 +174,9 @@ async fn panes_herdr_restored_as_shells_while_the_service_runs_get_omp_again_wit
 		|command: &[String]| command.iter().position(|word| word == "--config").map(|at| command[at + 1].clone());
 	assert!(overlay(&command_of(thread)).unwrap().ends_with(".yml"));
 	assert!(overlay(&command_of(project)).unwrap().ends_with(".yml"));
-	// Only the project pane gets the turn-end extension (0617).
+	// Every pane gets the bridge extension (0675).
 	assert!(command_of(project).contains(&"-e".to_owned()));
-	assert!(!command_of(thread).contains(&"-e".to_owned()));
+	assert!(command_of(thread).contains(&"-e".to_owned()));
 	// The thread is known by its new pane.
 	let fresh =
 		w.t.herdr
@@ -204,7 +193,7 @@ async fn panes_herdr_restored_as_shells_while_the_service_runs_get_omp_again_wit
 
 #[tokio::test]
 async fn an_omp_that_ends_in_a_jocasta_pane_left_open_starts_again_there_once_per_ending_0521() {
-	let w = world("none").await;
+	let w = world().await;
 	w.up();
 	// The refresh tick sees omp running in each pane's terminal.
 	w.tick().await;
@@ -228,7 +217,7 @@ async fn an_omp_that_ends_in_a_jocasta_pane_left_open_starts_again_there_once_pe
 
 #[tokio::test]
 async fn a_jocasta_pane_whose_omp_has_not_been_seen_running_is_left_alone_0521() {
-	let w = world("none").await;
+	let w = world().await;
 	w.tick().await;
 	w.tick().await;
 	assert_eq!(w.t.herdr.state().pane_list.iter().find(|p| p.pane_id == "p-demo").unwrap().agent_state, Unknown);
@@ -237,7 +226,7 @@ async fn a_jocasta_pane_whose_omp_has_not_been_seen_running_is_left_alone_0521()
 
 #[tokio::test]
 async fn a_thread_being_finished_its_omp_ending_as_its_workspace_closes_is_not_started_again_0521() {
-	let w = world("none").await;
+	let w = world().await;
 	w.up();
 	w.tick().await;
 	let thread = w.thread_pane();
@@ -254,7 +243,7 @@ async fn a_thread_being_finished_its_omp_ending_as_its_workspace_closes_is_not_s
 
 #[tokio::test]
 async fn an_omp_that_ends_once_the_service_stopped_is_not_started_again_0521() {
-	let w = world("none").await;
+	let w = world().await;
 	w.up();
 	w.tick().await;
 	let thread = w.thread_pane();
@@ -267,7 +256,7 @@ async fn an_omp_that_ends_once_the_service_stopped_is_not_started_again_0521() {
 #[tokio::test]
 async fn an_omp_that_keeps_ending_in_its_pane_starts_again_after_a_wait_said_once_0521() {
 	// The wait's own times (10 s, 20 s, a 10-minute run) are `OmpBackoff`'s tests; here the tick keeps to them.
-	let w = world("none").await;
+	let w = world().await;
 	let ends = || async {
 		let boss = w.boss();
 		w.t.herdr.set_state(&boss, Idle, None, false);
@@ -286,7 +275,7 @@ async fn an_omp_that_keeps_ending_in_its_pane_starts_again_after_a_wait_said_onc
 
 #[tokio::test]
 async fn r3_a_working_thread_whose_pane_herdr_restored_as_a_shell_is_relaunched_and_comes_up_idle_without_an_event() {
-	let w = world("none").await;
+	let w = world().await;
 	w.up();
 	w.tick().await;
 	let thread = w.thread_pane();
@@ -306,23 +295,8 @@ async fn r3_a_working_thread_whose_pane_herdr_restored_as_a_shell_is_relaunched_
 // ── service-regressions.test.ts ─────────────────────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn svc_3_a_project_pane_whose_omp_cant_start_again_does_not_end_the_tick() {
-	// The project's own omp config names a public relay: its pane is refused (0536, 0561); the thread's isn't.
-	let w = world("demo").await;
-	w.up();
-	w.tick().await;
-	w.t.herdr.restore();
-	w.tick().await;
-	let respawned = w.respawned();
-	assert!(respawned.iter().any(|(_, call)| same_dir(Path::new(call["cwd"].as_str().unwrap()), &w.wt)));
-	assert!(!respawned.iter().any(|(_, call)| same_dir(Path::new(call["cwd"].as_str().unwrap()), &w.main)));
-	let sent = w.t.sent.lock().unwrap();
-	assert!(sent.iter().any(|m| matches!(m, ServerMessage::Hud { hud } if hud.awaiting == 0)), "{sent:?}");
-}
-
-#[tokio::test]
 async fn svc_2_a_thread_registered_after_the_list_was_read_is_not_dropped_nor_said_closed() {
-	let w = world("none").await;
+	let w = world().await;
 	w.up();
 	w.tick().await;
 	let known_before = w.t.ctx.threads.entries();
@@ -341,7 +315,7 @@ async fn svc_2_a_thread_registered_after_the_list_was_read_is_not_dropped_nor_sa
 
 #[tokio::test]
 async fn a_thread_dropped_or_replaced_while_the_list_was_read_is_not_this_lists_to_judge() {
-	let w = world("none").await;
+	let w = world().await;
 	let old = w.t.with_thread("p-x", "Task A");
 	let tick = Tick {
 		read_at: 0,
@@ -364,7 +338,7 @@ async fn a_thread_dropped_or_replaced_while_the_list_was_read_is_not_this_lists_
 
 #[tokio::test]
 async fn a_thread_closed_in_herdr_the_boss_hears_it_once_and_its_worktree_and_branch_stay_0405() {
-	let w = world("none").await;
+	let w = world().await;
 	w.up();
 	w.tick().await;
 	assert_eq!(w.thread_count(), 1);
@@ -382,7 +356,7 @@ async fn a_thread_closed_in_herdr_the_boss_hears_it_once_and_its_worktree_and_br
 
 #[tokio::test]
 async fn a_thread_whose_workspace_is_being_finished_is_dropped_but_never_said_closed() {
-	let w = world("none").await;
+	let w = world().await;
 	w.up();
 	w.tick().await;
 	w.t.ctx.set_finishing("w-thread", Finishing::Removing);
@@ -403,7 +377,7 @@ async fn a_thread_whose_workspace_is_being_finished_is_dropped_but_never_said_cl
 
 #[tokio::test]
 async fn discover_finds_a_pane_in_a_linked_worktree_that_runs_omp_with_its_review_pane() {
-	let w = world("none").await;
+	let w = world().await;
 	w.up();
 	{
 		let mut herdr = w.t.herdr.state();
@@ -431,7 +405,7 @@ async fn discover_finds_a_pane_in_a_linked_worktree_that_runs_omp_with_its_revie
 
 #[tokio::test]
 async fn discover_takes_a_pane_jocasta_started_before_omp_reports_but_never_a_plain_shell() {
-	let w = world("none").await;
+	let w = world().await;
 	// Started by Jocasta, no agent yet: found.
 	w.r.discover(&w.snapshot().await).await.unwrap();
 	assert_eq!(w.thread_count(), 1);
@@ -452,7 +426,7 @@ async fn discover_takes_a_pane_jocasta_started_before_omp_reports_but_never_a_pl
 
 #[tokio::test]
 async fn discover_skips_a_workspace_with_a_thread_or_being_finished_and_looks_again_only_when_asked() {
-	let w = world("none").await;
+	let w = world().await;
 	w.up();
 	// A thread already holds the workspace.
 	let held = w.t.with_thread("p-held", "Held");
@@ -477,7 +451,7 @@ async fn discover_skips_a_workspace_with_a_thread_or_being_finished_and_looks_ag
 
 #[tokio::test]
 async fn discover_shows_a_working_pane_as_working_and_a_blocked_one_as_blocked() {
-	let w = world("none").await;
+	let w = world().await;
 	w.t.herdr.set_state("p-thread", Working, None, false);
 	w.r.discover(&w.snapshot().await).await.unwrap();
 	assert_eq!(w.t.ctx.threads.get("p-thread").unwrap().with(|t| t.shown), ThreadState::Working);
@@ -492,7 +466,7 @@ async fn discover_shows_a_working_pane_as_working_and_a_blocked_one_as_blocked()
 
 #[tokio::test]
 async fn one_tick_runs_at_a_time_and_every_caller_gets_the_running_one() {
-	let w = world("none").await;
+	let w = world().await;
 	assert!(w.r.running().is_none());
 	let (a, b) = (w.r.refresh(), w.r.refresh());
 	assert!(w.r.running().is_some());
@@ -510,7 +484,7 @@ async fn one_tick_runs_at_a_time_and_every_caller_gets_the_running_one() {
 
 #[tokio::test]
 async fn a_facts_refresh_drops_a_closed_thread_but_catches_up_nothing_and_a_full_one_asked_meanwhile_follows_it() {
-	let w = world("none").await;
+	let w = world().await;
 	w.up();
 	w.r.discover(&w.snapshot().await).await.unwrap();
 	let thread = w.t.ctx.threads.get("p-thread").unwrap();
@@ -534,7 +508,7 @@ async fn a_facts_refresh_drops_a_closed_thread_but_catches_up_nothing_and_a_full
 
 #[tokio::test]
 async fn a_step_that_fails_is_said_once_per_reason_and_the_rest_still_run() {
-	let w = world("none").await;
+	let w = world().await;
 	let inner = &w.r.inner;
 	let fail = |text: &'static str| inner.step::<(), _>("plans", async move { Err(Error::other(text)) });
 	assert_eq!(fail("one").await, None);
@@ -554,7 +528,7 @@ async fn a_step_that_fails_is_said_once_per_reason_and_the_rest_still_run() {
 
 #[tokio::test]
 async fn the_tick_notes_the_workspaces_and_reads_each_thread_panes_omp_once_per_terminal() {
-	let w = world("none").await;
+	let w = world().await;
 	w.up();
 	w.tick().await;
 	assert_eq!(w.t.ctx.status.workspaces().len(), w.snapshot().await.workspaces.len());
@@ -570,7 +544,7 @@ async fn the_tick_notes_the_workspaces_and_reads_each_thread_panes_omp_once_per_
 
 #[tokio::test]
 async fn found_threads_idle_now_get_their_catch_up_once_and_a_waiting_plan_holds_it_back() {
-	let w = world("none").await;
+	let w = world().await;
 	w.t.herdr.set_state("p-thread", Working, None, false);
 	w.r.discover(&w.snapshot().await).await.unwrap();
 	let thread = w.t.ctx.threads.get("p-thread").unwrap();
@@ -598,7 +572,7 @@ async fn found_threads_idle_now_get_their_catch_up_once_and_a_waiting_plan_holds
 
 #[tokio::test]
 async fn a_reopened_thread_idle_with_no_plan_awaiting_in_its_session_has_none_to_show() {
-	let w = world("none").await;
+	let w = world().await;
 	let file = w._dir.path().join("session.jsonl");
 	fs::write(&file, "").unwrap();
 	let thread = w.t.with_thread("p-r", "Reopened");
@@ -622,7 +596,7 @@ async fn a_reopened_thread_idle_with_no_plan_awaiting_in_its_session_has_none_to
 
 #[tokio::test]
 async fn plans_leaves_a_thread_without_a_session_or_at_work_alone() {
-	let w = world("none").await;
+	let w = world().await;
 	let no_session = w.t.with_thread("p-a", "No session");
 	no_session.with(|t| t.state = Idle);
 	let busy = w.t.with_thread("p-b", "Busy");
@@ -635,7 +609,7 @@ async fn plans_leaves_a_thread_without_a_session_or_at_work_alone() {
 
 #[tokio::test]
 async fn set_herdr_default_is_kept_until_the_default_workspace_is_closed_or_kept() {
-	let w = world("none").await;
+	let w = world().await;
 	assert!(!w.r.herdr_default());
 	w.r.set_herdr_default(true);
 	assert!(w.r.herdr_default());
@@ -647,7 +621,7 @@ async fn set_herdr_default_is_kept_until_the_default_workspace_is_closed_or_kept
 
 #[tokio::test]
 async fn a_boss_pane_that_keeps_closing_opens_again_at_once_then_waits() {
-	let w = world("none").await;
+	let w = world().await;
 	let boss_workspace = || w.t.ctx.boss().unwrap().with(|boss| boss.workspace_id.clone());
 	w.close(&boss_workspace()).await;
 	w.tick().await;

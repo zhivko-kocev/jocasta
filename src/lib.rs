@@ -11,6 +11,5 @@
 
 pub mod entry;
 pub mod frontier;
-pub mod mcp;
 pub mod setup;
 pub mod shared;

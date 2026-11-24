@@ -1,8 +1,7 @@
 //! The `jocasta` command (0387): open the work surface, `setup [--refresh <file>]`, `uninstall`, `diagnose`,
-//! `mcp [--boss]`, `project …`, `--version`, herdr's own words (the fork built in, its server running the Jocasta service
-//! for bare `jocasta`), `push-hook`, git's pre-push hook in every pane (0613), and `pane-check`, the check a project
-//! pane's omp extension asks for when a turn ends (0617). No Jocasta code runs inside omp (0386) but that one
-//! extension; omp starts `jocasta mcp` as a stdio MCP server. clap parses the words (0637); this module runs the route.
+//! `project …`, `--version`, herdr's own words (the fork built in, its server running the Jocasta service for bare
+//! `jocasta`), and `push-hook`, git's pre-push hook in every pane (0613). No Jocasta code runs inside omp (0386) but the
+//! bridge extension (0675). clap parses the words (0637); this module runs the route.
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -12,13 +11,12 @@ use std::sync::Arc;
 use futures_util::future::BoxFuture;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-use crate::frontier::client::{ask_pane_check, ask_push};
+use crate::frontier::client::ask_push;
 use crate::frontier::server::boss::{EnsureBossOptions, LaunchedPanes, boss_command, ensure_boss_pane};
 use crate::frontier::server::embedded::{SERVICE_ENV, register, serves};
 use crate::frontier::server::herdr::{HerdrOptions, connect_herdr};
 use crate::frontier::server::launch::{service_health, service_state};
 use crate::frontier::server::pane_launch::pane_omp_program;
-use crate::mcp::server::run_mcp_stdio;
 use crate::setup::diagnose::{DiagnoseDeps, ServiceInfo, run_diagnose};
 use crate::setup::setup::{
 	RunOutput, RunProgram, SetupDeps, SetupIo, default_calendar_store, default_setup_paths, mise_config_dir,
@@ -373,20 +371,6 @@ async fn run_route(target: Route, calendar_env: Option<String>) -> Result<i32> {
 		}
 		Route::Thread { args } => run_service_cli(CliWord::Thread, &args).await,
 		Route::Worktree { args } => run_service_cli(CliWord::Worktree, &args).await,
-		Route::Mcp { boss } => {
-			// stdout carries only MCP messages.
-			run_mcp_stdio(boss).await;
-			Ok(0)
-		}
-		Route::PaneCheck => {
-			// What a project pane's omp extension runs when a turn ends (0617): the service's text for the agent, or
-			// nothing.
-			let text = ask_pane_check(env::var("JOCASTA_PANE_KEY").as_deref()).await;
-			let mut stdout = std::io::stdout();
-			let _ = stdout.write_all(text.as_bytes());
-			let _ = stdout.flush();
-			Ok(0)
-		}
 		Route::PushHook { args } => run_push_hook_route(&args).await,
 		Route::Setup { refresh } => run_setup_route(refresh, calendar_env).await,
 		Route::Uninstall => run_uninstall_route().await,

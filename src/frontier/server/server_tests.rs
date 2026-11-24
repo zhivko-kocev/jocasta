@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use super::*;
 use crate::frontier::protocol::{ServerMessage, token_cookie};
 use crate::frontier::server::helpers::{
-	Page, TEST_BOSS_KEY, boss_pane, http, start_test_server, until, with_server, with_test_defaults,
+	Page, boss_pane, http, start_test_server, until, with_server, with_test_defaults,
 };
 use crate::frontier::server::herdr::AgentState;
 use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
@@ -119,38 +119,29 @@ async fn a_browsers_page_from_an_earlier_run_gets_a_page_saying_so_and_what_to_d
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_start_that_fails_after_its_relay_and_server_listen_stops_them_both_ports_are_free_again() {
+async fn a_start_that_fails_after_the_server_listens_stops_it_the_port_is_free_again() {
 	let _j = temp_jocasta();
-	let relay_port = free_port().unwrap();
 	let port = free_port().unwrap();
 	// jocasta-service.json can't be written: a folder holds its name.
 	fs::create_dir_all(service_file_path(None)).unwrap();
 	fs::create_dir_all(crate::shared::paths::data_dir().join("omp-sessions")).unwrap();
 	let herdr = Arc::new(FakeHerdr::new());
-	let options = ServerOptions { relay_port: Some(relay_port), port: Some(port), ..ServerOptions::default() };
+	let options = ServerOptions { port: Some(port), ..ServerOptions::default() };
 	assert!(start_server(with_test_defaults(options, &herdr)).await.is_err());
-	for taken in [relay_port, port] {
-		drop(bound(taken));
-	}
+	drop(bound(port));
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn the_mcp_endpoint_takes_the_service_token_as_a_bearer_and_answers_text_and_is_error() {
+async fn the_removed_mcp_cli_and_push_routes_answer_404_only_health_and_shutdown_remain() {
 	let _j = temp_jocasta();
 	with_server(ServerOptions::default(), |server| async move {
-		let url = format!("http://127.0.0.1:{}/api/mcp/today", server.port);
-		// `today` is a boss tool (SEC-1, 0484): the call carries the boss key.
-		let body = json!({ "args": {}, "bossKey": TEST_BOSS_KEY }).to_string();
 		let client = http();
-		let post = |url: &str| client.post(url).body(body.clone()).header("content-type", "application/json");
-		assert_eq!(status(post(&url)).await, 401);
-		assert_eq!(status(post(&url).bearer_auth("nope")).await, 401);
-		let ok: Value = post(&url).bearer_auth(&server.token).send().await.unwrap().json().await.unwrap();
-		assert!(ok.get("isError").is_none(), "{ok}");
-		assert!(ok["text"].as_str().unwrap().starts_with("TODAY · "), "{ok}");
-		let nope = format!("http://127.0.0.1:{}/api/mcp/nope", server.port);
-		let unknown: Value = post(&nope).bearer_auth(&server.token).send().await.unwrap().json().await.unwrap();
-		assert_eq!(unknown, json!({"text": "no tool nope.", "isError": true}));
+		for path in ["api/mcp/today", "api/cli", "api/push", "api/pane-check"] {
+			let request = client.post(format!("http://127.0.0.1:{}/{path}", server.port)).bearer_auth(&server.token);
+			assert_eq!(status(request).await, 404, "{path}");
+		}
+		let health = client.get(format!("http://127.0.0.1:{}/health", server.port)).bearer_auth(&server.token);
+		assert_eq!(status(health).await, 200);
 	})
 	.await;
 }

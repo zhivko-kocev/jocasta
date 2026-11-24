@@ -1,19 +1,15 @@
 //! Tests of `pane_launch.rs`: `pane-launch.test.ts` and `pane-hook-env.test.ts` (both whole), and the pane and backoff
 //! parts of `service-relaunch.test.ts` and `service-regressions.test.ts` (SVC-3's backoff) that don't need the service.
 
-use std::sync::Arc;
-
-use futures_util::FutureExt;
-
 use super::*;
 use crate::frontier::server::context::{TestContext, test_context};
 use crate::frontier::server::herdr::Herdr;
 use crate::frontier::server::hunk::fake_hunk::fake_hunk;
 use crate::frontier::server::mise::tests::captured_shim;
 use crate::frontier::server::overlay::overlay_file;
-use crate::frontier::server::service::RelayUrlOf;
 use crate::frontier::server::task_file::{NewTask, new_task, task_dir};
 use crate::frontier::server::thread::Thread;
+use crate::shared::bridge_wire::BRIDGE_EXTENSION;
 use crate::shared::env::overlay;
 use crate::shared::fsx::free_port;
 use crate::shared::log::logs_dir;
@@ -38,17 +34,12 @@ impl Drop for Var {
 	}
 }
 
-fn loopback() -> RelayUrlOf {
-	Arc::new(|_, _, _| async { Ok("ws://127.0.0.1:47499".to_owned()) }.boxed())
-}
-
-/// A context over a fake herdr with no shipped prompt and no mise; every pane's relay is loopback.
+/// A context over a fake herdr with no shipped prompt and no mise.
 fn world() -> TestContext {
 	test_context(|options| {
 		options.omp = Some(vec!["omp".to_owned()]);
 		options.pane_prompt = Some(None);
 		options.mise = Some(None);
-		options.relay_url_of = Some(loopback());
 		options.boss_key = Some("boss-key-of-this-run".to_owned());
 	})
 }
@@ -57,16 +48,13 @@ fn strings(words: &[&str]) -> Vec<String> {
 	words.iter().map(|word| (*word).to_owned()).collect()
 }
 
+/// The guard's `--config` and the bridge extension: what every pane's omp starts with after `--continue` (0450, 0675).
 fn guard() -> Vec<String> {
-	strings(&["--config", &shipped("guard.yml")])
+	strings(&["--config", &shipped("guard.yml"), "-e", &shipped(BRIDGE_EXTENSION)])
 }
 
 fn overlay_args() -> Vec<String> {
 	vec!["--config".to_owned(), overlay_file(PROJECT).display().to_string()]
-}
-
-fn check_flags() -> Vec<String> {
-	vec!["-e".to_owned(), shipped(PANE_CHECK_EXTENSION)]
 }
 
 fn join(parts: &[&[String]]) -> Vec<String> {
@@ -183,16 +171,13 @@ async fn a_heavy_threads_omp_starts_again_with_heavy_yml_after_the_overlay_resum
 }
 
 #[tokio::test]
-async fn a_project_panes_omp_starts_again_with_jocastas_turn_end_extension_and_the_checks_argv_resuming_or_restoring_a_threads_gets_neither()
+async fn every_panes_omp_starts_again_with_the_bridge_extension_a_threads_with_its_flags_too_and_the_env_has_no_check_argv()
  {
 	let t = world();
 	let cwd = t.ctx.options.sessions_dir.clone().unwrap().join("demo");
 	let project = respawned(&t, plain(&cwd, Some(Vec::new()))).await;
-	assert_eq!(project.command, join(&[&strings(&["omp", "--continue"]), &guard(), &overlay_args(), &check_flags()]));
-	let mut check: Vec<String> = self_command(None).iter().map(|word| word.display().to_string()).collect();
-	check.push(PANE_CHECK_ROLE.to_owned());
-	let argv: Vec<String> = serde_json::from_str(&env_of(&project.env, PANE_CHECK_ENV).unwrap()).unwrap();
-	assert_eq!(argv, check);
+	assert_eq!(project.command, join(&[&strings(&["omp", "--continue"]), &guard(), &overlay_args()]));
+	assert!(env_of(&project.env, PANE_KEY_ENV).is_some());
 	let session = cwd.join("s.jsonl");
 	let restored = respawned(&t, Respawn { restore: Some(&session), ..plain(&cwd, Some(Vec::new())) }).await;
 	assert_eq!(
@@ -202,13 +187,14 @@ async fn a_project_panes_omp_starts_again_with_jocastas_turn_end_extension_and_t
 			&guard(),
 			&strings(&["--restore", &session.display().to_string()]),
 			&overlay_args(),
-			&check_flags(),
 		])
 	);
 	let thread = thread_of(None);
 	let given = respawned(&t, Respawn { thread: Some(&thread), ..plain(&cwd, Some(Vec::new())) }).await;
-	assert!(!given.command.contains(&"-e".to_owned()));
-	assert_eq!(env_of(&given.env, PANE_CHECK_ENV), None);
+	assert_eq!(
+		given.command,
+		join(&[&strings(&["omp", "--continue"]), &guard(), &strings(&THREAD_FLAGS), &overlay_args()])
+	);
 }
 
 fn hook_command() -> String {
@@ -299,14 +285,12 @@ fn mises_env_loses_herdrs_jocastas_and_omps_keys_in_any_case() {
 }
 
 #[tokio::test]
-async fn the_panes_omp_is_omp_resuming_with_the_guard_and_the_options_say_how_omp_hunk_the_relay_and_the_boss_key_are()
-{
+async fn the_panes_omp_is_omp_resuming_with_the_guard_and_the_options_say_how_omp_hunk_and_the_boss_key_are() {
 	let t = world();
 	let panes = &t.ctx.panes;
 	assert_eq!(panes.omp(), ["omp"]);
 	assert_eq!(panes.pane_omp(), join(&[&strings(&["omp", "--continue"]), &guard()]));
 	assert_eq!(panes.hunk_port(), HUNK_PORT);
-	assert_eq!(panes.relay_port(), RELAY_PORT);
 	assert_eq!(panes.boss_key(), "boss-key-of-this-run");
 	let names: Vec<&str> = panes.pane_env().iter().map(|(name, _)| name.as_str()).collect();
 	assert_eq!(
@@ -327,12 +311,10 @@ async fn the_panes_omp_is_omp_resuming_with_the_guard_and_the_options_say_how_om
 	let other = test_context(|options| {
 		options.omp = Some(strings(&["bun", "omp.ts"]));
 		options.hunk_port = Some(4242);
-		options.relay_port = Some(4343);
 		options.pane_prompt = Some(None);
 	});
 	assert_eq!(other.ctx.panes.omp(), ["bun", "omp.ts"]);
 	assert_eq!(other.ctx.panes.hunk_port(), 4242);
-	assert_eq!(other.ctx.panes.relay_port(), 4343);
 	assert_eq!(env_of(other.ctx.panes.pane_env(), "HUNK_MCP_PORT").as_deref(), Some("4242"));
 	// Without a key in the options, a run's key is 32 random bytes in hex, the same every time it is asked.
 	let key = other.ctx.panes.boss_key().to_owned();
@@ -388,13 +370,9 @@ async fn a_boss_pane_starts_with_this_runs_key_the_hook_and_its_own_pane_key_and
 }
 
 #[tokio::test]
-async fn a_boss_without_its_jocasta_tools_is_noticed_once_and_a_boss_pane_ensured_again_keeps_its_state() {
+async fn a_boss_pane_ensured_again_keeps_its_state() {
 	let t = world();
 	t.ctx.panes.ensure_boss(true).await.unwrap();
-	let notice = t.ctx.panes.boss_notice().expect("a notice");
-	assert!(notice.starts_with("The boss has no tools: "), "{notice}");
-	t.ctx.panes.set_boss_notice(None);
-	assert_eq!(t.ctx.panes.boss_notice(), None);
 	let boss = t.ctx.boss().expect("the boss");
 	boss.with(|boss| {
 		boss.state = AgentState::Working;
@@ -408,52 +386,10 @@ async fn a_boss_without_its_jocasta_tools_is_noticed_once_and_a_boss_pane_ensure
 	assert_eq!((again.state, again.event_at, again.prompted_at), (AgentState::Working, Some(7), Some(8)));
 	// The boss's own start isn't repeated.
 	assert_eq!(t.herdr.of("ensureWorkspace").len(), 1);
-	// A boss that opens again, still without its tools, says nothing new.
 	let workspace = t.ctx.boss().expect("the boss").with(|boss| boss.workspace_id.clone());
 	t.ctx.herdr.close_workspace(&workspace).await.unwrap();
 	t.ctx.panes.ensure_boss(false).await.unwrap();
 	assert_eq!(t.herdr.of("ensureWorkspace").len(), 2);
-	assert_eq!(t.ctx.panes.boss_notice(), None);
-}
-
-#[tokio::test]
-async fn a_pane_whose_relay_isnt_loopback_is_refused_before_herdr_is_asked_and_nothing_is_recorded() {
-	let t = test_context(|options| {
-		options.pane_prompt = Some(None);
-		options.mise = Some(None);
-		options.relay_url_of = Some(Arc::new(|_, _, _| async { Ok("wss://relay.example.org".to_owned()) }.boxed()));
-	});
-	let cwd = t.ctx.options.sessions_dir.clone().unwrap();
-	let pane = new_pane(&t, &cwd).await;
-	let error = t.ctx.panes.respawn(&pane, plain(&cwd, None)).await.unwrap_err();
-	let command = t.ctx.panes.project_pane(&join(&[t.ctx.panes.pane_omp(), &overlay_args()]));
-	let refused = not_loopback(&cwd, "wss://relay.example.org", &config_files(&command)).to_string();
-	assert!(refused.contains("\"wss://relay.example.org\", not Jocasta's relay on 127.0.0.1"), "{refused}");
-	assert!(error.is_user());
-	assert_eq!(error.to_string(), refused);
-	assert!(t.herdr.of("respawn").is_empty());
-	assert!(!t.ctx.launched.has(&pane));
-	let logged: String = std::fs::read_dir(logs_dir())
-		.unwrap()
-		.flatten()
-		.filter_map(|entry| std::fs::read_to_string(entry.path()).ok())
-		.collect();
-	assert!(logged.contains(&format!("ERROR [service] {refused}")), "{logged}");
-}
-
-#[tokio::test]
-async fn relay_checked_asks_the_seam_with_the_command_folder_and_env_and_passes_loopback() {
-	let asked = Arc::new(Mutex::new(Vec::new()));
-	let seen = Arc::clone(&asked);
-	let t = test_context(move |options| {
-		options.relay_url_of = Some(Arc::new(move |command, cwd, env| {
-			seen.lock().unwrap().push((command, cwd, env));
-			async { Ok("ws://localhost:47499".to_owned()) }.boxed()
-		}));
-	});
-	let env = vec![("A".to_owned(), "1".to_owned())];
-	t.ctx.panes.relay_checked(&strings(&["omp", "--config", "x.yml"]), Path::new("/w"), &env).await.unwrap();
-	assert_eq!(*asked.lock().unwrap(), vec![(strings(&["omp", "--config", "x.yml"]), PathBuf::from("/w"), env)]);
 }
 
 #[tokio::test]
@@ -475,21 +411,6 @@ async fn a_pane_started_again_records_the_new_pane_with_its_folder_and_key_and_t
 	let given = last_respawn(&t);
 	assert_eq!(env_of(&given.env, "HUNK_MCP_PORT").as_deref(), Some(HUNK_PORT.to_string().as_str()));
 	assert!(t.ctx.launched.has(&bare));
-}
-
-#[tokio::test]
-async fn project_pane_and_project_env_add_the_extension_and_the_checks_argv() {
-	let t = world();
-	let panes = &t.ctx.panes;
-	assert_eq!(
-		panes.project_pane(&strings(&["omp", "--continue"])),
-		join(&[&strings(&["omp", "--continue"]), &check_flags()])
-	);
-	let env = panes.project_env(&vec![("A".to_owned(), "1".to_owned())]);
-	assert_eq!(env[0], ("A".to_owned(), "1".to_owned()));
-	assert_eq!(env[1].0, PANE_CHECK_ENV);
-	let argv: Vec<String> = serde_json::from_str(&env[1].1).unwrap();
-	assert_eq!(argv.last().map(String::as_str), Some(PANE_CHECK_ROLE));
 }
 
 #[tokio::test]

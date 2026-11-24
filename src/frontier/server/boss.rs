@@ -11,10 +11,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
-use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
 
 use super::herdr::{AgentState, Env, Herdr, HerdrSnapshot, PaneInfo, RespawnOptions, TabSpec, WorkspaceInfo};
+use crate::shared::bridge_wire::BRIDGE_EXTENSION;
 use crate::shared::errors::{Error, Result};
 use crate::shared::fsx::{read_json_object, same_token, write_atomically};
 use crate::shared::install::shipped_config_dir;
@@ -41,25 +41,9 @@ pub fn boss_command(omp: &[String], config_dir: Option<&Path>) -> Vec<String> {
 	let mut command = omp.to_vec();
 	command.extend(["--continue".to_owned(), "--config".to_owned(), config_dir.join("boss.yml").display().to_string()]);
 	command.extend(["--config".to_owned(), config_dir.join("guard.yml").display().to_string()]);
+	// The bridge extension (0675): the boss's tools, and its state for the service.
+	command.extend(["-e".to_owned(), config_dir.join(BRIDGE_EXTENSION).display().to_string()]);
 	command
-}
-
-/// What to tell him when the boss's omp would start without its tools: `<home>/.omp/mcp.json` (setup's migration 2,
-/// 0392 project-level MCP config) has no enabled `jocasta` server, so the boss would improvise without them (beta day
-/// P9). `None` when the server is there.
-pub fn boss_tools_missing(home: Option<&Path>) -> Option<String> {
-	let home = home.map_or_else(boss_home, Path::to_path_buf);
-	let file = home.join(".omp").join("mcp.json");
-	let enabled = read_json_object(&file)
-		.and_then(|config| config.get("mcpServers")?.as_object()?.get("jocasta")?.as_object().cloned())
-		.is_some_and(|server| server.get("enabled") != Some(&Value::Bool(false)));
-	if enabled {
-		return None;
-	}
-	Some(format!(
-		"The boss has no tools: {} has no \"jocasta\" MCP server. Run `jocasta setup`, then close Jocasta and run `jocasta` again.",
-		file.display()
-	))
 }
 
 /// Writes `text` to `file` when it differs.
@@ -305,10 +289,6 @@ fn shell_in(pane: &PaneInfo, cwd: &str) -> bool {
 	pane.cwd.as_deref().is_some_and(|dir| !dir.as_os_str().is_empty() && same_dir(dir, Path::new(cwd)))
 }
 
-/// Runs before the boss's omp starts with `command` in `cwd` and `env` (the relay check, 0561); an `Err` leaves the pane
-/// unstarted.
-pub type BossCheck = Box<dyn Fn(Vec<String>, PathBuf, Env) -> BoxFuture<'static, Result<()>> + Send + Sync>;
-
 /// Whether a found boss pane's omp must start again.
 pub type BossStale<'a> = Box<dyn Fn(&PaneInfo) -> bool + Send + Sync + 'a>;
 
@@ -320,8 +300,6 @@ pub struct EnsureBossOptions<'a> {
 	pub command: Vec<String>,
 	/// The boss pane's own variables (this run's boss key, 0484), whenever its omp is started.
 	pub env: Env,
-	/// The relay check (0561).
-	pub check: Option<BossCheck>,
 	/// The panes Jocasta started: the boss pane joins them; a restored one runs omp again.
 	pub launched: &'a LaunchedPanes,
 	/// The service's start, or a boss pane whose omp ended in it (0521): a boss pane with no agent in it runs omp even
@@ -342,7 +320,6 @@ impl<'a> EnsureBossOptions<'a> {
 		Self {
 			command,
 			env: Env::new(),
-			check: None,
 			launched,
 			adopt: false,
 			stale: None,
@@ -380,13 +357,6 @@ struct Start {
 	key: String,
 }
 
-async fn run_check(options: &EnsureBossOptions<'_>, start: &Start) -> Result<()> {
-	match &options.check {
-		Some(check) => check(options.command.clone(), start.home.clone(), start.env.clone()).await,
-		None => Ok(()),
-	}
-}
-
 fn record_start(options: &EnsureBossOptions<'_>, start: &Start, pane_id: &str) -> Result<()> {
 	options.launched.add(pane_id, &start.home.display().to_string(), Some(&start.key))?;
 	if let Some(started) = &options.started {
@@ -403,7 +373,6 @@ async fn make_boss(
 	start: &Start,
 	workspace_id: Option<String>,
 ) -> Result<(String, PaneInfo)> {
-	run_check(options, start).await?;
 	let (workspace_id, pane) = if let Some(workspace_id) = workspace_id {
 		let tab = TabSpec {
 			title: BOSS_WORKSPACE.to_owned(),
@@ -438,7 +407,6 @@ async fn respawn_boss(
 	start: &Start,
 	pane: &PaneInfo,
 ) -> Result<PaneInfo> {
-	run_check(options, start).await?;
 	let opts =
 		RespawnOptions { cwd: start.home.clone(), command: options.command.clone(), env: Some(start.env.clone()) };
 	let respawned = herdr.respawn(&pane.pane_id, &opts).await?;

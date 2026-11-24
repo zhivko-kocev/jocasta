@@ -1,6 +1,6 @@
 //! One request to a herdr session, through the product's client (`herdr_request_once`): its framing, `HerdrError`s and
-//! 0517's single retry of a dropped read. Only for the two calls the `Herdr` interface has no method for
-//! (`pane.wait_for_output`, `tab.close`); everything else goes through the client (`open_sandbox().herdr()`, BEN-18).
+//! 0517's single retry of a dropped read. Only for the calls the `Herdr` interface has no method for
+//! (`pane.wait_for_output`, `tab.close`, and H6's `agent.prompt` into a competitor's TUI); everything else goes through the client (`open_sandbox().herdr()`, BEN-18).
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;

@@ -12,6 +12,7 @@ use std::time::Duration;
 use futures_util::FutureExt;
 use serde_json::{Value, json};
 
+use crate::frontier::server::bridge::PaneAgent;
 use crate::frontier::server::close::CloseOutcome;
 use crate::frontier::server::helpers::{
 	BRIEF, HunkDaemon, TestServer, ThreadOptions, append_proposal, boss_idle, boss_lines, boss_pane, call, commit_in,
@@ -186,6 +187,7 @@ async fn b3_a_plan_awaiting_him_survives_stop_everything_and_reopen_the_resumed_
 	finally(&server, |server| async move {
 		let fresh = fresh_pane(&herdr);
 		append_entry(&file, &plan_mode_entry("m3"));
+		server.bridge.record(|recording| recording.agents.insert(fresh.clone(), PaneAgent::default()));
 		herdr.set_state(&fresh, AgentState::Idle, Some(path_text(&file)), true);
 		until_async(|| async {
 			if busy(&server).awaiting != 0 {
@@ -243,14 +245,14 @@ async fn a_done_and_reviewed_thread_survives_stop_everything_and_reopen_still_in
 }
 
 /// A thread whose omp left `session` (a plan proposed, or plan mode only) through Stop everything and a reopen (as B3):
-/// herdr restores its pane as a shell, the thread's omp resumes with `--continue` and goes idle, its screen `screen`.
+/// herdr restores its pane as a shell, the thread's omp resumes with `--continue` and goes idle, its bridge reporting `agent`.
 struct Reopened {
 	server: TestServer,
 	herdr: Arc<FakeHerdr>,
 	fresh: String,
 }
 
-async fn reopened(root: &Path, session: fn(&Path) -> PathBuf, screen: &str) -> Reopened {
+async fn reopened(root: &Path, session: fn(&Path) -> PathBuf, agent: PaneAgent) -> Reopened {
 	demo_project(root, "demo").await;
 	let daemon = use_hunk_daemon().await;
 	let herdr = Arc::new(FakeHerdr::new());
@@ -270,7 +272,7 @@ async fn reopened(root: &Path, session: fn(&Path) -> PathBuf, screen: &str) -> R
 	let fresh = fresh_pane(&herdr);
 	// The resumed omp re-enters plan mode in its session.
 	append_entry(&file, &plan_mode_entry("m3"));
-	herdr.state().screens.insert(fresh.clone(), screen.to_owned());
+	server.bridge.record(|recording| recording.agents.insert(fresh.clone(), agent));
 	herdr.set_state(&fresh, AgentState::Idle, Some(path_text(&file)), true);
 	Reopened { server, herdr, fresh }
 }
@@ -296,42 +298,26 @@ impl Reopened {
 		typed(&self.herdr, &self.fresh)
 	}
 
-	fn screen_reads(&self) -> usize {
-		self.herdr.of("screen").iter().filter(|args| args[0] == json!(self.fresh)).count()
+	/// Whether the reopened plan was looked at: the thread no longer waits for its review to be reopened.
+	fn looked(&self) -> bool {
+		let threads = self.server.service.context().threads.all();
+		!threads.is_empty() && threads.iter().all(|t| t.with(|t| t.plan.as_ref().is_some_and(|p| !p.reopened)))
+	}
+
+	/// The pane's omp reports `agent` over its bridge.
+	fn report(&self, agent: PaneAgent) {
+		self.server.bridge.record(|recording| recording.agents.insert(self.fresh.clone(), agent));
 	}
 }
 
-/// omp's Plan Review as `pane read` shows it.
-const PLAN_REVIEW: &str = "Plan: readme-line\n> Approve and execute\n  Approve and compact context\n  Approve and keep context (~12k / 200k)\n  Refine plan\n  Save and quit\n↑↓ navigate  enter select  esc cancel";
-
-/// A question of omp ≤ 18.18.2's `ask` as `pane read` shows it.
-const QUESTION: &str =
-	"Which file?\n> README.md\n  docs/intro.md\n  Other (type your own)\n↑↓ navigate  enter select  esc cancel";
-
-/// omp 18.22.0's `ask` form as its TUI draws it (pi-tui `html-form/dialog.ts`, 0589), cut so each test screen shows only
-/// one of the two lines that tell a form: its Other row, or its footer.
-const FORM_OTHER_ROW: &str = "╭─ Ask ──────────────────────────────────────────╮\n│ Session store                                  │\n│   ◉ SQLite: one file, no new service           │\n│   ○ Redis: shared across instances, needs ops  │\n│   ○ Other: type your own                       │";
-const FORM_FOOTER: &str = "│   Submit                                       │\n├────────────────────────────────────────────────┤\n│ ⏎ choose · ↑/↓ move · ⇥ next field · ⎋ cancel  │\n╰────────────────────────────────────────────────╯";
-
 #[tokio::test(flavor = "multi_thread")]
-async fn a_reopened_thread_whose_plan_awaits_him_gets_plan_review_typed_once_after_its_screen_shows_no_picker_0494() {
+async fn a_reopened_thread_whose_plan_awaits_him_gets_plan_review_typed_once_when_its_omp_shows_no_dialog_0494() {
 	let j = temp_jocasta();
-	let r = reopened(j.root(), proposed_plan_file, "plan mode  ▸ ").await;
+	let r = reopened(j.root(), proposed_plan_file, PaneAgent::default()).await;
 	finally(&r.server, |_| async {
 		r.look_until(|| !r.typed().is_empty()).await;
 		assert_eq!(r.typed(), vec![vec![json!(r.fresh), json!("/plan-review")]]);
-		// It read the screen before typing.
-		let calls: Vec<String> = r
-			.herdr
-			.state()
-			.calls
-			.iter()
-			.map(|c| format!("{} {}", c.method, c.args.first().and_then(Value::as_str).unwrap_or("undefined")))
-			.collect();
-		let position = |text: String| calls.iter().position(|c| *c == text);
-		assert!(position(format!("screen {}", r.fresh)) < position(format!("prompt {}", r.fresh)));
-		// Never a second time, even with the screen clear and omp idle again.
-		r.herdr.state().screens.insert(r.fresh.clone(), String::new());
+		// Never a second time, even with omp idle again.
 		r.herdr.set_state(&r.fresh, AgentState::Working, None, true);
 		r.herdr.set_state(&r.fresh, AgentState::Idle, None, true);
 		r.look(10).await;
@@ -341,29 +327,32 @@ async fn a_reopened_thread_whose_plan_awaits_him_gets_plan_review_typed_once_aft
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn nothing_is_typed_into_a_reopened_thread_while_omps_plan_review_shows_not_after_it_goes_either_0494() {
+async fn nothing_is_typed_into_a_reopened_thread_while_omps_plan_review_is_open_not_after_it_goes_either_0494() {
 	let j = temp_jocasta();
-	let r = reopened(j.root(), proposed_plan_file, PLAN_REVIEW).await;
+	let open = PaneAgent { input_open: true, input_kind: Some("plan".to_owned()), ..PaneAgent::default() };
+	let r = reopened(j.root(), proposed_plan_file, open).await;
 	finally(&r.server, |_| async {
-		r.look_until(|| r.screen_reads() > 0).await;
+		r.look_until(|| r.looked()).await;
 		assert_eq!(busy(&r.server).awaiting, 1);
-		// The picker already open ends the wait.
-		r.herdr.state().screens.insert(r.fresh.clone(), String::new());
+		// The Plan Review already open ends the wait.
+		r.report(PaneAgent::default());
 		r.look(10).await;
 		assert!(r.typed().is_empty());
-		assert_eq!(r.screen_reads(), 1);
 	})
 	.await;
 }
 
-async fn a_question_shows(screen: &str) {
+/// A dialog of omp's (`kind`: `ask`) is open when the reopened thread's plan is looked at, as its bridge reports it.
+async fn a_question_shows(kind: &str) {
 	let j = temp_jocasta();
-	let r = reopened(j.root(), proposed_plan_file, screen).await;
+	let open = PaneAgent { input_open: true, input_kind: Some(kind.to_owned()), ..PaneAgent::default() };
+	let r = reopened(j.root(), proposed_plan_file, open).await;
 	finally(&r.server, |_| async {
-		r.look_until(|| r.screen_reads() >= 3).await;
+		r.look(3).await;
 		assert_eq!(busy(&r.server).awaiting, 1);
 		assert!(r.typed().is_empty());
-		r.herdr.state().screens.insert(r.fresh.clone(), String::new());
+		// It is answered: the dialog closes, and the plan's review comes back.
+		r.report(PaneAgent::default());
 		r.look_until(|| !r.typed().is_empty()).await;
 		assert_eq!(r.typed(), vec![vec![json!(r.fresh), json!("/plan-review")]]);
 	})
@@ -371,27 +360,15 @@ async fn a_question_shows(screen: &str) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn nothing_is_typed_into_a_reopened_thread_while_a_question_shows_omp_18_18_2s_question_picker_once_it_is_answered_the_plans_review_comes_back_0494_0589()
+async fn nothing_is_typed_into_a_reopened_thread_while_a_question_dialog_is_open_once_it_is_answered_the_plans_review_comes_back_0494_0589()
  {
-	a_question_shows(QUESTION).await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn nothing_is_typed_into_a_reopened_thread_while_a_question_shows_an_ask_forms_other_row_once_it_is_answered_the_plans_review_comes_back_0494_0589()
- {
-	a_question_shows(FORM_OTHER_ROW).await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn nothing_is_typed_into_a_reopened_thread_while_a_question_shows_an_ask_forms_footer_once_it_is_answered_the_plans_review_comes_back_0494_0589()
- {
-	a_question_shows(FORM_FOOTER).await;
+	a_question_shows("ask").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_reopened_thread_whose_plan_isnt_awaiting_him_gets_nothing_typed_0494() {
 	let j = temp_jocasta();
-	let r = reopened(j.root(), plan_mode_file, "").await;
+	let r = reopened(j.root(), plan_mode_file, PaneAgent::default()).await;
 	finally(&r.server, |_| async {
 		// The reopened omp is idle in plan mode with no proposal: the tick looks at it and finds no plan to show. Ten
 		// ticks were not always enough on a loaded runner (the thread wasn't adopted and idle yet, so a proposal written
@@ -419,7 +396,6 @@ async fn a_reopened_thread_whose_plan_isnt_awaiting_him_gets_nothing_typed_0494(
 		r.look_until(|| busy(&r.server).awaiting == 1).await;
 		r.look(10).await;
 		assert!(r.typed().is_empty(), "typed: {:?}", r.typed());
-		assert!(r.herdr.of("screen").is_empty());
 	})
 	.await;
 }

@@ -14,8 +14,8 @@ use serde_json::{Value, json};
 
 use crate::frontier::protocol::{NeedsYouKind, ServerMessage, ToastReason};
 use crate::frontier::server::helpers::{
-	BRIEF, Keyed, Msg, Page, TestServer, ThreadOptions, boss_pane, call, call_as, cli, commit_in, demo_project, guard,
-	keyed, pane_check_flags, project_keyed, proposed_plan_file, push_state, review, session_file, sh,
+	BRIEF, Keyed, Msg, Page, TestServer, ThreadOptions, boss_pane, bridge_flags, call, call_as, cli, commit_in,
+	demo_project, guard, keyed, project_keyed, proposed_plan_file, push_state, review, session_file, sh,
 	start_test_server_with, start_thread, task_dir_of, thread_omp, until, until_async, use_hunk_daemon, with_server,
 };
 use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
@@ -119,7 +119,7 @@ where
 	}
 }
 
-fn expected_overlay(project: &Project, relay_port: u16) -> Value {
+fn expected_overlay(project: &Project) -> Value {
 	json!({
 		"memory": { "backend": "off" },
 		"task": { "completionProbe": false, "maxRecursionDepth": 1 },
@@ -137,9 +137,8 @@ fn expected_overlay(project: &Project, relay_port: u16) -> Value {
 		"dev": { "autoqa": false },
 		"disabledProviders": ["claude-plugins"],
 		"modelRoles": { "web": "web/duckduckgo" },
-		// Every session hosts in Jocasta's relay, and `/share` stays on this machine (0536, 0561).
-		"collab": { "autoStart": "control", "relayUrl": format!("ws://127.0.0.1:{relay_port}") },
-		"share": { "serverUrl": format!("http://127.0.0.1:{relay_port}/s") },
+		// `/share` stays on this machine (0536, 0561, 0675).
+		"share": { "serverUrl": "http://127.0.0.1:47499/s" },
 	})
 }
 
@@ -152,7 +151,7 @@ fn check_first_start(
 ) {
 	let overlay = overlay_file(&project.id);
 	let parsed = parse_value(&fs::read_to_string(&overlay).unwrap()).unwrap();
-	assert_eq!(parsed, expected_overlay(project, server.relay_port));
+	assert_eq!(parsed, expected_overlay(project));
 	// The project's lessons: one skill `lessons`, its index made from the shipped template (0459).
 	assert_eq!(
 		fs::read_to_string(lessons_dir(&project.id).join("SKILL.md")).unwrap(),
@@ -160,8 +159,8 @@ fn check_first_start(
 	);
 	let mut command = strings(&["omp", "--continue"]);
 	command.extend(guard());
+	command.extend(bridge_flags());
 	command.extend(["--config".to_owned(), path_text(&overlay)]);
-	command.extend(pane_check_flags());
 	// The project workspace: label = project name, cwd = main checkout, the project pane running omp with Jocasta's
 	// turn-end extension (0617).
 	let ensured = server.herdr.of("ensureWorkspace");
@@ -180,6 +179,7 @@ fn check_first_start(
 	let mut thread_command = strings(&["omp", "--append-system-prompt"]);
 	thread_command.push(path_text(&prompt));
 	thread_command.extend(guard());
+	thread_command.extend(bridge_flags());
 	thread_command.extend(["--config".to_owned(), path_text(&overlay)]);
 	// Every thread warns at $50 (0541) and appends its task's brief and done-when (0540).
 	thread_command.extend(strings(&["--warn-cost", "50"]));
@@ -302,6 +302,7 @@ async fn a_heavy_thread_start_0590_is_recorded_on_its_task_and_loads_heavy_yml_a
 		let mut command = strings(&["omp", "--append-system-prompt"]);
 		command.push(path_text(&task_dir_of(&project.id, "Readme line").join("prompt.md")));
 		command.extend(guard());
+		command.extend(bridge_flags());
 		command.extend(["--config".to_owned(), path_text(&overlay_file(&project.id))]);
 		command.extend(heavy.clone());
 		command.extend(strings(&["--warn-cost", "50"]));
@@ -380,8 +381,8 @@ async fn project_panes_append_the_shipped_ponytail_prompt_thread_panes_append_it
 		let mut command = strings(&["omp", "--continue", "--append-system-prompt"]);
 		command.push(path_text(&stripped));
 		command.extend(guard());
+		command.extend(bridge_flags());
 		command.extend(["--config".to_owned(), path_text(&overlay_file(&project.id))]);
-		command.extend(pane_check_flags());
 		let ensured = server.herdr.of("ensureWorkspace");
 		assert_eq!(ensured[1][..3], [json!("demo"), json!(path_text(&project.main_path)), json!(command)]);
 		assert_eq!(expected_env(HUNK_PORT, &[], true), env_of(&ensured[1][3]));
@@ -390,6 +391,7 @@ async fn project_panes_append_the_shipped_ponytail_prompt_thread_panes_append_it
 		let mut thread_command = strings(&["omp", "--append-system-prompt"]);
 		thread_command.push(path_text(&prompt));
 		thread_command.extend(guard());
+		thread_command.extend(bridge_flags());
 		thread_command.extend(["--config".to_owned(), path_text(&overlay_file(&project.id))]);
 		thread_command.extend(strings(&["--warn-cost", "50"]));
 		assert_eq!(server.herdr.of("createWorktree")[0][1]["command"], json!(thread_command));
@@ -402,36 +404,6 @@ async fn project_panes_append_the_shipped_ponytail_prompt_thread_panes_append_it
 				without_leading_comment(&shipped).trim()
 			)
 		);
-	})
-	.await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn a_brief_left_unsubmitted_in_omps_input_gets_one_enter_one_omp_takes_at_once_gets_none() {
-	let j = temp_jocasta();
-	demo_project(j.root(), "demo").await;
-	let options = ServerOptions { submit_wait_ms: Some(3_000), ..options_with_wait() };
-	with_server(options, |server| async move {
-		// The pane stays idle after the brief's paste: one Enter, only after the brief, never twice.
-		let started = start_thread(&server, ThreadOptions::default()).await;
-		let pane = started.pane_id;
-		assert_eq!(server.herdr.of("submit"), [[json!(pane)]]);
-		let order: Vec<String> =
-			server.herdr.methods().into_iter().filter(|m| m == "prompt" || m == "submit").collect();
-		assert_eq!(order, ["prompt", "submit"]);
-
-		// A second thread starts working on its brief: no Enter.
-		let asked = server.clone();
-		let replied = tokio::spawn(async move {
-			call(&asked, "thread_start", &json!({ "project": "demo", "title": "Second", "brief": "More." })).await
-		});
-		until(|| server.herdr.of("createWorktree").len() == 2).await;
-		let second = server.herdr.state().pane_list.last().map(|p| p.pane_id.clone()).unwrap();
-		server.herdr.set_state(&second, AgentState::Idle, None, true);
-		until(|| prompts_to(&server, &second).iter().any(|text| text.starts_with("More."))).await;
-		server.herdr.set_state(&second, AgentState::Working, None, true);
-		assert!(replied.await.unwrap().text.starts_with("Started demo/Second on branch"));
-		assert_eq!(server.herdr.of("submit"), [[json!(pane)]]);
 	})
 	.await;
 }
@@ -790,7 +762,7 @@ async fn sidebar_tokens_per_thread_pane_and_project_workspace_the_hud_and_the_to
 fn the_compaction_and_privacy_settings_agree_wherever_they_are_written_the_project_overlay_the_bosss_boss_yml_and_a1s_arm_0399_0448_0478_svc_16()
  {
 	let _j = temp_jocasta();
-	let overlay = parse_value(&overlay_text("p-0123456789abcdef", None)).unwrap();
+	let overlay = parse_value(&overlay_text("p-0123456789abcdef")).unwrap();
 	let boss = parse_value(&fs::read_to_string(shipped_config_dir(None).join("boss.yml")).unwrap()).unwrap();
 	let a1_file = Path::new(env!("CARGO_MANIFEST_DIR")).join("evals").join("variants").join("a1.yaml");
 	let a1 = parse_value(&fs::read_to_string(a1_file).unwrap()).unwrap()["settings"].clone();

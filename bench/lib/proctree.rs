@@ -27,6 +27,9 @@ pub struct ProcessInfo {
 	pub working_set: u64,
 	/// Bytes; `None` where the OS doesn't report them.
 	pub private_bytes: Option<u64>,
+	/// When it started (Windows file time, 100 ns ticks); `None` where not read. A "child" older than its parent is
+	/// another process's, whose parent pid was reused (the footprint run caught csrss under the service that way).
+	pub created: Option<u64>,
 }
 
 fn powershell() -> PathBuf {
@@ -86,6 +89,10 @@ pub fn parse_windows_processes(json: &str) -> Result<Vec<ProcessInfo>> {
 				None | Some(Value::Null) => None,
 				other => Some(number(other) as u64),
 			},
+			created: match row.get("Created") {
+				None | Some(Value::Null) => None,
+				other => Some(number(other) as u64),
+			},
 		})
 		.collect())
 }
@@ -105,6 +112,7 @@ pub fn parse_ps_processes(text: &str) -> Vec<ProcessInfo> {
 				name: found[4].to_owned(),
 				command_line: found[5].to_owned(),
 				private_bytes: None,
+				created: None,
 			})
 		})
 		.collect()
@@ -113,7 +121,7 @@ pub fn parse_ps_processes(text: &str) -> Vec<ProcessInfo> {
 /// Every running process, once.
 pub fn snapshot_processes() -> Result<Vec<ProcessInfo>> {
 	if cfg!(windows) {
-		let script = "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine,WorkingSetSize,PrivatePageCount | ConvertTo-Json -Compress";
+		let script = "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine,WorkingSetSize,PrivatePageCount,@{n='Created';e={$_.CreationDate.ToFileTimeUtc()}} | ConvertTo-Json -Compress";
 		let argv = [
 			powershell().to_string_lossy().into_owned(),
 			"-NoProfile".into(),
@@ -150,8 +158,11 @@ pub fn tree_of(root_pid: u32, processes: &[ProcessInfo]) -> Vec<ProcessInfo> {
 	let mut seen = HashSet::from([root_pid]);
 	let mut at = 0;
 	while at < tree.len() {
-		for child in by_parent.get(&tree[at].pid).into_iter().flatten() {
-			if seen.insert(child.pid) {
+		let parent = tree[at];
+		for child in by_parent.get(&parent.pid).into_iter().flatten() {
+			// A process can't be older than its parent: one that is belongs to a dead process whose pid was reused.
+			let older = matches!((child.created, parent.created), (Some(child), Some(parent)) if child < parent);
+			if !older && seen.insert(child.pid) {
 				tree.push(child);
 			}
 		}

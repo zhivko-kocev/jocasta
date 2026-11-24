@@ -7,15 +7,16 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
+use tokio::io::{AsyncWriteExt, ReadHalf, WriteHalf};
 
 use crate::lib::args::BenchUsageError;
-use crate::lib::output::json_text;
 use jocasta::frontier::server::launch::{OnOff, service_health};
+use jocasta::shared::bridge_wire::{CliPeer, MAX_LINE, Stream, VERSION, bridge_address, connect, line_of};
 use jocasta::shared::env;
 use jocasta::shared::errors::{Context, Error, Result};
 use jocasta::shared::layer::{HOSTS_ENV, LAYER_ENV};
+use jocasta::shared::line_rpc::LineReader;
 use jocasta::shared::pathkey::resolve;
 use jocasta::shared::paths::default_data_dir;
 use jocasta::shared::process::{RunOptions, run_program_sync};
@@ -128,13 +129,22 @@ pub fn require_sandbox_in(env: &HashMap<String, String>, windows: bool, his_data
 	Ok(Sandbox { data_dir: data_dir.clone(), herdr_session: herdr_session.clone(), config_dir: config_dir.clone() })
 }
 
-/// What the service's MCP and CLI endpoints answer.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase")]
+/// What the service's bridge answers to a tool call or a `jocasta` command: a `result` line's text (or error).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolReply {
 	pub text: String,
-	#[serde(default)]
 	pub is_error: Option<bool>,
+}
+
+impl ToolReply {
+	fn of_result(result: &Value) -> Self {
+		let ok = result.get("ok").and_then(Value::as_bool) != Some(false);
+		let key = if ok { "text" } else { "error" };
+		Self {
+			text: result.get(key).and_then(Value::as_str).unwrap_or_default().to_owned(),
+			is_error: (!ok).then_some(true),
+		}
+	}
 }
 
 /// The running service `<data>/jocasta-service.json` names (`JOCASTA_DATA_DIR` picks the sandbox's).
@@ -144,57 +154,72 @@ fn service() -> Result<(u16, String)> {
 	Ok((running.port, running.token))
 }
 
-/// A client for the loopback service: no proxy, no time limit (a start waits for omp to come up in its pane).
-pub(crate) fn http_client() -> Result<reqwest::Client> {
-	reqwest::Client::builder().no_proxy().build().context("building the HTTP client")
-}
-
-/// POSTs `body` (JSON) to the running service with its token as a bearer; the reply as a [`ToolReply`].
-pub(crate) async fn post_to_service(path: &str, body: &Value) -> Result<ToolReply> {
+/// One `jocasta thread|worktree` command against the running service, as the CLI makes it: a `cli` message on the
+/// bridge, opened with the service's token from `<data>/jocasta-service.json` (0675).
+pub(crate) async fn cli_request(command: &str, args: Map<String, Value>) -> Result<ToolReply> {
 	let (port, token) = service()?;
-	let response = http_client()?
-		.post(format!("http://127.0.0.1:{port}{path}"))
-		.bearer_auth(token)
-		.header("content-type", "application/json")
-		.body(json_text(body, false))
-		.send()
-		.await?;
-	Ok(response.json().await?)
+	let mut peer = CliPeer::open(port, &token).await.context("connecting to the service's bridge")?;
+	let result = peer.request(json!({ "t": "cli", "command": command, "args": args })).await?;
+	Ok(ToolReply::of_result(&result))
 }
 
-/// `encodeURIComponent`.
-fn encode_uri_component(text: &str) -> String {
-	let mut out = String::new();
-	for byte in text.bytes() {
-		if byte.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&byte) {
-			out.push(char::from(byte));
-		} else {
-			out.push_str(&format!("%{byte:02X}"));
+/// A pane's omp as the service sees it over the bridge: a hello with the pane's key (0578), which the service keeps in
+/// `<data>/panes.json`, then the pane's tool calls. The hello takes the real omp's place on the bridge while this
+/// session lasts (a pane's omp that started again does), so a sandbox pane is only queried, never prompted, meanwhile.
+pub struct PaneSession {
+	read: LineReader<ReadHalf<Stream>>,
+	write: WriteHalf<Stream>,
+	next: u64,
+}
+
+impl PaneSession {
+	/// A pane session for `pane_key` (the pane's key from `<data>/panes.json`): a hello on the bridge, ready to `call`.
+	pub async fn open(pane_key: &str) -> Result<Self> {
+		let (port, _) = service()?;
+		let stream = connect(&bridge_address(port)).await.context("connecting to the service's bridge")?;
+		let (read, write) = tokio::io::split(stream);
+		let mut session = Self { read: LineReader::new(read, MAX_LINE), write, next: 0 };
+		session.send(&json!({ "t": "hello", "v": VERSION, "key": pane_key, "harness": "jocasta-bench" })).await?;
+		if session.message().await?.get("t").and_then(Value::as_str) != Some("welcome") {
+			return Err(Error::other("the bridge didn't welcome the pane's key"));
+		}
+		Ok(session)
+	}
+
+	async fn send(&mut self, message: &Value) -> Result<()> {
+		self.write.write_all(line_of(message).as_bytes()).await?;
+		self.write.flush().await?;
+		Ok(())
+	}
+
+	async fn message(&mut self) -> Result<Value> {
+		loop {
+			match self.read.next_line().await {
+				Ok(Some(line)) => {
+					if let Ok(message) = serde_json::from_str::<Value>(&line) {
+						return Ok(message);
+					}
+				}
+				Ok(None) => {
+					return Err(Error::other("the bridge closed the connection: not a pane key of the service?"));
+				}
+				Err(error) => return Err(Error::other(error.to_string())),
+			}
 		}
 	}
-	out
-}
 
-/// Who a tool call is made for: a pane's tools name the pane by its key (0578).
-#[derive(Debug, Clone, Default)]
-pub struct Caller {
-	pub pane_key: Option<String>,
-	pub boss_key: Option<String>,
-}
-
-/// One call to the running service's MCP endpoint, as `jocasta mcp` makes it (`POST /api/mcp/<tool>`, bearer token from
-/// `<data>/jocasta-service.json`, body `{args, paneKey?, bossKey?}`): a pane's tools name the pane by its key (0578), which
-/// the service keeps in `<data>/panes.json`.
-pub async fn call_tool(tool: &str, args: Map<String, Value>, caller: &Caller) -> Result<ToolReply> {
-	let mut body = Map::new();
-	body.insert("args".to_owned(), Value::Object(args));
-	if let Some(key) = &caller.pane_key {
-		body.insert("paneKey".to_owned(), Value::String(key.clone()));
+	/// One tool call of the pane (`call`), as the pane's omp makes it; resolves its `result`.
+	pub async fn call(&mut self, tool: &str, args: Map<String, Value>) -> Result<ToolReply> {
+		self.next += 1;
+		let id = self.next.to_string();
+		self.send(&json!({ "t": "call", "id": id, "tool": tool, "args": args })).await?;
+		loop {
+			let answer = self.message().await?;
+			if answer.get("t").and_then(Value::as_str) == Some("result") && answer.get("id") == Some(&json!(id)) {
+				return Ok(ToolReply::of_result(&answer));
+			}
+		}
 	}
-	if let Some(key) = &caller.boss_key {
-		body.insert("bossKey".to_owned(), Value::String(key.clone()));
-	}
-	post_to_service(&format!("/api/mcp/{}", encode_uri_component(tool)), &Value::Object(body)).await
 }
 
 /// The two test-only switches a sandbox service reports in `/health` (0576), with the variable that turns each off.

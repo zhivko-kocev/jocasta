@@ -12,6 +12,7 @@ use chrono::{Local, TimeZone};
 use serde_json::{Value, json};
 
 use super::*;
+use crate::frontier::server::bridge::PaneAgent;
 use crate::frontier::server::context::{TestContext, test_context};
 use crate::frontier::server::day::DayOptions;
 use crate::frontier::server::herdr::AgentState::{Blocked, Idle, Unknown, Working};
@@ -164,17 +165,6 @@ impl World {
 				ServerMessage::Toast { reason, text, pane_id, .. } => Some((*reason, text.clone(), pane_id.clone())),
 				_ => None,
 			})
-			.collect()
-	}
-
-	/// What herdr was asked about `pane`, by method, in order.
-	fn calls_on(&self, pane: &str) -> Vec<String> {
-		let state = self.t.herdr.state();
-		state
-			.calls
-			.iter()
-			.filter(|call| call.args.first().is_some_and(|arg| arg == pane))
-			.map(|c| c.method.clone())
 			.collect()
 	}
 }
@@ -698,6 +688,7 @@ async fn b3_a_resumed_threads_plan_found_idle_counts_as_awaiting_him_and_gets_pl
 	w.change_with(Idle, Some(&file)).await;
 	assert!(w.awaits(&fresh));
 	assert_eq!(w.thread.with(|t| t.plan.as_ref().and_then(|p| p.awaiting.clone())), Some("readme-line".to_owned()));
+	dialog(&w, &fresh, None);
 	w.t.ctx.lifecycle.reopen_plan_review(&w.thread).await.unwrap();
 	// The only text typed into it is omp's `/plan-review`, once (0494).
 	assert_eq!(w.prompts_to(&fresh), ["/plan-review"]);
@@ -705,15 +696,15 @@ async fn b3_a_resumed_threads_plan_found_idle_counts_as_awaiting_him_and_gets_pl
 	assert_eq!(w.prompts_to(&fresh), ["/plan-review"]);
 }
 
-const PLAN_REVIEW: &str = "Plan: readme-line\n> Approve and execute\n  Approve and compact context\n  Approve and keep context (~12k / 200k)\n  Refine plan\n  Save and quit\n↑↓ navigate  enter select  esc cancel";
-const QUESTION: &str =
-	"Which file?\n> README.md\n  docs/intro.md\n  Other (type your own)\n↑↓ navigate  enter select  esc cancel";
-const FORM_OTHER_ROW: &str = "╭─ Ask ──────────────────────────────────────────╮\n│ Session store                                  │\n│   ◉ SQLite: one file, no new service           │\n│   ○ Redis: shared across instances, needs ops  │\n│   ○ Other: type your own                       │";
-const FORM_FOOTER: &str = "│   Submit                                       │\n├────────────────────────────────────────────────┤\n│ ⏎ choose · ↑/↓ move · ⇥ next field · ⎋ cancel  │\n╰────────────────────────────────────────────────╯";
+/// What omp's extension reports for the pane (0675): no dialog open, or the dialog of `kind` (`plan`, `ask`, `approval`).
+fn dialog(w: &World, pane: &str, kind: Option<&str>) {
+	let agent = PaneAgent { input_open: kind.is_some(), input_kind: kind.map(str::to_owned), ..PaneAgent::default() };
+	w.t.ctx.bridge.record(|recording| recording.agents.insert(pane.to_owned(), agent)).expect("a recording bridge");
+}
 
 /// A thread whose omp left `session` through Stop everything and a reopen (as B3): its pane herdr restored as a shell,
-/// its new omp resumed with `--continue` and idle, its screen `screen`.
-async fn reopened(session: fn(&TestContext, &Path) -> std::path::PathBuf, screen: &str) -> (World, String) {
+/// its new omp resumed with `--continue` and idle, its dialog `kind` open (none for `None`).
+async fn reopened(session: fn(&TestContext, &Path) -> std::path::PathBuf, kind: Option<&str>) -> (World, String) {
 	let w = world(|options| options.plan_settle_ms = Some(100));
 	let file = session(&w.t, &w.repo);
 	w.change_with(Working, Some(&file)).await;
@@ -723,27 +714,18 @@ async fn reopened(session: fn(&TestContext, &Path) -> std::path::PathBuf, screen
 	let fresh = w.pane();
 	// The resumed omp re-enters plan mode in its session.
 	append(&file, &[plan_mode_entry("m3")]);
-	w.t.herdr.state().screens.insert(fresh.clone(), screen.to_owned());
+	dialog(&w, &fresh, kind);
 	w.change_with(Idle, Some(&file)).await;
 	(w, fresh)
 }
 
-fn screen_reads(w: &World, pane: &str) -> usize {
-	w.calls_on(pane).iter().filter(|method| *method == "screen").count()
-}
-
 #[tokio::test]
-async fn a_reopened_thread_whose_plan_awaits_him_gets_plan_review_typed_once_after_its_screen_shows_no_picker() {
+async fn a_reopened_thread_whose_plan_awaits_him_gets_plan_review_sent_once_when_no_dialog_is_open() {
 	// 0494
-	let (w, fresh) = reopened(proposed_plan_file, "plan mode  ▸ ").await;
+	let (w, fresh) = reopened(proposed_plan_file, None).await;
 	w.t.ctx.lifecycle.reopen_plan_review(&w.thread).await.unwrap();
 	assert_eq!(w.prompts_to(&fresh), ["/plan-review"]);
-	// It read the screen before typing.
-	let calls = w.calls_on(&fresh);
-	let (screen, prompt) = (calls.iter().position(|m| m == "screen"), calls.iter().position(|m| m == "prompt"));
-	assert!(screen.unwrap() < prompt.unwrap());
-	// Never a second time, even with the screen clear and omp idle again.
-	w.t.herdr.state().screens.insert(fresh.clone(), String::new());
+	// Never a second time, even with omp idle again.
 	w.change(Working).await;
 	w.change(Idle).await;
 	w.t.ctx.lifecycle.reopen_plan_review(&w.thread).await.unwrap();
@@ -751,32 +733,28 @@ async fn a_reopened_thread_whose_plan_awaits_him_gets_plan_review_typed_once_aft
 }
 
 #[tokio::test]
-async fn nothing_is_typed_into_a_reopened_thread_while_omps_plan_review_shows_not_after_it_goes_either() {
-	// 0494
-	let (w, fresh) = reopened(proposed_plan_file, PLAN_REVIEW).await;
+async fn nothing_is_sent_to_a_reopened_thread_while_omps_plan_review_shows_not_after_it_goes_either() {
+	// 0494: the Plan Review already open ends the wait.
+	let (w, fresh) = reopened(proposed_plan_file, Some("plan")).await;
 	w.t.ctx.lifecycle.reopen_plan_review(&w.thread).await.unwrap();
-	assert_eq!(screen_reads(&w, &fresh), 1);
 	assert!(w.awaits(&fresh));
-	// The picker already open ends the wait.
 	assert_eq!(w.thread.with(|t| t.plan.as_ref().map(|plan| plan.reopened)), Some(false));
-	w.t.herdr.state().screens.insert(fresh.clone(), String::new());
+	dialog(&w, &fresh, None);
 	w.t.ctx.lifecycle.reopen_plan_review(&w.thread).await.unwrap();
 	assert!(w.prompts_to(&fresh).is_empty());
 }
 
 #[tokio::test]
-async fn nothing_is_typed_into_a_reopened_thread_while_a_question_shows_once_it_is_answered_the_plans_review_comes_back()
- {
-	// 0494, 0589: omp 18.18.2's question picker, an ask form's Other row, an ask form's footer.
-	for screen in [QUESTION, FORM_OTHER_ROW, FORM_FOOTER] {
-		let (w, fresh) = reopened(proposed_plan_file, screen).await;
+async fn nothing_is_sent_to_a_reopened_thread_while_a_question_shows_once_it_is_answered_the_plans_review_comes_back() {
+	// 0494, 0589: omp's question picker and an ask form, whichever dialog its extension reports open.
+	for kind in ["ask", "approval"] {
+		let (w, fresh) = reopened(proposed_plan_file, Some(kind)).await;
 		for _ in 0..3 {
 			w.t.ctx.lifecycle.reopen_plan_review(&w.thread).await.unwrap();
 		}
-		assert_eq!(screen_reads(&w, &fresh), 3);
 		assert!(w.awaits(&fresh));
 		assert!(w.prompts_to(&fresh).is_empty());
-		w.t.herdr.state().screens.insert(fresh.clone(), String::new());
+		dialog(&w, &fresh, None);
 		w.t.ctx.lifecycle.reopen_plan_review(&w.thread).await.unwrap();
 		assert_eq!(w.prompts_to(&fresh), ["/plan-review"]);
 	}
@@ -784,18 +762,17 @@ async fn nothing_is_typed_into_a_reopened_thread_while_a_question_shows_once_it_
 
 #[tokio::test]
 async fn a_reopened_thread_whose_plan_isnt_awaiting_him_gets_nothing_typed() {
-	// 0494: the reopened omp is idle in plan mode with no proposal: no plan to show, and its screen isn't read.
-	let (w, fresh) = reopened(plan_mode_file, "").await;
+	// 0494: the reopened omp is idle in plan mode with no proposal: no plan to show, and nothing is sent.
+	let (w, fresh) = reopened(plan_mode_file, None).await;
 	assert!(!w.awaits(&fresh));
 	assert_eq!(w.thread.with(|t| t.plan.as_ref().and_then(|plan| plan.awaiting.clone())), None);
 	w.t.ctx.lifecycle.reopen_plan_review(&w.thread).await.unwrap();
 	assert!(w.prompts_to(&fresh).is_empty());
-	assert!(w.t.herdr.of("screen").is_empty());
 }
 
 #[tokio::test]
 async fn reopening_plan_review_waits_for_an_idle_omp_with_no_state_change_being_handled() {
-	let (w, fresh) = reopened(proposed_plan_file, "").await;
+	let (w, fresh) = reopened(proposed_plan_file, None).await;
 	w.thread.with(|t| t.state = Working);
 	w.t.ctx.lifecycle.reopen_plan_review(&w.thread).await.unwrap();
 	w.thread.with(|t| t.state = Idle);
@@ -803,7 +780,7 @@ async fn reopening_plan_review_waits_for_an_idle_omp_with_no_state_change_being_
 	w.t.ctx.lifecycle.state_changed(&fresh, Working, StateSource::Herdr);
 	assert!(w.t.ctx.lifecycle.busy(&fresh));
 	w.t.ctx.lifecycle.reopen_plan_review(&w.thread).await.unwrap();
-	assert!(w.t.herdr.of("screen").is_empty());
+	assert!(w.prompts_to(&fresh).is_empty());
 	w.t.ctx.lifecycle.settled().await;
 }
 

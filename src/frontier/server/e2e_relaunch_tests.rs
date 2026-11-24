@@ -14,7 +14,7 @@ use crate::frontier::server::helpers::{
 	BRIEF, Msg, TestServer, ThreadOptions, boss_idle, boss_pane, call, commit_in, demo_project, handoff_entry,
 	proposed_plan_file, relaunch_idle, review, session_file, sh, start_thread, to_handoff, until, use_hunk_daemon,
 };
-use crate::frontier::server::helpers_procs::{Hooked, ended_pid, with_server_on};
+use crate::frontier::server::helpers_procs::{Hooked, with_server_on};
 use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
 use crate::frontier::server::herdr::{AgentState, Herdr};
 use crate::frontier::server::server::ServerOptions;
@@ -171,7 +171,7 @@ async fn stop_everything_ends_what_each_thread_panes_remembered_omp_left_also_wh
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn stop_everything_a_thread_in_its_review_turn_is_saved_for_restore_and_its_omp_ends_forced_before_herdrs_server_stops_the_bosss_ends_with_herdr_only_the_ended_omps_host_entries_go_0549_0547()
+async fn stop_everything_a_thread_in_its_review_turn_is_saved_for_restore_and_its_omp_ends_forced_before_herdrs_server_stops_the_bosss_ends_with_herdr_0549()
  {
 	let j = temp_jocasta();
 	let project = demo_project(j.root(), "demo").await;
@@ -189,7 +189,6 @@ async fn stop_everything_a_thread_in_its_review_turn_is_saved_for_restore_and_it
 		// The thread's and the boss's omps: real processes that outlive their roots, as omp's workers do.
 		let omp = sleeper_tree(&root.join("thread-omp"), true).await;
 		let boss = sleeper_tree(&root.join("boss-omp"), true).await;
-		let ended = ended_pid();
 		let boss_id = boss_pane(&herdr).expect("the boss pane");
 		herdr.state().roots.insert(pane_id.clone(), omp.root);
 		herdr.state().roots.insert(boss_id, boss.root);
@@ -203,14 +202,6 @@ async fn stop_everything_a_thread_in_its_review_turn_is_saved_for_restore_and_it
 		let file = session_file(&path, &[Msg::new("Reviewing.", 0.1)]);
 		herdr.set_state(&pane_id, AgentState::Working, file.to_str(), true);
 		until(|| server.service.busy_threads().unwrap().working == 1).await;
-		// omp's host registry: the thread's omp, the boss's, and another omp that already ended.
-		let hosts = data_dir().join("collab-hosts");
-		fs::create_dir_all(&hosts).unwrap();
-		for (name, pid) in [("thread", omp.root), ("boss", boss.root), ("other", ended)] {
-			let entry = json!({"version": 1, "instanceId": name, "pid": pid, "endpoint": format!("none-{name}"),
-				"createdAt": 0, "token": "t"});
-			fs::write(hosts.join(format!("{name}.json")), entry.to_string()).unwrap();
-		}
 		// What runs as herdr's server stops (this fake's stop ends no process).
 		let at_stop: Arc<Mutex<Option<Alive>>> = Arc::new(Mutex::new(None));
 		let (thread_pids, boss_pids, seen) = (omp.all.clone(), boss.all.clone(), Arc::clone(&at_stop));
@@ -222,10 +213,6 @@ async fn stop_everything_a_thread_in_its_review_turn_is_saved_for_restore_and_it
 		assert_eq!(*at_stop.lock().unwrap(), Some((Vec::<u32>::new(), boss.all.clone())));
 		let panes: Value = serde_json::from_str(&fs::read_to_string(data_dir().join("panes.json")).unwrap()).unwrap();
 		assert_eq!(panes[&pane_id]["restore"], json!(file.display().to_string()));
-		let mut left: Vec<String> =
-			fs::read_dir(&hosts).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
-		left.sort();
-		assert_eq!(left, vec!["boss.json".to_owned(), "other.json".to_owned()]);
 		drop(omp);
 		drop(boss);
 		// Nothing it started still works in the temp folder, so the folder can go (Windows' EBUSY).

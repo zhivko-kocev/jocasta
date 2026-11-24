@@ -12,9 +12,9 @@
 //! `ask` tool call's message once complete (`completedAt`, not the request's start, so the model's generation isn't in
 //! the figures) or a plan proposal. t3 is the moment herdr answered `shown` for the pane's `blocked` notification: the
 //! notification reached Windows; how long Windows then takes to draw the banner isn't measured.
-//! Conditions (0576): `host` (the default), the service reading each thread's state from omp's collab host, polled
-//! every 1 s (0547); `herdr`, the sandbox service started with `JOCASTA_HOSTS=off`, so it ignores omp's host registry
-//! and falls back to herdr's events and its tick. H2 reads the service's switch from `/health` and refuses a mismatch.
+//! Conditions (0576): `host` (the default), the service taking each thread's state as its omp pushes it over the
+//! bridge (0675); `herdr`, the sandbox service started with `JOCASTA_HOSTS=off`, so it ignores those pushes and falls
+//! back to herdr's events and its tick. H2 reads the service's switch from `/health` and refuses a mismatch.
 //! Trials come from threads he starts (the boss's left out), or with `--start <project>` from
 //! threads H2 starts as `jocasta thread new` does and reads as `jocasta thread list` does (no Allow, 0544, 0576; each
 //! brief makes omp ask one question, so a model runs: VM only): then only those threads' panes are trials (a listed
@@ -333,7 +333,7 @@ impl Recorder<'_> {
 /// The `--dry-run` plan.
 fn print_h2_plan(args: &BenchArgs, condition: &str, minutes: f64, project: Option<&str>) {
 	let how = if condition == "host" {
-		"host (omp's collab host, polled every 1 s)"
+		"host (omp's state pushed over the bridge)"
 	} else {
 		"herdr (service started with JOCASTA_HOSTS=off: herdr's events and tick)"
 	};

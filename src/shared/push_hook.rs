@@ -13,9 +13,6 @@ use crate::shared::env;
 /// The internal word of the `jocasta` command git runs as the hook (0613); not in the usage text.
 pub const PUSH_HOOK_ROLE: &str = "push-hook";
 
-/// Where the hook asks the service (`POST`, the API token as the bearer).
-pub const PUSH_PATH: &str = "/api/push";
-
 /// The all-zero commit git gives for a ref that doesn't exist yet (a new branch) or is being deleted.
 pub static NO_COMMIT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^0+$").expect("a fixed pattern"));
 
@@ -33,7 +30,7 @@ pub struct PushedRef {
 	pub remote: String,
 }
 
-/// What the hook sends the service (`PUSH_PATH`).
+/// What the hook sends the service (a `push` message on the bridge pipe, 0675).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PushRequest {

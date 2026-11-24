@@ -382,15 +382,13 @@ async fn split_beside_runs_the_command_with_its_env_and_names_the_new_pane() {
 	assert_eq!(fake.last("pane.rename").unwrap().params, json!({"pane_id": "w4:p7", "label": "review"}));
 }
 
-#[tokio::test]
-async fn prompt_and_send_text_strip_esc_and_other_control_characters_so_outside_text_cant_end_the_paste() {
-	let Setup { fake, herdr, .. } = &setup().await;
-	fake.set_handler("agent.prompt", ok());
-	fake.set_handler("pane.send_text", ok());
-	herdr.prompt("w4:p2", "title\u{1b}[201~\r!echo pwned\u{7}\u{9b}2J\u{7f}\nnext\tline «ok» é").await.unwrap();
-	herdr.send_text("w4:p2", "a\u{1b}b").await.unwrap();
-	assert_eq!(fake.last("agent.prompt").unwrap().params["text"], "title[201~!echo pwned2J\nnext\tline «ok» é");
-	assert_eq!(fake.last("pane.send_text").unwrap().params["text"], "ab");
+#[test]
+fn pane_text_strips_esc_and_other_control_characters_so_outside_text_cant_end_the_paste() {
+	assert_eq!(
+		pane_text("title\u{1b}[201~\r!echo pwned\u{7}\u{9b}2J\u{7f}\nnext\tline «ok» é"),
+		"title[201~!echo pwned2J\nnext\tline «ok» é"
+	);
+	assert_eq!(pane_text("a\u{1b}b"), "ab");
 	assert_eq!(pane_text("plain"), "plain");
 }
 
@@ -460,21 +458,12 @@ async fn watch_a_state_pushed_while_the_subscriptions_reconcile_read_is_in_fligh
 }
 
 #[tokio::test]
-async fn prompt_send_text_stop_focus_and_metadata_send_herdrs_methods_and_params() {
+async fn send_keys_focus_and_metadata_send_herdrs_methods_and_params() {
 	let Setup { fake, herdr, .. } = &setup().await;
-	for method in [
-		"agent.prompt",
-		"pane.send_text",
-		"pane.send_keys",
-		"pane.focus",
-		"pane.report_metadata",
-		"workspace.report_metadata",
-	] {
+	for method in ["pane.send_keys", "pane.focus", "pane.report_metadata", "workspace.report_metadata"] {
 		fake.set_handler(method, ok());
 	}
-	herdr.prompt("w4:p2", "add a README line").await.unwrap();
-	herdr.send_text("w4:p2", "/handoff").await.unwrap();
-	herdr.stop("w4:p2").await.unwrap();
+	herdr.send_keys("w4:p2", &strings(&["esc"])).await.unwrap();
 	herdr.focus("w4:p2").await.unwrap();
 	herdr
 		.report_pane_metadata(
@@ -491,8 +480,6 @@ async fn prompt_send_text_stop_focus_and_metadata_send_herdrs_methods_and_params
 	assert_eq!(
 		shape(&fake.requests()[1..]),
 		json!([
-			{"method": "agent.prompt", "params": {"target": "w4:p2", "text": "add a README line"}},
-			{"method": "pane.send_text", "params": {"pane_id": "w4:p2", "text": "/handoff"}},
 			{"method": "pane.send_keys", "params": {"pane_id": "w4:p2", "keys": ["esc"]}},
 			{"method": "pane.focus", "params": {"pane_id": "w4:p2"}},
 			{"method": "pane.report_metadata", "params": {
@@ -510,11 +497,11 @@ async fn prompt_send_text_stop_focus_and_metadata_send_herdrs_methods_and_params
 #[tokio::test]
 async fn each_request_uses_its_own_connection_an_error_response_rejects_with_herdrs_code() {
 	let Setup { fake, herdr, .. } = &setup().await;
-	fake.set_handler("agent.prompt", |_| {
+	fake.set_handler("pane.focus", |_| {
 		Answer::error("agent_blocked", "agent w4:p2 is blocked and requires interactive input")
 	});
 	fake.set_handler("pane.list", reply(pane_list(vec![])));
-	let blocked = herdr.prompt("w4:p2", "go").await.unwrap_err();
+	let blocked = herdr.focus("w4:p2").await.unwrap_err();
 	assert_eq!(blocked.code, "agent_blocked");
 	assert!(herdr.panes().await.unwrap().is_empty());
 	assert!(herdr.panes().await.unwrap().is_empty());
@@ -536,11 +523,11 @@ async fn a_read_herdr_closes_before_answering_is_asked_again_once_a_second_drop_
 #[tokio::test]
 async fn a_change_herdr_closes_before_answering_is_never_sent_again_herdr_may_have_made_it() {
 	let Setup { fake, herdr, .. } = &setup().await;
-	fake.set_handler("agent.prompt", ok());
-	fake.drop_next("agent.prompt", 1);
-	let error = herdr.prompt("w4:p2", "go").await.unwrap_err();
-	assert!(error.message.contains("closed the connection before answering agent.prompt"), "{error}");
-	assert_eq!(fake.methods().iter().filter(|m| *m == "agent.prompt").count(), 1);
+	fake.set_handler("pane.focus", ok());
+	fake.drop_next("pane.focus", 1);
+	let error = herdr.focus("w4:p2").await.unwrap_err();
+	assert!(error.message.contains("closed the connection before answering pane.focus"), "{error}");
+	assert_eq!(fake.methods().iter().filter(|m| *m == "pane.focus").count(), 1);
 }
 
 #[tokio::test]

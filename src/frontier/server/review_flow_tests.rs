@@ -32,7 +32,7 @@ use crate::frontier::server::hunk::fake_hunk::{fake_hunk, health_daemon};
 use crate::frontier::server::mise::tests::{captured_shim, stand_in};
 use crate::frontier::server::service::ServiceOptions;
 use crate::frontier::server::task_file::TaskRecord;
-use crate::frontier::server::wording::IDLE_CHECK_FRAME;
+use crate::frontier::server::wording::{HANDOFF_PROMPT, IDLE_CHECK_FRAME};
 use crate::shared::env::overlay;
 use crate::shared::layer::LAYER_ENV;
 use crate::shared::pathkey::real_path;

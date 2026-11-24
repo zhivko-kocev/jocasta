@@ -3,7 +3,10 @@
 use std::path::Path;
 
 use super::*;
+use crate::shared::bridge_wire::{MAX_LINE, VERSION, connect, line_of};
+use crate::shared::line_rpc::LineReader;
 use crate::shared::testing::temp_dir;
+use tokio::io::AsyncWriteExt;
 
 /// `TASK_PROMPT_PREFIX` of `evals/tasks.ts`: the prompt of every arm, before the issue's text.
 const TASK_PROMPT_PREFIX: &str = "Fix the issue below in the repository in the current folder.\n\n";
@@ -17,7 +20,7 @@ fn arg_after<'a>(args: &'a [String], flag: &str) -> &'a str {
 	&args[at + 1]
 }
 
-/// Waits on a real server, the way the service's own e2e tests do.
+/// Runs on the real bridge the layer starts, the way a pane's omp reaches it.
 #[tokio::test(flavor = "multi_thread")]
 async fn a6s_layer_keeps_its_data_under_the_os_temp_folder_not_in_a_trial_root_outside_the_profile_and_removes_it() {
 	// EVL-1: the TypeScript put the trial root beside the checkout (on Windows outside the user's profile, D:\ on his
@@ -40,35 +43,39 @@ async fn a6s_layer_keeps_its_data_under_the_os_temp_folder_not_in_a_trial_root_o
 	let data = std::path::PathBuf::from(&layer.env["JOCASTA_DATA_DIR"]);
 	assert!(inside(&std::env::temp_dir(), &data));
 	assert!(!inside(root.path(), &data));
-	assert!(data.join("jocasta-service.json").exists());
-	let plugin = arg_after(&layer.args, "-e").to_owned();
-	// 0577: the check's 30 minutes fit omp's limit; JOCASTA_THREAD lists report_result and check.
-	let mcp: Value =
-		serde_json::from_str(&std::fs::read_to_string(Path::new(&plugin).join(".mcp.json")).unwrap()).unwrap();
-	let server = &mcp["mcpServers"]["jocasta"];
-	assert_eq!(server["timeout"], 1_860_000);
-	assert_eq!(server["env"]["JOCASTA_DATA_DIR"], data.display().to_string());
-	let thread = server["env"]["JOCASTA_THREAD"].as_str().unwrap();
-	assert!(!thread.is_empty() && thread.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'));
+	// 0675: the trial's omp loads the bridge extension a pane does, and finds the bridge and its own key in its env.
+	assert_eq!(arg_after(&layer.args, "-e"), shipped_config_dir(None).join(BRIDGE_EXTENSION).display().to_string());
+	let address = layer.env[BRIDGE_ENV].clone();
+	let key = layer.env[PANE_KEY_ENV].clone();
+	assert!(!address.is_empty() && !key.is_empty());
 	// PRM-5: titled as New thread titles the brief, the checkout's folder as the project.
 	let text = std::fs::read_to_string(arg_after(&layer.args, "--append-system-prompt")).unwrap();
 	assert!(text.starts_with("# Ponytail, lazy senior dev mode\n"));
 	assert!(text.contains(&format!("# Your task: {} (repo)", brief_title(&prompt))));
 	assert!(!text.contains("benchmark"));
+	// The pane's hello with its key is welcomed with a thread's tools, history_search among them.
+	let (read, mut write) = tokio::io::split(connect(&address).await.unwrap());
+	let mut read = LineReader::new(read, MAX_LINE);
+	let hello = json!({ "t": "hello", "v": VERSION, "key": key, "pid": std::process::id(), "harness_version": "test" });
+	write.write_all(line_of(&hello).as_bytes()).await.unwrap();
+	let welcome: Value = serde_json::from_str(&read.next_line().await.unwrap().expect("a welcome")).unwrap();
+	assert_eq!(welcome["t"], "welcome");
+	let tools: Vec<&str> =
+		welcome["tools"].as_array().unwrap().iter().filter_map(|tool| tool["name"].as_str()).collect();
+	assert!(tools.contains(&"history_search"), "{tools:?}");
 	// A trial has no past sessions: the search tool answers as for an empty history (0604).
-	let service: Value =
-		serde_json::from_str(&std::fs::read_to_string(data.join("jocasta-service.json")).unwrap()).unwrap();
-	let reply: Value = reqwest::Client::new()
-		.post(format!("http://127.0.0.1:{}/api/mcp/history_search", service["port"]))
-		.bearer_auth(service["token"].as_str().unwrap())
-		.body(r#"{"args":{"query":"retry decision"}}"#)
-		.send()
-		.await
-		.unwrap()
-		.json()
-		.await
-		.unwrap();
-	assert_eq!(reply, json!({ "text": "Nothing in repo's history for that." }));
+	let call = json!({ "t": "call", "id": "1", "tool": "history_search", "args": { "query": "retry decision" } });
+	write.write_all(line_of(&call).as_bytes()).await.unwrap();
+	let reply: Value = loop {
+		let line = read.next_line().await.unwrap().expect("a result");
+		let message: Value = serde_json::from_str(&line).unwrap();
+		if message["t"] == "result" {
+			break message;
+		}
+	};
+	assert_eq!((reply["id"].as_str(), reply["ok"].as_bool()), (Some("1"), Some(true)));
+	assert_eq!(reply["text"], "Nothing in repo's history for that.");
+	drop((read, write));
 	layer.close().await;
 	assert!(!data.exists());
 }

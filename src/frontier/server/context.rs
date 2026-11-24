@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use crate::frontier::server::allow::AllowGate;
 use crate::frontier::server::boss::LaunchedPanes;
+use crate::frontier::server::bridge::Bridge;
 use crate::frontier::server::checks::{Admission, CheckRunner, CheckRunnerOptions, checks_dir};
 use crate::frontier::server::day::{Day, SharedCatalog};
 use crate::frontier::server::events::{BossPane, Events};
@@ -181,6 +182,8 @@ pub struct ServiceContext {
 	pub catalog: SharedCatalog,
 	pub options: ServiceOptions,
 	pub herdr: Arc<dyn Herdr>,
+	/// The bridge to the panes' omps (0675): their prompts, control and state.
+	pub bridge: Bridge,
 	/// The session index. Its methods take `&mut self` and `warm` and `prepare` run in steps over awaits, so it is behind
 	/// a tokio lock: an async caller takes it with `lock().await` and never calls a part while holding it; a synchronous
 	/// one (a `DayHooks` method) uses `try_lock` and treats a busy index as "nothing new yet".
@@ -241,6 +244,7 @@ impl ServiceContext {
 		);
 		let ctx = Arc::new(Self {
 			herdr: options.herdr.clone(),
+			bridge: options.bridge.clone().unwrap_or_default(),
 			sessions: tokio::sync::Mutex::new(SessionIndex::new(options.sessions_dir.clone(), None)),
 			checks,
 			launched: LaunchedPanes::new(None),

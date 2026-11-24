@@ -17,7 +17,7 @@ use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 use std::time::Duration;
 
 use futures_util::{FutureExt, SinkExt, StreamExt};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
@@ -25,6 +25,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 use crate::frontier::protocol::{ClientMessage, ServerMessage};
 use crate::frontier::server::allow::Answer;
+use crate::frontier::server::bridge::{PaneAgent, PaneEvent};
 use crate::frontier::server::day::DayOptions;
 use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
 use crate::frontier::server::herdr::{AgentState, Env};
@@ -33,10 +34,10 @@ use crate::frontier::server::hunk::{ReviewContext, review_prompt};
 use crate::frontier::server::overlay::overlay_file;
 use crate::frontier::server::popups::PopupEnd;
 use crate::frontier::server::server::{JocastaServer, ServerOptions, start_server};
-use crate::frontier::server::tools::ToolReply;
+use crate::frontier::server::tools::{Caller, ToolReply};
 use crate::frontier::server::wording::HANDOFF_PROMPT;
+use crate::shared::bridge_wire::{BRIDGE_ENV, BRIDGE_EXTENSION};
 use crate::shared::install::{self_command, shipped_config_dir};
-use crate::shared::pane_check::{PANE_CHECK_ENV, PANE_CHECK_EXTENSION, PANE_CHECK_ROLE};
 use crate::shared::pathkey::{path_key, real_path};
 use crate::shared::paths::{data_dir, project_dir};
 use crate::shared::poll::wait_for;
@@ -263,31 +264,17 @@ impl std::ops::Deref for TestServer {
 	}
 }
 
-/// The collab relay in a test (0561): a free port (never his Jocasta's), every pane's relay resolved as loopback without
-/// his omp, and an empty host registry polled only when a test asks for it. The options to spread:
-/// `ServerOptions { .., ..relay_test_options() }`.
-pub(crate) fn relay_test_options() -> ServerOptions {
-	ServerOptions {
-		relay_port: Some(0),
-		relay_url_of: Some(Arc::new(|_, _, _| async { Ok("ws://127.0.0.1:47499".to_owned()) }.boxed())),
-		hosts_dir: Some(data_dir().join("collab-hosts")),
-		host_poll_ms: Some(60_000),
-		..ServerOptions::default()
-	}
-}
-
 /// Every default of [`start_test_server`] under what the test gave.
 pub(crate) fn with_test_defaults(mut options: ServerOptions, herdr: &Arc<FakeHerdr>) -> ServerOptions {
 	let data = data_dir();
-	let relay = relay_test_options();
 	options.herdr.get_or_insert_with(|| herdr.clone());
+	options.bridge.get_or_insert_with(|| herdr.recording_bridge());
 	let day = options.day.get_or_insert_with(|| DayOptions { pollers: Some(false), ..DayOptions::default() });
 	// Never his disk: a nearly full one raises an urgent line that keeps the boss busy ahead of the test's own.
 	day.disk_free.get_or_insert_with(|| Arc::new(|| 0.5));
 	options.port.get_or_insert(0);
 	options.sessions_dir.get_or_insert_with(|| data.join("omp-sessions"));
 	options.agent_wait_ms.get_or_insert(0);
-	options.submit_wait_ms.get_or_insert(0);
 	options.refresh_ms.get_or_insert(60_000);
 	options.whiteboard.get_or_insert(None);
 	options.pane_prompt.get_or_insert(None);
@@ -303,10 +290,6 @@ pub(crate) fn with_test_defaults(mut options: ServerOptions, herdr: &Arc<FakeHer
 		.confirm
 		.get_or_insert_with(|| Arc::new(|_, _| async { Ok(Answer { allow: true, how: PopupEnd::Answered }) }.boxed()));
 	options.reattach.get_or_insert_with(|| Arc::new(|| Ok(())));
-	options.relay_port = options.relay_port.or(relay.relay_port);
-	options.relay_url_of = options.relay_url_of.or(relay.relay_url_of);
-	options.hosts_dir = options.hosts_dir.or(relay.hosts_dir);
-	options.host_poll_ms = options.host_poll_ms.or(relay.host_poll_ms);
 	options
 }
 
@@ -324,11 +307,7 @@ pub(crate) async fn start_test_server(options: ServerOptions) -> TestServer {
 pub(crate) async fn start_test_server_with(herdr: Arc<FakeHerdr>, options: ServerOptions) -> TestServer {
 	let data = data_dir();
 	fs::create_dir_all(data.join("omp-sessions")).unwrap();
-	let boss_omp = data.join("home").join(".omp");
-	fs::create_dir_all(&boss_omp).unwrap();
-	let mcp =
-		json!({ "mcpServers": { "jocasta": { "type": "stdio", "command": "jocasta", "args": ["mcp", "--boss"] } } });
-	fs::write(boss_omp.join("mcp.json"), mcp.to_string()).unwrap();
+
 	let server = start_server(with_test_defaults(options, &herdr)).await.expect("the test server starts");
 	// The service starts after the server listens; tests act on a started one.
 	server.ready().await.expect("the service starts");
@@ -454,6 +433,7 @@ pub(crate) fn thread_omp(project_id: &str, title: &str) -> Vec<String> {
 	let mut argv = strings(&["omp", "--continue", "--append-system-prompt"]);
 	argv.push(prompt.display().to_string());
 	argv.extend(guard());
+	argv.extend(bridge_flags());
 	argv.extend(strings(&["--warn-cost", "50", "--config"]));
 	argv.push(overlay_file(project_id).display().to_string());
 	argv
@@ -482,18 +462,7 @@ pub(crate) fn thread_pane(herdr: &FakeHerdr, path: &Path) -> String {
 	pane.map(|pane| pane.pane_id.clone()).unwrap_or_else(|| panic!("no thread pane in {}", path.display()))
 }
 
-async fn post(server: &TestServer, path: &str, body: &Value) -> ToolReply {
-	let response = http()
-		.post(format!("http://127.0.0.1:{}{path}", server.port))
-		.bearer_auth(&server.token)
-		.json(body)
-		.send()
-		.await
-		.expect("the service answers");
-	response.json().await.expect("a tool reply")
-}
-
-/// `jocasta mcp`'s call: `POST /api/mcp/<tool>` with the service token, from the boss pane with its key.
+/// A pane's tool call as the bridge hands it to the service (0675), from the boss pane with its key.
 pub(crate) async fn call(server: &TestServer, tool: &str, args: &Value) -> ToolReply {
 	let pane = boss_pane(&server.herdr);
 	let boss_key = pane.is_some().then_some(TEST_BOSS_KEY);
@@ -512,19 +481,13 @@ pub(crate) async fn call_as(
 	let pane_key = pane_id.and_then(|pane| server.herdr.env_of(pane)).and_then(|env| {
 		env.into_iter().find(|(name, _)| name == "JOCASTA_PANE_KEY").map(|(_, key)| key).filter(|key| !key.is_empty())
 	});
-	let mut body = json!({ "args": args });
-	if let Some(key) = pane_key {
-		body["paneKey"] = json!(key);
-	}
-	if let Some(key) = boss_key {
-		body["bossKey"] = json!(key);
-	}
-	post(server, &format!("/api/mcp/{tool}"), &body).await
+	let caller = Caller { pane_key, boss_key: boss_key.map(str::to_owned) };
+	server.service.call_tool(tool, args.as_object().unwrap_or(&Map::new()), &caller).await
 }
 
-/// `jocasta thread|worktree`'s call: `POST /api/cli` with the service token.
+/// `jocasta thread|worktree`'s call: a `cli` message of the bridge.
 pub(crate) async fn cli(server: &TestServer, command: &str, args: &Value) -> ToolReply {
-	post(server, "/api/cli", &json!({ "command": command, "args": args })).await
+	server.service.cli_call(command, args.as_object().unwrap_or(&Map::new())).await
 }
 
 /// What [`start_thread`] starts: each unset field takes `demo`, `Readme line` and [`BRIEF`].
@@ -583,6 +546,7 @@ pub(crate) struct Keyed(pub BTreeMap<String, String>);
 impl PartialEq<Env> for Keyed {
 	fn eq(&self, actual: &Env) -> bool {
 		let mut actual: BTreeMap<String, String> = actual.iter().cloned().collect();
+		actual.remove(BRIDGE_ENV);
 		actual.remove("JOCASTA_PANE_KEY").is_some() && actual == self.0
 	}
 }
@@ -605,18 +569,23 @@ pub(crate) fn keyed(vars: &[(&str, &str)]) -> Keyed {
 	Keyed(env)
 }
 
-/// What a project pane's omp starts with beyond a thread's (0617): Jocasta's turn-end extension, loaded with `-e`.
-pub(crate) fn pane_check_flags() -> Vec<String> {
-	vec!["-e".to_owned(), shipped_config_dir(None).join(PANE_CHECK_EXTENSION).display().to_string()]
+/// What every pane's omp starts with (0675): the bridge extension, loaded with `-e`.
+pub(crate) fn bridge_flags() -> Vec<String> {
+	vec!["-e".to_owned(), shipped_config_dir(None).join(BRIDGE_EXTENSION).display().to_string()]
 }
 
-/// A project pane's whole env: `keyed`'s, with the argv of the turn-end check its extension runs (0617).
+/// A pane's omp pushes `event` over its bridge (0675): the recording bridge keeps `agent` as its state, and the service
+/// takes the event as the bridge's reader would.
+pub(crate) fn pane_reports(server: &TestServer, pane_id: &str, event: &PaneEvent, agent: PaneAgent) {
+	use crate::frontier::server::bridge::{Resolved, Role};
+	server.bridge.record(|recording| recording.agents.insert(pane_id.to_owned(), agent.clone()));
+	let who = Resolved { pane_id: pane_id.to_owned(), role: Role::Thread, caller: Caller::default() };
+	server.service.pane_event(&who, event, &agent);
+}
+
+/// A project pane's whole env: the same as any pane's, now that every pane loads the bridge extension (0675).
 pub(crate) fn project_keyed(vars: &[(&str, &str)]) -> Keyed {
-	let mut check = self_words();
-	check.push(PANE_CHECK_ROLE.to_owned());
-	let mut keyed = keyed(vars);
-	keyed.0.insert(PANE_CHECK_ENV.to_owned(), json!(check).to_string());
-	keyed
+	keyed(vars)
 }
 
 // ---- omp's sessions ----

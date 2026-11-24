@@ -8,12 +8,15 @@
 //! with nothing), starts the release `jocasta` as its server (`JOCASTA_SERVICE=1 jocasta server`, no client window),
 //! opens the four projects' workspaces so their panes start, waits 60 s idle and prints one JSON object:
 //! `processes` and `idle_rss_mb` (Jocasta's own tree, without the agents), `idle_cpu_pct` (that tree's CPU over the
-//! idle minute, in percent of one core), `startup_ms` (the server's start to `/health` answering), `binary_mb`, and
-//! `bridge_ms` (null until the bridge exists, 0675). Processes named `omp` and their trees are listed under `omp` and
-//! never budgeted. The client (bare `jocasta`'s window) is not measured.
+//! idle minute, in percent of one core), `startup_ms` (the server's start to `/health` answering, polled every 2 ms),
+//! `binary_mb`, and `bridge_ms` (the median of 20 `ping` round trips over the bridge on one connection with the
+//! service's token, 0675). Processes named `omp` and their trees are listed under `omp` and never budgeted. The
+//! client (bare `jocasta`'s window) is not measured.
 //! It measures three times, each in a fresh sandbox. `--write-budget` writes each number's worst run to
-//! `bench/footprint-budget.json`; without it each number's median more than 5% over its budget prints
-//! `footprint: <key> <value> over budget <budget>` and exits 1 (a null budget is skipped).
+//! `bench/footprint-budget.json`; without it each number's median over its budget's limit prints
+//! `footprint: <key> <value> over budget <budget>` and exits 1 (a null budget is skipped). The limit is 5% over the
+//! budget, and for the noisy numbers (`startup_ms`, `idle_cpu_pct`, `bridge_ms`) the larger of that and an absolute
+//! slack ([`LIMITS`]).
 
 use std::collections::HashSet;
 use std::fs;
@@ -29,7 +32,7 @@ use crate::lib::temp::mkdtemp;
 use crate::lib::timing::{WaitOptions, wait_for};
 use jocasta::frontier::server::herdr::{HerdrOptions, connect_herdr};
 use jocasta::frontier::server::launch::{ServiceState, ask_shutdown, service_state};
-use jocasta::frontier::server::relay::{RELAY_PORT, relay_url};
+use jocasta::shared::bridge_wire::CliPeer;
 use jocasta::shared::errors::{Error, Result};
 use jocasta::shared::proctree::{kill_tree, pid_alive};
 use jocasta::shared::service_file::read_service_file;
@@ -38,7 +41,20 @@ const BUDGET_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/bench/footprint-
 const RUNS: usize = 3;
 const PROJECTS: usize = 4;
 const IDLE: Duration = Duration::from_secs(60);
-const SLACK: f64 = 1.05;
+/// Round trips `bridge_ms` takes the median of.
+const PINGS: usize = 20;
+/// How far a median may go over its budget before the check fails (0674): every number 5% (`RELATIVE`), and the three
+/// noisy ones, whose few-millisecond or few-hundredths values 5% would fail on noise alone, the larger of that and an
+/// absolute slack in the key's own unit. The other three have no slack. A key not in the table has none either.
+const RELATIVE: f64 = 1.05;
+const LIMITS: [(&str, f64); 6] = [
+	("processes", 0.0),
+	("idle_rss_mb", 0.0),
+	("binary_mb", 0.0),
+	("startup_ms", 25.0),
+	("idle_cpu_pct", 1.0),
+	("bridge_ms", 2.0),
+];
 const MIB: f64 = 1024.0 * 1024.0;
 /// Set on the inner run, which finds the sandbox already in its environment.
 const INNER_ENV: &str = "JOCASTA_FOOTPRINT_SANDBOX";
@@ -53,15 +69,8 @@ pub fn stub_agent() -> Option<ExitCode> {
 	match args.first().map(String::as_str) {
 		Some("--version") => println!("19.1.1"),
 		Some("usage") => println!("{{}}"),
-		// `config get <key> --json` answers `{"value": …}`; the service's relay check reads `collab.relayUrl` (0561).
-		Some("config") => {
-			let value = if args.iter().any(|arg| arg == "collab.relayUrl") {
-				json!(relay_url(RELAY_PORT))
-			} else {
-				json!(null)
-			};
-			println!("{}", json!({ "value": value }));
-		}
+		// `config get <key> --json` answers `{"value": …}`.
+		Some("config") => println!("{}", json!({ "value": null })),
 		_ => {
 			println!("footprint stub agent: idle");
 			loop {
@@ -117,10 +126,6 @@ fn git(dir: &Path, args: &[&str]) -> Result<()> {
 /// comparison takes each number's median, so one noisy sample neither sets nor breaks the budget.
 fn measure_runs() -> Result<Vec<Map<String, Value>>> {
 	let jocasta = release_jocasta()?;
-	// The service's collab relay listens on one fixed port (0561): a Jocasta already running holds it.
-	if std::net::TcpListener::bind(("127.0.0.1", RELAY_PORT)).is_err() {
-		return Err(Error::other(format!("port {RELAY_PORT} (the collab relay) is taken; close Jocasta first")));
-	}
 	let mut runs = Vec::new();
 	for run in 1..=RUNS {
 		let measured = one_run(&jocasta, run)?;
@@ -131,7 +136,11 @@ fn measure_runs() -> Result<Vec<Map<String, Value>>> {
 }
 
 fn write_budget(runs: &[Map<String, Value>]) -> Result<ExitCode> {
-	let budget = combine(runs, |values| values.iter().copied().fold(f64::MIN, f64::max));
+	let measured = combine(runs, |values| values.iter().copied().fold(f64::MIN, f64::max));
+	// The budget only goes down (0674): each number keeps the lower of its old budget and its new worst run.
+	let old: Map<String, Value> =
+		fs::read_to_string(BUDGET_FILE).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
+	let budget = ratchet(&measured, &old);
 	// Tab-indented, as the repo's formatter (Biome) keeps JSON.
 	let mut text = Vec::new();
 	let formatter = serde_json::ser::PrettyFormatter::with_indent(b"\t");
@@ -154,6 +163,22 @@ fn compare(runs: &[Map<String, Value>]) -> Result<ExitCode> {
 		println!("{line}");
 	}
 	Ok(if over.is_empty() { ExitCode::SUCCESS } else { ExitCode::from(1) })
+}
+
+/// The new budget: per key the lower of `measured` and `old`; a key with no old number (missing or null) takes the
+/// measured one.
+pub fn ratchet(measured: &Map<String, Value>, old: &Map<String, Value>) -> Map<String, Value> {
+	measured
+		.iter()
+		.map(|(key, value)| {
+			let kept = match (value.as_f64(), old.get(key).and_then(Value::as_f64)) {
+				(Some(new), Some(before)) => json!(new.min(before)),
+				(None, Some(before)) => json!(before),
+				_ => value.clone(),
+			};
+			(key.clone(), kept)
+		})
+		.collect()
 }
 
 /// Each key of the first run with `pick` over its values in every run; a key that isn't a number in every run is null.
@@ -225,16 +250,41 @@ fn one_run(jocasta: &Path, run: usize) -> Result<Map<String, Value>> {
 	serde_json::from_str(line).map_err(|error| Error::other(format!("no result line ({error}): {text}")))
 }
 
-/// Each measured number more than 5% over its budget, as the line that says so; a null or missing budget is skipped.
+/// Each measured number over its limit (5% over its budget; the noisy keys the larger of that and their absolute slack,
+/// [`LIMITS`]), as the line that says so; a null or missing budget is skipped.
 pub fn over_budget(measured: &Map<String, Value>, budget: &Map<String, Value>) -> Vec<String> {
 	measured
 		.iter()
 		.filter_map(|(key, value)| {
 			let value = value.as_f64()?;
 			let limit = budget.get(key)?.as_f64()?;
-			(value > limit * SLACK).then(|| format!("footprint: {key} {value} over budget {limit}"))
+			let slack = LIMITS.iter().find(|(name, _)| name == key).map_or(0.0, |(_, slack)| *slack);
+			(value > (limit * RELATIVE).max(limit + slack))
+				.then(|| format!("footprint: {key} {value} over budget {limit}"))
 		})
 		.collect()
+}
+
+/// The median of `PINGS` `ping` round trips over the bridge, on one connection with the service's token (0675).
+async fn bridge_ms() -> Result<f64> {
+	let file = read_service_file().ok_or_else(|| Error::other("no service file"))?;
+	let mut peer = CliPeer::open(file.port, &file.token)
+		.await
+		.map_err(|error| Error::other(format!("the bridge refused the footprint's peer: {error}")))?;
+	let mut times = Vec::with_capacity(PINGS);
+	for _ in 0..PINGS {
+		let started = Instant::now();
+		let answer = peer
+			.request(json!({ "t": "cli", "command": "ping", "args": {} }))
+			.await
+			.map_err(|error| Error::other(format!("bridge ping: {error}")))?;
+		if answer.get("ok").and_then(Value::as_bool) != Some(true) {
+			return Err(Error::other(format!("bridge ping answered {answer}")));
+		}
+		times.push(started.elapsed().as_secs_f64() * 1000.0);
+	}
+	times.sort_by(f64::total_cmp);
+	Ok(times[times.len() / 2])
 }
 
 /// The measured run, inside the sandbox's environment: start, open the projects, idle, read, stop.
@@ -258,7 +308,7 @@ async fn inner() -> Result<ExitCode> {
 			let file = read_service_file();
 			file.is_some() && service_state(file.as_ref(), None).await == ServiceState::Up
 		},
-		WaitOptions { timeout_ms: 120_000, interval_ms: 25 },
+		WaitOptions { timeout_ms: 120_000, interval_ms: 2 },
 	)
 	.await;
 	let startup_ms = started.elapsed().as_secs_f64() * 1000.0;
@@ -303,6 +353,7 @@ async fn measure(session: &str, startup_ms: f64, jocasta: &Path) -> Result<Value
 	tokio::time::sleep(IDLE).await;
 	let after = cpu_seconds(service)?;
 	let wall = idle_from.elapsed().as_secs_f64();
+	let bridge = bridge_ms().await?;
 	let all = snapshot_processes()?;
 	let (own, agents) = split(&tree_of(service, &all));
 	let rss: u64 = own.iter().map(|info| info.working_set).sum();
@@ -314,7 +365,7 @@ async fn measure(session: &str, startup_ms: f64, jocasta: &Path) -> Result<Value
 		"idle_cpu_pct": round2(cpu.max(0.0) / wall * 100.0),
 		"startup_ms": round2(startup_ms),
 		"binary_mb": round2(binary as f64 / MIB),
-		"bridge_ms": null,
+		"bridge_ms": round2(bridge),
 		"omp": agents.iter().map(|info| json!({"name": info.name, "mb": round2(info.working_set as f64 / MIB)})).collect::<Vec<_>>(),
 		"own": own.iter().map(|info| json!({"name": info.name, "mb": round2(info.working_set as f64 / MIB)})).collect::<Vec<_>>(),
 	}))

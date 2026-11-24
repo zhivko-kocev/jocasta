@@ -8,6 +8,7 @@ use serde_json::Value;
 
 use crate::frontier::protocol::ToastPriority;
 use crate::frontier::server::allow::Confirmation;
+use crate::frontier::server::bridge::Deliver;
 use crate::frontier::server::context::{Finishing, Link};
 use crate::frontier::server::day::Landing;
 use crate::frontier::server::herdr::AgentState;
@@ -535,7 +536,9 @@ impl Finisher {
 			return Err(Error::user(format!("{} has no git remote to push {} to.", t.project.name, t.branch)));
 		};
 		thread.with(|t| set_phase(t, Phase::Finish, "it is asked to open its PR"));
-		if let Err(error) = c.herdr.prompt(&t.pane_id, &pr_request(remote, &t.branch, trunk)).await {
+		if let Err(error) =
+			c.bridge.prompt(&t.pane_id, c.bridge.seal(&pr_request(remote, &t.branch, trunk)), Deliver::FollowUp).await
+		{
 			thread.with(|t| set_phase(t, Phase::Task, "it didn't take the PR request"));
 			return Err(Error::user(format!("{name} didn't take the request: {error}")));
 		}

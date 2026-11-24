@@ -39,6 +39,69 @@ impl LineSplitter {
 	}
 }
 
+/// Why [`LineReader::next_line`] failed.
+#[derive(Debug, PartialEq, Eq)]
+pub enum LineError {
+	/// A line grew past the cap without ending.
+	TooLong,
+	/// The bytes of a line are not UTF-8.
+	NotUtf8,
+	/// The stream failed.
+	Io(String),
+}
+
+impl std::fmt::Display for LineError {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Self::TooLong => f.write_str("a line is longer than the cap"),
+			Self::NotUtf8 => f.write_str("a line is not UTF-8"),
+			Self::Io(text) => f.write_str(text),
+		}
+	}
+}
+
+/// Reads `\n`-terminated UTF-8 lines of at most `cap` bytes from a byte stream, keeping what follows a line for the
+/// next call (the bridge's framing, 0675).
+pub struct LineReader<R> {
+	reader: R,
+	buffered: Vec<u8>,
+	cap: usize,
+}
+
+impl<R: AsyncRead + Unpin> LineReader<R> {
+	/// A reader of `reader` that refuses a line longer than `cap` bytes.
+	pub fn new(reader: R, cap: usize) -> Self {
+		Self { reader, buffered: Vec::new(), cap }
+	}
+
+	/// The next line without its newline (and without a trailing `\r`); `None` at the end of the stream.
+	pub async fn next_line(&mut self) -> std::result::Result<Option<String>, LineError> {
+		loop {
+			if let Some(end) = self.buffered.iter().position(|byte| *byte == b'\n') {
+				// A line whose end arrived in the same read that took it past the cap is as long as one that never ended.
+				if end > self.cap {
+					return Err(LineError::TooLong);
+				}
+				let mut line: Vec<u8> = self.buffered.drain(..=end).collect();
+				line.pop();
+				if line.last() == Some(&b'\r') {
+					line.pop();
+				}
+				return String::from_utf8(line).map(Some).map_err(|_| LineError::NotUtf8);
+			}
+			if self.buffered.len() > self.cap {
+				return Err(LineError::TooLong);
+			}
+			let mut chunk = [0_u8; 16 * 1024];
+			match self.reader.read(&mut chunk).await {
+				Ok(0) => return Ok(None),
+				Ok(read) => self.buffered.extend_from_slice(&chunk[..read]),
+				Err(error) => return Err(LineError::Io(error.to_string())),
+			}
+		}
+	}
+}
+
 /// How much of the child's stderr is kept for its exit error.
 const STDERR_TAIL: usize = 500;
 

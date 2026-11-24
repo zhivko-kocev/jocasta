@@ -132,7 +132,7 @@ impl Keys {
 		if state != AgentState::Working && state != AgentState::Blocked {
 			return Err(Error::user(format!("Stop: {name} isn't working; nothing to stop.")));
 		}
-		self.ctx.herdr.stop(&pane).await?;
+		self.ctx.lifecycle.abort_turn(&pane).await?;
 		Ok(format!("Stopped {name}'s run."))
 	}
 

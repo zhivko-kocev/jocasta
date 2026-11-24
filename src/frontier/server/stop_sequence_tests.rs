@@ -123,10 +123,6 @@ impl StopService for FakeService {
 		self.call("endThreadLeftovers")
 	}
 
-	fn remove_ended_hosts(&self) -> BoxFuture<'_, Result<()>> {
-		self.call("removeEndedHosts")
-	}
-
 	fn end_hunk_daemon(&self) -> BoxFuture<'_, Result<()>> {
 		self.call("endHunkDaemon")
 	}
@@ -156,7 +152,7 @@ impl World {
 		let sent = Arc::clone(&self.sent);
 		let log = Arc::clone(&self.log);
 		let server_log = Arc::clone(&self.log);
-		let relay = step(&log, "relay").run;
+		let bridge = step(&log, "bridge").run;
 		StopParts {
 			popups: Arc::clone(&self.popups),
 			broadcast: Arc::new(move |message| sent.lock().unwrap_or_else(PoisonError::into_inner).push(message)),
@@ -165,7 +161,7 @@ impl World {
 			service: self.service.clone(),
 			extra_stops,
 			whiteboard: None,
-			relay,
+			bridge,
 			server: step(&server_log, "server").run,
 			bounds: StopBounds::default(),
 		}
@@ -191,10 +187,9 @@ fn the_sequence_stops_everything_in_its_order_with_the_extra_stops_after_the_hun
 			"the turns at work",
 			"herdr session jocasta",
 			"the threads' leftovers",
-			"omp's host entries",
 			"hunk's daemon",
 			"the test's stop",
-			"the collab relay",
+			"the bridge",
 			"the server",
 			"jocasta-service.json",
 		]
@@ -204,7 +199,7 @@ fn the_sequence_stops_everything_in_its_order_with_the_extra_stops_after_the_hun
 	assert_eq!(by("the service").ms, Some(30_000));
 	assert_eq!(by("herdr session jocasta").ms, Some(15_000));
 	assert_eq!(by("the server").when, StopWhen::Finally);
-	assert_eq!(by("the collab relay").when, StopWhen::Always);
+	assert_eq!(by("the bridge").when, StopWhen::Always);
 	assert_eq!(by("hunk's daemon").when, StopWhen::All);
 }
 
@@ -233,10 +228,9 @@ async fn stopping_everything_stops_the_service_then_herdrs_server_then_the_rest(
 			"stop",
 			"cutPausedTurns",
 			"endThreadLeftovers",
-			"removeEndedHosts",
 			"endHunkDaemon",
 			"the test's stop",
-			"relay",
+			"bridge",
 			"server",
 		]
 	);
@@ -248,12 +242,12 @@ async fn stopping_everything_stops_the_service_then_herdrs_server_then_the_rest(
 }
 
 #[tokio::test]
-async fn a_failed_start_stops_the_service_the_relay_and_the_server_only() {
+async fn a_failed_start_stops_the_service_the_bridge_and_the_server_only() {
 	let _j = temp_jocasta();
 	let world = World::new();
 	let steps = stop_steps(world.parts(Vec::new()));
 	run_stop_steps(&steps, false, &mut |name, error| panic!("{name}: {error}")).await;
-	assert_eq!(seen(&world.log), ["stop", "relay", "server"]);
+	assert_eq!(seen(&world.log), ["stop", "bridge", "server"]);
 	assert!(world.herdr.of("stopServer").is_empty());
 }
 

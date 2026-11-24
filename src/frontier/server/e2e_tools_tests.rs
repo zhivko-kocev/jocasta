@@ -1,19 +1,18 @@
 //! `test/frontier/server/service-tools.test.ts`, case for case, on the real server (wave 12): the tools and the client's
 //! messages, a thread closed in herdr, the panes herdr restored as shells, the boss key of an earlier run, herdr's
-//! default workspace (0495), and the tool registry against `jocasta mcp`.
+//! default workspace (0495), and the tool registry against the tool specs.
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use regex::Regex;
 use serde_json::{Value, json};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::frontier::protocol::{ClientMessage, ServerMessage};
+use crate::frontier::server::bridge::{BridgeService, Role};
 use crate::frontier::server::helpers::{
-	HunkDaemon, Page, README_THREAD_ENV, TEST_BOSS_KEY, TestServer, ThreadOptions, boss_pane, call, call_as, commit_in,
-	demo_project, guard, keyed, pane_check_flags, project_keyed, push_state, review, sh, start_test_server_with,
+	HunkDaemon, Page, README_THREAD_ENV, TEST_BOSS_KEY, TestServer, ThreadOptions, boss_pane, bridge_flags, call,
+	call_as, commit_in, demo_project, guard, keyed, project_keyed, push_state, review, sh, start_test_server_with,
 	start_thread, thread_omp, thread_pane, until, use_hunk_daemon, with_server,
 };
 use crate::frontier::server::helpers_procs::{ShimTree, with_server_on};
@@ -24,7 +23,6 @@ use crate::frontier::server::overlay::overlay_file;
 use crate::frontier::server::server::ServerOptions;
 use crate::frontier::server::tools::{TOOLS, ToolReply};
 use crate::frontier::server::wording::HANDOFF_PROMPT;
-use crate::mcp::server::{MCP_PROTOCOL_VERSION, McpServerOptions, ServiceLookup, run_mcp_server};
 use crate::shared::proctree::pid_alive;
 use crate::shared::proctree::tests::{settles, sleeper_tree};
 use crate::shared::testing::temp_jocasta;
@@ -281,9 +279,9 @@ async fn herdr_restored_its_panes_as_shells_jocasta_goes_first_the_boss_project_
 		let respawned = respawns_since(&herdr, before);
 		let mut overlay: Vec<String> = vec!["omp".to_owned(), "--continue".to_owned()];
 		overlay.extend(guard());
+		overlay.extend(bridge_flags());
 		overlay.push("--config".to_owned());
 		overlay.push(overlay_file(&project_id).display().to_string());
-		overlay.extend(pane_check_flags());
 		let thread = thread_omp(&project_id, "Readme line");
 		let heads: Vec<Vec<String>> = respawned.iter().map(|r| r.command[..3].to_vec()).collect();
 		let words = |list: &[&str]| list.iter().map(|w| (*w).to_owned()).collect::<Vec<_>>();
@@ -563,39 +561,10 @@ async fn a_touched_default_workspace_stays_a_second_pane_an_agent_another_folder
 	}
 }
 
-/// The tool names `jocasta mcp` lists (`tools/list`) with `boss` and `env`.
-async fn mcp_names(boss: bool, env: HashMap<String, String>) -> Vec<String> {
-	let (mut to_server, input) = tokio::io::duplex(1 << 20);
-	let (output, mut from_server) = tokio::io::duplex(1 << 20);
-	let service: ServiceLookup = Arc::new(|| None);
-	let options = McpServerOptions { boss, service: Some(service), pane_key: None, boss_key: None, env: Some(env) };
-	let server = tokio::spawn(run_mcp_server(options, input, output));
-	// rmcp serves nothing before omp's handshake.
-	let lines = [
-		json!({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
-			"protocolVersion": MCP_PROTOCOL_VERSION, "capabilities": {}, "clientInfo": {"name": "test", "version": "0"}}}),
-		json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
-		json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
-	];
-	for line in lines {
-		to_server.write_all(format!("{line}\n").as_bytes()).await.unwrap();
-	}
-	drop(to_server);
-	let mut answered = String::new();
-	tokio::time::timeout(std::time::Duration::from_secs(20), from_server.read_to_string(&mut answered))
-		.await
-		.expect("the server ends with its input")
-		.unwrap();
-	server.await.unwrap();
-	let reply = answered
-		.lines()
-		.filter_map(|line| serde_json::from_str::<Value>(line).ok())
-		.find(|reply| reply["id"] == 1)
-		.unwrap_or(Value::Null);
-	let mut names: Vec<String> = reply["result"]["tools"]
-		.as_array()
-		.into_iter()
-		.flatten()
+/// The tool names the service lists a pane of `role` (`BridgeService::tools`), sorted.
+fn listed_names(server: &TestServer, role: Role) -> Vec<String> {
+	let mut names: Vec<String> = BridgeService::tools(&*server.service, role)
+		.iter()
 		.filter_map(|tool| tool["name"].as_str().map(str::to_owned))
 		.collect();
 	names.sort();
@@ -603,7 +572,7 @@ async fn mcp_names(boss: bool, env: HashMap<String, String>) -> Vec<String> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn the_services_tool_registry_agrees_with_jocasta_mcp_a_threads_pane_lists_exactly_the_tools_any_pane_may_call_the_bosss_the_rest_0484_0539_0542_svc_15()
+async fn the_services_tool_registry_agrees_with_the_tool_specs_a_threads_pane_lists_exactly_the_tools_any_pane_may_call_the_bosss_the_rest_0484_0539_0542_svc_15()
  {
 	let named = |boss: bool| {
 		let mut names: Vec<String> =
@@ -611,9 +580,11 @@ async fn the_services_tool_registry_agrees_with_jocasta_mcp_a_threads_pane_lists
 		names.sort();
 		names
 	};
-	let thread = HashMap::from([("JOCASTA_THREAD".to_owned(), "readme-line".to_owned())]);
-	assert_eq!(mcp_names(false, thread).await, named(false));
-	let boss = mcp_names(true, HashMap::new()).await;
-	let rest: Vec<String> = boss.into_iter().filter(|name| !named(false).contains(name)).collect();
-	assert_eq!(rest, named(true));
+	with_server(ServerOptions::default(), |server| async move {
+		assert_eq!(listed_names(&server, Role::Thread), named(false));
+		let boss = listed_names(&server, Role::Boss);
+		let rest: Vec<String> = boss.into_iter().filter(|name| !named(false).contains(name)).collect();
+		assert_eq!(rest, named(true));
+	})
+	.await;
 }

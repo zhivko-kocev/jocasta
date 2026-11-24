@@ -17,6 +17,7 @@ use regex::Regex;
 use tokio::sync::Notify;
 
 use crate::frontier::protocol::{ServerMessage, ThreadState, ToastLevel, ToastPriority, ToastReason};
+use crate::frontier::server::bridge::Deliver;
 use crate::frontier::server::checks::{CheckRun, CheckSpec, gate_reply, short_tree};
 use crate::frontier::server::context::{Calls, Link, ServiceContext};
 use crate::frontier::server::herdr::{Direction, SplitOptions};
@@ -30,12 +31,13 @@ use crate::frontier::server::task_file::{CheckExit, TaskReview};
 use crate::frontier::server::thread::{
 	Phase, ReviewResult, ReviewRunning, Thread, ThreadRef, ThreadReview, is_idle, set_phase, show, subject,
 };
-use crate::frontier::server::wording::{HANDOFF_PROMPT, idle_check_text, quoted, review_said, tests_said};
+use crate::frontier::server::wording::{HANDOFF_FOCUS, idle_check_text, quoted, review_said, tests_said};
 use crate::frontier::server::worktrees::git_out;
 use crate::shared::clock::now_ms;
 use crate::shared::errors::{Error, Result};
 use crate::shared::log::{LogLevel, log};
-use crate::shared::pane_check::PANE_CHECK_WAIT_MS;
+/// How long a pane's turn-end check request waits for its check (0617), under the extension's own limit.
+const PANE_CHECK_WAIT_MS: i64 = 20_000;
 use crate::shared::process::{AbortSignal, aborted as abort_reason};
 
 /// A project pane's check, started and shared: whoever awaits it gets its text; it runs on whether anyone waits.
@@ -359,7 +361,7 @@ impl ReviewFlow {
 					.map(|report| report_line(&report.value)),
 			),
 		};
-		c.herdr.prompt(&t.pane_id, &review_prompt(hunk, range, &context)).await?;
+		c.bridge.prompt(&t.pane_id, c.bridge.seal(&review_prompt(hunk, range, &context)), Deliver::FollowUp).await?;
 		Ok(())
 	}
 
@@ -757,7 +759,7 @@ impl ReviewFlow {
 		}
 		let message = format!("{}: checks failed on tree {}", subject(&now), short_tree(&run.tree));
 		log(LogLevel::Info, "checks", &message, None);
-		c.herdr.prompt(&now.pane_id, &idle_check_text(&gate_reply(&run))).await?;
+		c.bridge.prompt(&now.pane_id, c.bridge.seal(&idle_check_text(&gate_reply(&run))), Deliver::FollowUp).await?;
 		Ok(())
 	}
 
@@ -771,7 +773,7 @@ impl ReviewFlow {
 		Ok(git_out(path, &["rev-parse", "HEAD^{tree}"]).await?.as_deref() != Some(tree))
 	}
 
-	/// A project pane's check when its turn ends (0617), asked by its extension through `POST /api/pane-check`: the
+	/// A project pane's check when its turn ends (0617), asked by the bridge extension as a `stop` request (0675): the
 	/// threads' rule on the pane's own folder. A tree with edits not yet checked has the project's check run (no
 	/// `done_when`), after the pane's previous check; a failure within the wait, counted from the request, is the answer,
 	/// in the threads' frame text, once per tree. A check still running when the wait ends, or when `signal` says the
@@ -912,11 +914,28 @@ impl ReviewFlow {
 		let (path, pane_id) = thread.with(|t| (t.path.clone(), t.pane_id.clone()));
 		let head = git_out(&path, &["rev-parse", "HEAD"]).await?;
 		thread.with(|t| t.head = head);
-		if let Err(error) = c.herdr.prompt(&pane_id, HANDOFF_PROMPT).await {
+		if let Err(error) = self.send_handoff(&pane_id).await {
 			thread.with(|t| set_phase(t, Phase::Task, "it didn't take /handoff"));
 			c.warn(error);
 		}
 		Ok(())
+	}
+
+	/// `/handoff` to the omp in `pane_id` (0400): as `ctx.compact` in handoff mode with the focus as its guidance, so omp runs
+	/// it itself (0675); an omp that can't compact (0684) gets `/handoff <focus>` as a prompt, which omp's own input
+	/// doesn't run as a command, and the degrade is logged.
+	async fn send_handoff(&self, pane_id: &str) -> Result<()> {
+		let c = self.link.ctx();
+		if c.bridge.compact(pane_id, c.bridge.seal(HANDOFF_FOCUS)).await? {
+			return Ok(());
+		}
+		log(
+			LogLevel::Warn,
+			"threads",
+			&format!("omp in {pane_id} can't compact for Jocasta; /handoff goes as a prompt"),
+			None,
+		);
+		c.bridge.prompt(pane_id, c.bridge.seal(&format!("/handoff {HANDOFF_FOCUS}")), Deliver::FollowUp).await
 	}
 }
 

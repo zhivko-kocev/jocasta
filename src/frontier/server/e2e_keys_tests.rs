@@ -13,14 +13,14 @@ use serde_json::{Value, json};
 
 use crate::frontier::protocol::{PluginAction, ServerMessage};
 use crate::frontier::server::allow::{Answer, Confirmation};
+use crate::frontier::server::bridge::{PaneAgent, PaneEvent};
 use crate::frontier::server::helpers::{
-	BRIEF, Msg, Page, TestServer, boss_pane, call, call_as, cli, commit_in, demo_project, guard, http,
-	proposed_plan_file, push_state, session_file, sh, states_settled, task_dir_of, thread_omp, until, use_hunk_daemon,
-	with_server,
+	BRIEF, Msg, Page, TestServer, boss_pane, bridge_flags, call, call_as, cli, commit_in, demo_project, guard,
+	pane_reports, proposed_plan_file, push_state, session_file, sh, states_settled, task_dir_of, thread_omp, until,
+	use_hunk_daemon, with_server,
 };
 use crate::frontier::server::herdr::AgentState;
 use crate::frontier::server::history::search_history;
-use crate::frontier::server::hosts::fake::{FakeHostState, fake_host};
 use crate::frontier::server::native::NativeServer;
 use crate::frontier::server::overlay::overlay_file;
 use crate::frontier::server::popups::{AnswerTaken, Popup, PopupEnd};
@@ -184,137 +184,40 @@ async fn his_keys_stop_refuses_an_idle_thread_with_why_and_stops_a_working_one_f
 	.await;
 }
 
-/// A process that lives until it is killed, as a pane's omp does: its pid and start can be read (0490).
-const SLEEPER_VAR: &str = "E2E_KEYS_SLEEPER";
-
-/// The stand-in of [`Sleeper`]: sleeps when started by one, does nothing in a normal test run.
-#[test]
-fn sleeper_main() {
-	if crate::shared::env::var(SLEEPER_VAR).is_some() {
-		loop {
-			std::thread::sleep(std::time::Duration::from_secs(1));
-		}
-	}
-}
-
-struct Sleeper(std::process::Child);
-
-impl Sleeper {
-	fn start() -> Self {
-		let mut command = std::process::Command::new(std::env::current_exe().expect("the test executable"));
-		command
-			.args(["--exact", "frontier::server::e2e_keys_tests::sleeper_main", "--nocapture"])
-			.env(SLEEPER_VAR, "1")
-			.stdin(std::process::Stdio::null())
-			.stdout(std::process::Stdio::null())
-			.stderr(std::process::Stdio::null());
-		Self(command.spawn().expect("starting the stand-in omp"))
-	}
-
-	fn pid(&self) -> u32 {
-		self.0.id()
-	}
-}
-
-impl Drop for Sleeper {
-	fn drop(&mut self) {
-		let _ = self.0.kill();
-		let _ = self.0.wait();
-	}
-}
-
 #[tokio::test(flavor = "multi_thread")]
-async fn a_threads_working_asking_and_idle_come_from_its_omp_hosts_pipe_matched_by_its_omps_pid_and_worktree_herdrs_state_counts_only_while_the_host_doesnt_answer_0547_0561()
+async fn a_threads_working_asking_and_idle_come_from_its_omps_bridge_herdrs_state_counts_only_while_the_bridge_isnt_connected_0547_0561()
  {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
-	let options = ServerOptions { agent_wait_ms: Some(10_000), host_poll_ms: Some(50), ..ServerOptions::default() };
+	let options = ServerOptions { agent_wait_ms: Some(10_000), ..ServerOptions::default() };
 	with_server(options, |server| async move {
 		let started = crate::frontier::server::helpers::start_thread(&server, Default::default()).await;
-		let (pane_id, path) = (started.pane_id, started.path);
-		// The pane's omp: a real process, so its pid and start can be read (0490).
-		let omp = Sleeper::start();
-		let hosts = data_dir().join("collab-hosts");
-		let state = |pid: u32, busy: bool, input_required: bool| FakeHostState {
-			pid,
-			cwd: path.display().to_string(),
-			busy: Some(busy),
-			input_required,
-		};
-		let mut host = fake_host(&hosts, state(omp.pid(), true, false), None).await;
-		// His own omp in the same worktree, not the pane's: never asked.
-		let mut his = fake_host(&hosts, state(std::process::id(), false, true), None).await;
-		server.herdr.state().roots.insert(pane_id.clone(), omp.pid());
-		server.service.refresh().await;
+		let pane_id = started.pane_id;
+		let reports = |event: PaneEvent, agent: PaneAgent| pane_reports(&server, &pane_id, &event, agent);
+		let working = PaneAgent { working: true, ..PaneAgent::default() };
 		let busy = || server.service.busy_threads().unwrap();
 		// herdr says idle; omp says a turn runs.
+		reports(PaneEvent::AgentStart, working.clone());
 		until(|| busy().working == 1).await;
-		// herdr's idle pushed meanwhile doesn't end it while the host answers.
+		// herdr's idle pushed meanwhile doesn't end it while the bridge answers.
 		state_of(&pane_id, &server, AgentState::Idle, None);
-		let asked = host.asked();
-		until(|| host.asked() >= asked + 2).await;
+		server.service.refresh().await;
 		assert_eq!((busy().working, busy().awaiting), (1, 0));
 		// omp's `ask` dialog: awaiting him.
-		host.state.lock().unwrap_or_else(PoisonError::into_inner).input_required = true;
+		let asking = PaneAgent { input_open: true, input_kind: Some("ask".to_owned()), ..working };
+		reports(PaneEvent::Input { open: true, kind: Some("ask".to_owned()) }, asking);
 		until(|| busy().awaiting == 1).await;
 		// The turn ends.
-		{
-			let mut now = host.state.lock().unwrap_or_else(PoisonError::into_inner);
-			now.busy = Some(false);
-			now.input_required = false;
-		}
+		let idle = PaneAgent { idle_reported: true, ..PaneAgent::default() };
+		reports(PaneEvent::AgentEnd { idle: true, jobs: 0 }, idle);
 		until(|| busy().awaiting == 0 && busy().working == 0).await;
-		// No entry any more: unknown, and herdr's events decide again.
-		host.close().await;
-		// Once a poll finds no entry, herdr's working (pushed again until it counts) is the thread's state.
+		// The bridge is gone: unknown, and herdr's events decide again.
+		reports(PaneEvent::Gone, PaneAgent::default());
 		until(|| {
 			state_of(&pane_id, &server, AgentState::Working, None);
 			busy().working == 1
 		})
 		.await;
-		assert_eq!(his.asked(), 0);
-		his.close().await;
-		drop(omp);
-	})
-	.await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn a_pane_whose_collab_relay_url_doesnt_resolve_to_loopback_isnt_started_thread_start_refuses_before_anything_is_made_0536_0561()
- {
-	let j = temp_jocasta();
-	let project = demo_project(j.root(), "demo").await;
-	let overlay = overlay_file(&project.id).display().to_string();
-	// The boss's overlay resolves to the relay; the project's says the public one.
-	let options = ServerOptions {
-		relay_url_of: Some(Arc::new(move |command, _, _| {
-			let url = if command.iter().any(|word| word.contains(&overlay)) {
-				"wss://my.omp.sh"
-			} else {
-				"ws://127.0.0.1:47499"
-			};
-			async move { Ok(url.to_owned()) }.boxed()
-		})),
-		..ServerOptions::default()
-	};
-	with_server(options, |server| async move {
-		let reply = call(
-			&server,
-			"thread_start",
-			&json!({ "project": "demo", "title": "Readme line", "brief": "Add a README line." }),
-		)
-		.await;
-		assert_eq!(reply.is_error, Some(true));
-		assert!(
-			reply.text.contains(&format!("omp wasn't started in {}", project.main_path.display())),
-			"{}",
-			reply.text
-		);
-		assert!(reply.text.contains("\"wss://my.omp.sh\""), "{}", reply.text);
-		assert!(reply.text.contains(&overlay_file(&project.id).display().to_string()), "{}", reply.text);
-		assert!(server.herdr.of("createWorktree").is_empty());
-		let labels: Vec<String> = server.herdr.state().workspace_list.iter().map(|w| w.label.clone()).collect();
-		assert_eq!(labels, words(&["Jocasta"]));
 	})
 	.await;
 }
@@ -368,7 +271,7 @@ async fn parallel_thread_starts_in_one_project_dont_race_on_its_overlay_one_writ
 			let reply = reply.await.unwrap();
 			assert!(reply.text.starts_with("Started "), "{}", reply.text);
 		}
-		assert_eq!(read(&overlay), overlay_text(&project.id, Some(server.relay_port)));
+		assert_eq!(read(&overlay), overlay_text(&project.id));
 		// The overlay as it should be, held open by every omp reading it: never replaced, every start goes on.
 		let second = hold_open(&overlay);
 		let more: Vec<_> = ["Five", "Six", "Seven", "Eight"].into_iter().map(start).collect();
@@ -426,6 +329,7 @@ async fn thread_starts_brief_and_done_when_go_into_the_task_file_and_every_launc
 		let mut expected = words(&["omp", "--append-system-prompt"]);
 		expected.push(prompt.display().to_string());
 		expected.extend(guard());
+		expected.extend(bridge_flags());
 		expected.extend(words(&["--config"]));
 		expected.push(overlay_file(&project.id).display().to_string());
 		expected.extend(words(&["--warn-cost", "50"]));
@@ -885,13 +789,6 @@ async fn jocasta_thread_and_worktree_commands_run_the_services_own_functions_and
 		);
 		assert_eq!(server.herdr.of("createWorktree").len(), worktrees);
 		assert_eq!(asks_now().len(), asked + 2);
-		let unauthorized = http()
-			.post(format!("http://127.0.0.1:{}/api/cli", server.port))
-			.body("{}")
-			.send()
-			.await
-			.expect("an answer");
-		assert_eq!(unauthorized.status().as_u16(), 401);
 	})
 	.await;
 }

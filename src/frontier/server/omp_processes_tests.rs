@@ -1,4 +1,4 @@
-//! Tests of `omp_processes.rs`: the omp-process cases of `service-relaunch.test.ts` and the host-poll and pause cases of
+//! Tests of `omp_processes.rs`: the omp-process cases of `service-relaunch.test.ts` and the pause cases of
 //! `service-regressions.test.ts`, rewritten on the part (the real processes are stand-in trees, 0630), and a case for each
 //! method the service's flow reaches.
 
@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 use crate::frontier::server::context::{TestContext, test_context};
-use crate::frontier::server::hosts::fake::{FakeHost, FakeHostState, fake_host};
 use crate::frontier::server::thread::ThreadOmp;
 use crate::shared::paths::data_dir;
 use crate::shared::proctree::tests::{SleeperTree, settles, sleeper_tree};
@@ -58,17 +57,6 @@ fn ended_pid() -> u32 {
 /// Runs and ends at once: the process [`ended_pid`] starts.
 #[test]
 fn nothing() {}
-
-#[test]
-fn omps_own_state_of_a_host_is_blocked_for_a_dialog_working_for_a_turn_idle_otherwise_unknown_when_it_doesnt_say() {
-	let host =
-		|busy, input_required| HostState { pid: 1, cwd: PathBuf::new(), busy, input_required, relay_connected: true };
-	assert_eq!(host_state(&host(Some(false), true)), Some(AgentState::Blocked));
-	assert_eq!(host_state(&host(None, true)), Some(AgentState::Blocked));
-	assert_eq!(host_state(&host(Some(true), false)), Some(AgentState::Working));
-	assert_eq!(host_state(&host(Some(false), false)), Some(AgentState::Idle));
-	assert_eq!(host_state(&host(None, false)), None);
-}
 
 #[tokio::test]
 async fn a_thread_panes_omp_is_remembered_by_pid_and_start_with_what_runs_under_it_only_for_a_pane_jocasta_started() {
@@ -227,42 +215,21 @@ fn omps_of(shim: ProcessId) -> OmpProcesses {
 	omp_processes(&[shim]).into_iter().next().expect("a read")
 }
 
-/// The host registry entry of an omp, as omp writes it.
-fn host_entry(dir: &Path, name: &str, pid: u32) {
-	std::fs::create_dir_all(dir).unwrap();
-	let entry = serde_json::json!({ "version": 1, "instanceId": name, "pid": pid, "endpoint": format!("none-{name}"), "createdAt": 0, "token": "t" });
-	std::fs::write(dir.join(format!("{name}.json")), entry.to_string()).unwrap();
-}
-
-fn names(dir: &Path) -> Vec<String> {
-	let mut names: Vec<String> = std::fs::read_dir(dir)
-		.unwrap()
-		.flatten()
-		.map(|entry| entry.file_name().to_string_lossy().into_owned())
-		.collect();
-	names.sort();
-	names
-}
-
 struct Pause {
 	t: TestContext,
 	_folder: TempDir,
 	thread: ThreadRef,
 	omp: SleeperTree,
 	boss: SleeperTree,
-	hosts: PathBuf,
 	session: PathBuf,
 }
 
 /// A thread in its review turn and the boss, each with its omp (real processes that outlive their roots, as omp's
-/// workers do), and omp's host registry: the thread's omp, the boss's, and another omp that already ended.
+/// workers do): the thread's omp and the boss's.
 async fn pause_world() -> Pause {
 	let folder = temp_dir("omps-pause");
-	let hosts = folder.path().join("collab-hosts");
-	let hosts_dir = hosts.clone();
 	let t = test_context(move |options| {
 		leftovers(options);
-		options.hosts_dir = Some(hosts_dir);
 	});
 	let path = folder.path().join("demo.wt").join("readme-line");
 	let thread = started(&t, "p1", &path);
@@ -278,16 +245,12 @@ async fn pause_world() -> Pause {
 		thread.state = AgentState::Working;
 		thread.session_path = Some(session.clone());
 	});
-	for (name, pid) in [("thread", omp.root), ("boss", boss.root), ("other", ended_pid())] {
-		host_entry(&hosts, name, pid);
-	}
-	Pause { t, _folder: folder, thread, omp, boss, hosts, session }
+	Pause { t, _folder: folder, thread, omp, boss, session }
 }
 
 #[tokio::test]
-async fn a_thread_in_its_review_turn_is_saved_for_restore_and_its_omp_ends_forced_the_bosss_stays_only_the_ended_omps_host_entries_go()
- {
-	let Pause { t, thread, omp, boss, hosts, session, _folder } = pause_world().await;
+async fn a_thread_in_its_review_turn_is_saved_for_restore_and_its_omp_ends_forced_the_bosss_stays() {
+	let Pause { t, thread, omp, boss, session, _folder } = pause_world().await;
 	t.ctx.omps.pause().await.unwrap();
 	// Saved in `panes.json`: the next start brings its omp back with `--restore`.
 	assert_eq!(t.ctx.launched.paused("p1"), Some(session.display().to_string()));
@@ -301,10 +264,6 @@ async fn a_thread_in_its_review_turn_is_saved_for_restore_and_its_omp_ends_force
 	assert!(settles(gone(&omp)).await, "the thread's omp is still running");
 	assert!(boss.all.iter().all(|pid| pid_alive(*pid)));
 	assert!(logged().contains("demo/Readme line: its omp ended mid-turn, for --restore"), "{}", logged());
-	// Only what ended goes from omp's host registry (the boss's omp still runs, so it waits the full time).
-	t.ctx.omps.remove_ended_hosts().await;
-	assert_eq!(names(&hosts), ["boss.json", "other.json"]);
-	assert!(logged().contains("removed 1 ended omp host entry"), "{}", logged());
 	drop(thread);
 }
 
@@ -331,7 +290,6 @@ async fn a_thread_not_at_work_or_without_a_session_is_not_saved_and_one_awaiting
 	assert_eq!(t.ctx.launched.paused("p2"), None);
 	// A turn started and not yet reported is at work too.
 	assert_eq!(t.ctx.launched.paused("p3"), Some(session.display().to_string()));
-	assert!(t.ctx.omps.state().closing.is_empty());
 	// A thread paused but whose omp is not known: it ends with herdr.
 	t.ctx.omps.cut_paused().await;
 	assert!(
@@ -345,47 +303,21 @@ async fn a_thread_not_at_work_or_without_a_session_is_not_saved_and_one_awaiting
 async fn a_herdr_that_cannot_read_a_pane_doesnt_hold_pause_and_nothing_to_remove_returns_at_once() {
 	let t = test_context(leftovers);
 	let started_at = std::time::Instant::now();
-	t.ctx.omps.remove_ended_hosts().await;
 	assert!(started_at.elapsed() < Duration::from_secs(2));
 	// A pane Jocasta started whose root herdr doesn't know: no omp to end later.
 	t.ctx.launched.add("boss-1", "/somewhere", None).unwrap();
 	t.ctx.omps.pause().await.unwrap();
-	assert!(t.ctx.omps.state().closing.is_empty());
 }
 
-struct Hosted {
-	t: TestContext,
-	thread: ThreadRef,
-	host: FakeHost,
-	_folder: TempDir,
-	path: PathBuf,
-}
-
-/// A thread whose remembered omp is process `pid`, and a fake host answering for it in the thread's worktree.
-async fn hosted(state: impl FnOnce(&Path) -> FakeHostState) -> Hosted {
-	let folder = temp_dir("omps-hosts");
-	let hosts = folder.path().join("collab-hosts");
-	let dir = hosts.clone();
-	let t = test_context(move |options| options.hosts_dir = Some(dir));
+/// A thread in pane `p1`, idle, one Jocasta started omp in.
+fn bridged() -> (TestContext, ThreadRef, TempDir) {
+	let folder = temp_dir("omps-bridge");
+	let t = test_context(|_| {});
 	let path = folder.path().join("demo.wt").join("readme-line");
 	std::fs::create_dir_all(&path).unwrap();
 	let thread = started(&t, "p1", &path);
-	let pid = 4242;
-	let id = ProcessId { pid, start: 1.0 };
-	thread.with(|thread| {
-		thread.state = AgentState::Idle;
-		thread.omp = Some(ThreadOmp {
-			terminal: None,
-			shim: None,
-			processes: Some(OmpProcesses { omp: vec![id], tree: vec![id] }),
-		});
-	});
-	let host = fake_host(&hosts, state(&path), None).await;
-	Hosted { t, thread, host, _folder: folder, path }
-}
-
-fn host_at(path: &Path, busy: Option<bool>, input_required: bool) -> FakeHostState {
-	FakeHostState { pid: 4242, cwd: path.display().to_string(), busy, input_required }
+	thread.with(|thread| thread.state = AgentState::Idle);
+	(t, thread, folder)
 }
 
 fn host_of(thread: &ThreadRef) -> Option<AgentState> {
@@ -393,69 +325,27 @@ fn host_of(thread: &ThreadRef) -> Option<AgentState> {
 }
 
 #[tokio::test]
-async fn each_thread_panes_omp_as_its_host_reports_it_working_blocked_or_idle_and_unknown_when_the_host_doesnt_say() {
-	let mut h = hosted(|path| host_at(path, Some(true), false)).await;
-	h.t.ctx.omps.poll().await;
-	assert_eq!(host_of(&h.thread), Some(AgentState::Working));
-	assert!(logged().contains("demo/Readme line: omp's host reports working"), "{}", logged());
-	h.host.state.lock().unwrap().input_required = true;
-	h.t.ctx.omps.poll().await;
-	assert_eq!(host_of(&h.thread), Some(AgentState::Blocked));
-	{
-		let mut state = h.host.state.lock().unwrap();
-		state.input_required = false;
-		state.busy = Some(false);
-	}
-	h.t.ctx.omps.poll().await;
-	assert_eq!(host_of(&h.thread), Some(AgentState::Idle));
-	// An older omp doesn't say: unknown, never idle; the thread's own state decides again.
-	h.host.state.lock().unwrap().busy = None;
-	h.t.ctx.omps.poll().await;
-	assert_eq!(host_of(&h.thread), None);
-	assert!(logged().contains("demo/Readme line: omp's host is gone; herdr decides"), "{}", logged());
-	assert_eq!(h.host.asked(), 4);
-	h.host.close().await;
+async fn each_thread_panes_omp_as_its_bridge_reports_it_working_blocked_or_idle_and_none_when_the_pipe_is_gone() {
+	let (t, thread, _folder) = bridged();
+	t.ctx.omps.host_reports("p1", Some(AgentState::Working));
+	assert_eq!(host_of(&thread), Some(AgentState::Working));
+	assert!(logged().contains("demo/Readme line: omp reports working"), "{}", logged());
+	t.ctx.omps.host_reports("p1", Some(AgentState::Blocked));
+	assert_eq!(host_of(&thread), Some(AgentState::Blocked));
+	t.ctx.omps.host_reports("p1", Some(AgentState::Idle));
+	assert_eq!(host_of(&thread), Some(AgentState::Idle));
+	// The pipe ends: the thread's own state decides again.
+	t.ctx.omps.host_reports("p1", None);
+	assert_eq!(host_of(&thread), None);
+	assert!(logged().contains("demo/Readme line: omp's bridge is gone; herdr decides"), "{}", logged());
 }
 
 #[tokio::test]
-async fn a_host_in_another_folder_or_of_another_pid_is_not_the_threads_and_a_host_that_went_is_gone() {
-	let mut h = hosted(|_| host_at(Path::new("/his/own"), Some(true), false)).await;
-	h.t.ctx.omps.poll().await;
-	// His own omp, started in another folder: never taken for the thread's.
-	assert_eq!(host_of(&h.thread), None);
-	h.host.state.lock().unwrap().cwd = h.path.display().to_string();
-	h.t.ctx.omps.poll().await;
-	assert_eq!(host_of(&h.thread), Some(AgentState::Working));
-	h.host.close().await;
-	h.t.ctx.omps.poll().await;
-	assert_eq!(host_of(&h.thread), None);
-	// A thread whose omp Jocasta didn't start (nothing remembered) has no host.
-	let other = h.t.with_thread("p2", "Other");
-	h.t.ctx.omps.poll().await;
-	assert_eq!(host_of(&other), None);
-}
-
-#[tokio::test]
-async fn a_poll_under_way_is_joined_not_started_again_and_stop_can_wait_for_it() {
-	let mut h = hosted(|path| host_at(path, Some(true), false)).await;
-	assert!(h.t.ctx.omps.polling().is_none());
-	let omps = &h.t.ctx.omps;
-	tokio::join!(omps.poll(), omps.poll(), async {
-		if let Some(read) = omps.polling() {
-			read.await;
-		}
-	});
-	assert_eq!(h.host.asked(), 1);
-	assert!(h.t.ctx.omps.polling().is_none());
-	h.host.close().await;
-}
-
-#[tokio::test]
-async fn a_stopping_service_asks_no_host() {
-	let mut h = hosted(|path| host_at(path, Some(true), false)).await;
-	h.t.ctx.set_stopping();
-	h.t.ctx.omps.poll().await;
-	assert_eq!(h.host.asked(), 0);
-	assert_eq!(host_of(&h.thread), None);
-	h.host.close().await;
+async fn a_report_for_a_pane_that_is_no_thread_is_ignored_and_a_stopping_service_takes_none() {
+	let (t, thread, _folder) = bridged();
+	t.ctx.omps.host_reports("nowhere", Some(AgentState::Working));
+	assert_eq!(host_of(&thread), None);
+	t.ctx.set_stopping();
+	t.ctx.omps.host_reports("p1", Some(AgentState::Working));
+	assert_eq!(host_of(&thread), None);
 }

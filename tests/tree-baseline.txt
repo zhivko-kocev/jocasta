@@ -289,7 +289,6 @@ src/frontier/server/worklog.rs undocumented-export GitPlaces.of
 src/frontier/server/worklog.rs undocumented-export worklog_path
 src/frontier/today/main.rs flag-parameter TodayProgram.step(down)
 src/frontier/tui.rs forwarding Pane.end
-src/mcp/server.rs flag-parameter mcp_tools(boss)
 src/mcp/server.rs flag-parameter run_mcp_stdio(boss)
 src/setup/diagnose.rs undocumented-export DiagnoseDeps
 src/setup/diff.rs undocumented-export line_diff

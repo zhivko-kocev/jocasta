@@ -9,11 +9,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
 /// The message the thread and worktree commands give when no service runs (`NOT_RUNNING`).
 const NOT_RUNNING: &str = "Jocasta isn't running; start it with jocasta.";
-const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 
 /// A folder of the test's own, removed when it ends. Under `/tmp` on Linux and macOS, with a short name: herdr's
 /// session sockets live in it, and a socket's path must stay under 104 bytes (macOS's temp dir alone is about 50).
@@ -161,7 +160,7 @@ fn other_words_print_clap_usage_and_exit_2_a_word_that_is_no_command_named_first
 	assert!(unknown.stdout.is_empty(), "{}", unknown.stdout);
 	assert!(unknown.stderr.starts_with("error: unrecognized subcommand 'threads'"), "{}", unknown.stderr);
 	assert!(unknown.stderr.contains("Usage: jocasta"), "{}", unknown.stderr);
-	for args in [["mcp", "--nope"], ["setup", "now"]] {
+	for args in [["uninstall", "--nope"], ["setup", "now"]] {
 		let out = run(&sandbox, &args);
 		assert_eq!(out.code, Some(2), "{args:?}");
 		assert!(out.stderr.starts_with("error: "), "{}", out.stderr);
@@ -176,10 +175,10 @@ fn help_goes_to_stdout_and_exits_0_without_the_internal_words() {
 	assert_eq!(out.code, Some(0));
 	assert!(out.stderr.is_empty(), "{}", out.stderr);
 	assert!(out.stdout.contains("Usage: jocasta"), "{}", out.stdout);
-	for word in ["setup", "uninstall", "diagnose", "mcp", "project", "thread", "worktree", "--version"] {
+	for word in ["setup", "uninstall", "diagnose", "project", "thread", "worktree", "--version"] {
 		assert!(out.stdout.contains(word), "{word} missing from {}", out.stdout);
 	}
-	for hidden in ["push-hook", "pane-check", "\n  plugin "] {
+	for hidden in ["push-hook", "\n  plugin "] {
 		assert!(!out.stdout.contains(hidden), "{hidden} in {}", out.stdout);
 	}
 	// herdr's commands, built in, are named after Jocasta's own.
@@ -213,37 +212,6 @@ fn thread_and_worktree_bad_usage_exits_2_with_the_usage_without_the_service_exit
 		assert_eq!(out.code, Some(3), "{args:?}");
 		assert_eq!(out.stderr.trim(), format!("jocasta: {NOT_RUNNING}"));
 	}
-}
-
-#[test]
-fn jocasta_mcp_answers_initialize_on_stdio_and_its_tools_say_jocasta_isnt_running_without_the_service() {
-	let sandbox = Sandbox::new();
-	let mut command = sandbox.jocasta(&["mcp", "--boss"]);
-	let mut child = command.stdin(Stdio::piped()).spawn().expect("starting jocasta mcp");
-	let mut stdin = child.stdin.take().expect("jocasta mcp has no stdin");
-	let initialize = json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
-		"protocolVersion": MCP_PROTOCOL_VERSION, "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } } });
-	let initialized = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
-	let call = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
-		"name": "history_search", "arguments": { "project": "demo", "query": "x" } } });
-	for message in [initialize, initialized, call] {
-		writeln!(stdin, "{message}").expect("writing to jocasta mcp");
-	}
-	drop(stdin);
-	let out = finish(child, 30);
-	assert_eq!(out.code, Some(0), "{}", out.stderr);
-	let replies: Vec<Value> = out.stdout.trim().lines().map(|line| serde_json::from_str(line).expect("JSON")).collect();
-	assert_eq!(
-		replies[0],
-		json!({ "jsonrpc": "2.0", "id": 1, "result": {
-			"protocolVersion": MCP_PROTOCOL_VERSION,
-			"capabilities": { "tools": { "listChanged": false } },
-			"serverInfo": { "name": "jocasta", "version": env!("CARGO_PKG_VERSION") } } })
-	);
-	assert_eq!(
-		replies[1],
-		json!({ "jsonrpc": "2.0", "id": 2, "result": { "content": [{ "type": "text", "text": NOT_RUNNING }], "isError": true } })
-	);
 }
 
 #[test]
@@ -653,7 +621,7 @@ fn logs(sandbox: &Sandbox, session: &str) -> String {
 	logs.join("\n")
 }
 
-/// One test, as the service's collab relay has one fixed port (0561): two services at once would refuse the second.
+/// One test: the failed start and the working one share a sandbox and its herdr sessions.
 #[test]
 fn bare_jocasta_runs_the_service_in_herdrs_server_one_that_cant_start_ends_it_saying_why_closing_his_terminal_closes_jocasta_a_plain_server_runs_none_0549_0582()
  {
@@ -661,6 +629,11 @@ fn bare_jocasta_runs_the_service_in_herdrs_server_one_that_cant_start_ends_it_sa
 	let service_file = sandbox.path().join("data").join("jocasta-service.json");
 
 	// No omp on PATH: the service can't start, so herdr's server stops, and bare `jocasta` says why and exits 1.
+	// The boss's home can't be written (a file holds the name of its `.omp` folder), so the boss, and with it the service,
+	// can't start.
+	let boss_home = sandbox.path().join("data").join("home");
+	std::fs::create_dir_all(&boss_home).expect("the boss's home");
+	std::fs::write(boss_home.join(".omp"), "").expect("the blocker");
 	let mut first = Terminal::bare(&sandbox, "f", None);
 	let ended = waited(90, || matches!(first.client.try_wait(), Ok(Some(_))));
 	assert!(ended, "herdr's client outlived a service that didn't start; {}", first.report(&sandbox, "f"));
@@ -673,6 +646,7 @@ fn bare_jocasta_runs_the_service_in_herdrs_server_one_that_cant_start_ends_it_sa
 		finish(in_session(&sandbox, "f", &["pane", "list"]).spawn().expect("pane list"), 30).code == Some(1)
 	});
 	drop(first);
+	std::fs::remove_file(boss_home.join(".omp")).expect("the blocker goes");
 
 	fake_omp(&sandbox);
 	// A project with a leftover worktree, for an Allow; the service runs git from git's own folder.

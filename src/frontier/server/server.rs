@@ -3,7 +3,7 @@
 //! API call carries the token as a bearer (`jocasta mcp`, bare `jocasta`, the benchmark's clients); the browser's pages carry
 //! a separate page token as a per-port cookie, set from a one-time launch code (`/?t=<code>`, SEC-NET-4, SEC-LOC-11). It
 //! serves the MCP tools, the state feed, his questions and whiteboard's canvas page (0393), and runs the herdr-backed
-//! service. A start that fails stops what it had started, its relay included (SRV-A-2).
+//! service. A start that fails stops what it had started, its bridge included (SRV-A-2).
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -21,9 +21,10 @@ use crate::frontier::protocol::{
 };
 use crate::frontier::server::allow::{Answer, CONFIRM_WAIT_MS, Confirm, Confirmation};
 use crate::frontier::server::asker::{Ask, Show, asker};
+use crate::frontier::server::bridge::{Bridge, BridgeService, Secrets};
 use crate::frontier::server::close::{CloseFlow, CloseHow, CloseOutcome, CloseParts, CloseService, close_flow};
 use crate::frontier::server::day::{DayOptions, SharedCatalog};
-use crate::frontier::server::door_routes::{DoorParts, DoorService, door_routes};
+use crate::frontier::server::door_routes::{DoorParts, door_routes};
 use crate::frontier::server::feed::{FeedService, Guard, Reply, feed_route, feed_socket, publish};
 use crate::frontier::server::health_route::health_route;
 use crate::frontier::server::herdr::{Herdr, HerdrOptions, Note, connect_herdr};
@@ -31,11 +32,8 @@ use crate::frontier::server::native::{Native, NativeServer};
 use crate::frontier::server::page_routes::{LaunchCodes, PageParts, PageResponder, page_responder, whiteboard_reviews};
 use crate::frontier::server::phone::{Phone, PhoneOptions, Timing};
 use crate::frontier::server::popups::{ALLOW, AnswerTaken, Popup, Popups, allow_question};
-use crate::frontier::server::relay::{Relay, start_relay};
 use crate::frontier::server::routes::{Route, Served, ServerHandle, listen};
-use crate::frontier::server::service::{
-	Changed, FindReview, Heal, JocastaService, OpenReview, RelayUrlOf, ServiceOptions,
-};
+use crate::frontier::server::service::{Changed, FindReview, Heal, JocastaService, OpenReview, ServiceOptions};
 use crate::frontier::server::stop_sequence::{
 	StopBounds, StopParts, StopRun, StopService, StopStep, StopWhen, Stopper, stop_steps, stopper, undo_start,
 };
@@ -43,7 +41,7 @@ use crate::frontier::server::thread_keys::{ActionService, KeyParts, ThreadKeys};
 use crate::frontier::server::whiteboard::{
 	ServiceStatus, Whiteboard, WhiteboardOptions, is_stage_file, start_whiteboard,
 };
-use crate::shared::credentials::take_calendar_env;
+use crate::shared::credentials::{calendar_secret, take_calendar_env};
 use crate::shared::errors::Result;
 use crate::shared::herdr_session::herdr_session;
 use crate::shared::link::open_in_browser;
@@ -103,8 +101,6 @@ pub struct ServerOptions {
 	pub find_review: Option<FindReview>,
 	/// Opens a whiteboard review in his browser; overrides whiteboard's own.
 	pub open_review: Option<OpenReview>,
-	/// How long `thread_start` waits for the pane to start working before one Enter.
-	pub submit_wait_ms: Option<i64>,
 	/// mise's argv; `Some(None)` runs none.
 	pub mise: Option<Option<Vec<String>>>,
 	/// How long the weekly big-picture review may run (0470).
@@ -119,23 +115,16 @@ pub struct ServerOptions {
 	pub confirm_wait_ms: Option<i64>,
 	/// The boss pane's key (0484).
 	pub boss_key: Option<String>,
+	/// The bridge (0675): the one the server makes by default; a recording one in a test (test seam).
+	pub bridge: Option<Bridge>,
 	/// How long the end of a thread pane's omp is waited for before its leftovers end (0490).
 	pub leftover_wait_ms: Option<i64>,
 	/// When leftovers are looked for again (0490).
 	pub leftover_again_ms: Option<i64>,
-	/// `collab.relayUrl` as the omp of a command resolves it.
-	pub relay_url_of: Option<RelayUrlOf>,
-	/// omp's host registry folder.
-	pub hosts_dir: Option<PathBuf>,
-	/// How often the thread panes' omp hosts are asked for their state.
-	pub host_poll_ms: Option<i64>,
 	/// `Some(false)`: a task end without a `report_result` goes straight to its review (0539).
 	pub ask_report: Option<bool>,
 	/// How long a plan-mode turn's end waits for the session to show its proposal; `PLAN_SETTLE_MS` (test seam).
 	pub plan_settle_ms: Option<i64>,
-	/// The collab relay's port on 127.0.0.1 (test seam): `RELAY_PORT`; `Some(0)` a free one. Taken: the start fails
-	/// (0561).
-	pub relay_port: Option<u16>,
 	/// herdr (test seam): the server this service lives in by default.
 	pub herdr: Option<Arc<dyn Herdr>>,
 	/// herdr's session, for its name in the stop steps and the panes' commands (smoke seam); `jocasta` by default.
@@ -177,19 +166,15 @@ impl ServerOptions {
 		service.agent_wait_ms = self.agent_wait_ms;
 		service.pane_check_wait_ms = self.pane_check_wait_ms;
 		service.refresh_ms = self.refresh_ms;
-		service.submit_wait_ms = self.submit_wait_ms;
 		service.mise = self.mise.take();
 		service.weekly_review_ms = self.weekly_review_ms;
 		service.scorecard_ms = self.scorecard_ms;
 		service.weekly_reviews = self.weekly_reviews;
 		service.confirm_wait_ms = self.confirm_wait_ms;
 		service.boss_key = self.boss_key.take();
+		service.bridge = self.bridge.clone();
 		service.leftover_wait_ms = self.leftover_wait_ms;
 		service.leftover_again_ms = self.leftover_again_ms;
-		service.relay_port = self.relay_port;
-		service.relay_url_of = self.relay_url_of.take();
-		service.hosts_dir = self.hosts_dir.take();
-		service.host_poll_ms = self.host_poll_ms;
 		service.ask_report = self.ask_report;
 		service.day = self.day.take();
 	}
@@ -205,8 +190,8 @@ pub struct JocastaServer {
 	pub port: u16,
 	/// The API token: the bearer of every call (`jocasta-service.json`); never a cookie or in a URL (SEC-NET-4).
 	pub token: String,
-	/// The collab relay's port on 127.0.0.1 (0561).
-	pub relay_port: u16,
+	/// The bridge (0675): where the panes' omps and the CLI connect.
+	pub bridge: Bridge,
 	pub service: Arc<JocastaService>,
 	/// whiteboard's server, the service's child (0393); `None` when the server was started without it.
 	pub whiteboard: Option<Arc<Whiteboard>>,
@@ -453,11 +438,10 @@ pub async fn start_server(mut options: ServerOptions) -> Result<JocastaServer> {
 	// The calendar's secret leaves this process's environment before anything is spawned (SEC-5, 0430).
 	take_calendar_env();
 	let tokens = Tokens { api: random_hex(), page: random_hex() };
-	// The collab relay every omp pane hosts its session in (0536, 0561), first: a port another program holds stops the
-	// start before herdr or any pane starts. It stops with Jocasta, and with a failed start.
-	let relay = Arc::new(start_relay(options.relay_port)?);
-	let mut undo: Undo = vec![StopStep::new("the collab relay", relay_stop(&relay))];
-	match start_rest(&mut options, relay, tokens, &mut undo).await {
+	let bridge = options.bridge.get_or_insert_with(Bridge::new).clone();
+	bridge.set_secrets(secrets_of(&tokens));
+	let mut undo: Undo = vec![StopStep::new("the bridge", bridge_stop(&bridge))];
+	match start_rest(&mut options, bridge, tokens, &mut undo).await {
 		Ok(server) => Ok(server),
 		Err(error) => {
 			undo_start(&undo).await;
@@ -466,12 +450,23 @@ pub async fn start_server(mut options: ServerOptions) -> Result<JocastaServer> {
 	}
 }
 
-fn relay_stop(relay: &Arc<Relay>) -> StopRun {
-	let relay = Arc::clone(relay);
+/// What the bridge blanks from everything a model reads (0681): the calendar URL, both tokens and the ntfy server and
+/// token.
+fn secrets_of(tokens: &Tokens) -> Secrets {
+	let ntfy = read_ntfy();
+	Secrets::new(
+		[calendar_secret(), Some(tokens.api.clone()), Some(tokens.page.clone()), ntfy.server, ntfy.token]
+			.into_iter()
+			.flatten(),
+	)
+}
+
+fn bridge_stop(bridge: &Bridge) -> StopRun {
+	let bridge = bridge.clone();
 	Arc::new(move || {
-		let relay = Arc::clone(&relay);
+		let bridge = bridge.clone();
 		Box::pin(async move {
-			relay.stop().await;
+			bridge.stop();
 			Ok(())
 		})
 	})
@@ -591,7 +586,7 @@ fn phone_stop(phone: &Arc<Phone>) -> StopStep {
 /// The stopper: what stops, in what order, with the listening server read when it stops.
 fn stopper_of(
 	rig: &Rig<'_>,
-	relay: StopRun,
+	bridge: StopRun,
 	listening: &Arc<Mutex<Option<ServerHandle>>>,
 	bounds: StopBounds,
 ) -> Arc<Stopper> {
@@ -623,7 +618,7 @@ fn stopper_of(
 			service: Arc::clone(&service) as Arc<dyn StopService>,
 			extra_stops,
 			whiteboard: whiteboard.clone(),
-			relay: Arc::clone(&relay),
+			bridge: Arc::clone(&bridge),
 			server,
 			bounds,
 		})
@@ -653,7 +648,6 @@ fn routes_of(rig: &Rig<'_>, close: &CloseFlow) -> Vec<Box<dyn Route>> {
 	let closed = close.clone();
 	door_routes(DoorParts {
 		token: rig.tokens.api.clone(),
-		service: Arc::clone(rig.service) as Arc<dyn DoorService>,
 		client_closed: Arc::new(move || {
 			let close = closed.clone();
 			tokio::spawn(async move { close.close(CloseHow { ask: true, reattach: true }).await });
@@ -788,7 +782,7 @@ fn pages_of(
 
 async fn start_rest(
 	options: &mut ServerOptions,
-	relay: Arc<Relay>,
+	bridge: Bridge,
 	tokens: Tokens,
 	undo: &mut Undo,
 ) -> Result<JocastaServer> {
@@ -815,8 +809,6 @@ async fn start_rest(
 	let codes = Arc::new(LaunchCodes::default());
 	let waiting_ms = options.confirm_wait_ms.unwrap_or(CONFIRM_WAIT_MS);
 	let opener = page_opener(&port, &codes);
-	// The panes' overlays name the relay as it listens (a test's `Some(0)` asks for a free port).
-	options.relay_port = Some(relay.port);
 	let (service, asking) = build_service(options, &herdr, &broadcast, whiteboard.as_ref(), opener)?;
 	// Its stop closes what it opened (the catalog, the day's stores) and herdr's connection.
 	undo.push(undo_service(&service));
@@ -834,7 +826,7 @@ async fn start_rest(
 		broadcast: &broadcast,
 		phone: phone.as_ref(),
 	};
-	let stops = stopper_of(&rig, relay_stop(&relay), &listening, options.stop_bounds_ms);
+	let stops = stopper_of(&rig, bridge_stop(&bridge), &listening, options.stop_bounds_ms);
 	let close = close_of(&rig, &stops, options.reattach.take());
 	let mut routes = routes_of(&rig, &close);
 	let closing = Arc::clone(&stops);
@@ -846,6 +838,9 @@ async fn start_rest(
 	*locked(&listening) = Some(handle.clone());
 	undo.push(undo_server(&handle));
 	port.store(handle.port(), Ordering::SeqCst);
+	// The panes' omps connect to the bridge on the port the server got (0675); it listens before the service starts the
+	// boss, whose environment names it.
+	bridge.listen(handle.port(), &tokens.api, &(Arc::clone(&service) as Arc<dyn BridgeService>))?;
 	undo.push(StopStep::sync("jocasta-service.json", || {
 		remove_service_file(std::process::id());
 		Ok(())
@@ -863,7 +858,7 @@ async fn start_rest(
 	Ok(JocastaServer {
 		port: handle.port(),
 		token: tokens.api,
-		relay_port: relay.port,
+		bridge,
 		service,
 		whiteboard,
 		inner: Arc::new(Inner { codes, stops, close, question: asking.question, popups: asking.popups, keys, herdr }),

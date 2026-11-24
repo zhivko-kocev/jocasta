@@ -1,20 +1,19 @@
-//! The cases of `test/frontier/server/push-gate.test.ts` through the real server: git's pre-push hook asks
-//! `POST /api/push` with the service token, and his Allow box is the server's `confirm` option (0613). The parts of
-//! the gate (the body, the texts, the box's details) are in `push_gate_tests.rs`.
+//! The cases of `test/frontier/server/push-gate.test.ts` through the real server: git's pre-push hook asks the
+//! service's `push` request (a bridge message, 0675), and his Allow box is the server's `confirm` option (0613). The
+//! parts of the gate (the body, the texts, the box's details) are in `push_gate_tests.rs`.
 
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use serde_json::json;
-
 use crate::frontier::server::allow::{Answer, Confirm, Confirmation};
-use crate::frontier::server::helpers::{TestServer, commit_in, demo_project, http, sh, with_server};
+use crate::frontier::server::bridge::BridgeService;
+use crate::frontier::server::helpers::{TestServer, commit_in, demo_project, sh, with_server};
 use crate::frontier::server::popups::PopupEnd;
 use crate::frontier::server::server::ServerOptions;
 use crate::shared::paths::projects_file;
 use crate::shared::projects_file::{PushWay, read_projects_file, set_push_way};
-use crate::shared::push_hook::{PUSH_PATH, PushAnswer, PushedRef};
+use crate::shared::push_hook::{PushAnswer, PushRequest, PushedRef};
 use crate::shared::testing::temp_jocasta;
 
 const NONE: &str = "0000000000000000000000000000000000000000";
@@ -22,15 +21,8 @@ const REMOTE: &str = "https://user:secret@example.org/acme/demo.git";
 
 /// What the hook sends for a push from `dir` updating `refs`.
 async fn push_refs(server: &TestServer, dir: &Path, refs: Vec<PushedRef>) -> PushAnswer {
-	let body = json!({ "dir": dir.display().to_string(), "remote": REMOTE, "refs": refs });
-	let response = http()
-		.post(format!("http://127.0.0.1:{}{PUSH_PATH}", server.port))
-		.bearer_auth(&server.token)
-		.json(&body)
-		.send()
-		.await
-		.expect("the service answers");
-	response.json().await.expect("a push answer")
+	let request = PushRequest { dir: dir.to_path_buf(), remote: REMOTE.to_owned(), refs, pane_key: None };
+	BridgeService::push(&*server.service, request).await
 }
 
 /// What the hook sends for a push from `dir` updating `branches` (new branches by default).

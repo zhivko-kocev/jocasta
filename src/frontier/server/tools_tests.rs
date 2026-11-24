@@ -299,8 +299,9 @@ async fn boss_tools_refuse_every_caller_without_this_runs_boss_key_plainly() {
 }
 
 #[tokio::test]
-async fn the_registry_agrees_with_jocasta_mcp_a_threads_pane_lists_the_tools_any_pane_may_call_the_boss_the_rest() {
-	let fixture: Value = serde_json::from_str(include_str!("../../mcp/tools_list_fixture.json")).unwrap();
+async fn the_registry_agrees_with_the_tool_specs_fixture_a_threads_pane_lists_the_tools_any_pane_may_call_the_boss_the_rest()
+ {
+	let fixture: Value = serde_json::from_str(include_str!("tool_specs_fixture.json")).unwrap();
 	let listed = |mode: &str| -> Vec<String> {
 		let tools = fixture[mode]["tools_list"]["result"]["tools"].as_array().expect("the listed tools");
 		let mut names: Vec<String> = tools.iter().map(|tool| tool["name"].as_str().unwrap().to_owned()).collect();
@@ -828,7 +829,6 @@ async fn thread_start_reads_its_arguments_first_and_the_reply_is_the_starts_text
 	let w = World::with(|options| {
 		options.confirm = Some(confirm);
 		options.agent_wait_ms = Some(0);
-		options.submit_wait_ms = Some(50);
 	})
 	.await;
 	assert_eq!(

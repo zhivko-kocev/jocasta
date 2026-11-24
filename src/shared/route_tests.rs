@@ -1,7 +1,6 @@
 use clap::error::ErrorKind;
 
 use super::*;
-use crate::shared::pane_check::PANE_CHECK_ROLE;
 use crate::shared::push_hook::PUSH_HOOK_ROLE;
 
 fn words(args: &[&str]) -> Vec<String> {
@@ -31,8 +30,6 @@ fn the_jocasta_commands_words_0387_0467_0468_0472_0544_anything_else_is_a_usage_
 	assert_eq!(go(&["setup", "--refresh", "herdr.toml"]), Route::Setup { refresh: Some("herdr.toml".to_owned()) });
 	assert_eq!(go(&["uninstall"]), Route::Uninstall);
 	assert_eq!(go(&["diagnose"]), Route::Diagnose);
-	assert_eq!(go(&["mcp"]), Route::Mcp { boss: false });
-	assert_eq!(go(&["mcp", "--boss"]), Route::Mcp { boss: true });
 	assert_eq!(go(&["project", "list"]), Route::Project { args: words(&["list"]) });
 	assert_eq!(go(&["thread", "list"]), Route::Thread { args: words(&["list"]) });
 	assert_eq!(go(&["worktree", "remove", "x"]), Route::Worktree { args: words(&["remove", "x"]) });
@@ -41,14 +38,13 @@ fn the_jocasta_commands_words_0387_0467_0468_0472_0544_anything_else_is_a_usage_
 	assert_eq!(refused(&["--help"]).kind(), ErrorKind::DisplayHelp);
 	assert_eq!(refused(&["-h"]).kind(), ErrorKind::DisplayHelp);
 	// Retired words (0387) are no command and are named; stray arguments to a command are invocation errors.
-	for args in [&["guard"][..], &["harness"], &["memory", "import"], &["fix it"]] {
+	for args in [&["guard"][..], &["mcp"], &["pane-check"], &["harness"], &["memory", "import"], &["fix it"]] {
 		let error = refused(args);
 		assert_eq!(error.kind(), ErrorKind::InvalidSubcommand, "{args:?}");
 		assert!(error.to_string().contains(&format!("'{}'", args[0])), "{error}");
 	}
 	for args in [
-		&["mcp", "-x"][..],
-		&["setup", "now"],
+		&["setup", "now"][..],
 		&["setup", "--refresh"],
 		&["setup", "--refresh", ""],
 		&["uninstall", "--yes"],
@@ -71,11 +67,10 @@ fn help_is_clap_text_that_lists_the_words_and_exits_0_to_stdout() {
 	assert_eq!(error.exit_code(), 0);
 	let text = help();
 	assert!(text.contains("Usage: jocasta"), "{text}");
-	for word in ["setup", "uninstall", "diagnose", "mcp", "project", "thread", "worktree", "--version", "--help"] {
+	for word in ["setup", "uninstall", "diagnose", "project", "thread", "worktree", "--version", "--help"] {
 		assert!(text.contains(word), "{word} missing from {text}");
 	}
 	assert!(refused(&["setup", "--help"]).to_string().contains("--refresh <FILE>"));
-	assert!(refused(&["mcp", "--help"]).to_string().contains("--boss"));
 }
 
 #[test]
@@ -125,14 +120,6 @@ fn the_command_word_routes_to_the_hook_with_gits_arguments_and_stays_out_of_the_
 		Route::PushHook { args: words(&["origin", "https://example.org/a.git"]) }
 	);
 	assert_eq!(go(&["push-hook"]), Route::PushHook { args: vec![] });
-}
-
-#[test]
-fn the_pane_check_word_routes_but_is_not_in_the_help_0617() {
-	assert_eq!(PANE_CHECK_ROLE, "pane-check");
-	assert_eq!(go(&["pane-check"]), Route::PaneCheck);
-	assert!(refused(&["pane-check", "x"]).use_stderr());
-	assert!(!help().contains("pane-check"));
 }
 
 #[test]

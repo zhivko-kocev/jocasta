@@ -238,7 +238,6 @@ impl Harness {
 			self.lsp(),
 			self.watchdog(),
 			self.mise_skill(),
-			self.global_mcp(),
 			self.hook(),
 			self.secrets(),
 		]
@@ -332,7 +331,7 @@ async fn a_fresh_machine_the_diff_names_every_file_and_n_writes_nothing() {
 	let Out { code, text, asked } = h.setup(Some("n")).await;
 	assert_eq!(code, 0);
 	assert_eq!(asked, ["Write these changes? [y/N] "]);
-	assert!(text.contains(&format!("omp MCP servers \"jocasta\", \"whiteboard\": {}", s(&h.boss_mcp()))));
+	assert!(text.contains(&format!("omp MCP server \"whiteboard\": {}", s(&h.boss_mcp()))));
 	assert!(text.contains(&format!("herdr config for session `jocasta`: {}", s(&h.herdr_toml()))));
 	assert!(text.contains(&format!("Windows Terminal scheme Tokyo Night: {}", s(&h.fragment()))));
 	assert!(text.contains(&format!(
@@ -361,23 +360,9 @@ async fn y_writes_every_file_marks_each_migration_and_a_second_run_has_nothing_t
 	let Out { code, text, .. } = h.setup(Some("y")).await;
 	assert_eq!(code, 0);
 	assert!(text.contains(&format!("wrote {}", s(&h.paths.omp_agent_dir))));
-	assert_eq!(
-		read_json(&h.global_mcp()),
-		json!({"mcpServers": {"jocasta": {
-			"type": "stdio", "command": "C:\\Jocasta\\jocasta.exe", "args": ["mcp"], "timeout": 1_860_000,
-		}}})
-	);
-	// omp's 30 s request timeout is raised past the tools' own bounds (0577): a thread's 30-minute `check` plus a minute,
-	// the boss's calls more.
-	assert_eq!(
-		read_json(&h.boss_mcp()),
-		json!({"mcpServers": {
-			"jocasta": {
-				"type": "stdio", "command": "C:\\Jocasta\\jocasta.exe", "args": ["mcp", "--boss"], "timeout": 2_100_000,
-			},
-			"whiteboard": h.whiteboard_server(),
-		}})
-	);
+	// The snapshot has no `mcp.json` any more (0675), and the boss's holds whiteboard's entry only.
+	assert!(!h.global_mcp().exists());
+	assert_eq!(read_json(&h.boss_mcp()), json!({"mcpServers": {"whiteboard": h.whiteboard_server()}}));
 	// The snapshot as shipped: `config/omp/` file for file, and herdr's hook from the fork's own asset.
 	assert_eq!(read(&h.omp_config()), asset_text("omp/config.yml"));
 	assert_eq!(read(&h.keybindings()), asset_text("omp/keybindings.yml"));
@@ -432,7 +417,7 @@ async fn with_mise_installed_setup_writes_jocastas_mise_file_exact_pins_and_the_
 }
 
 #[tokio::test]
-async fn the_bosss_mcp_json_keeps_his_other_servers_and_keys_only_jocastas_entries_change() {
+async fn the_bosss_mcp_json_keeps_his_other_servers_and_keys_setup_adds_whiteboard_and_drops_the_old_jocasta_entry() {
 	let h = Harness::new();
 	let his = json!({
 		"mcpServers": {
@@ -443,17 +428,13 @@ async fn the_bosss_mcp_json_keeps_his_other_servers_and_keys_only_jocastas_entri
 	});
 	put(&h.boss_mcp(), &pretty(&his));
 	let Out { text, .. } = h.setup(Some("y")).await;
-	assert!(text.contains("-       \"command\": \"old\\\\jocasta.exe\","));
-	assert!(text.contains("+       \"command\": \"C:\\\\Jocasta\\\\jocasta.exe\","));
 	assert!(text.contains("        \"command\": \"gh-mcp\","));
+	assert!(text.contains("mcpServers.jocasta in "), "{text}");
 	assert_eq!(
 		read_json(&h.boss_mcp()),
 		json!({
 			"mcpServers": {
 				"github": {"type": "stdio", "command": "gh-mcp", "args": []},
-				"jocasta": {
-					"type": "stdio", "command": "C:\\Jocasta\\jocasta.exe", "args": ["mcp", "--boss"], "timeout": 2_100_000,
-				},
 				"whiteboard": h.whiteboard_server(),
 			},
 			"disabledServers": ["github"],
@@ -462,14 +443,44 @@ async fn the_bosss_mcp_json_keeps_his_other_servers_and_keys_only_jocastas_entri
 }
 
 #[tokio::test]
-async fn without_whiteboards_build_setup_says_so_and_adds_only_the_jocasta_server() {
+async fn without_whiteboards_build_setup_says_so_and_writes_no_mcp_json() {
 	let mut h = Harness::new();
 	h.paths.whiteboard = None;
 	let Out { text, .. } = h.setup(Some("y")).await;
 	assert!(text.starts_with("whiteboard isn't built: run `mise run build`"));
-	assert!(text.contains(&format!("omp MCP server \"jocasta\": {}", s(&h.boss_mcp()))));
-	assert!(read_json(&h.boss_mcp())["mcpServers"].get("whiteboard").is_none());
-	assert!(read_json(&h.global_mcp())["mcpServers"].get("whiteboard").is_none());
+	assert!(!text.contains("omp MCP server"), "{text}");
+	assert!(!h.boss_mcp().exists());
+	assert!(!h.global_mcp().exists());
+}
+
+#[tokio::test]
+async fn migration_20_takes_only_the_jocasta_entry_out_of_each_mcp_json_and_no_entry_means_no_step() {
+	// No `jocasta` entry anywhere: no step, no marker.
+	let h = Harness::new();
+	h.setup(Some("y")).await;
+	assert!(h.marker("0020-jocasta-mcp-gone").is_none());
+	// An earlier build's entries in both files: only `jocasta` goes, his other entries and keys stay.
+	let jocasta = json!({"type": "stdio", "command": "old\\jocasta.exe", "args": ["mcp"]});
+	let mut boss = read_json(&h.boss_mcp());
+	boss["mcpServers"]["jocasta"] = jocasta.clone();
+	boss["mcpServers"]["other"] = json!({"type": "stdio", "command": "other-mcp", "args": []});
+	put(&h.boss_mcp(), &pretty(&boss));
+	put(&h.global_mcp(), &pretty(&json!({"mcpServers": {"jocasta": jocasta}, "disabledServers": ["x"]})));
+	let Out { text, .. } = h.setup(Some("y")).await;
+	assert!(text.contains("The jocasta MCP server is gone"), "{text}");
+	assert!(text.contains(&format!("mcpServers.jocasta in {}", s(&h.boss_mcp()))), "{text}");
+	assert!(text.contains(&format!("mcpServers.jocasta in {}", s(&h.global_mcp()))), "{text}");
+	assert_eq!(
+		read_json(&h.boss_mcp()),
+		json!({"mcpServers": {
+			"whiteboard": h.whiteboard_server(),
+			"other": {"type": "stdio", "command": "other-mcp", "args": []},
+		}})
+	);
+	assert_eq!(read_json(&h.global_mcp()), json!({"mcpServers": {}, "disabledServers": ["x"]}));
+	assert!(h.marker("0020-jocasta-mcp-gone").is_some());
+	// Done: a second run has nothing to do.
+	assert_eq!(h.setup(Some("y")).await.text, IN_PLACE);
 }
 
 /// Files of omp's that the snapshot doesn't have: his logins, sessions, memory and history.
@@ -722,7 +733,7 @@ async fn refresh_herdr_toml_shows_the_diff_keeps_a_dated_backup_writes_the_shipp
 }
 
 #[tokio::test]
-async fn refresh_says_to_restart_herdr_when_it_cant_reload_resets_jocastas_mcp_entries_and_refuses_other_files() {
+async fn refresh_says_to_restart_herdr_when_it_cant_reload_resets_whiteboards_mcp_entry_and_refuses_other_files() {
 	let mut h = Harness::new();
 	h.setup(Some("y")).await;
 	put(&h.herdr_toml(), "# his\n");
@@ -732,7 +743,7 @@ async fn refresh_says_to_restart_herdr_when_it_cant_reload_resets_jocastas_mcp_e
 	));
 
 	let mut mcp = read_json(&h.boss_mcp());
-	mcp["mcpServers"]["jocasta"]["args"] = json!(["mcp", "--his"]);
+	mcp["mcpServers"]["whiteboard"]["args"] = json!(["his"]);
 	mcp["mcpServers"]["github"] = json!({"type": "stdio", "command": "gh-mcp"});
 	put(&h.boss_mcp(), &mcp.to_string());
 	let reset = h.refresh("mcp.json", Some("y")).await.unwrap();
@@ -740,9 +751,6 @@ async fn refresh_says_to_restart_herdr_when_it_cant_reload_resets_jocastas_mcp_e
 	assert_eq!(
 		read_json(&h.boss_mcp())["mcpServers"],
 		json!({
-			"jocasta": {
-				"type": "stdio", "command": "C:\\Jocasta\\jocasta.exe", "args": ["mcp", "--boss"], "timeout": 2_100_000,
-			},
 			"whiteboard": h.whiteboard_server(),
 			"github": {"type": "stdio", "command": "gh-mcp"},
 		})
@@ -783,10 +791,10 @@ async fn setup_and_refresh_write_on_y_or_yes_in_any_case_and_spacing_any_other_a
 		let Out { code, text, .. } = h.setup(answer).await;
 		assert_eq!(code, 0);
 		assert!(text.ends_with("Nothing written."));
-		assert!(!h.global_mcp().exists());
+		assert!(!h.boss_mcp().exists());
 	}
 	h.setup(Some(" YES ")).await;
-	assert!(h.global_mcp().exists());
+	assert!(h.boss_mcp().exists());
 	put(&h.herdr_toml(), "# his\n");
 	assert!(
 		h.refresh("herdr.toml", Some("Y"))
@@ -810,14 +818,10 @@ async fn setup_undo_names_what_setup_added_from_its_markers_only_a_step_without_
 	h.setup(Some("y")).await;
 	let undo = h.undo(false);
 	let mut writes = Map::new();
-	writes.insert(
-		"jocasta".to_owned(),
-		json!({"type": "stdio", "command": "C:\\Jocasta\\jocasta.exe", "args": ["mcp", "--boss"], "timeout": 2_100_000}),
-	);
 	writes.insert("whiteboard".to_owned(), h.whiteboard_server());
 	assert!(undo.contains(&SetupUndo::Mcp(McpUndo {
 		path: s(&h.boss_mcp()),
-		servers: strings(&["jocasta", "whiteboard"]),
+		servers: strings(&["whiteboard"]),
 		writes,
 		wrote: h.marker("0002-boss-mcp").unwrap().fingerprint,
 	})));

@@ -58,12 +58,7 @@ statusLine:
 # Tool output collapsed: omp already shows it collapsed (Ctrl+O expands it); there is no setting
 # for it (`toolOutputExpanded = false`, packages/coding-agent/src/modes/interactive-mode.ts:1478).
 
-# Jocasta's local collab relay (0536, 0561): the boss's session hosts there (omp's host registry reports whether it
-# works or asks), never on omp's public relay; `/share` uploads to the same loopback port, which serves nothing else.
-# The port is `RELAY_PORT` in src/frontier/server/relay.rs. Keys checked against omp 19.1.1's source
-# (`collab/settings.ts`, `commands/settings.ts`).
-collab:
-  autoStart: control
-  relayUrl: "ws://127.0.0.1:47499"
+# `/share` would upload a session to omp's public host; its address is a loopback port nothing listens on, so it never
+# leaves the machine (0675: the collab relay it once shared with is gone). The collab pins stay as the snapshot has them.
 share:
   serverUrl: "http://127.0.0.1:47499/s"

@@ -1,15 +1,13 @@
 //! `jocasta thread …` and `jocasta worktree …` (0544): doors to the running service's own thread functions (the ones the
-//! boss's tools use) that need no model, over its localhost API with its token (`POST /api/cli`). The changes (`thread
+//! boss's tools use) that need no model, over its bridge pipe with its token (0675). The changes (`thread
 //! send|stop|finish`, `worktree remove`) wait for his Allow, asked in his terminal; the rest run at once.
 
 use serde_json::{Map, Value, json};
 
+use crate::shared::bridge_wire::{CliPeer, unreachable};
 use crate::shared::errors::{Error, Result};
 use crate::shared::log::{LogLevel, log};
-use crate::shared::service_file::{NOT_RUNNING, connection_refused};
-
-/// Where the service takes these commands: bearer token, body `{command, args}`, reply `{text, isError?}`.
-pub const CLI_PATH: &str = "/api/cli";
+use crate::shared::service_file::NOT_RUNNING;
 
 /// Exit codes: done; refused or failed (Deny and no answer included); bad usage (0140); Jocasta isn't running.
 pub struct Exit {
@@ -170,12 +168,9 @@ pub trait CliDeps {
 	fn print_error(&self, line: &str);
 }
 
-/// No request timeout: his Allow waits 2 minutes and a merge's hooks may take 10; the service bounds every step itself.
-fn client() -> Option<reqwest::Client> {
-	reqwest::Client::builder().no_proxy().build().ok()
-}
-
-/// Runs one command against the service and prints its answer; resolves the exit code (`EXIT`).
+/// Runs one command against the service over the bridge pipe (0675) and prints its answer; resolves the exit code
+/// (`EXIT`). There is no time limit: his Allow waits 2 minutes and a merge's hooks may take 10; the service bounds every
+/// step itself.
 pub async fn run_cli_command(request: &CliRequest, deps: &impl CliDeps) -> i32 {
 	let Some((port, token)) = deps.service() else {
 		deps.print_error(&format!("jocasta: {NOT_RUNNING}"));
@@ -184,33 +179,30 @@ pub async fn run_cli_command(request: &CliRequest, deps: &impl CliDeps) -> i32 {
 	if request.asks {
 		deps.print_error("jocasta: asking you first in your terminal (Allow with its code; 2 minutes)…");
 	}
-	let Some(client) = client() else {
-		deps.print_error("jocasta: Jocasta's service failed: the HTTP client could not start");
-		return EXIT.refused;
+	let message = json!({ "t": "cli", "command": request.command, "args": request.args });
+	let answer = match CliPeer::open(port, &token).await {
+		Ok(mut peer) => peer.request(message).await,
+		Err(error) => Err(error),
 	};
-	let body = json!({ "command": request.command, "args": request.args });
-	let sent = client.post(format!("http://127.0.0.1:{port}{CLI_PATH}")).bearer_auth(&token).json(&body).send().await;
-	let response = match sent {
-		Ok(response) => response,
+	let answer = match answer {
+		Ok(answer) => answer,
 		Err(error) => {
-			if connection_refused(&error) {
+			if unreachable(&error) {
 				deps.print_error(&format!("jocasta: {NOT_RUNNING}"));
 				return EXIT.not_running;
 			}
-			// Anything but a refused connection is unexpected: it goes to the log before the one-line reply (DUP-12).
+			// Anything but a missing pipe is unexpected: it goes to the log before the one-line reply (DUP-12).
 			log(LogLevel::Error, "cli", &format!("{error:?}"), None);
 			deps.print_error(&format!("jocasta: Jocasta's service failed: {error}"));
 			return EXIT.refused;
 		}
 	};
-	let status = response.status();
-	let body: Option<Value> = response.json().await.ok();
-	let object = body.as_ref().and_then(Value::as_object);
-	let Some(text) = object.and_then(|object| object.get("text")).and_then(Value::as_str) else {
-		deps.print_error(&format!("jocasta: Jocasta's service answered HTTP {} without a result", status.as_u16()));
+	let text = ["text", "error"].iter().find_map(|key| answer.get(key).and_then(Value::as_str));
+	let Some(text) = text else {
+		deps.print_error("jocasta: Jocasta's service answered without a result");
 		return EXIT.refused;
 	};
-	if !status.is_success() || object.and_then(|object| object.get("isError")) == Some(&Value::Bool(true)) {
+	if answer.get("ok") != Some(&Value::Bool(true)) {
 		deps.print_error(&format!("jocasta: {text}"));
 		return EXIT.refused;
 	}

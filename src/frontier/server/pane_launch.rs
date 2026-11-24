@@ -10,21 +10,19 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
-use crate::frontier::server::boss::{
-	EnsureBossOptions, PANE_KEY_ENV, boss_command, boss_tools_missing, ensure_boss_pane, new_pane_key,
-};
+use crate::frontier::server::boss::{EnsureBossOptions, PANE_KEY_ENV, boss_command, ensure_boss_pane, new_pane_key};
 use crate::frontier::server::context::{Link, Shared};
 use crate::frontier::server::events::BossPane;
 use crate::frontier::server::herdr::{AgentState, Env, PaneInfo, RespawnOptions};
 use crate::frontier::server::hunk::{HUNK_PORT, ensure_hunk_daemon, find_hunk, hunk_env};
 use crate::frontier::server::mise::{Mise, mise_env, trust_copies};
 use crate::frontier::server::overlay::ensure_overlay;
-use crate::frontier::server::relay::{RELAY_PORT, config_files, is_loopback_relay, not_loopback, omp_relay_url};
 use crate::frontier::server::service::ServiceOptions;
 use crate::frontier::server::task_file::{TaskRecord, launch_prompt};
 use crate::frontier::server::thread::ThreadRef;
 use crate::frontier::server::worktrees::thread_env;
 use crate::shared::boss_key::BOSS_KEY_ENV;
+use crate::shared::bridge_wire::{BRIDGE_ENV, BRIDGE_EXTENSION};
 use crate::shared::clock::now_ms;
 use crate::shared::env;
 use crate::shared::errors::{Error, Result};
@@ -32,7 +30,6 @@ use crate::shared::fsx::write_atomically;
 use crate::shared::install::{self_command, shipped_config_dir};
 use crate::shared::layer::LAYER_ENV;
 use crate::shared::log::{LogLevel, log};
-use crate::shared::pane_check::{PANE_CHECK_ENV, PANE_CHECK_EXTENSION, PANE_CHECK_ROLE};
 use crate::shared::pathkey::{path_key, real_path};
 use crate::shared::paths::data_dir;
 #[cfg(windows)]
@@ -166,7 +163,6 @@ struct Config {
 	pane_env: Env,
 	hook_env: Env,
 	hunk_port: u16,
-	relay_port: u16,
 	boss_key: String,
 }
 
@@ -203,22 +199,15 @@ impl Config {
 			pane_omp.extend(["--append-system-prompt".to_owned(), stripped_prompt(prompt).display().to_string()]);
 		}
 		pane_omp.extend(["--config".to_owned(), shipped("guard.yml")]);
+		// The one extension every pane loads (0675); `-e` adds to the extensions his own settings list.
+		pane_omp.extend(["-e".to_owned(), shipped(BRIDGE_EXTENSION)]);
 		let hunk_port = options.hunk_port.unwrap_or(HUNK_PORT);
 		let hook_env = hook_env();
 		let mut pane_env = hunk_env(hunk_port);
 		for (name, value) in &hook_env {
 			set_env(&mut pane_env, name, value.clone());
 		}
-		Self {
-			omp,
-			pane_omp,
-			pane_prompt,
-			pane_env,
-			hook_env,
-			hunk_port,
-			relay_port: options.relay_port.unwrap_or(RELAY_PORT),
-			boss_key,
-		}
+		Self { omp, pane_omp, pane_prompt, pane_env, hook_env, hunk_port, boss_key }
 	}
 }
 
@@ -229,8 +218,6 @@ struct State {
 	boss_keyed: Option<String>,
 	/// The boss's omp started without its `jocasta` tools (beta day P9), said once as a warning notification.
 	boss_notice: Option<String>,
-	/// The last missing-tools warning said: a boss started again without them says nothing new.
-	tools_said: Option<String>,
 	/// The hunk session daemon this service started (B4): Jocasta's close ends it.
 	hunk_daemon: Option<ProcessId>,
 }
@@ -288,9 +275,18 @@ impl PaneLauncher {
 		self.config().hunk_port
 	}
 
-	/// The relay port the panes' overlays name (0561).
-	pub fn relay_port(&self) -> u16 {
-		self.config().relay_port
+	/// The shipped bridge extension every pane loads (0675).
+	pub fn bridge_extension(&self) -> String {
+		shipped(BRIDGE_EXTENSION)
+	}
+
+	/// `env` with the bridge's address (`JOCASTA_BRIDGE`, 0675), which the extension every pane loads connects to; `env`
+	/// alone while the bridge isn't listening.
+	pub fn bridged(&self, mut env: Env) -> Env {
+		if let Some(address) = self.link.ctx().bridge.address() {
+			set_env(&mut env, BRIDGE_ENV, address);
+		}
+		env
 	}
 
 	/// This run's boss key (0484): only the boss pane's environment gets it, and boss tools require it.
@@ -321,32 +317,17 @@ impl PaneLauncher {
 		let c = self.link.ctx();
 		let command = c.options.boss_command.clone().unwrap_or_else(|| boss_command(self.omp(), None));
 		let mut options = EnsureBossOptions::new(command, &c.launched);
-		let link = self.link.clone();
-		options.check = Some(Box::new(move |command, cwd, env| {
-			let link = link.clone();
-			Box::pin(async move { link.ctx().panes.relay_checked(&command, &cwd, &env).await })
-		}));
 		let mut boss_env: Env = vec![(BOSS_KEY_ENV.to_owned(), self.boss_key().to_owned())];
 		for (name, value) in &self.config().hook_env {
 			set_env(&mut boss_env, name, value.clone());
 		}
-		options.env = boss_env;
+		options.env = self.bridged(boss_env);
 		options.adopt = adopt;
 		let link = self.link.clone();
 		options.stale = Some(Box::new(move |pane| link.ctx().panes.unkeyed_boss(pane)));
 		let link = self.link.clone();
 		options.started = Some(Box::new(move |pane_id| {
-			let c = link.ctx();
-			c.panes.state().boss_keyed = Some(pane_id.to_owned());
-			let missing = boss_tools_missing(None);
-			let mut state = c.panes.state();
-			if state.tools_said != missing {
-				state.tools_said.clone_from(&missing);
-				if let Some(missing) = missing {
-					log(LogLevel::Warn, "service", &missing, None);
-					state.boss_notice = Some(missing);
-				}
-			}
+			link.ctx().panes.state().boss_keyed = Some(pane_id.to_owned());
 		}));
 		let pane = ensure_boss_pane(&*c.herdr, options).await?;
 		let same = c.boss().filter(|boss| boss.with(|boss| boss.pane_id == pane.pane_id));
@@ -382,7 +363,7 @@ impl PaneLauncher {
 	pub async fn respawn(&self, pane_id: &str, how: Respawn<'_>) -> Result<String> {
 		let c = self.link.ctx();
 		let Respawn { cwd, project_id, env, restore, thread } = how;
-		let overlay = ensure_overlay(project_id, Some(self.relay_port())).await?;
+		let overlay = ensure_overlay(project_id).await?;
 		let task = thread.and_then(|thread| thread.with(|thread| thread.task.clone()));
 		let pane = if thread.is_some() {
 			let flags: Vec<String> = self.pane_omp().iter().cloned().chain(THREAD_FLAGS.map(str::to_owned)).collect();
@@ -401,37 +382,18 @@ impl PaneLauncher {
 		let mut started = omp;
 		started.extend(["--config".to_owned(), overlay.display().to_string()]);
 		started.extend(after_overlay(task.as_ref()));
-		let command = if thread.is_some() { started } else { self.project_pane(&started) };
+		let command = started;
 		let key = new_pane_key();
 		let mut own = match env {
 			Some(env) => env,
 			None => self.with_mise(project_id, cwd, self.pane_env()).await,
 		};
 		set_env(&mut own, PANE_KEY_ENV, key.clone());
-		let pane_env = if thread.is_some() { own } else { self.project_env(&own) };
-		self.relay_checked(&command, cwd, &pane_env).await?;
+		let pane_env = self.bridged(own);
 		let opts = RespawnOptions { cwd: cwd.to_path_buf(), command, env: Some(pane_env) };
 		let respawned = c.herdr.respawn(pane_id, &opts).await?;
 		c.launched.add(&respawned.pane_id, &cwd.display().to_string(), Some(&key))?;
 		Ok(respawned.pane_id)
-	}
-
-	/// A project pane's omp argv from `command` (0617): Jocasta's turn-end extension loaded with `-e`, which adds to the
-	/// extensions his own settings list (a settings array from a later `--config` file would replace them). Thread panes
-	/// and the boss's start without it; the project pane's first start and every respawn take it from here.
-	pub fn project_pane(&self, command: &[String]) -> Vec<String> {
-		let mut argv = command.to_vec();
-		argv.extend(["-e".to_owned(), shipped(PANE_CHECK_EXTENSION)]);
-		argv
-	}
-
-	/// `env` of a project pane (0617) with the argv of the turn-end check its extension runs.
-	pub fn project_env(&self, env: &Env) -> Env {
-		let mut check: Vec<String> = self_command(None).iter().map(|word| word.display().to_string()).collect();
-		check.push(PANE_CHECK_ROLE.to_owned());
-		let mut env = env.clone();
-		set_env(&mut env, PANE_CHECK_ENV, serde_json::to_string(&check).unwrap_or_default());
-		env
 	}
 
 	/// A thread pane's omp argv with its task's launch prompt (0540): `prompt.md` (the panes' shipped prompt, then the
@@ -457,25 +419,6 @@ impl PaneLauncher {
 		argv.extend(["--append-system-prompt".to_owned(), file]);
 		argv.extend_from_slice(&command[guard..]);
 		Ok(argv)
-	}
-
-	/// Refuses to start the omp of `command` in `cwd` with `env` unless its `collab.relayUrl` resolves to loopback
-	/// (0536, 0561): a pane that would host its session on a public relay doesn't start.
-	pub async fn relay_checked(&self, command: &[String], cwd: &Path, env: &Env) -> Result<()> {
-		let c = self.link.ctx();
-		let value = match c.options.relay_url_of.clone() {
-			Some(relay_url_of) => relay_url_of(command.to_vec(), cwd.to_path_buf(), env.clone()).await?,
-			None => {
-				let given: HashMap<String, String> = env.iter().cloned().collect();
-				omp_relay_url(self.omp(), command, cwd, Some(&given)).await?
-			}
-		};
-		if !is_loopback_relay(&value) {
-			let refused = not_loopback(cwd, &value, &config_files(command));
-			log(LogLevel::Error, "service", &refused.to_string(), None);
-			return Err(refused);
-		}
-		Ok(())
 	}
 
 	/// `env` with mise's for a pane of `project_id` in `cwd` (0473, 0477); `env` alone without mise.
@@ -522,7 +465,7 @@ impl PaneLauncher {
 			base.extend(env.iter().cloned());
 			trust_copies(&project.id, &project.main_path, path, Some(&base), mise).await;
 		}
-		Ok(self.with_mise(&project.id, path, &env).await)
+		Ok(self.bridged(self.with_mise(&project.id, path, &env).await))
 	}
 
 	/// hunk's argv: the test seam's, else the shipped or npm binary; none when there is none.

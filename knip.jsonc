@@ -4,7 +4,7 @@
 	// What starts at no import: the canvas page's script (index.html names it; knip does not read the page), the
 	// scripts, H1's oracle (the Rust bench starts it with Bun, 0636) and the omp extension project panes load with `-e`
 	// (0617). The tests are found from package.json's scripts and the Bun test plugin.
-	"entry": ["src/frontier/canvas/main.ts", "scripts/*.ts", "bench/h1-guard/*.ts", "config/pane-check-extension.ts"],
+	"entry": ["src/frontier/canvas/main.ts", "scripts/*.ts", "bench/h1-guard/*.ts", "config/bridge-extension.ts"],
 	"project": ["src/**", "scripts/**", "bench/**", "test/**"],
 	// A git submodule (.gitmodules) and the herdr fork's subtree: other projects' code and tests, not Jocasta's.
 	"ignore": ["forks/**", "crates/**"],

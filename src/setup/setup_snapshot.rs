@@ -7,11 +7,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde_json::json;
-
 use super::SetupPaths;
-use super::migrations::{MCP_TIMEOUT_MS, PlanContext, Servers, asset, jocasta_server, with_timeout};
-use super::steps::{SetupChange, Step, json, read_text, shown, unchanged};
+use super::migrations::{PlanContext, asset};
+use super::steps::{SetupChange, Step, read_text, shown, unchanged};
 use crate::setup::diff::line_diff;
 use crate::setup::markers::{Marker, Undo, fingerprint, markers_dir};
 use crate::setup::omp_settings::omp_settings_text;
@@ -26,16 +24,7 @@ struct SnapshotFile {
 	only_when_missing: bool,
 }
 
-/// The thread's `jocasta` server in omp's global `mcp.json`, with omp's request timeout past a `check`'s 30 minutes
-/// (0577).
-pub(super) fn global_servers(paths: &SetupPaths) -> Servers {
-	let mut servers = Servers::new();
-	servers.insert("jocasta".to_owned(), with_timeout(jocasta_server(paths, &["mcp"]), MCP_TIMEOUT_MS));
-	servers
-}
-
-/// The snapshot as this install writes it: the shipped files, `config.yml` with Windows' own folders fenced on Windows
-/// (0594), `mcp.json` naming this install's `jocasta`, and the hook herdr's own `integration install omp` writes.
+/// (0594), and the hook herdr's own `integration install omp` writes.
 fn snapshot_files(paths: &SetupPaths) -> Result<Vec<SnapshotFile>> {
 	let shipped = |relative: &str| asset(paths, &["omp", relative]);
 	let file =
@@ -46,7 +35,6 @@ fn snapshot_files(paths: &SetupPaths) -> Result<Vec<SnapshotFile>> {
 		file("lsp.json", shipped("lsp.json")?),
 		file("WATCHDOG.md", shipped("WATCHDOG.md")?),
 		file("skills/mise/SKILL.md", asset(paths, &["omp", "skills", "mise", "SKILL.md"])?),
-		file("mcp.json", json(&json!({"mcpServers": global_servers(paths)}))),
 		file(&format!("extensions/{}", herdr::embed::OMP_HOOK_FILE), herdr::embed::OMP_HOOK.to_owned()),
 		SnapshotFile { relative: "secrets.yml".to_owned(), text: shipped("secrets.yml")?, only_when_missing: true },
 	])

@@ -196,6 +196,7 @@ fn jocastas_processes_the_service_herdrs_server_and_the_attached_surfaces_each_o
 		command_line: "p".to_owned(),
 		working_set,
 		private_bytes: Some(working_set),
+		created: None,
 	};
 	// The surface (30) started the service (31, with a child 32) and its herdr client (33); herdr's server (40) runs
 	// the panes (41).
@@ -235,6 +236,7 @@ fn ps_output() {
 			name: "omp".to_owned(),
 			command_line: "omp --mode json".to_owned(),
 			private_bytes: None,
+			created: None,
 		}]
 	);
 }

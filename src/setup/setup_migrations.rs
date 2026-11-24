@@ -45,18 +45,12 @@ pub(super) fn marker_name(migration: &Migration) -> String {
 	format!("{:04}-{}", migration.id, migration.slug)
 }
 
-/// omp's request timeout for the thread's MCP server (0577): a thread's `check` may run for 30 minutes, plus a minute;
-/// omp's own default of 30 s would cut it.
-pub(super) const MCP_TIMEOUT_MS: u64 = 1_860_000;
-/// omp's request timeout for the boss's MCP server (0484, 0577): a call may outlast its 30-minute bound with his Allow.
-const BOSS_MCP_TIMEOUT_MS: u64 = 2_100_000;
-
 /// Said under what `herdr config check` reported when it found issues.
 const IGNORED_KEYS_NOTE: &str = "herdr ignores the keys named above: fix them in the shipped template or report them.";
 
 /// The migrations, in the order they apply. Numbers 1, 3, 4, 6, 9–13, 15 and 17 were the merges into omp's files and
 /// the clean-ups of earlier versions: the omp snapshot (19) replaced them, and their markers are ignored.
-pub(super) static MIGRATIONS: [Migration; 7] = [
+pub(super) static MIGRATIONS: [Migration; 8] = [
 	Migration {
 		// The boss's tools only in its own folder (0392: project-level MCP config), with omp's request timeout past
 		// their own bounds (0577); whiteboard's tools for drawing (0393, 0607) on the service's whiteboard state,
@@ -110,7 +104,7 @@ pub(super) static MIGRATIONS: [Migration; 7] = [
 		plan: plan_herdr_plugin_gone,
 	},
 	Migration {
-		// Jocasta's omp snapshot (fork plan phase 6): `config/omp/`, `mcp.json` and herdr's omp hook over omp's own
+		// Jocasta's omp snapshot (fork plan phase 6): `config/omp/` and herdr's omp hook over omp's own
 		// files, each replaced one kept first; `secrets.yml` only when missing.
 		id: 19,
 		slug: "omp-snapshot",
@@ -118,26 +112,17 @@ pub(super) static MIGRATIONS: [Migration; 7] = [
 		servers: None,
 		plan: plan_snapshot,
 	},
+	Migration {
+		// The `jocasta` MCP server is gone (0675): omp's tools come from the bridge extension, so the entry leaves both
+		// `mcp.json` files and every other entry stays.
+		id: 20,
+		slug: "jocasta-mcp-gone",
+		refresh: None,
+		servers: None,
+		plan: plan_jocasta_mcp_gone,
+	},
 ];
 
-/// A stdio MCP server running this Jocasta with `args`.
-pub(super) fn jocasta_server(paths: &SetupPaths, args: &[&str]) -> Map<String, Value> {
-	let mut command = paths.jocasta_command.iter().map(|part| part.display().to_string());
-	let program = command.next().unwrap_or_else(|| "jocasta".to_owned());
-	let args: Vec<String> = command.chain(args.iter().map(|arg| (*arg).to_owned())).collect();
-	match json!({"type": "stdio", "command": program, "args": args}) {
-		Value::Object(server) => server,
-		_ => Map::new(),
-	}
-}
-
-/// A server with omp's request `timeout` added.
-pub(super) fn with_timeout(mut server: Map<String, Value>, timeout: u64) -> Value {
-	server.insert("timeout".to_owned(), json!(timeout));
-	Value::Object(server)
-}
-
-/// whiteboard's `mcp` server, `None` while whiteboard isn't built. It finds the service's whiteboard server (its
 /// Desktop server, instance `stable`) through DEV_REVIEW_HOME.
 fn whiteboard_server(paths: &SetupPaths) -> Option<Value> {
 	let whiteboard = paths.whiteboard.as_ref()?;
@@ -157,7 +142,6 @@ fn whiteboard_server(paths: &SetupPaths) -> Option<Value> {
 /// The boss's `jocasta --boss` server and whiteboard's (0607), in its folder's `mcp.json` (migration 2).
 fn boss_servers(paths: &SetupPaths) -> Servers {
 	let mut servers = Servers::new();
-	servers.insert("jocasta".to_owned(), with_timeout(jocasta_server(paths, &["mcp", "--boss"]), BOSS_MCP_TIMEOUT_MS));
 	if let Some(whiteboard) = whiteboard_server(paths) {
 		servers.insert("whiteboard".to_owned(), whiteboard);
 	}
@@ -357,6 +341,46 @@ fn plan_herdr_plugin_gone(c: &mut PlanContext) -> Result<Option<Step>> {
 			Box::pin(async move {
 				for path in &gone {
 					remove_tree(path)?;
+				}
+				Ok(())
+			})
+		}),
+	});
+	Ok(Some(step))
+}
+
+/// The `mcp.json` files that still name a `jocasta` server: omp's global one and the boss's own.
+fn mcp_files_with_jocasta(paths: &SetupPaths) -> Vec<PathBuf> {
+	let candidates = [paths.omp_agent_dir.join("mcp.json"), paths.data_dir.join("home").join(".omp").join("mcp.json")];
+	candidates
+		.into_iter()
+		.filter(|path| {
+			fs::read_to_string(path)
+				.ok()
+				.and_then(|text| serde_json::from_str::<Value>(&text).ok())
+				.is_some_and(|value| value.get("mcpServers").and_then(|servers| servers.get("jocasta")).is_some())
+		})
+		.collect()
+}
+
+/// Takes the `jocasta` entry out of each `mcp.json` that has one (0675), leaving his other entries as they are.
+fn plan_jocasta_mcp_gone(c: &mut PlanContext) -> Result<Option<Step>> {
+	let files = mcp_files_with_jocasta(c.paths);
+	let Some(first) = files.first().cloned() else { return Ok(None) };
+	let mut step = Step::new(&first, fingerprint("jocasta-mcp-gone"), Vec::new());
+	step.change = Some(SetupChange {
+		title: "The jocasta MCP server is gone: its entry leaves mcp.json".to_owned(),
+		path: shown(&first),
+		diff: files.iter().map(|path| format!("- mcpServers.jocasta in {}", path.display())).collect(),
+		kept: Vec::new(),
+		apply: Box::new(move |_io| {
+			Box::pin(async move {
+				for path in files {
+					let mut value: Value = serde_json::from_str(&fs::read_to_string(&path)?)?;
+					if let Some(servers) = value.get_mut("mcpServers").and_then(Value::as_object_mut) {
+						servers.remove("jocasta");
+					}
+					fs::write(&path, json(&value))?;
 				}
 				Ok(())
 			})

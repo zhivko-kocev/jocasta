@@ -411,7 +411,7 @@ async function shipConpty(out: string): Promise<void> {
 }
 
 /**
- * Empties `dist/<target>`. A file there held open (a `jocasta.exe` or its server run from it, or omp's `jocasta mcp`
+ * Empties `dist/<target>`. A file there held open (a `jocasta.exe` or its server run from it,
  * started from it) fails with the file and, on Windows, the processes running from the folder, instead of a raw EBUSY.
  */
 function clearOut(out: string): void {

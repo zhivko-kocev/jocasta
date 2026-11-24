@@ -331,16 +331,8 @@ pub trait Herdr: Send + Sync {
 	fn respawn<'a>(&'a self, pane_id: &'a str, opts: &'a RespawnOptions) -> BoxFuture<'a, HerdrResult<TabPane>>;
 	/// A new pane running `command` beside `pane_id` in its tab, named `label` when given; returns the new pane id.
 	fn split_beside<'a>(&'a self, pane_id: &'a str, opts: &'a SplitOptions) -> BoxFuture<'a, HerdrResult<String>>;
-	/// Submits `text` to the pane's agent: a bracketed paste, then Enter. ESC and other control characters are removed
-	/// first, so the text can't end the paste early and type keys of its own.
-	fn prompt<'a>(&'a self, pane_id: &'a str, text: &'a str) -> BoxFuture<'a, HerdrResult<()>>;
-	/// Types `text` into the pane without submitting it (control characters removed, as for `prompt`).
-	fn send_text<'a>(&'a self, pane_id: &'a str, text: &'a str) -> BoxFuture<'a, HerdrResult<()>>;
-	/// One Escape.
-	fn stop<'a>(&'a self, pane_id: &'a str) -> BoxFuture<'a, HerdrResult<()>>;
-	/// One Enter: submits what sits in the pane's input (a prompt whose paste landed but whose Enter didn't).
-	fn submit<'a>(&'a self, pane_id: &'a str) -> BoxFuture<'a, HerdrResult<()>>;
-	/// Keys by herdr's key names (`f9`, `enter`) to the pane, as typed (`pane.send_keys`).
+	/// Keys by herdr's key names (`f9`) to the pane, as typed (`pane.send_keys`): the one input that still goes through the
+	/// terminal, push-to-talk (F9), which omp reads as a key, not as a message (0675).
 	fn send_keys<'a>(&'a self, pane_id: &'a str, keys: &'a [String]) -> BoxFuture<'a, HerdrResult<()>>;
 	/// A Windows notification through herdr's client (`notification.show`, 0554): title and body as given, with
 	/// herdr's `request` sound or none. Resolves herdr's reason: `Shown`, or why not.
@@ -348,7 +340,8 @@ pub trait Herdr: Send + Sync {
 	fn focus<'a>(&'a self, pane_id: &'a str) -> BoxFuture<'a, HerdrResult<()>>;
 	/// Installs the Agents view's filter and sort for `source` (`agent.view.set`, 0553).
 	fn set_agent_view<'a>(&'a self, view: &'a AgentView) -> BoxFuture<'a, HerdrResult<()>>;
-	/// What the pane shows now, as plain text (`pane.read`, its visible viewport).
+	/// What the pane shows now, as plain text (`pane.read`, its visible viewport): only for the default workspace's shell,
+	/// the one pane that is not an omp (0675).
 	fn screen<'a>(&'a self, pane_id: &'a str) -> BoxFuture<'a, HerdrResult<String>>;
 	/// Display-only tokens and state labels; `ttl_ms` makes herdr drop them when they aren't reported again in time, so
 	/// a stopped service leaves nothing stale.
@@ -1390,31 +1383,6 @@ impl Herdr for HerdrClient {
 
 	fn split_beside<'a>(&'a self, pane_id: &'a str, opts: &'a SplitOptions) -> BoxFuture<'a, HerdrResult<String>> {
 		Box::pin(HerdrClient::split_beside(self, pane_id, opts))
-	}
-
-	fn prompt<'a>(&'a self, pane_id: &'a str, text: &'a str) -> BoxFuture<'a, HerdrResult<()>> {
-		Box::pin(async move {
-			// agent.prompt {target, text}: a bracketed paste then Enter into the pane's agent; refuses with
-			// `agent_blocked` or `agent_not_ready` (socket-api.mdx "Raw methods"; herdr
-			// `src/app/api/agents.rs:140-207`).
-			let params = json!({"target": pane_id, "text": pane_text(text)});
-			self.client.request_value("agent.prompt", &params, None).await.map(drop)
-		})
-	}
-
-	fn send_text<'a>(&'a self, pane_id: &'a str, text: &'a str) -> BoxFuture<'a, HerdrResult<()>> {
-		Box::pin(async move {
-			let params = json!({"pane_id": pane_id, "text": pane_text(text)});
-			self.client.request_value("pane.send_text", &params, None).await.map(drop)
-		})
-	}
-
-	fn stop<'a>(&'a self, pane_id: &'a str) -> BoxFuture<'a, HerdrResult<()>> {
-		Box::pin(async move { HerdrClient::send_keys(self, pane_id, &["esc"]).await })
-	}
-
-	fn submit<'a>(&'a self, pane_id: &'a str) -> BoxFuture<'a, HerdrResult<()>> {
-		Box::pin(async move { HerdrClient::send_keys(self, pane_id, &["enter"]).await })
 	}
 
 	fn send_keys<'a>(&'a self, pane_id: &'a str, keys: &'a [String]) -> BoxFuture<'a, HerdrResult<()>> {

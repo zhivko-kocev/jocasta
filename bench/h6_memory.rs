@@ -28,6 +28,7 @@ use crate::lib::args::{
 	ArgSpec, BenchArgs, BenchUsageError, FlagValue, flag, flag_or, list_flag, number_list_flag, parse_bench_args,
 	run_script,
 };
+use crate::lib::herdr::herdr_request;
 use crate::lib::jocasta::{SandboxJocasta, open_sandbox};
 use crate::lib::launch::{
 	BENCH_TOOLS, BenchTool, LaunchOptions, LaunchedPane, bench_herdr, close_pane, launch_in_pane, ready_patterns,
@@ -40,7 +41,7 @@ use crate::lib::stats::{BootstrapOptions, summarize};
 use crate::lib::temp::mkdtemp;
 use crate::lib::threads::{start_thread, wait_for_enter};
 use jocasta::frontier::protocol::js_number_text;
-use jocasta::frontier::server::herdr::Herdr;
+use jocasta::frontier::server::herdr::{Herdr, pane_text};
 use jocasta::shared::errors::{Error, Result};
 use jocasta::shared::pathkey::resolve;
 use jocasta::shared::service_file::read_service_file;
@@ -270,7 +271,10 @@ async fn measure_pane(
 			if !settings.turn || tool.unsigned().is_some() {
 				break;
 			}
-			herdr.prompt(&pane.pane_id, TURN_PROMPT).await?;
+			// `agent.prompt`: a bracketed paste then Enter into the competitor's TUI; the `Herdr` interface has no method for
+			// it now that Jocasta's own prompts go over the bridge (0675).
+			let params = json!({ "target": pane.pane_id, "text": pane_text(TURN_PROMPT) });
+			herdr_request::<Value>(settings.pty_session, "agent.prompt", &params, None).await?;
 		}
 		settings.idle().await;
 		let shell = herdr.pane_root(&pane.pane_id, Some(10_000)).await.ok().flatten().filter(|root| *root != 0);

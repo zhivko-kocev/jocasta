@@ -10,6 +10,7 @@ use serde_json::Value;
 use crate::frontier::protocol::ThreadState;
 use crate::frontier::server::allow::Confirmation;
 use crate::frontier::server::boss::{PANE_KEY_ENV, new_pane_key};
+use crate::frontier::server::bridge::Deliver;
 use crate::frontier::server::context::{Link, Shared};
 use crate::frontier::server::day::ScheduleStart;
 use crate::frontier::server::herdr::{AgentState, Env, PaneInfo, Prepare, WorktreeOptions};
@@ -34,8 +35,6 @@ use crate::shared::schedules::Schedule;
 
 /// How long `thread_start` waits for omp to come up in the new pane before sending the brief.
 const AGENT_WAIT_MS: i64 = 20_000;
-/// How long `thread_start` waits for the pane to start working on the brief before sending one Enter.
-const SUBMIT_WAIT_MS: i64 = 5_000;
 /// How often a start looks at the new pane meanwhile.
 const POLL_MS: i64 = 250;
 /// How long taking back a failed start waits for its checkout's processes to let go (SVC-7).
@@ -285,7 +284,7 @@ impl ThreadStarts {
 		// guard asks about, waits for his Allow (0484, 0492, 0580); one he started with his own key and form, or with
 		// `jocasta thread new`, needs none: the thread waits at its plan for him (0544).
 		self.confirm(&project, &request, prompted).await?;
-		let overlay = ensure_overlay(&project.id, Some(c.panes.relay_port())).await?;
+		let overlay = ensure_overlay(&project.id).await?;
 		let mut command = c.panes.pane_omp().to_vec();
 		command.extend(["--config".to_owned(), overlay.display().to_string()]);
 		let trunk = c.places.trunk(&project).await?;
@@ -315,7 +314,6 @@ impl ThreadStarts {
 		// The project pane and the thread pane load the same overlays; the worktree is trunk's checkout of the project,
 		// so its own `.omp/config.yml` is the main checkout's (0561). Asked before anything is made.
 		let main_env = c.panes.with_mise(&project.id, &project.main_path, c.panes.pane_env()).await;
-		c.panes.relay_checked(&command, &project.main_path, &main_env).await?;
 		let key = new_pane_key();
 		let title_trimmed = js_trim(title);
 		let launch = Launch {
@@ -450,8 +448,8 @@ impl ThreadStarts {
 				let project_key = new_pane_key();
 				let mut env = launch.main_env.clone();
 				set_env(&mut env, PANE_KEY_ENV, &project_key);
-				let env = c.panes.project_env(&env);
-				let pane_command = c.panes.project_pane(launch.command);
+				let env = c.panes.bridged(env);
+				let pane_command = launch.command.to_vec();
 				let made = c
 					.herdr
 					.ensure_workspace(&project.name, &project.main_path, Some(&pane_command), Some(&env))
@@ -552,21 +550,9 @@ impl ThreadStarts {
 				done: false,
 			});
 		}
-		if let Err(error) = c.herdr.prompt(&created.pane_id, &said).await {
-			return Ok(Started {
-				text: format!("{started}, but the brief couldn't be sent: {}", error.message),
-				done: false,
-			});
-		}
-		// The paste can land while omp's input drops the Enter that follows it: if the pane doesn't start working on the
-		// brief, one Enter submits it (as herdr's own `agent prompt` retries a stalled prompt). Never a second one.
-		if !self.started_working(&created.pane_id).await?
-			&& let Err(error) = c.herdr.submit(&created.pane_id).await
-		{
-			return Ok(Started {
-				text: format!("{started}, but the brief may still sit unsent in its pane: {}", error.message),
-				done: false,
-			});
+		// Through the bridge (0675): omp takes it as a user message, so there is no paste to lose and no Enter to send.
+		if let Err(error) = c.bridge.prompt(&created.pane_id, c.bridge.seal(&said), Deliver::FollowUp).await {
+			return Ok(Started { text: format!("{started}, but the brief couldn't be sent: {error}"), done: false });
 		}
 		// A heavy thread says so (0590): it runs on his slow role, his strongest model.
 		let slow = if heavy {
@@ -621,25 +607,6 @@ impl ThreadStarts {
 
 	fn agent_wait_ms(&self) -> i64 {
 		self.link.ctx().options.agent_wait_ms.unwrap_or(AGENT_WAIT_MS)
-	}
-
-	/// Waits up to `submit_wait_ms` for the pane to leave idle (working, or already blocked on a question).
-	async fn started_working(&self, pane_id: &str) -> Result<bool> {
-		let c = self.link.ctx();
-		let wait = c.options.submit_wait_ms.unwrap_or(SUBMIT_WAIT_MS);
-		let (c, id) = (&c, pane_id);
-		wait_for(
-			|| async move {
-				let thread = c.threads.get(id).map(|thread| thread.with(|t| t.state));
-				let pane = c.herdr.panes().await?.into_iter().find(|p| p.pane_id == id);
-				let state = pane.map(|pane| pane.agent_state).or(thread);
-				Ok(matches!(state, Some(AgentState::Working | AgentState::Blocked))
-					|| thread == Some(AgentState::Working))
-			},
-			wait,
-			POLL_MS,
-		)
-		.await
 	}
 
 	/// Waits until herdr sees an agent in the pane (its state isn't `unknown`), at most `agent_wait_ms`. A thread takes

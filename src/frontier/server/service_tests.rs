@@ -12,7 +12,6 @@ use super::*;
 use crate::frontier::protocol::ToastPriority;
 use crate::frontier::server::herdr::WorkspaceInfo;
 use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
-use crate::shared::layer::HOSTS_ENV;
 use crate::shared::schema::open_catalog;
 use crate::shared::testing::{TempJocasta, temp_jocasta};
 
@@ -44,9 +43,7 @@ fn stand(change: impl FnOnce(&mut TempJocasta, &mut ServiceOptions)) -> Stand {
 	options.hunk = Some(None);
 	options.weekly_reviews = Some(false);
 	options.boss_key = Some(BOSS_KEY.to_owned());
-	options.relay_url_of = Some(Arc::new(|_, _, _| async { Ok("ws://127.0.0.1:47499".to_owned()) }.boxed()));
 	options.refresh_ms = Some(3_600_000);
-	options.host_poll_ms = Some(3_600_000);
 	options.alive_ms = Some(3_600_000);
 	options.watcher_interval_ms = Some(3_600_000);
 	change(&mut jocasta, &mut options);
@@ -84,17 +81,19 @@ async fn a_second_start_gets_the_first_ones_outcome_and_starts_nothing_again() {
 	within_a_second(first).await.unwrap();
 	within_a_second(second).await.unwrap();
 	within_a_second(s.service.start()).await.unwrap();
-	// One boss workspace was made, and one set of timers runs: the refresh, the host poll and the heartbeat.
+	// One boss workspace was made, and one set of timers runs: the refresh and the heartbeat.
 	assert_eq!(s.herdr.of("ensureWorkspace").len(), 1);
-	assert_eq!(s.service.timer_count(), 3);
+	assert_eq!(s.service.timer_count(), 2);
 	within_a_second(s.service.stop()).await;
 }
 
 #[tokio::test]
 async fn a_start_that_fails_still_marks_the_threads_discovered_and_the_same_error_comes_to_every_caller() {
-	// The boss pane's omp would host its session on a public relay: it doesn't start (0536, 0561).
-	let s = stand(|_, options| {
-		options.relay_url_of = Some(Arc::new(|_, _, _| async { Ok("wss://relay.example.org".to_owned()) }.boxed()));
+	// The boss's home can't be written (a file holds the name of its `.omp` folder): the boss doesn't start.
+	let s = stand(|_, _| {
+		let home = crate::frontier::server::boss::boss_home();
+		std::fs::create_dir_all(&home).unwrap();
+		std::fs::write(home.join(".omp"), "").unwrap();
 	});
 	let first = within_a_second(s.service.start()).await.unwrap_err();
 	let second = within_a_second(s.service.start()).await.unwrap_err();
@@ -232,20 +231,6 @@ async fn a_change_herdr_reports_refreshes_its_facts_soon_while_the_full_tick_wai
 	within_a_second(s.service.stop()).await;
 }
 
-#[tokio::test]
-async fn the_host_poll_runs_only_with_the_host_registry_on() {
-	let on = stand(|_, _| {});
-	within_a_second(on.service.start()).await.unwrap();
-	assert_eq!(on.service.timer_count(), 3);
-	within_a_second(on.service.stop()).await;
-	assert_eq!(on.service.timer_count(), 0);
-	drop(on);
-	let off = stand(|jocasta, _| jocasta.set_var(HOSTS_ENV, Some("off")));
-	within_a_second(off.service.start()).await.unwrap();
-	assert_eq!(off.service.timer_count(), 2);
-	within_a_second(off.service.stop()).await;
-}
-
 /// The hang of 2026-11-23 held the catalog: the dock's heartbeat goes through it, so a stuck service stops beating and
 /// the dock says so (0662); free again, it beats again.
 #[tokio::test]
@@ -375,7 +360,6 @@ async fn the_steps_of_stop_everything_run_on_a_started_service() {
 	within_a_second(s.service.start()).await.unwrap();
 	s.service.pause_working().await.unwrap();
 	s.service.cut_paused_turns().await;
-	s.service.remove_ended_hosts().await;
 	s.service.end_thread_leftovers().await.unwrap();
 	s.service.end_hunk_daemon().await;
 	assert!(!s.service.context().stopping());

@@ -10,6 +10,7 @@ use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 
 use super::*;
+use crate::frontier::server::whiteboard::WhiteboardRuntime;
 use crate::setup::markers::markers_dir;
 use crate::setup::setup::{CalendarStore, HerdrCheck, RunOutput, SetupDeps, SetupPaths, run_setup, setup_undo};
 use crate::shared::testing::{TempDir, TempJocasta, temp_dir, temp_jocasta};
@@ -138,7 +139,10 @@ impl Machine {
 			system_folders: None,
 			mise_config_dir: root.join("mise"),
 			jocasta_command: vec![PathBuf::from("C:\\Jocasta\\jocasta.exe")],
-			whiteboard: None,
+			whiteboard: Some(WhiteboardRuntime {
+				node: PathBuf::from("C:\\Jocasta\\node\\node.exe"),
+				cli: PathBuf::from("C:\\Jocasta\\whiteboard\\cli.js"),
+			}),
 		};
 		// A machine set up by `jocasta setup` over his own omp `mcp.json` and `keybindings.yml`, with the calendar's
 		// secret stored.
@@ -249,7 +253,7 @@ async fn a_running_jocasta_is_refused_and_n_removes_nothing() {
 	assert!(text.contains("herdr session `jocasta-test` (stopped, its panes closed, then deleted)"));
 	assert!(text.contains(&format!(
 		"{}: yours from before Jocasta's omp snapshot back (while it is the snapshot's)",
-		agent.join("mcp.json").display()
+		agent.join("keybindings.yml").display()
 	)));
 	assert!(text.contains(&format!("{} (while it is still the snapshot's)", agent.join("config.yml").display())));
 	assert!(text.contains(&format!(
@@ -329,20 +333,20 @@ impl Machine {
 async fn a_snapshot_file_he_changed_since_stays_with_his_file_from_before_jocasta_beside_it() {
 	let m = Machine::new().await;
 	let agent = m.setup.omp_agent_dir.clone();
-	let mcp = agent.join("mcp.json");
-	put(&mcp, "{ \"mcpServers\": {} }\n");
+	let keys = agent.join("keybindings.yml");
+	put(&keys, "# his changed keys\n");
 	put(&agent.join("WATCHDOG.md"), "# His brief\n");
 	let Out { code, text, .. } = m.run(&["y", "n"]).await;
 	assert_eq!(code, 0);
-	let before = agent.join("mcp.json.before-jocasta");
+	let before = agent.join("keybindings.yml.before-jocasta");
 	assert!(text.contains(&format!(
 		"kept {}: changed since setup; yours from before is {}",
-		mcp.display(),
+		keys.display(),
 		before.display()
 	)));
 	assert!(text.contains(&format!("kept {}: changed since setup", agent.join("WATCHDOG.md").display())));
-	assert_eq!(read(&mcp), "{ \"mcpServers\": {} }\n");
-	assert_eq!(read_json(&before), json!({ "mcpServers": { "github": { "command": "gh-mcp" } } }));
+	assert_eq!(read(&keys), "# his changed keys\n");
+	assert_eq!(read(&before), HIS_KEYS);
 	assert_eq!(read(&agent.join("WATCHDOG.md")), "# His brief\n");
 	assert!(!agent.join("WATCHDOG.md.before-jocasta").exists());
 	// The snapshot's files he left alone are gone.
@@ -426,25 +430,28 @@ async fn an_mcp_entry_that_isnt_what_setup_wrote_is_kept_and_said() {
 	let m = Machine::new().await;
 	let boss = m.setup.data_dir.join("home").join(".omp").join("mcp.json");
 	let mut config = read_json(&boss);
-	config["mcpServers"]["jocasta"]["args"] = json!(["mcp", "--his"]);
+	config["mcpServers"]["whiteboard"]["args"] = json!(["mcp", "--his"]);
 	put(&boss, &config.to_string());
 	let Out { code, text, .. } = m.run(&["y", "n"]).await;
 	assert_eq!(code, 0);
 	let shown = boss.display();
-	assert!(text.contains(&format!("- MCP server \"jocasta\" in {shown} (each while it is still what setup wrote)")));
 	assert!(
-		text.contains(&format!(
-			"{shown} has none of Jocasta's MCP servers left; kept \"jocasta\" (not what setup wrote)"
-		))
+		text.contains(&format!("- MCP server \"whiteboard\" in {shown} (each while it is still what setup wrote)"))
 	);
+	assert!(text.contains(&format!(
+		"{shown} has none of Jocasta's MCP servers left; kept \"whiteboard\" (not what setup wrote)"
+	)));
 	assert_eq!(read_json(&boss), config);
 }
 
 #[tokio::test]
 async fn an_mcp_entry_still_as_its_marker_recorded_goes_after_jocasta_moved() {
 	let mut m = Machine::new().await;
-	// Jocasta moved since setup ran: the boss's entry differs from today's but still is what setup wrote.
-	m.setup.jocasta_command = vec![PathBuf::from("D:\\Moved\\jocasta.exe")];
+	// Whiteboard moved since setup ran: the boss's entry differs from today's but still is what setup wrote.
+	m.setup.whiteboard = Some(WhiteboardRuntime {
+		node: PathBuf::from("D:\\Moved\\node.exe"),
+		cli: PathBuf::from("D:\\Moved\\whiteboard\\cli.js"),
+	});
 	let boss = m.setup.data_dir.join("home").join(".omp").join("mcp.json");
 	let Out { code, text, .. } = m.run(&["y", "n"]).await;
 	assert_eq!(code, 0);

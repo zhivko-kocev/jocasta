@@ -121,9 +121,8 @@ pub(crate) fn test_context(options: impl FnOnce(&mut ServiceOptions)) -> TestCon
 	service.day = Some(DayOptions { pollers: Some(false), disk_free: Some(Arc::new(|| 0.5)), ..DayOptions::default() });
 	// Never his omp's path: panes run `omp` by name, as where none is on PATH (`pane_omp_program` names the one found).
 	service.omp = Some(vec!["omp".to_owned()]);
-	// Every pane's relay is loopback, as the TypeScript's `relayTestOptions`: a relaunch never runs a real `omp`.
-	service.relay_url_of =
-		Some(Arc::new(|_, _, _| futures_util::FutureExt::boxed(async { Ok("ws://127.0.0.1:47499".to_owned()) })));
+	// Prompts and control go to a recording bridge that reports them to the fake herdr (0675).
+	service.bridge = Some(herdr.recording_bridge());
 	options(&mut service);
 	let catalog: SharedCatalog = Arc::new(Mutex::new(open_catalog().expect("the catalog")));
 	let link = Link::new();

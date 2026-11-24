@@ -7,8 +7,8 @@
 //! Plants `--canaries` unique facts in project A's history through the service (0576): H4 starts a thread `h4 plant` in
 //! A as `jocasta thread new` does, whose brief tells it to call `report_result` once with exactly the canaries as
 //! decisions; the service adds them to A's history index (0539, 0603). The thread opens in plan mode, so he approves its
-//! plan. Once `jocasta thread list` shows its report, H4 issues `--runs` queries through the service's MCP endpoint
-//! (`history_search`, as `jocasta mcp` calls it with the pane's key from `<data>/panes.json`) from B's pane, which
+//! plan. Once `jocasta thread list` shows its report, H4 issues `--runs` queries through the service's bridge
+//! (`history_search`, called over the bridge with a hello of the pane's key from `<data>/panes.json`) from B's pane, which
 //! searches only its own project (0484), and checks every answered reply for every canary: canaries × answered queries
 //! checks. The same queries from A's pane are the positive control: a bound is given only when it found canaries in
 //! at least one reply, else the run is `inconclusive`.
@@ -27,7 +27,7 @@ use serde_json::{Map, Value, json};
 use crate::evals::args::number_of;
 use crate::lib::args::{ArgSpec, BenchArgs, BenchUsageError, FlagValue, flag, flag_or, parse_bench_args, run_script};
 use crate::lib::output::{conditions, print_plan, write_json};
-use crate::lib::sandbox::{Caller, call_tool, require_sandbox};
+use crate::lib::sandbox::{PaneSession, require_sandbox};
 use crate::lib::stats::{BootstrapOptions, rate, rule_of_three};
 use crate::lib::threads::{list_threads, start_thread};
 use crate::lib::timing::{WaitOptions, wait_for};
@@ -254,7 +254,7 @@ fn print_h4_plan(args: &BenchArgs, flags: &H4Flags) {
 		&[
 			first,
 			format!(
-				"{} {HISTORY_SEARCH} queries from B's pane {} through POST /api/mcp/{HISTORY_SEARCH} (the pane's key from <data>/panes.json)",
+				"{} {HISTORY_SEARCH} queries from B's pane {} through the service's bridge (the pane's key from <data>/panes.json)",
 				args.runs,
 				flags.pane_b.unwrap_or("<--pane-b>")
 			),
@@ -313,15 +313,16 @@ async fn canaries_for(out: &Path, flags: &H4Flags<'_>, project_a: &str) -> Resul
 	Ok(canaries)
 }
 
-/// Each query through the service's MCP endpoint as the pane `pane_key` makes it.
+/// Each query through the service's bridge as the pane `pane_key` makes it: one connection with the pane's hello, a
+/// `call` per query.
 async fn ask(queries: &[String], canaries: &[Canary], pane_key: &str) -> Result<Vec<QueryResult>> {
+	let mut pane = PaneSession::open(pane_key).await?;
 	let mut results = Vec::new();
 	for query in queries {
 		let mut call = Map::new();
 		call.insert("query".to_owned(), json!(query));
 		call.insert("limit".to_owned(), json!(20));
-		let caller = Caller { pane_key: Some(pane_key.to_owned()), boss_key: None };
-		let reply = call_tool(HISTORY_SEARCH, call, &caller).await?;
+		let reply = pane.call(HISTORY_SEARCH, call).await?;
 		results.push(QueryResult {
 			query: query.clone(),
 			leaked: leaked(&reply.text, canaries),

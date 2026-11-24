@@ -1,13 +1,12 @@
 use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 
-use axum::Router;
-use axum::extract::Json;
-use axum::http::{HeaderMap, StatusCode, Uri};
-use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
+use tokio::io::AsyncWriteExt;
 
 use super::*;
+use crate::shared::bridge_wire::{MAX_LINE, Stream, VERSION, bridge_address, cli_hello, line_of};
+use crate::shared::line_rpc::LineReader;
 
 fn words(list: &[&str]) -> Vec<String> {
 	list.iter().map(|word| (*word).to_owned()).collect()
@@ -103,25 +102,61 @@ fn thread_and_worktree_words_become_the_services_commands_the_changes_ask_him_05
 	}
 }
 
-/// What a fake service saw: the path, the authorization header and the body.
-type Calls = Arc<Mutex<Vec<(String, Option<String>, Value)>>>;
+/// What a fake service read: the hello and each `cli` line, as sent.
+type Calls = Arc<Mutex<Vec<Value>>>;
 
-/// A service answering `POST /api/cli` with `reply`; its port and what it got.
-async fn fake_service(reply: impl Fn() -> Response + Clone + Send + Sync + 'static) -> (u16, Calls) {
+/// Serves one connection: a hello with the token `tok` is welcomed (any other refused), each `cli` line is kept and
+/// answered with `reply` under its id.
+async fn serve(stream: Stream, reply: Value, seen: Calls) {
+	let (read, mut write) = tokio::io::split(stream);
+	let mut lines = LineReader::new(read, MAX_LINE);
+	while let Ok(Some(line)) = lines.next_line().await {
+		let message: Value = serde_json::from_str(&line).unwrap();
+		seen.lock().unwrap().push(message.clone());
+		let answer = match message["t"].as_str() {
+			Some("hello") if message["token"] == "tok" => json!({ "t": "welcome", "v": VERSION }),
+			Some("hello") => json!({ "t": "refused" }),
+			_ => {
+				let mut answer = reply.clone();
+				answer["t"] = json!("result");
+				answer["id"] = message["id"].clone();
+				answer
+			}
+		};
+		write.write_all(line_of(&answer).as_bytes()).await.unwrap();
+		write.flush().await.unwrap();
+	}
+}
+
+/// A bridge answering `cli` lines with `reply`; the port its pipe or socket is named for, and what it read.
+#[cfg(windows)]
+async fn fake_service(reply: Value) -> (u16, Calls) {
+	use tokio::net::windows::named_pipe::ServerOptions;
+	let port = crate::shared::fsx::free_port().unwrap();
 	let calls = Calls::default();
 	let seen = Arc::clone(&calls);
-	let app = Router::new().fallback(move |uri: Uri, headers: HeaderMap, Json(body): Json<Value>| {
-		let seen = Arc::clone(&seen);
-		let reply = reply.clone();
-		async move {
-			let auth = headers.get("authorization").and_then(|v| v.to_str().ok()).map(str::to_owned);
-			seen.lock().unwrap().push((uri.path().to_owned(), auth, body));
-			reply()
-		}
+	let server = ServerOptions::new().first_pipe_instance(true).create(bridge_address(port)).unwrap();
+	tokio::spawn(async move {
+		server.connect().await.unwrap();
+		serve(Box::new(server), reply, seen).await;
 	});
-	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-	let port = listener.local_addr().unwrap().port();
-	tokio::spawn(async move { axum::serve(listener, app).await });
+	(port, calls)
+}
+
+/// A bridge answering `cli` lines with `reply`; the port its pipe or socket is named for, and what it read.
+#[cfg(unix)]
+async fn fake_service(reply: Value) -> (u16, Calls) {
+	let port = crate::shared::fsx::free_port().unwrap();
+	let calls = Calls::default();
+	let seen = Arc::clone(&calls);
+	let address = bridge_address(port);
+	std::fs::create_dir_all(std::path::Path::new(&address).parent().unwrap()).unwrap();
+	let listener = tokio::net::UnixListener::bind(&address).unwrap();
+	tokio::spawn(async move {
+		let (stream, _) = listener.accept().await.unwrap();
+		serve(Box::new(stream), reply, seen).await;
+		let _ = std::fs::remove_file(address);
+	});
 	(port, calls)
 }
 
@@ -149,26 +184,19 @@ fn at(port: u16) -> Deps {
 }
 
 #[tokio::test]
-async fn a_command_goes_to_the_service_with_its_token_exit_0_done_1_refused_3_when_jocasta_isnt_running_0544() {
-	let (port, calls) = fake_service(|| Json(json!({ "text": "Stopped Login's run." })).into_response()).await;
+async fn a_command_goes_over_the_bridge_with_the_token_exit_0_done_1_refused_3_when_jocasta_isnt_running_0544() {
+	let (port, calls) = fake_service(json!({ "ok": true, "text": "Stopped Login's run." })).await;
 	let deps = at(port);
 	let stop = request(CliWord::Thread, &["stop", "Login"]);
 	assert_eq!(run_cli_command(&stop, &deps).await, EXIT.done);
 	assert_eq!(
 		*calls.lock().unwrap(),
-		[(
-			CLI_PATH.to_owned(),
-			Some("Bearer tok".to_owned()),
-			json!({ "command": "thread stop", "args": { "thread": "Login" } })
-		)]
+		[cli_hello("tok"), json!({ "t": "cli", "id": "1", "command": "thread stop", "args": { "thread": "Login" } }),]
 	);
 	assert_eq!(*deps.out.borrow(), ["Stopped Login's run."]);
 	assert_eq!(*deps.err.borrow(), ["jocasta: asking you first in your terminal (Allow with its code; 2 minutes)…"]);
 
-	let (port, _) = fake_service(|| {
-		Json(json!({ "text": "He chose Deny; nothing was stopped.", "isError": true })).into_response()
-	})
-	.await;
+	let (port, _) = fake_service(json!({ "ok": false, "error": "He chose Deny; nothing was stopped." })).await;
 	let deps = at(port);
 	let list = request(CliWord::Thread, &["list"]);
 	assert_eq!(run_cli_command(&list, &deps).await, EXIT.refused);
@@ -179,14 +207,21 @@ async fn a_command_goes_to_the_service_with_its_token_exit_0_done_1_refused_3_wh
 	assert_eq!(run_cli_command(&list, &deps).await, EXIT.not_running);
 	assert_eq!(*deps.err.borrow(), ["jocasta: Jocasta isn't running; start it with jocasta."]);
 
-	// jocasta-service.json names a live process, but nothing listens on its port.
+	// jocasta-service.json names a live process, but nothing serves its bridge.
 	let deps = at(crate::shared::fsx::free_port().unwrap());
 	let worktrees = request(CliWord::Worktree, &["leftover"]);
 	assert_eq!(run_cli_command(&worktrees, &deps).await, EXIT.not_running);
 	assert_eq!(*deps.err.borrow(), ["jocasta: Jocasta isn't running; start it with jocasta."]);
 
-	let (port, _) = fake_service(|| (StatusCode::INTERNAL_SERVER_ERROR, "nope").into_response()).await;
+	// A result without a text or an error is refused with a line of its own.
+	let (port, _) = fake_service(json!({ "ok": true })).await;
 	let deps = at(port);
 	assert_eq!(run_cli_command(&worktrees, &deps).await, EXIT.refused);
-	assert_eq!(*deps.err.borrow(), ["jocasta: Jocasta's service answered HTTP 500 without a result"]);
+	assert_eq!(*deps.err.borrow(), ["jocasta: Jocasta's service answered without a result"]);
+
+	// The bridge refuses the hello: a wrong token.
+	let (port, _) = fake_service(json!({ "ok": true, "text": "never" })).await;
+	let deps = Deps { address: Some((port, "wrong".to_owned())), ..Deps::default() };
+	assert_eq!(run_cli_command(&worktrees, &deps).await, EXIT.refused);
+	assert_eq!(*deps.err.borrow(), ["jocasta: Jocasta's service failed: the bridge refused the hello"]);
 }

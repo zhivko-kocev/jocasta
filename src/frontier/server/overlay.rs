@@ -11,7 +11,7 @@ use futures_util::future::{BoxFuture, FutureExt, Shared};
 use serde_json::Value;
 
 use super::lessons::ensure_lessons_skill;
-use super::relay::{RELAY_PORT, relay_overlay};
+
 use crate::shared::errors::{Error, Result};
 use crate::shared::fsx::temp_beside;
 use crate::shared::paths::{lessons_dir, project_dir};
@@ -26,6 +26,14 @@ fn quoted(value: &str) -> String {
 	Value::String(value.to_owned()).to_string()
 }
 
+/// Where `/share` uploads go in Jocasta's panes (0536, 0561): a loopback port nothing listens on since the relay went
+/// (0675), so a share is refused and never leaves this machine.
+const SHARE_SINK_PORT: u16 = 47_499;
+
+fn share_overlay() -> Vec<String> {
+	vec!["share:".to_owned(), format!("  serverUrl: {}", quoted(&format!("http://127.0.0.1:{SHARE_SINK_PORT}/s")))]
+}
+
 /// The overlay's text: omp's memory off (0606); no completion probe and no job widgets, which only the boss keeps
 /// (0601, 0602); a subagent starts no subagents of its own (0619); new sessions in plan mode; compaction at 300k tokens,
 /// a handoff first (0399, 0448, 0592); private notes from `AGENTS.local.md` (0449); the project's lessons as the skill
@@ -33,10 +41,10 @@ fn quoted(value: &str) -> String {
 /// one skill); no reviewer model, so omp's bundled reviewer runs on his `slow` role (0488); the privacy settings,
 /// whatever his global config says (0478): no Auto QA
 /// reports, no Claude Code plugins, web search on DuckDuckGo (an overlay's `modelRoles.web` leaves his other roles
-/// alone; its `disabledProviders` replaces his list); every session hosted in Jocasta's relay on `relay_port` and
-/// `/share` kept on this machine (0536, 0561). Keys checked against omp 19.1.1's source (`memory-backend/settings.ts`,
+/// alone; its `disabledProviders` replaces his list); `/share` kept on this machine (0536, 0561, 0675). Keys checked
+/// against omp 19.1.1's source (`memory-backend/settings.ts`,
 /// `task/settings.ts`, `tools/settings.ts`). Paths are JSON strings, valid YAML.
-pub fn overlay_text(project_id: &str, relay_port: Option<u16>) -> String {
+pub fn overlay_text(project_id: &str) -> String {
 	let skills = lessons_dir(project_id).parent().map(Path::to_path_buf).unwrap_or_default();
 	let mut lines: Vec<String> = [
 		"memory:",
@@ -66,7 +74,7 @@ pub fn overlay_text(project_id: &str, relay_port: Option<u16>) -> String {
 			.iter()
 			.map(|line| (*line).to_owned()),
 	);
-	lines.extend(relay_overlay(relay_port.unwrap_or(RELAY_PORT)));
+	lines.extend(share_overlay());
 	lines.push(String::new());
 	lines.join("\n")
 }
@@ -95,16 +103,15 @@ fn writes() -> std::sync::MutexGuard<'static, HashMap<String, Write>> {
 /// the text isn't written again, so parallel starts in one project never replace the file their omps are reading; a
 /// rename Windows refuses (EPERM, EBUSY, EACCES: an omp has it open) is tried again for about a second. The waits are
 /// async, not `write_atomically`'s: the service's event loop goes on while an omp holds the file.
-pub async fn ensure_overlay(project_id: &str, relay_port: Option<u16>) -> Result<PathBuf> {
+pub async fn ensure_overlay(project_id: &str) -> Result<PathBuf> {
 	let write = {
 		let mut running = writes();
 		match running.get(project_id) {
 			Some(write) => write.clone(),
 			None => {
 				let id = project_id.to_owned();
-				let port = relay_port.unwrap_or(RELAY_PORT);
 				let write: Write = async move {
-					let done = write_overlay(&id, port).await.map_err(|error| error.to_string());
+					let done = write_overlay(&id).await.map_err(|error| error.to_string());
 					writes().remove(&id);
 					done
 				}
@@ -118,10 +125,10 @@ pub async fn ensure_overlay(project_id: &str, relay_port: Option<u16>) -> Result
 	write.await.map_err(Error::other)
 }
 
-async fn write_overlay(project_id: &str, relay_port: u16) -> Result<PathBuf> {
+async fn write_overlay(project_id: &str) -> Result<PathBuf> {
 	let overlay = overlay_file(project_id);
 	ensure_lessons_skill(project_id, None)?;
-	let text = overlay_text(project_id, Some(relay_port));
+	let text = overlay_text(project_id);
 	if fs::read_to_string(&overlay).is_ok_and(|existing| existing == text) {
 		return Ok(overlay);
 	}
@@ -158,28 +165,28 @@ mod tests {
 	use crate::shared::testing::temp_jocasta;
 
 	#[test]
-	fn the_overlay_text_names_the_projects_skill_folder_and_the_relay_port() {
+	fn the_overlay_text_names_the_projects_skill_folder_and_keeps_share_on_this_machine() {
 		let _j = temp_jocasta();
-		let text = overlay_text("acme", Some(1234));
+		let text = overlay_text("acme");
 		assert!(text.starts_with("memory:\n  backend: \"off\"\n"));
 		assert!(
 			text.contains(&format!("  customDirectories: [{}]", quoted(&project_dir("acme").display().to_string())))
 		);
-		assert!(text.contains("ws://127.0.0.1:1234"));
+		assert!(text.contains("share:\n  serverUrl: \"http://127.0.0.1:47499/s\""));
+		assert!(!text.contains("collab"));
 		assert!(text.ends_with("\n"));
-		assert_eq!(overlay_text("acme", None), overlay_text("acme", Some(RELAY_PORT)));
 	}
 
 	#[tokio::test]
 	async fn ensure_overlay_writes_once_and_parallel_starts_share_one_write() {
 		let _j = temp_jocasta();
-		let (a, b) = tokio::join!(ensure_overlay("acme", None), ensure_overlay("acme", None));
+		let (a, b) = tokio::join!(ensure_overlay("acme"), ensure_overlay("acme"));
 		let file = overlay_file("acme");
 		assert_eq!((a.unwrap(), b.unwrap()), (file.clone(), file.clone()));
-		assert_eq!(fs::read_to_string(&file).unwrap(), overlay_text("acme", None));
+		assert_eq!(fs::read_to_string(&file).unwrap(), overlay_text("acme"));
 		assert!(lessons_dir("acme").join("SKILL.md").exists());
 		let modified = fs::metadata(&file).unwrap().modified().unwrap();
-		ensure_overlay("acme", None).await.unwrap();
+		ensure_overlay("acme").await.unwrap();
 		assert_eq!(fs::metadata(&file).unwrap().modified().unwrap(), modified);
 		assert!(writes().is_empty());
 	}

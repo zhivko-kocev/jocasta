@@ -100,7 +100,7 @@ test("the rule tells a stale command or path from prose", () => {
 	expect(stale("jocasta setup")).toBeUndefined();
 	expect(stale("jocasta nonsense")).toContain("nonsense");
 	expect(stale("src/shared/route.rs")).toBeUndefined();
-	expect(stale("jocasta pane-check")).toBeUndefined();
+	expect(stale("jocasta push-hook")).toBeUndefined();
 	expect(stale("src/shared/no-such-file.ts")).toBe("path doesn't exist");
 	// Skipped by rule: placeholders, globs, URLs, home and absolute paths, other projects' names, plain words.
 	for (const token of [

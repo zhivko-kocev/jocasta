@@ -29,14 +29,14 @@ use crate::frontier::protocol::{
 use crate::frontier::server::allow::Confirm;
 use crate::frontier::server::asker::Notifier;
 use crate::frontier::server::boss::fresh_session;
+use crate::frontier::server::bridge::{Bridge, BridgeService, PaneAgent, PaneEvent, Resolved, Role};
 use crate::frontier::server::checks::CheckRunner;
 use crate::frontier::server::close::CloseService;
 use crate::frontier::server::context::{Link, ServiceContext};
 use crate::frontier::server::day::{AlertDetails, Day, DayHooks, DayOptions, DayThread, ScheduleStart, SharedCatalog};
-use crate::frontier::server::door_routes::DoorService;
 use crate::frontier::server::events::{Toast, clean};
 use crate::frontier::server::feed::{FeedService, Reply};
-use crate::frontier::server::herdr::{AgentState, Env, Herdr, HerdrSnapshot, StopWatch, pane_text};
+use crate::frontier::server::herdr::{AgentState, Herdr, HerdrSnapshot, StopWatch, pane_text};
 use crate::frontier::server::keys::{FinishHow, KeyFinishable, KeyOutcome, Keys, NewThreadForm};
 use crate::frontier::server::phone::PhoneFacts;
 use crate::frontier::server::popups::Counts;
@@ -46,12 +46,14 @@ use crate::frontier::server::refresh::Refresher;
 use crate::frontier::server::status::Busy;
 use crate::frontier::server::stop_sequence::StopService;
 use crate::frontier::server::thread_keys::KeyService;
+use crate::frontier::server::tool_specs::{ToolSpec, bad_arguments, tools_for};
 use crate::frontier::server::tools::{Caller, ToolReply, Tools};
 use crate::frontier::server::watcher::{Watcher, WatcherOptions, start_watcher};
 use crate::frontier::server::wording::Door;
 use crate::frontier::server::worklog::WorklogSession;
 use crate::shared::day::{day_start, midnight_of};
 use crate::shared::errors::{Error, Result};
+use crate::shared::fsx::same_token;
 use crate::shared::link::{open_in_browser, web_link};
 use crate::shared::log::{LogLevel, log};
 use crate::shared::paths::data_dir;
@@ -74,9 +76,6 @@ pub type FindReview = Arc<dyn Fn(String) -> BoxFuture<'static, Result<Option<Str
 
 /// Opens a whiteboard review, by id, in his browser.
 pub type OpenReview = Arc<dyn Fn(&str) + Send + Sync>;
-
-/// `collab.relayUrl` as the omp of `command` resolves it in `cwd` with `env`.
-pub type RelayUrlOf = Arc<dyn Fn(Vec<String>, PathBuf, Env) -> BoxFuture<'static, Result<String>> + Send + Sync>;
 
 /// What `JocastaService` is built with. Every field but `herdr` and `broadcast` is optional: `None` is the TypeScript's
 /// absent option, and the default each field names is the service's, not this struct's. The service takes `day` out
@@ -119,9 +118,6 @@ pub struct ServiceOptions {
 	pub agent_wait_ms: Option<i64>,
 	/// How long a project pane's check request waits for its check (0617); `PANE_CHECK_WAIT_MS`, 20 s.
 	pub pane_check_wait_ms: Option<i64>,
-	/// How long `thread_start` waits for the pane to start working on the brief before sending one Enter;
-	/// `SUBMIT_WAIT_MS`, 5 s.
-	pub submit_wait_ms: Option<i64>,
 	/// How often everything is refreshed; 5 s, or a minute with `herdr_changed` (test seam).
 	pub refresh_ms: Option<i64>,
 	/// How long the end of a thread pane's omp is waited for before its leftovers end (0490); 10 s (test seam).
@@ -148,14 +144,8 @@ pub struct ServiceOptions {
 	pub confirm_wait_ms: Option<i64>,
 	/// The boss pane's key (0484); a new random one per run by default (test seam).
 	pub boss_key: Option<String>,
-	/// The port of Jocasta's collab relay the panes' overlays name (0561); `RELAY_PORT` by default.
-	pub relay_port: Option<u16>,
-	/// `collab.relayUrl` as the omp of a command resolves it; omp's own `omp config get` by default (test seam).
-	pub relay_url_of: Option<RelayUrlOf>,
-	/// omp's host registry folder (`hosts.ts`); `~/.omp/run/collab-hosts` by default (test seam).
-	pub hosts_dir: Option<PathBuf>,
-	/// How often the thread panes' omp hosts are asked for their state (0547, 0561); 1 s.
-	pub host_poll_ms: Option<i64>,
+	/// The bridge (0675): one the service listens on by default; a recording one in tests (test seam).
+	pub bridge: Option<Bridge>,
 	/// How often the dock's heartbeat goes (0662); 10 s (test seam).
 	pub alive_ms: Option<i64>,
 	/// `Some(false)` (test seam): a task end without a `report_result` goes straight to its review, with no steer asking
@@ -189,7 +179,6 @@ impl ServiceOptions {
 			sessions_dir: None,
 			agent_wait_ms: None,
 			pane_check_wait_ms: None,
-			submit_wait_ms: None,
 			refresh_ms: None,
 			leftover_wait_ms: None,
 			leftover_again_ms: None,
@@ -201,10 +190,7 @@ impl ServiceOptions {
 			confirm: None,
 			confirm_wait_ms: None,
 			boss_key: None,
-			relay_port: None,
-			relay_url_of: None,
-			hosts_dir: None,
-			host_poll_ms: None,
+			bridge: None,
 			alive_ms: None,
 			ask_report: None,
 			checks: None,
@@ -230,8 +216,6 @@ const REFRESH_MS: u64 = 5_000;
 const FULL_REFRESH_MS: u64 = 60_000;
 /// How long after herdr's change its facts are read: a burst (a workspace with its tab and pane) is one refresh.
 const CHANGE_SETTLE_MS: u64 = 150;
-/// How often the thread panes' omp hosts are asked for their state (0547, 0561); a pipe answers in 0–5 ms.
-const HOST_POLL_MS: u64 = 1_000;
 /// How often the dock hears the service is alive (0662); it says the service isn't answering after 30 s without word.
 const ALIVE_MS: u64 = 10_000;
 /// How long `stop` waits for tool calls in flight before closing the catalog under them (SVC-13).
@@ -552,10 +536,6 @@ impl JocastaService {
 		if let Some(changed) = changes {
 			timers.push(on_changes(changed, me.clone()));
 		}
-		if self.ctx.hosts {
-			let poll_ms = self.ctx.options.host_poll_ms.map_or(HOST_POLL_MS, |ms| ms.unsigned_abs().max(1));
-			timers.push(every(poll_ms, me.clone(), |service| async move { service.ctx.omps.poll().await }.boxed()));
-		}
 		// The dock's heartbeat (0662), off a blocking thread: through the day's state and the catalog, the two the hang
 		// of 2026-11-23 held, so a service stuck on either stops beating.
 		let alive_ms = self.ctx.options.alive_ms.map_or(ALIVE_MS, |ms| ms.unsigned_abs().max(1));
@@ -648,9 +628,6 @@ impl JocastaService {
 		for timer in locked(&self.timers).drain(..) {
 			timer.abort();
 		}
-		if let Some(poll) = c.omps.polling() {
-			poll.await;
-		}
 		if let Some(unwatch) = locked(&self.unwatch).take() {
 			unwatch();
 		}
@@ -687,11 +664,6 @@ impl JocastaService {
 	/// Stop everything (0549): the omps kept for `--restore` end mid-turn (`OmpTracker::cut_paused`).
 	pub async fn cut_paused_turns(&self) {
 		self.ctx.omps.cut_paused().await;
-	}
-
-	/// Stop everything's last step for omp (0547): the host entries of the omps Jocasta ended.
-	pub async fn remove_ended_hosts(&self) {
-		self.ctx.omps.remove_ended_hosts().await;
 	}
 
 	/// Once herdr's server is gone (0486, 0490): what the thread panes' omps left ends.
@@ -777,18 +749,18 @@ impl JocastaService {
 		Ok(())
 	}
 
-	/// One `jocasta mcp` tool call (`POST /api/mcp/<tool>`). A refusal is `is_error` with a one-line reason.
+	/// One tool call over the bridge (0675). A refusal is `is_error` with a one-line reason.
 	pub async fn call_tool(&self, name: &str, args: &Map<String, Value>, caller: &Caller) -> ToolReply {
 		reply_of(self.track(self.tools.tool(name, args, caller)).await)
 	}
 
-	/// One `jocasta thread|worktree` command (`POST /api/cli`, 0544): the same functions and rules as the boss's tools;
+	/// One `jocasta thread|worktree` command (a bridge `cli` message, 0544): the same functions and rules as the boss's tools;
 	/// `thread send`, `thread stop`, `thread finish` and `worktree remove` wait for his Allow. A refusal is `is_error`.
 	pub async fn cli_call(&self, command: &str, args: &Map<String, Value>) -> ToolReply {
 		reply_of(self.track(self.tools.cli(command, args)).await)
 	}
 
-	/// The pre-push hook's question (`POST /api/push`, 0613): whether the push may go ahead, which may wait for his Allow.
+	/// The pre-push hook's question (a bridge `push` message, 0613): whether the push may go ahead, which may wait for his Allow.
 	/// Counted like a tool call (SVC-13); a refusal is the answer `{allow: false, reason}`.
 	pub async fn push_verdict(&self, request: &PushRequest) -> PushAnswer {
 		match self.track(self.pushes.verdict(request)).await {
@@ -797,7 +769,7 @@ impl JocastaService {
 		}
 	}
 
-	/// A project pane's check at its turn's end (`POST /api/pane-check`, 0617): the text for its agent, or "" for nothing.
+	/// A project pane's check at its turn's end (a bridge `stop` request, 0617): the text for its agent, or "" for nothing.
 	/// `signal` ends when the pane stops asking. Counted like a tool call (SVC-13); a failure of its own answers nothing,
 	/// as the extension would.
 	pub async fn pane_check(&self, pane_key: &str, signal: Option<AbortSignal>) -> String {
@@ -807,6 +779,29 @@ impl JocastaService {
 				self.ctx.warn(error);
 				String::new()
 			}
+		}
+	}
+
+	/// A pane's omp pushed `event` over the bridge (0675): a thread's turn and dialog states reach the lifecycle as omp's
+	/// own, as the host poll's did (0547, 0561); an omp that can't take prompts is said (0684).
+	pub fn pane_event(&self, who: &Resolved, event: &PaneEvent, agent: &PaneAgent) {
+		let c = &self.ctx;
+		match event {
+			PaneEvent::Connected { version, caps, .. } if !caps.iter().any(|cap| cap == "prompt") => {
+				c.events.warning(&format!("omp {version} can't take prompts from Jocasta; check the pin"));
+			}
+			PaneEvent::Gone => c.omps.host_reports(&who.pane_id, None),
+			PaneEvent::AgentStart | PaneEvent::AgentEnd { .. } | PaneEvent::Input { .. } => {
+				let state = if agent.input_open {
+					AgentState::Blocked
+				} else if agent.working {
+					AgentState::Working
+				} else {
+					AgentState::Idle
+				};
+				c.omps.host_reports(&who.pane_id, Some(state));
+			}
+			_ => {}
 		}
 	}
 
@@ -975,13 +970,6 @@ impl StopService for JocastaService {
 		Box::pin(JocastaService::end_thread_leftovers(self))
 	}
 
-	fn remove_ended_hosts(&self) -> BoxFuture<'_, Result<()>> {
-		Box::pin(async move {
-			JocastaService::remove_ended_hosts(self).await;
-			Ok(())
-		})
-	}
-
 	fn end_hunk_daemon(&self) -> BoxFuture<'_, Result<()>> {
 		Box::pin(async move {
 			JocastaService::end_hunk_daemon(self).await;
@@ -1022,27 +1010,51 @@ impl Notifier for JocastaService {
 	}
 }
 
-/// The doors' calls never reject: a refusal is already the reply's `is_error`.
-impl DoorService for JocastaService {
-	fn call_tool<'a>(
-		&'a self,
-		name: &'a str,
-		args: Map<String, Value>,
-		caller: Caller,
-	) -> BoxFuture<'a, Result<ToolReply>> {
-		Box::pin(async move { Ok(JocastaService::call_tool(self, name, &args, &caller).await) })
+/// What the panes' omps and the `jocasta` CLI ask of the service over the bridge (0675). A refusal is already the
+/// reply's `is_error`.
+impl BridgeService for JocastaService {
+	fn resolve(&self, key: &str) -> Option<Resolved> {
+		let c = &self.ctx;
+		if same_token(Some(key), c.panes.boss_key()) {
+			let pane_id = c.panes.boss_keyed()?;
+			let caller = Caller { pane_key: c.launched.key_of(&pane_id), boss_key: Some(key.to_owned()) };
+			return Some(Resolved { pane_id, role: Role::Boss, caller });
+		}
+		let pane_id = c.launched.pane_of_key(Some(key))?;
+		let role = if c.threads.get(&pane_id).is_some() { Role::Thread } else { Role::Project };
+		Some(Resolved { pane_id, role, caller: Caller { pane_key: Some(key.to_owned()), boss_key: None } })
 	}
 
-	fn cli_call<'a>(&'a self, command: &'a str, args: Map<String, Value>) -> BoxFuture<'a, Result<ToolReply>> {
-		Box::pin(async move { Ok(JocastaService::cli_call(self, command, &args).await) })
+	fn tools(&self, role: Role) -> Vec<Value> {
+		tools_for(role, self.ctx.layer).iter().map(ToolSpec::to_value).collect()
 	}
 
-	fn push_verdict(&self, request: PushRequest) -> BoxFuture<'_, Result<PushAnswer>> {
-		Box::pin(async move { Ok(JocastaService::push_verdict(self, &request).await) })
+	fn call(&self, who: Resolved, tool: String, args: Map<String, Value>) -> BoxFuture<'_, ToolReply> {
+		Box::pin(async move {
+			let listed = tools_for(who.role, self.ctx.layer);
+			if let Some(spec) = listed.iter().find(|spec| spec.name == tool)
+				&& let Some(problem) = bad_arguments(spec, &args)
+			{
+				return ToolReply { text: problem, is_error: Some(true) };
+			}
+			JocastaService::call_tool(self, &tool, &args, &who.caller).await
+		})
 	}
 
-	fn pane_check<'a>(&'a self, pane_key: &'a str, signal: AbortSignal) -> BoxFuture<'a, Result<String>> {
-		Box::pin(async move { Ok(JocastaService::pane_check(self, pane_key, Some(signal)).await) })
+	fn cli(&self, command: String, args: Map<String, Value>) -> BoxFuture<'_, ToolReply> {
+		Box::pin(async move { JocastaService::cli_call(self, &command, &args).await })
+	}
+
+	fn push(&self, request: PushRequest) -> BoxFuture<'_, PushAnswer> {
+		Box::pin(async move { JocastaService::push_verdict(self, &request).await })
+	}
+
+	fn stop(&self, pane_key: String, signal: AbortSignal) -> BoxFuture<'_, String> {
+		Box::pin(async move { JocastaService::pane_check(self, &pane_key, Some(signal)).await })
+	}
+
+	fn event(&self, who: &Resolved, event: &PaneEvent, agent: &PaneAgent) {
+		JocastaService::pane_event(self, who, event, agent);
 	}
 }
 

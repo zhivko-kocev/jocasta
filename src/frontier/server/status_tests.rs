@@ -91,6 +91,7 @@ pub(crate) fn world(options: impl FnOnce(&mut ServiceOptions)) -> World {
 		Arc::new(move |message| broadcast.lock().unwrap_or_else(PoisonError::into_inner).push(message)),
 	);
 	service.sessions_dir = Some(j.root().join("sessions"));
+	service.bridge = Some(herdr.recording_bridge());
 	service.day = Some(DayOptions { pollers: Some(false), ..DayOptions::default() });
 	options(&mut service);
 	let catalog: SharedCatalog = Arc::new(Mutex::new(open_catalog().expect("the catalog")));

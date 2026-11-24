@@ -9,8 +9,9 @@ use crate::shared::env;
 /// Like `JOCASTA_HERDR_SESSION` (0441) it is for benchmarks and tests; anything else leaves the layer on.
 pub const LAYER_ENV: &str = "JOCASTA_LAYER";
 
-/// H2's `herdr` condition (0576): `JOCASTA_HOSTS=off` makes a sandbox service ignore omp's host registry, so a
-/// thread's state comes from herdr's events and tick only. For benchmarks and tests, like [`LAYER_ENV`].
+/// H2's `herdr` condition (0576): `JOCASTA_HOSTS=off` makes a sandbox service ignore the states omp pushes over the
+/// bridge (0675), so a thread's state comes from herdr's events and tick only. For benchmarks and tests, like
+/// [`LAYER_ENV`].
 pub const HOSTS_ENV: &str = "JOCASTA_HOSTS";
 
 fn is_on(name: &str, environment: Option<&HashMap<String, String>>) -> bool {
@@ -26,7 +27,7 @@ pub fn layer_on(environment: Option<&HashMap<String, String>>) -> bool {
 	is_on(LAYER_ENV, environment)
 }
 
-/// Whether the service reads omp's host registry in `environment` (the process's when `None`) (0576): only `off`
+/// Whether the service takes omp's pushed states in `environment` (the process's when `None`) (0576, 0675): only `off`
 /// turns it off.
 pub fn hosts_on(environment: Option<&HashMap<String, String>>) -> bool {
 	is_on(HOSTS_ENV, environment)

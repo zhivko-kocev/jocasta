@@ -335,9 +335,7 @@ async fn the_new_thread_form_of_a_thread_of_a_project_not_in_the_list_falls_back
 async fn start_gives_the_brief_to_the_thread_start_and_an_unfinished_start_is_an_error() {
 	let t = test_context(|options| {
 		options.agent_wait_ms = Some(0);
-		options.submit_wait_ms = Some(50);
 		options.mise = Some(None);
-		options.relay_url_of = Some(Arc::new(|_, _, _| Box::pin(async { Ok("ws://127.0.0.1:47499".to_owned()) })));
 	});
 	let dir = temp_dir("keys");
 	projects_world(&t, &dir).await;

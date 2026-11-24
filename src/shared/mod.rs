@@ -1,4 +1,5 @@
 pub mod boss_key;
+pub mod bridge_wire;
 pub mod clock;
 pub mod credentials;
 pub mod day;
@@ -19,7 +20,6 @@ pub mod line_rpc;
 pub mod link;
 pub mod log;
 pub mod omp_session;
-pub mod pane_check;
 pub mod pathkey;
 pub mod paths;
 pub mod poll;

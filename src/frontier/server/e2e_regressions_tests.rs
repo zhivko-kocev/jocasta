@@ -8,27 +8,23 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use futures_util::FutureExt;
-use futures_util::future::BoxFuture;
 use regex::Regex;
 use serde_json::{Map, Value, json};
 use tokio::sync::watch;
 
 use crate::frontier::protocol::{QuotaSpan, ServerMessage, ToastLevel, ToastReason};
 use crate::frontier::server::allow::{Answer, Confirm, Confirmation};
+use crate::frontier::server::bridge::Bridge;
 use crate::frontier::server::day::DayOptions;
 use crate::frontier::server::events::Toast;
 use crate::frontier::server::helpers::{
 	BRIEF, Msg, Page, TEST_BOSS_KEY, TestServer, ThreadOptions, boss_idle, boss_lines, boss_pane, call, commit_in,
-	demo_project, http, push_state, relaunch_idle, review, session_file, sh, start_test_server, start_test_server_with,
+	demo_project, push_state, relaunch_idle, review, session_file, sh, start_test_server, start_test_server_with,
 	start_thread, states_settled, task_dir_of, thread_pane, until, until_async, use_hunk_daemon, with_server,
 	write_settings,
 };
 use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
-use crate::frontier::server::herdr::{
-	AgentState, AgentView, Env, Herdr, HerdrError, HerdrResult, HerdrSnapshot, Note, NotificationResult, OnChange,
-	PaneIds, PaneInfo, PaneMetadata, RespawnOptions, SplitOptions, StopWatch, TabPane, TabSpec, Tokens, WorkspaceInfo,
-	WorktreeCreated, WorktreeOptions,
-};
+use crate::frontier::server::herdr::{AgentState, Env, Herdr, HerdrError, NotificationResult, WorkspaceInfo};
 use crate::frontier::server::keys::FinishHow;
 use crate::frontier::server::popups::PopupEnd;
 use crate::frontier::server::server::ServerOptions;
@@ -56,14 +52,8 @@ fn now_ms() -> i64 {
 
 /// A tool call as `jocasta mcp` sends it from a pane whose `JOCASTA_PANE_KEY` is `pane_key`, without the boss key.
 async fn call_with_key(server: &TestServer, tool: &str, args: &Value, pane_key: &str) -> ToolReply {
-	let response = http()
-		.post(format!("http://127.0.0.1:{}/api/mcp/{tool}", server.port))
-		.bearer_auth(&server.token)
-		.json(&json!({ "args": args, "paneKey": pane_key }))
-		.send()
-		.await
-		.expect("the service answers");
-	response.json().await.expect("a tool reply")
+	let caller = Caller { pane_key: Some(pane_key.to_owned()), boss_key: None };
+	server.service.call_tool(tool, args.as_object().unwrap_or(&Map::new()), &caller).await
 }
 
 /// `with_server` on a herdr the test made, so the test can reach it (and a wrapper of it).
@@ -88,146 +78,32 @@ fn typed_into(herdr: &FakeHerdr, pane: &str, text: &str) -> usize {
 	herdr.of("prompt").iter().filter(|args| args[0] == pane && args[1] == text).count()
 }
 
-/// A herdr whose prompts into the boss pane wait while `gate` is set, as herdr's agent.prompt round trip takes its
-/// time; everything else is the fake's.
-struct GatedHerdr {
-	inner: Arc<FakeHerdr>,
+/// Prompts into the boss pane wait while `gate` is set, as the prompt's round trip takes its time.
+struct Gate {
 	gate: Mutex<Option<watch::Receiver<bool>>>,
 	waiting: AtomicBool,
 }
 
-impl Herdr for GatedHerdr {
-	fn started_server(&self) -> bool {
-		self.inner.started_server()
-	}
-
-	fn ping(&self) -> BoxFuture<'_, HerdrResult<Option<String>>> {
-		self.inner.ping()
-	}
-
-	fn ensure_workspace<'a>(
-		&'a self,
-		label: &'a str,
-		cwd: &'a Path,
-		command: Option<&'a [String]>,
-		env: Option<&'a Env>,
-	) -> BoxFuture<'a, HerdrResult<String>> {
-		self.inner.ensure_workspace(label, cwd, command, env)
-	}
-
-	fn workspaces(&self) -> BoxFuture<'_, HerdrResult<Vec<WorkspaceInfo>>> {
-		self.inner.workspaces()
-	}
-
-	fn snapshot(&self) -> BoxFuture<'_, HerdrResult<HerdrSnapshot>> {
-		self.inner.snapshot()
-	}
-
-	fn close_workspace<'a>(&'a self, workspace_id: &'a str) -> BoxFuture<'a, HerdrResult<()>> {
-		self.inner.close_workspace(workspace_id)
-	}
-
-	fn create_tab<'a>(&'a self, workspace_id: &'a str, tab: &'a TabSpec) -> BoxFuture<'a, HerdrResult<TabPane>> {
-		self.inner.create_tab(workspace_id, tab)
-	}
-
-	fn create_worktree<'a>(
-		&'a self,
-		workspace_id: &'a str,
-		opts: WorktreeOptions,
-	) -> BoxFuture<'a, HerdrResult<WorktreeCreated>> {
-		self.inner.create_worktree(workspace_id, opts)
-	}
-
-	fn move_workspace<'a>(&'a self, workspace_id: &'a str, index: usize) -> BoxFuture<'a, HerdrResult<()>> {
-		self.inner.move_workspace(workspace_id, index)
-	}
-
-	fn respawn<'a>(&'a self, pane_id: &'a str, opts: &'a RespawnOptions) -> BoxFuture<'a, HerdrResult<TabPane>> {
-		self.inner.respawn(pane_id, opts)
-	}
-
-	fn split_beside<'a>(&'a self, pane_id: &'a str, opts: &'a SplitOptions) -> BoxFuture<'a, HerdrResult<String>> {
-		self.inner.split_beside(pane_id, opts)
-	}
-
-	fn prompt<'a>(&'a self, pane_id: &'a str, text: &'a str) -> BoxFuture<'a, HerdrResult<()>> {
-		Box::pin(async move {
-			let gate = locked(&self.gate).clone();
-			if let Some(mut gate) = gate
-				&& boss_pane(&self.inner).as_deref() == Some(pane_id)
+/// A recording bridge whose prompts into the boss pane wait for `gate`; everything else is recorded as the fake does.
+fn gated_bridge(fake: &Arc<FakeHerdr>, gate: &Arc<Gate>) -> Bridge {
+	let bridge = fake.recording_bridge();
+	let (fake, gate) = (Arc::clone(fake), Arc::clone(gate));
+	bridge.record(|recording| {
+		recording.sink = Some(Arc::new(move |method, args| {
+			let held = locked(&gate.gate).clone();
+			if let Some(open) = held
+				&& method == "prompt"
+				&& args.first().and_then(Value::as_str) == boss_pane(&fake).as_deref()
 			{
-				self.waiting.store(true, Ordering::SeqCst);
-				let _ = gate.wait_for(|open| *open).await;
+				gate.waiting.store(true, Ordering::SeqCst);
+				while !*open.borrow() {
+					std::thread::sleep(std::time::Duration::from_millis(5));
+				}
 			}
-			self.inner.prompt(pane_id, text).await
-		})
-	}
-
-	fn send_text<'a>(&'a self, pane_id: &'a str, text: &'a str) -> BoxFuture<'a, HerdrResult<()>> {
-		self.inner.send_text(pane_id, text)
-	}
-
-	fn stop<'a>(&'a self, pane_id: &'a str) -> BoxFuture<'a, HerdrResult<()>> {
-		self.inner.stop(pane_id)
-	}
-
-	fn submit<'a>(&'a self, pane_id: &'a str) -> BoxFuture<'a, HerdrResult<()>> {
-		self.inner.submit(pane_id)
-	}
-
-	fn send_keys<'a>(&'a self, pane_id: &'a str, keys: &'a [String]) -> BoxFuture<'a, HerdrResult<()>> {
-		self.inner.send_keys(pane_id, keys)
-	}
-
-	fn notify<'a>(&'a self, note: &'a Note) -> BoxFuture<'a, HerdrResult<NotificationResult>> {
-		self.inner.notify(note)
-	}
-
-	fn focus<'a>(&'a self, pane_id: &'a str) -> BoxFuture<'a, HerdrResult<()>> {
-		self.inner.focus(pane_id)
-	}
-
-	fn set_agent_view<'a>(&'a self, view: &'a AgentView) -> BoxFuture<'a, HerdrResult<()>> {
-		self.inner.set_agent_view(view)
-	}
-
-	fn screen<'a>(&'a self, pane_id: &'a str) -> BoxFuture<'a, HerdrResult<String>> {
-		self.inner.screen(pane_id)
-	}
-
-	fn report_pane_metadata<'a>(&'a self, pane_id: &'a str, meta: &'a PaneMetadata) -> BoxFuture<'a, HerdrResult<()>> {
-		self.inner.report_pane_metadata(pane_id, meta)
-	}
-
-	fn report_workspace_metadata<'a>(
-		&'a self,
-		workspace_id: &'a str,
-		tokens: &'a Tokens,
-		ttl_ms: Option<i64>,
-	) -> BoxFuture<'a, HerdrResult<()>> {
-		self.inner.report_workspace_metadata(workspace_id, tokens, ttl_ms)
-	}
-
-	fn panes(&self) -> BoxFuture<'_, HerdrResult<Vec<PaneInfo>>> {
-		self.inner.panes()
-	}
-
-	fn pane_root<'a>(&'a self, pane_id: &'a str, timeout_ms: Option<i64>) -> BoxFuture<'a, HerdrResult<Option<u32>>> {
-		self.inner.pane_root(pane_id, timeout_ms)
-	}
-
-	fn watch(&self, pane_ids: PaneIds, on_change: OnChange) -> StopWatch {
-		self.inner.watch(pane_ids, on_change)
-	}
-
-	fn stop_server(&self) -> BoxFuture<'_, HerdrResult<()>> {
-		self.inner.stop_server()
-	}
-
-	fn close(&self) {
-		self.inner.close();
-	}
+			fake.bridge_call(method, args)
+		}));
+	});
+	bridge
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -235,8 +111,8 @@ async fn svc_2_a_thread_started_while_the_tick_tells_the_boss_of_a_closed_one_is
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
 	let fake = Arc::new(FakeHerdr::new());
-	let gated = Arc::new(GatedHerdr { inner: fake.clone(), gate: Mutex::new(None), waiting: AtomicBool::new(false) });
-	let options = ServerOptions { herdr: Some(gated.clone()), ..ServerOptions::default() };
+	let gated = Arc::new(Gate { gate: Mutex::new(None), waiting: AtomicBool::new(false) });
+	let options = ServerOptions { bridge: Some(gated_bridge(&fake, &gated)), ..ServerOptions::default() };
 	let fake_in = fake.clone();
 	with_herdr(&fake, options, |server| async move {
 		let fake = fake_in;
@@ -267,10 +143,9 @@ async fn svc_2_a_thread_started_while_the_tick_tells_the_boss_of_a_closed_one_is
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn svc_3_a_project_pane_whose_omp_cant_start_again_doesnt_end_the_tick_the_thread_pane_runs_omp_again_and_the_sidebar_is_reported()
- {
+async fn svc_3_a_thread_pane_runs_omp_again_after_a_restart_and_the_sidebar_is_reported() {
 	let j = temp_jocasta();
-	let project = demo_project(j.root(), "demo").await;
+	demo_project(j.root(), "demo").await;
 	let fake = Arc::new(FakeHerdr::new());
 	let server = start_test_server_with(fake.clone(), ServerOptions::default()).await;
 	let path = start_thread(&server, ThreadOptions::default()).await.path;
@@ -279,16 +154,7 @@ async fn svc_3_a_project_pane_whose_omp_cant_start_again_doesnt_end_the_tick_the
 	let reports = || fake.of("reportPaneMetadata").len() + fake.of("reportWorkspaceMetadata").len();
 	let cleared = reports();
 	fake.restore();
-	// The project's own omp config names a public relay: its pane is refused (0536, 0561); the thread's isn't.
-	let main = real_path(&project.main_path);
-	let options = ServerOptions {
-		relay_url_of: Some(Arc::new(move |_, cwd, _| {
-			let url = if real_path(&cwd) == main { "wss://relay.example.org" } else { "ws://127.0.0.1:47499" };
-			async move { Ok(url.to_owned()) }.boxed()
-		})),
-		..ServerOptions::default()
-	};
-	let server = start_test_server_with(fake.clone(), options).await;
+	let server = start_test_server_with(fake.clone(), ServerOptions::default()).await;
 	server.service.refresh().await;
 	let respawned =
 		fake.of("respawn").iter().any(|args| path_key(Path::new(args[1]["cwd"].as_str().unwrap())) == path_key(&path));
@@ -913,63 +779,28 @@ async fn c6_with_the_layer_off_a_thread_pane_gets_jocasta_layer_off_its_prompt_n
 	.await;
 }
 
-/// A long-lived process standing in for a thread's omp.
-fn long_lived() -> std::process::Child {
-	let mut command = if cfg!(windows) {
-		let mut command = std::process::Command::new("ping");
-		command.args(["-n", "120", "127.0.0.1"]);
-		command
-	} else {
-		let mut command = std::process::Command::new("sleep");
-		command.arg("120");
-		command
-	};
-	command.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
-	#[cfg(windows)]
-	{
-		use std::os::windows::process::CommandExt;
-		command.creation_flags(0x0800_0000);
-	}
-	command.spawn().expect("a stand-in omp")
-}
-
 #[tokio::test(flavor = "multi_thread")]
-async fn c6b_with_omps_host_registry_off_a_thread_whose_omp_hosts_follows_herdrs_state_and_the_registry_is_never_read_0576()
+async fn c6b_with_omps_host_registry_off_a_thread_whose_omp_reports_over_its_bridge_follows_herdrs_state_and_the_report_is_never_read_0576()
  {
-	use crate::frontier::server::hosts::fake::{FakeHostState, fake_host};
+	use crate::frontier::server::bridge::{PaneAgent, PaneEvent};
+	use crate::frontier::server::helpers::pane_reports;
 	use crate::frontier::server::status::Busy;
 	let mut j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
 	j.set_var(HOSTS_ENV, Some("off"));
-	let options = ServerOptions { host_poll_ms: Some(50), ..ServerOptions::default() };
-	with_server(options, |server| async move {
+	with_server(ServerOptions::default(), |server| async move {
 		let started = start_thread(&server, ThreadOptions::default()).await;
-		let mut omp = long_lived();
-		let mut host = fake_host(
-			&data_dir().join("collab-hosts"),
-			FakeHostState {
-				pid: omp.id(),
-				cwd: started.path.display().to_string(),
-				busy: Some(true),
-				input_required: false,
-			},
-			None,
-		)
-		.await;
-		server.herdr.state().roots.insert(started.pane_id.clone(), omp.id());
 		// herdr's working, then idle, decide: the brief's turn runs and ends.
 		server.herdr.set_state(&started.pane_id, AgentState::Working, None, true);
 		until(|| server.service.busy_threads().unwrap().working == 1).await;
 		server.herdr.set_state(&started.pane_id, AgentState::Idle, None, true);
 		until(|| server.service.busy_threads().unwrap().working == 0).await;
-		// omp's host says a turn runs; it is never asked, and herdr's idle stands.
+		// omp's bridge says a turn runs; it is never read, and herdr's idle stands.
+		let working = PaneAgent { working: true, ..PaneAgent::default() };
+		pane_reports(&server, &started.pane_id, &PaneEvent::AgentStart, working);
 		server.service.refresh().await;
 		server.service.refresh().await;
 		assert_eq!(server.service.busy_threads().unwrap(), Busy { working: 0, awaiting: 0 });
-		assert_eq!(host.asked(), 0);
-		host.close().await;
-		let _ = omp.kill();
-		let _ = omp.wait();
 	})
 	.await;
 }

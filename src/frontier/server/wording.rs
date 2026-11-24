@@ -5,8 +5,19 @@
 use crate::frontier::server::sessions::TestsResult;
 use crate::shared::day::local_day;
 
-/// The task-end `/handoff` with its focus (0400, 0448), so the summary keeps what the next task needs.
-pub const HANDOFF_PROMPT: &str = "/handoff Keep what the next task needs: the approved plan's state (steps done and left), open questions, decisions and why, unfixed review findings. Drop test and debug output.";
+/// The focus of the task-end `/handoff` (0400, 0448), so the summary keeps what the next task needs.
+macro_rules! handoff_focus {
+	() => {
+		"Keep what the next task needs: the approved plan's state (steps done and left), open questions, decisions and why, unfixed review findings. Drop test and debug output."
+	};
+}
+
+/// The task-end `/handoff`'s focus: the guidance of the handoff compaction (0675).
+pub const HANDOFF_FOCUS: &str = handoff_focus!();
+
+/// `/handoff` with its focus as the one prompt an omp that can't compact for Jocasta gets (0684).
+#[cfg(test)]
+pub const HANDOFF_PROMPT: &str = concat!("/handoff ", handoff_focus!());
 
 /// The one steer a task end without its report gets (0539), typed into the thread's pane like the boss's steers.
 pub const REPORT_STEER: &str = "Your task ended without its report. Call the report_result tool now, once, with this task's outcome, summary, files, tests, decisions, open questions and follow-ups. Don't change code in this turn.";

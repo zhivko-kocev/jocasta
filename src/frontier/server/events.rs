@@ -15,6 +15,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use crate::frontier::protocol::{ServerMessage, ToastLevel, ToastPriority, ToastReason};
+use crate::frontier::server::bridge::Deliver;
 use crate::frontier::server::context::{BossRef, Calls, Link};
 use crate::frontier::server::day::AlertDetails;
 use crate::frontier::server::herdr::{AgentState, Note, NotificationResult, Sound, pane_text};
@@ -267,7 +268,7 @@ impl Events {
 			boss.prompted_at = Some(now_ms());
 			(boss.pane_id.clone(), was)
 		});
-		match ctx.herdr.prompt(&pane_id, text).await {
+		match ctx.bridge.prompt(&pane_id, ctx.bridge.seal(text), Deliver::FollowUp).await {
 			Ok(()) => true,
 			Err(error) => {
 				boss.with(|boss| {

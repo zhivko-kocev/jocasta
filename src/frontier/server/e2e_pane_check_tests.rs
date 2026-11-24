@@ -1,6 +1,6 @@
-//! The cases of `test/frontier/server/pane-check.test.ts`, case for case on the real server: a project pane's turn-end
-//! check (0617) asked through `POST /api/pane-check` as the omp extension's role does, over a stand-in mise whose
-//! `verify` task is the check (`fake-mise-verify.ts`, 0630), and `jocasta pane-check` itself.
+//! The cases of `test/frontier/server/pane-check.test.ts` through the real server: a project pane's turn-end check
+//! (0617) asked as the bridge's `stop` request, over a stand-in mise whose `verify` task is the check
+//! (`fake-mise-verify.ts`, 0630).
 
 use std::fs;
 use std::io::Write;
@@ -8,19 +8,18 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use regex::Regex;
-use serde_json::json;
 
+use crate::frontier::server::bridge::BridgeService;
 use crate::frontier::server::helpers::{
-	TestServer, boss_pane, commit_in, demo_project, http, start_thread, until, with_server,
+	TestServer, boss_pane, commit_in, demo_project, start_thread, until, with_server,
 };
 use crate::frontier::server::mise::tests::{captured_shim, stand_in};
 use crate::frontier::server::server::ServerOptions;
 use crate::frontier::server::wording::IDLE_CHECK_FRAME;
 use crate::shared::env;
 use crate::shared::layer::LAYER_ENV;
-use crate::shared::pane_check::{PANE_CHECK_PATH, PaneCheckAnswer};
 use crate::shared::pathkey::same_dir;
-use crate::shared::service_file::{ServiceFile, write_service_file};
+use crate::shared::process::AbortSignal;
 use crate::shared::testing::{TempJocasta, temp_jocasta};
 
 /// A stand-in for mise in these cases: a trusted project whose `verify` task is the check. `run -c verify` counts
@@ -93,27 +92,23 @@ impl Fixture {
 		line_count(&self.dir.join("overlaps"))
 	}
 
-	/// The pane's check as the extension's role asks for it (`POST /api/pane-check`); "" for nothing. `None` when the
-	/// request fails: the connection ended.
-	async fn try_ask(&self, pane: &str) -> Option<String> {
+	/// The pane's check as the bridge's `stop` request asks for it, until `signal` aborts; "" for nothing.
+	async fn ask_with(&self, pane: &str, signal: AbortSignal) -> String {
 		let key = self
 			.server
 			.herdr
 			.env_of(pane)
 			.and_then(|env| env.into_iter().find(|(name, _)| name == "JOCASTA_PANE_KEY").map(|(_, key)| key))
 			.unwrap_or_else(|| "no-such-key".to_owned());
-		let response = http()
-			.post(format!("http://127.0.0.1:{}{PANE_CHECK_PATH}", self.server.port))
-			.bearer_auth(&self.server.token)
-			.json(&json!({ "paneKey": key }))
-			.send()
-			.await
-			.ok()?;
-		Some(response.json::<PaneCheckAnswer>().await.ok()?.text)
+		BridgeService::stop(&*self.server.service, key, signal).await
 	}
 
+	/// The pane's check, its turn never aborted.
 	async fn ask(&self, pane: &str) -> String {
-		self.try_ask(pane).await.expect("the service answers")
+		let (hold, signal) = tokio::sync::watch::channel(None::<String>);
+		let text = self.ask_with(pane, signal).await;
+		drop(hold);
+		text
 	}
 
 	/// Today's activity lines.
@@ -307,17 +302,12 @@ async fn a_role_that_stops_asking_mid_wait_ends_the_services_wait_the_failure_th
 		f.control("exit", 1);
 		f.control("delay", 1500);
 		edit(&f.main, "one");
-		let (abort, stopped) = tokio::sync::oneshot::channel::<()>();
+		let (abort, signal) = tokio::sync::watch::channel(None::<String>);
 		let asking = f.clone();
-		let asked = tokio::spawn(async move {
-			tokio::select! {
-				text = asking.try_ask(&asking.pane) => text.unwrap_or_else(|| "stopped asking".to_owned()),
-				_ = stopped => "stopped asking".to_owned(),
-			}
-		});
+		let asked = tokio::spawn(async move { asking.ask_with(&asking.pane, signal).await });
 		until(|| f.runs() == 1).await;
-		let _ = abort.send(());
-		assert_eq!(asked.await.unwrap(), "stopped asking");
+		let _ = abort.send(Some("the stop hook was aborted".to_owned()));
+		assert_eq!(asked.await.unwrap(), "");
 		// Within the 60 s wait: had the service not seen the role leave, the failure would go to the gone request and
 		// today would say nothing.
 		let failed = Regex::new("checks failed").unwrap();
@@ -336,57 +326,13 @@ async fn stopping_the_service_ends_a_pane_checks_wait_at_once_and_writes_no_toda
 		f.control("delay", 20_000);
 		edit(&f.main, "one");
 		let asking = f.clone();
-		let asked = tokio::spawn(async move { asking.try_ask(&asking.pane).await.unwrap_or_default() });
+		let asked = tokio::spawn(async move { asking.ask(&asking.pane).await });
 		until(|| f.runs() == 1).await;
 		let started = Instant::now();
 		f.server.stop().await;
 		assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
 		assert_eq!(asked.await.unwrap(), "");
 		assert!(!f.today().iter().any(|line| line.contains("checks failed")));
-	})
-	.await;
-}
-
-/// Runs `jocasta pane-check` as the extension does, in the temp data folder, with the pane key given; its stdout and
-/// exit code.
-async fn role(pane_key: &str) -> (String, i32) {
-	let exe = std::env::current_exe().expect("the test executable");
-	let name = if cfg!(windows) { "jocasta.exe" } else { "jocasta" };
-	let bin =
-		exe.ancestors().map(|dir| dir.join(name)).find(|bin| bin.is_file()).unwrap_or_else(|| PathBuf::from(name));
-	assert!(bin.exists(), "build the binaries first: {}", bin.display());
-	let mut command = tokio::process::Command::new(bin);
-	command
-		.arg("pane-check")
-		.env("JOCASTA_PANE_KEY", pane_key)
-		.stdin(std::process::Stdio::null())
-		.stdout(std::process::Stdio::piped())
-		.stderr(std::process::Stdio::null());
-	env::apply_to_tokio(&mut command);
-	let output = command.output().await.expect("running jocasta pane-check");
-	(String::from_utf8_lossy(&output.stdout).into_owned(), output.status.code().unwrap_or(-1))
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn jocasta_pane_check_prints_the_services_text_for_the_panes_key_and_prints_nothing_and_exits_0_when_no_service_runs_0617()
- {
-	let mut j = temp_jocasta();
-	assert_eq!(role("any-key").await, (String::new(), 0));
-	with_project_pane(&mut j, None, |f| async move {
-		let file = ServiceFile { port: f.server.port, token: f.server.token.clone(), pid: std::process::id() };
-		write_service_file(&file, None).unwrap();
-		let key = f
-			.server
-			.herdr
-			.env_of(&f.pane)
-			.and_then(|env| env.into_iter().find(|(name, _)| name == "JOCASTA_PANE_KEY").map(|(_, key)| key))
-			.expect("the project pane's key");
-		f.control("exit", 1);
-		edit(&f.main, "one");
-		let (out, code) = role(&key).await;
-		assert_eq!(code, 0);
-		assert!(starts_with_failing_check(&out), "{out}");
-		assert_eq!(role(&key).await, (String::new(), 0));
 	})
 	.await;
 }

@@ -136,7 +136,7 @@ impl Pins {
 		pinned.extend(
 			set_keys(&read("omp/config.yml")?).into_iter().filter(|key| !quality(key) && !key.starts_with("retry.")),
 		);
-		let mut per_pane = set_keys(&overlay_text("p0", Some(47_499)));
+		let mut per_pane = set_keys(&overlay_text("p0"));
 		for name in ["boss.yml", "heavy.yml", "headless.yml"] {
 			per_pane.extend(set_keys(&read(name)?));
 		}

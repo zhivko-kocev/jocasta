@@ -1,6 +1,6 @@
-//! Bench threads start and are read as `jocasta thread new` and `jocasta thread list` do (0576, 0544): `POST /api/cli`
-//! with the service's token, which starts a thread without his Allow and needs no boss key. Threads still open in plan
-//! mode and wait for his approval of their plan in their pane.
+//! Bench threads start and are read as `jocasta thread new` and `jocasta thread list` do (0576, 0544): a `cli` message on
+//! the service's bridge (0675) with the service's token, which starts a thread without his Allow and needs no boss key.
+//! Threads still open in plan mode and wait for his approval of their plan in their pane.
 
 use std::sync::LazyLock;
 
@@ -9,14 +9,8 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-use crate::lib::sandbox::{ToolReply, post_to_service};
+use crate::lib::sandbox::cli_request;
 use jocasta::shared::errors::{Error, Result};
-use jocasta::shared::thread_cli::CLI_PATH;
-
-/// One `jocasta thread|worktree` command against the running service (`<data>/jocasta-service.json`).
-async fn cli_call(command: &str, args: Map<String, Value>) -> Result<ToolReply> {
-	post_to_service(CLI_PATH, &json!({ "command": command, "args": args })).await
-}
 
 static STARTED_BRANCH: LazyLock<Regex> =
 	LazyLock::new(|| Regex::new(r"(?m) on branch (\S+?)(?:[.,]|\r?$)").expect("a fixed pattern"));
@@ -30,7 +24,7 @@ pub fn started_branch(reply: &str) -> Option<String> {
 pub async fn start_thread(project: &str, title: &str, brief: &str) -> Result<String> {
 	let args = json!({ "project": project, "title": title, "brief": brief });
 	let Value::Object(args) = args else { unreachable!("a literal object") };
-	let reply = cli_call("thread new", args).await?;
+	let reply = cli_request("thread new", args).await?;
 	match started_branch(&reply.text) {
 		Some(branch) if reply.is_error != Some(true) => Ok(branch),
 		_ => Err(Error::other(format!("thread new {title}: {}", reply.text))),
@@ -99,7 +93,7 @@ pub async fn list_threads(project: Option<&str>) -> Result<Vec<ThreadLine>> {
 	if let Some(project) = project.filter(|project| !project.is_empty()) {
 		args.insert("project".to_owned(), Value::String(project.to_owned()));
 	}
-	let reply = cli_call("thread list", args).await?;
+	let reply = cli_request("thread list", args).await?;
 	if reply.is_error == Some(true) {
 		return Err(Error::other(format!("thread list: {}", reply.text)));
 	}

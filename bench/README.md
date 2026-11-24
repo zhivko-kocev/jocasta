@@ -48,7 +48,7 @@ The scripts that act on a running Jocasta (H2–H6, H8) refuse to start without 
 folder in `JOCASTA_DATA_DIR` (not the OS default), a herdr session in `JOCASTA_HERDR_SESSION` that isn't `jocasta` (or
 `jarvis`), and its own config folder in `JOCASTA_CODING_AGENT_DIR` (not `~/.jocasta/agent`: the config folder picks the
 projects and herdr's config, so a sandbox on his would act on his). Start the sandbox's `jocasta` with the same three. H2, H4 (its `h4 plant` thread), H6 and H8
-start their threads as `jocasta thread new` does (`POST /api/cli`: no Allow, no boss key, 0544) and read them as
+start their threads as `jocasta thread new` does (a `cli` message on the bridge: no Allow, no boss key, 0544) and read them as
 `jocasta thread list` does;
 threads still open in plan mode and wait for the operator's approval of their plan in their pane. The bench never
 closes threads or removes worktrees: those ask him first (0484), so H6 and H8 wait for Enter between runs.
@@ -156,9 +156,9 @@ fixed before the long runs. The task benchmark refuses only an omp folder that w
   weren't kept, so they can't be recomputed). **t3 is the moment herdr answered `shown` for the pane's `blocked`
   notification**: the notification reached Windows; how long Windows then takes to draw the banner isn't measured.
   Each row also names herdr's answer to the pane's first `blocked` notification (`notificationResult`), so a trial
-  without t3 says why. **Conditions (0576):** `host` (the default): the service reads each thread's state from omp's
-  collab host, polled every 1 s (0547); `herdr`: the sandbox service started with `JOCASTA_HOSTS=off`, so it ignores
-  omp's host registry and falls back to herdr's events and its tick. H2 reads the switch from `/health` and refuses a
+  without t3 says why. **Conditions (0576):** `host` (the default): the service takes each thread's state as its omp
+  pushes it over the bridge (0675); `herdr`: the sandbox service started with `JOCASTA_HOSTS=off`, so it ignores those
+  pushes and falls back to herdr's events and its tick. H2 reads the switch from `/health` and refuses a
   mismatch. Without `--start`, trials come from threads started by hand (the boss's and the today pane left out).
   `--start` starts each trial as `jocasta thread new` does and counts only those threads' panes; the next starts once
   the last one's notification came, or after 5 minutes without one, which `h2-toast.json`'s `missed` lists. Writes
@@ -193,7 +193,7 @@ fixed before the long runs. The task benchmark refuses only an omp folder that w
   does, whose brief tells it to call `report_result` once with exactly the canaries as decisions (`<topic> codename` =
   the token, why `H4 canary`); the service adds them to A's history index (0539, 0603). The operator approves the
   thread's plan in its pane; once `jocasta thread list` shows its report (within `--plant-timeout` minutes), H4 has
-  nothing to wait for. Then it queries `history_search` from B's pane through the service's MCP endpoint (as that pane:
+  nothing to wait for. Then it queries `history_search` from B's pane over the service's bridge (0675; as that pane:
   its key from the sandbox's `<data>/panes.json`; a pane without one is refused: `pane <id> has no key in
   <data>/panes.json: pass a pane Jocasta started`) and checks every answered reply for every canary; errored replies
   are counted apart and aren't checks. The same queries from A's pane are the required positive control: the

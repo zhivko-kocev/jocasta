@@ -145,7 +145,7 @@ impl WeeklyReviews {
 		fs::create_dir_all(&dir)?;
 		let production = self.production(project)?;
 		let scorecard = self.scorecard(c, project).await?;
-		let overlay = ensure_overlay(&project.id, Some(c.panes.relay_port())).await?;
+		let overlay = ensure_overlay(&project.id).await?;
 		let prompt = review_prompt(project, &week, &production, &scorecard);
 		let argv: Vec<String> = c
 			.panes

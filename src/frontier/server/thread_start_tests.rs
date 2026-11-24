@@ -10,7 +10,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use regex::Regex;
 use serde_json::{Value, json};
@@ -24,6 +23,7 @@ use crate::frontier::server::overlay::overlay_file;
 use crate::frontier::server::popups::PopupEnd;
 use crate::frontier::server::service::ServiceOptions;
 use crate::frontier::server::wording::{WHEN_YOU_FINISH, fallback_slug};
+use crate::shared::bridge_wire::BRIDGE_EXTENSION;
 use crate::shared::env::overlay as env_overlay;
 use crate::shared::git::git;
 use crate::shared::layer::LAYER_ENV;
@@ -63,7 +63,7 @@ fn shipped(file: &str) -> String {
 }
 
 fn guard() -> Vec<String> {
-	strings(&["--config", &shipped("guard.yml")])
+	strings(&["--config", &shipped("guard.yml"), "-e", &shipped(BRIDGE_EXTENSION)])
 }
 
 /// His Allow: every question is kept and answered by `allow`.
@@ -94,10 +94,8 @@ fn world_with(options: impl FnOnce(&mut ServiceOptions)) -> World {
 		o.omp = Some(vec!["omp".to_owned()]);
 		o.pane_prompt = Some(None);
 		o.mise = Some(None);
-		o.relay_url_of = Some(Arc::new(|_, _, _| async { Ok("ws://127.0.0.1:47499".to_owned()) }.boxed()));
 		o.confirm = Some(asking(&confirm_allow, &confirm_asked));
 		o.agent_wait_ms = Some(10_000);
-		o.submit_wait_ms = Some(100);
 		options(o);
 	});
 	t.herdr.state().omp_up_on_create = Some(AgentState::Idle);
@@ -188,7 +186,7 @@ fn pane_json(path: &Path) -> Value {
 	json!(path.display().to_string())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn thread_start_makes_the_project_workspace_the_overlay_a_worktree_on_feature_slug_then_the_brief_with_the_lessons_line()
  {
 	let w = world();
@@ -212,7 +210,6 @@ async fn thread_start_makes_the_project_workspace_the_overlay_a_worktree_on_feat
 	let mut command = strings(&["omp", "--continue"]);
 	command.extend(guard());
 	command.extend(["--config".to_owned(), overlay.display().to_string()]);
-	command.extend(["-e".to_owned(), shipped(crate::shared::pane_check::PANE_CHECK_EXTENSION)]);
 	let ensured = &w.t.herdr.of("ensureWorkspace");
 	assert_eq!(ensured.len(), 1);
 	assert_eq!(ensured[0][..3], [json!("demo"), pane_json(&main), json!(command)]);
@@ -285,7 +282,7 @@ async fn a_thread_takes_its_first_state_from_herdrs_pane_list_while_the_start_wa
 	assert_eq!(thread.with(|t| t.session_path.clone()), Some(PathBuf::from("/sessions/a.jsonl")));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_heavy_thread_start_is_recorded_on_its_task_and_loads_heavy_yml_after_the_overlay() {
 	let w = world();
 	w.project("demo");
@@ -327,7 +324,7 @@ fn a_heavy_or_done_when_that_isnt_what_it_should_be_is_refused_at_both_doors() {
 	assert_eq!(listed(Value::Null, Door::Key), "New thread: done_when is a list of commands.");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn the_worktree_goes_beside_the_project_in_wt_slug_and_a_taken_branch_or_folder_makes_both_2_3() {
 	let w = world();
 	let main = w.project("demo");
@@ -365,7 +362,6 @@ async fn project_panes_append_the_shipped_ponytail_prompt_and_thread_panes_appen
 	let mut command = strings(&["omp", "--continue", "--append-system-prompt", &stripped.display().to_string()]);
 	command.extend(guard());
 	command.extend(["--config".to_owned(), overlay_file(&w.project_id("demo")).display().to_string()]);
-	command.extend(["-e".to_owned(), shipped(crate::shared::pane_check::PANE_CHECK_EXTENSION)]);
 	assert_eq!(w.t.herdr.of("ensureWorkspace")[0][..3], [json!("demo"), pane_json(&main), json!(command)]);
 	// omp 18.18 takes one --append-system-prompt (the last), so Ponytail and the task share `prompt.md`.
 	let prompt = w.task_dir_of("demo", "Readme line").join("prompt.md");
@@ -379,30 +375,6 @@ async fn project_panes_append_the_shipped_ponytail_prompt_and_thread_panes_appen
 			WHEN_YOU_FINISH.join("\n")
 		)
 	);
-}
-
-#[tokio::test]
-async fn a_brief_left_unsubmitted_in_omps_input_gets_one_enter_and_one_omp_takes_at_once_gets_none() {
-	let w = world_with(|o| o.submit_wait_ms = Some(1_000));
-	w.project("demo");
-	// The pane stays idle after the brief's paste: one Enter, only after the brief, never twice.
-	let (pane, _, _) = w.start_thread("Readme line", BRIEF).await;
-	assert_eq!(w.t.herdr.of("submit"), [vec![json!(pane)]]);
-	let order: Vec<String> = w.t.herdr.methods().into_iter().filter(|m| m == "prompt" || m == "submit").collect();
-	assert_eq!(order, ["prompt", "submit"]);
-	// A second thread starts working on its brief: no Enter.
-	w.t.herdr.state().omp_up_on_create = None;
-	let replied = w.start("demo", "Second", "More.");
-	let drive = async {
-		until(|| w.t.herdr.of("createWorktree").len() == 2).await;
-		let second = w.t.herdr.state().pane_list.last().unwrap().pane_id.clone();
-		w.t.herdr.set_state(&second, AgentState::Idle, None, true);
-		until(|| w.prompts().iter().any(|(p, text)| *p == second && text.starts_with("More."))).await;
-		w.t.herdr.set_state(&second, AgentState::Working, None, true);
-	};
-	let (replied, ()) = tokio::join!(replied, drive);
-	assert!(replied.unwrap().text.starts_with("Started demo/Second on branch"));
-	assert_eq!(w.t.herdr.of("submit"), [vec![json!(pane)]]);
 }
 
 #[tokio::test]
@@ -420,7 +392,7 @@ async fn a_pane_whose_omp_never_comes_up_is_a_half_done_start_that_says_the_brie
 	assert!(w.t.herdr.of("prompt").is_empty());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn his_new_thread_key_starts_a_macedonian_title_on_a_transliterated_branch_and_another_scripts_on_thread_date_n()
 {
 	// UX-11, C11: the key's door answers `Started … on <branch>: it plans first; approve its plan in its pane.`
@@ -626,21 +598,7 @@ async fn a_start_in_a_project_that_isnt_a_git_repository_or_with_a_multi_line_do
 	assert!(w.t.herdr.of("createWorktree").is_empty());
 }
 
-#[tokio::test]
-async fn a_pane_whose_relay_url_isnt_loopback_isnt_started_and_nothing_is_made() {
-	let w = world_with(|o| {
-		o.relay_url_of = Some(Arc::new(|_, _, _| async { Ok("wss://my.omp.sh".to_owned()) }.boxed()));
-	});
-	let main = w.project("demo");
-	let refused = refusal(w.start("demo", "Readme line", BRIEF).await);
-	assert!(refused.contains(&format!("omp wasn't started in {}", main.display())), "{refused}");
-	assert!(refused.contains("\"wss://my.omp.sh\""), "{refused}");
-	assert!(refused.contains(&overlay_file(&w.project_id("demo")).display().to_string()), "{refused}");
-	assert!(w.t.herdr.of("createWorktree").is_empty());
-	assert!(w.t.herdr.state().workspace_list.is_empty());
-}
-
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn the_boss_asks_before_a_start_in_another_project_than_the_last_one_he_focused_and_not_before_one_in_it() {
 	// service-allow.test.ts's thread_start half (0484, 0492).
 	let w = world();
@@ -692,7 +650,7 @@ async fn the_boss_asks_before_a_start_in_another_project_than_the_last_one_he_fo
 	assert_eq!(w.t.herdr.of("createWorktree").len(), 2);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn his_own_key_and_the_clis_door_ask_nothing_whatever_the_focus() {
 	let w = world();
 	w.project("demo");
@@ -857,7 +815,7 @@ async fn a_scheduled_start_opens_a_plan_mode_thread_titled_from_its_brief_throug
 	assert_eq!(task.heavy, Some(true));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_scheduled_start_is_skipped_when_a_thread_with_its_title_is_open_in_the_project() {
 	let w = world();
 	w.project("demo");

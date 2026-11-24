@@ -9,14 +9,14 @@ use futures_util::FutureExt;
 use serde_json::{Value, json};
 
 use crate::frontier::protocol::ServerMessage;
+use crate::frontier::server::bridge::{PaneAgent, PaneEvent};
 use crate::frontier::server::helpers::{
-	BRIEF, HunkDaemon, Msg, Page, README_THREAD_ENV, TEST_BOSS_KEY, TestServer, ThreadOptions, boss_pane, call,
-	commit_in, demo_project, guard, handoff_entry, keyed, pane_check_flags, project_keyed, review, session_file, sh,
+	BRIEF, HunkDaemon, Msg, Page, README_THREAD_ENV, TEST_BOSS_KEY, TestServer, ThreadOptions, boss_pane, bridge_flags,
+	call, commit_in, demo_project, guard, handoff_entry, keyed, pane_reports, project_keyed, review, session_file, sh,
 	start_test_server_with, start_thread, thread_omp, thread_pane, to_handoff, until, until_async, use_hunk_daemon,
 };
 use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
 use crate::frontier::server::herdr::{AgentState, Env};
-use crate::frontier::server::hosts::fake::{FakeHostState, fake_host};
 use crate::frontier::server::hunk::hunk_env;
 use crate::frontier::server::overlay::overlay_file;
 use crate::frontier::server::server::ServerOptions;
@@ -24,7 +24,6 @@ use crate::frontier::server::status::Busy;
 use crate::frontier::server::tools::ToolReply;
 use crate::frontier::server::wording::HANDOFF_PROMPT;
 use crate::shared::clock::testing::stand_still_at;
-use crate::shared::env;
 use crate::shared::log::logs_dir;
 use crate::shared::pathkey::path_key;
 use crate::shared::paths::data_dir;
@@ -129,8 +128,8 @@ fn pairs<'a>(hunk: &'a [(String, String)], extra: &[(&'a str, &'a str)]) -> Vec<
 fn overlay_command(project: &Project) -> Vec<String> {
 	let mut command = vec!["omp".to_owned(), "--continue".to_owned()];
 	command.extend(guard());
+	command.extend(bridge_flags());
 	command.extend(["--config".to_owned(), overlay_file(&project.id).display().to_string()]);
-	command.extend(pane_check_flags());
 	command
 }
 
@@ -225,66 +224,28 @@ async fn thread_states_stay_true_a_dismissed_question_ends_the_turn_a_handoff_wi
 	.await;
 }
 
-/// A long-lived process standing in for the pane's omp: its pid and start can be read (0490).
-async fn spawn_idle_process() -> tokio::process::Child {
-	let mut command =
-		if cfg!(windows) { tokio::process::Command::new("ping") } else { tokio::process::Command::new("sleep") };
-	if cfg!(windows) {
-		command.args(["-n", "120", "127.0.0.1"]);
-	} else {
-		command.arg("120");
-	}
-	env::apply_to_tokio(&mut command);
-	command.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
-	command.kill_on_drop(true);
-	#[cfg(windows)]
-	command.creation_flags(0x0800_0000);
-	command.spawn().expect("a stand-in omp process")
-}
-
 #[tokio::test(flavor = "multi_thread")]
-async fn a_thread_whose_omp_host_answers_leaves_the_handoff_step_once_its_session_has_the_handoff_s_entry_f_01_0547() {
+async fn a_thread_whose_omp_bridge_reports_idle_leaves_the_handoff_step_once_its_session_has_the_handoff_s_entry_f_01_0547()
+ {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
 	let hunk = use_hunk_daemon().await;
-	let mut options = options_with(&hunk);
-	options.host_poll_ms = Some(50);
+	let options = options_with(&hunk);
 	crate::frontier::server::helpers::with_server(options, |server| async move {
 		let started = start_thread(&server, ThreadOptions::default()).await;
 		let (pane_id, path) = (started.pane_id, started.path);
 		let file = to_handoff(&server, &pane_id, &path).await;
-		// The pane's omp: a real process, so its pid and start can be read (0490); its host answers idle.
-		let mut omp = spawn_idle_process().await;
-		let state = FakeHostState {
-			pid: omp.id().expect("the stand-in's pid"),
-			cwd: path.display().to_string(),
-			busy: Some(false),
-			input_required: false,
-		};
-		let mut host = fake_host(&data_dir().join("collab-hosts"), state.clone(), None).await;
 		let ended = || log_text().contains("demo/Readme line: handoff → task (its handoff is written)");
-		let outcome = std::panic::AssertUnwindSafe(async {
-			server.herdr.state().roots.insert(pane_id.clone(), state.pid);
-			until_async(|| async {
-				server.service.refresh().await;
-				host.asked() >= 2
-			})
-			.await;
-			// /handoff ran with no turn reported by herdr or the host; its entry is in the session now.
-			handoff_entry(&file);
-			until_async(|| async {
-				server.service.refresh().await;
-				ended()
-			})
-			.await;
+		// /handoff ran with no turn reported by herdr; its omp's bridge says the turn ended idle, and the entry is in the
+		// session now.
+		let idle = PaneAgent { idle_reported: true, ..PaneAgent::default() };
+		pane_reports(&server, &pane_id, &PaneEvent::AgentEnd { idle: true, jobs: 0 }, idle);
+		handoff_entry(&file);
+		until_async(|| async {
+			server.service.refresh().await;
+			ended()
 		})
-		.catch_unwind()
 		.await;
-		host.close().await;
-		omp.kill().await.ok();
-		if let Err(panic) = outcome {
-			std::panic::resume_unwind(panic);
-		}
 	})
 	.await;
 }

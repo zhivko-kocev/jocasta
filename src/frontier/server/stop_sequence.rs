@@ -124,7 +124,6 @@ pub trait StopService: Send + Sync {
 	fn stop(&self) -> BoxFuture<'_, Result<()>>;
 	fn cut_paused_turns(&self) -> BoxFuture<'_, Result<()>>;
 	fn end_thread_leftovers(&self) -> BoxFuture<'_, Result<()>>;
-	fn remove_ended_hosts(&self) -> BoxFuture<'_, Result<()>>;
 	fn end_hunk_daemon(&self) -> BoxFuture<'_, Result<()>>;
 }
 
@@ -139,8 +138,8 @@ pub struct StopParts {
 	/// What else Jocasta started that stops with it (0549), in the order registered; read when the stop runs.
 	pub extra_stops: Vec<StopStep>,
 	pub whiteboard: Option<Arc<Whiteboard>>,
-	/// Stops the collab relay.
-	pub relay: StopRun,
+	/// Stops the bridge's listener (0675).
+	pub bridge: StopRun,
 	/// Stops the listening server (`server.stop(true)`); nothing when it never listened.
 	pub server: StopRun,
 	pub bounds: StopBounds,
@@ -162,7 +161,7 @@ macro_rules! call {
 /// everything, in this order. Each step that waits on herdr or another process is bounded (LC-5, LC-8, SRV-A-3): the
 /// threads noted and herdr's stop by `herdr`, the service, whiteboard and the extra stops by their own.
 pub fn stop_steps(parts: StopParts) -> Vec<StopStep> {
-	let StopParts { popups, broadcast, herdr, session, service, extra_stops, whiteboard, relay, server, bounds } =
+	let StopParts { popups, broadcast, herdr, session, service, extra_stops, whiteboard, bridge, server, bounds } =
 		parts;
 	let service_ms = bounds.service.unwrap_or(30_000);
 	let herdr_ms = bounds.herdr.unwrap_or(15_000);
@@ -196,8 +195,6 @@ pub fn stop_steps(parts: StopParts) -> Vec<StopStep> {
 		.when(StopWhen::All),
 		// What the thread panes' omps left, an earlier herdr server's included, once herdr is gone (0486, 0490).
 		StopStep::new("the threads' leftovers", call!(&service, end_thread_leftovers)).when(StopWhen::All),
-		// The host registry entries of the omps that ended (0547).
-		StopStep::new("omp's host entries", call!(&service, remove_ended_hosts)).when(StopWhen::All),
 		// Once herdr's hunk panes are gone, the hunk session daemon the service started (0434, 0486).
 		StopStep::new("hunk's daemon", call!(&service, end_hunk_daemon)).when(StopWhen::All),
 	];
@@ -218,7 +215,7 @@ pub fn stop_steps(parts: StopParts) -> Vec<StopStep> {
 		);
 	}
 	// Also after a failed start: nothing else would close its port.
-	steps.push(StopStep::new("the collab relay", relay));
+	steps.push(StopStep::new("the bridge", bridge));
 	steps.push(StopStep::new("the server", server).when(StopWhen::Finally));
 	steps.push(
 		StopStep::sync("jocasta-service.json", || {

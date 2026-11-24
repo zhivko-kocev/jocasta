@@ -17,8 +17,8 @@ use serde_json::{Value, json};
 use crate::frontier::protocol::ServerMessage;
 use crate::frontier::server::day::DayOptions;
 use crate::frontier::server::helpers::{
-	Page, TestServer, ThreadOptions, boss_pane, call, commit_in, demo_project, push_state, relay_test_options, review,
-	sh, start_test_server_with, start_thread, task_dir_of, until, use_hunk_daemon, with_server,
+	Page, TestServer, ThreadOptions, boss_pane, call, commit_in, demo_project, push_state, review, sh,
+	start_test_server_with, start_thread, task_dir_of, until, use_hunk_daemon, with_server,
 };
 use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
 use crate::frontier::server::herdr::{AgentState, Herdr, HerdrError, TabSpec};
@@ -494,7 +494,7 @@ async fn after_a_service_restart_the_next_task_reuses_the_threads_hunk_pane_a_hu
 async fn events_raised_together_reach_a_busy_boss_as_one_prompt_after_its_turn_not_back_to_back_cr_08() {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
-	let options = ServerOptions { submit_wait_ms: Some(0), ..wait_options() };
+	let options = wait_options();
 	with_server(options, |server| async move {
 		let first = start_thread(&server, ThreadOptions::default()).await;
 		let second = start_thread(
@@ -712,7 +712,7 @@ async fn the_server_listens_and_answers_the_page_before_the_service_has_started_
 		refresh_ms: Some(60_000),
 		mise: Some(None),
 		weekly_reviews: Some(false),
-		..relay_test_options()
+		..ServerOptions::default()
 	};
 	let server = start_server(options).await.expect("the server starts");
 	let started = Arc::new(AtomicBool::new(false));

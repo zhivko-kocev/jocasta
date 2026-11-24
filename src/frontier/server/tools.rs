@@ -1,4 +1,4 @@
-//! The `jocasta mcp` tools (`/api/mcp/<tool>`) and the `jocasta thread|worktree` commands (`/api/cli`, 0544): one
+//! The tools a pane's omp calls over the bridge (0675) and the `jocasta thread|worktree` commands (`cli` messages, 0544): one
 //! registry each, the same functions and rules behind both doors. Every tool but `history_search`, `report_result` and
 //! `check` is the boss's (0392, 0484, 0539, 0542).
 //!
@@ -13,6 +13,7 @@ use serde_json::{Map, Value};
 
 use crate::frontier::protocol::ToastPriority;
 use crate::frontier::server::allow::Confirmation;
+use crate::frontier::server::bridge::Deliver;
 use crate::frontier::server::context::ServiceContext;
 use crate::frontier::server::history::{HISTORY_SEARCH, HistoryEntry, add_history, history_answer, search_history};
 use crate::frontier::server::lessons::ensure_lessons_skill;
@@ -480,6 +481,7 @@ impl Tools {
 		let c = &self.c;
 		let args = Args::new(args, format!("jocasta {command}"));
 		match command {
+			"ping" => Ok("ok".to_owned()),
 			"thread new" => self.start_tool(&args, Door::Cli).await,
 			"thread list" => {
 				let project = args.optional("project").map(|name| c.places.find(&name)).transpose()?;
@@ -579,7 +581,7 @@ impl Tools {
 			t.sent_at = Some(now_ms());
 			t.pane_id.clone()
 		});
-		self.c.herdr.prompt(&pane_id, text).await?;
+		self.c.bridge.prompt(&pane_id, self.c.bridge.seal(text), Deliver::Steer).await?;
 		Ok(format!("Sent to {name}."))
 	}
 
@@ -600,7 +602,7 @@ impl Tools {
 			}
 		}
 		let pane_id = thread.with(|t| t.pane_id.clone());
-		self.c.herdr.stop(&pane_id).await?;
+		self.c.lifecycle.abort_turn(&pane_id).await?;
 		Ok(format!("Stopped {name}'s run."))
 	}
 

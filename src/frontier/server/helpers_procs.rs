@@ -112,18 +112,6 @@ impl Herdr for Hooked {
 	fn split_beside<'a>(&'a self, pane_id: &'a str, opts: &'a SplitOptions) -> BoxFuture<'a, HerdrResult<String>> {
 		self.inner.split_beside(pane_id, opts)
 	}
-	fn prompt<'a>(&'a self, pane_id: &'a str, text: &'a str) -> BoxFuture<'a, HerdrResult<()>> {
-		self.inner.prompt(pane_id, text)
-	}
-	fn send_text<'a>(&'a self, pane_id: &'a str, text: &'a str) -> BoxFuture<'a, HerdrResult<()>> {
-		self.inner.send_text(pane_id, text)
-	}
-	fn stop<'a>(&'a self, pane_id: &'a str) -> BoxFuture<'a, HerdrResult<()>> {
-		self.inner.stop(pane_id)
-	}
-	fn submit<'a>(&'a self, pane_id: &'a str) -> BoxFuture<'a, HerdrResult<()>> {
-		self.inner.submit(pane_id)
-	}
 	fn send_keys<'a>(&'a self, pane_id: &'a str, keys: &'a [String]) -> BoxFuture<'a, HerdrResult<()>> {
 		self.inner.send_keys(pane_id, keys)
 	}
@@ -285,18 +273,4 @@ impl Drop for ShimTree {
 		end_all(self.all());
 		let _ = self.child.take();
 	}
-}
-
-/// A process that already ended: its pid, as an omp's that is gone.
-pub(crate) fn ended_pid() -> u32 {
-	let mut child = Command::new(std::env::current_exe().unwrap())
-		.arg("--list")
-		.stdin(Stdio::null())
-		.stdout(Stdio::null())
-		.stderr(Stdio::null())
-		.spawn()
-		.expect("starting a process that ends");
-	let pid = child.id();
-	child.wait().unwrap();
-	pid
 }

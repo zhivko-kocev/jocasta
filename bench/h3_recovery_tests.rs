@@ -108,6 +108,7 @@ fn a_restarts_client_ends_root_first_and_never_the_new_services_tree_0528() {
 		command_line: name.to_owned(),
 		working_set: 0,
 		private_bytes: None,
+		created: None,
 	};
 	let processes = [
 		proc(10, 1, "cmd.exe"),

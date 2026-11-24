@@ -405,7 +405,24 @@ impl FakeHerdr {
 	pub(crate) fn methods(&self) -> Vec<String> {
 		self.state().calls.iter().map(|call| call.method.clone()).collect()
 	}
+	/// A bridge for tests that records the service's prompts and control and reports them here (`bridge_call`).
+	pub(crate) fn recording_bridge(self: &Arc<Self>) -> crate::frontier::server::bridge::Bridge {
+		let bridge = crate::frontier::server::bridge::Bridge::recording();
+		let herdr = Arc::clone(self);
+		bridge.record(|recording| recording.sink = Some(Arc::new(move |method, args| herdr.bridge_call(method, args))));
+		bridge
+	}
 
+	/// What a recording bridge reports here (`Bridge::recording`'s sink): the call is recorded as the old typed one was,
+	/// and a pane marked `prompt_refused` refuses a prompt as herdr's `agent_blocked` did.
+	pub(crate) fn bridge_call(&self, method: &str, args: Vec<Value>) -> std::result::Result<(), String> {
+		let pane = args.first().and_then(Value::as_str).unwrap_or_default().to_owned();
+		if method == "prompt" && self.state().prompt_refused.as_deref() == Some(pane.as_str()) {
+			return Err(format!("agent {pane} is blocked and requires interactive input"));
+		}
+		self.record(method, args);
+		Ok(())
+	}
 	fn record(&self, method: &str, args: Vec<Value>) {
 		self.state().calls.push(Call { method: method.to_owned(), args });
 	}
@@ -697,31 +714,6 @@ impl Herdr for FakeHerdr {
 			}
 			Ok(pane.pane_id)
 		})
-	}
-
-	fn prompt<'a>(&'a self, pane_id: &'a str, text: &'a str) -> BoxFuture<'a, HerdrResult<()>> {
-		if self.state().prompt_refused.as_deref() == Some(pane_id) {
-			let blocked =
-				HerdrError::new("agent_blocked", format!("agent {pane_id} is blocked and requires interactive input"));
-			return Box::pin(std::future::ready(Err(blocked)));
-		}
-		self.record("prompt", vec![json!(pane_id), json!(text)]);
-		done()
-	}
-
-	fn send_text<'a>(&'a self, pane_id: &'a str, text: &'a str) -> BoxFuture<'a, HerdrResult<()>> {
-		self.record("sendText", vec![json!(pane_id), json!(text)]);
-		done()
-	}
-
-	fn stop<'a>(&'a self, pane_id: &'a str) -> BoxFuture<'a, HerdrResult<()>> {
-		self.record("stop", vec![json!(pane_id)]);
-		done()
-	}
-
-	fn submit<'a>(&'a self, pane_id: &'a str) -> BoxFuture<'a, HerdrResult<()>> {
-		self.record("submit", vec![json!(pane_id)]);
-		done()
 	}
 
 	fn send_keys<'a>(&'a self, pane_id: &'a str, keys: &'a [String]) -> BoxFuture<'a, HerdrResult<()>> {

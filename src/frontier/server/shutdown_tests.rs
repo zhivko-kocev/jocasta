@@ -8,8 +8,8 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::frontier::server::helpers::{
-	TestServer, ThreadOptions, call, demo_project, http, relay_test_options, start_test_server, start_test_server_with,
-	start_thread, until, with_test_defaults,
+	TestServer, ThreadOptions, call, demo_project, http, start_test_server, start_test_server_with, start_thread,
+	until, with_test_defaults,
 };
 use crate::frontier::server::herdr::AgentState;
 use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
@@ -206,7 +206,7 @@ async fn a_close_right_after_a_service_restart_waits_for_the_threads_to_be_found
 			push(&told, popup.view().message.clone());
 			popup.close(None);
 		})),
-		..relay_test_options()
+		..ServerOptions::default()
 	};
 	let second = start_server(with_test_defaults(options, &herdr)).await.expect("the second server");
 	let outcome = {

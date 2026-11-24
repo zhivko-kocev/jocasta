@@ -1,27 +1,20 @@
-//! The omps of the thread panes Jocasta started (0490, 0547, 0549, 0561): remembered by pid and start time, ended with
-//! what they left when their pane goes, asked for their state through omp's host registry, and ended for `--restore`
-//! when Jocasta stops everything.
+//! The omps of the thread panes Jocasta started (0490, 0547, 0549, 0675): remembered by pid and start time, ended with
+//! what they left when their pane goes, told apart by the state their bridge pushes, and ended for `--restore` when
+//! Jocasta stops everything.
 //!
-//! The omps being ended, the threads saved for `--restore`, the omps read as Stop everything begins and the host read
-//! under way sit behind one lock that is never held across an `.await` and never while a part is called.
+//! The omps being ended and the threads saved for `--restore` sit behind one lock that is never held across an `.await`
+//! and never while a part is called.
 
-use std::collections::{HashMap, HashSet};
-use std::path::Path;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::collections::HashMap;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use futures_util::FutureExt;
-use futures_util::future::{BoxFuture, Shared, join_all};
-
 use crate::frontier::server::context::{Link, ServiceContext};
-use crate::frontier::server::herdr::{AgentState, PaneInfo, STOP_PING_MS};
-use crate::frontier::server::hosts::{HostState, read_hosts, remove_host_entries};
+use crate::frontier::server::herdr::{AgentState, PaneInfo};
 use crate::frontier::server::thread::{ThreadOmp, ThreadRef, settled, subject};
 use crate::frontier::server::thread_lifecycle::StateSource;
 use crate::shared::errors::Result;
 use crate::shared::log::{LogLevel, log};
-use crate::shared::pathkey::same_dir;
-use crate::shared::poll::wait_for;
 use crate::shared::proctree::{
 	OmpProcesses, ProcessId, end_omp_leftovers, end_processes, merge_omp, omp_processes, process_id_of,
 };
@@ -30,21 +23,6 @@ use crate::shared::proctree::{
 const LEFTOVER_WAIT_MS: i64 = 10_000;
 /// When leftovers are looked for again, for workers an exiting omp started (0490).
 const LEFTOVER_AGAIN_MS: i64 = 3_000;
-/// How long Stop everything waits for the omps it ended to be gone before their host entries go (0547).
-const HOST_END_WAIT_MS: i64 = 5_000;
-/// How often Stop everything looks whether the omps it ended are gone.
-const HOST_END_POLL_MS: i64 = 100;
-
-/// The host registry read under way, for `stop` to wait for.
-pub type HostPoll = Shared<BoxFuture<'static, ()>>;
-
-/// omp's own state of a host (0547): a dialog waiting, else a turn running, else idle; unknown when it doesn't say.
-fn host_state(host: &HostState) -> Option<AgentState> {
-	if host.input_required {
-		return Some(AgentState::Blocked);
-	}
-	host.busy.map(|busy| if busy { AgentState::Working } else { AgentState::Idle })
-}
 
 #[derive(Default)]
 struct State {
@@ -53,10 +31,6 @@ struct State {
 	next_ending: u64,
 	/// Threads Stop everything saves for `--restore` (0549): their omp ends without ending its turn first.
 	paused: Vec<ThreadRef>,
-	/// The omps of the panes Jocasta started, read as Stop everything begins: their host entries go once they ended.
-	closing: Vec<ProcessId>,
-	/// The host registry read under way (`poll`).
-	host_poll: Option<HostPoll>,
 }
 
 pub struct OmpTracker {
@@ -187,8 +161,7 @@ impl OmpTracker {
 
 	/// Before Jocasta stops everything (0549): each thread at work, as the close question counts it (`at_work`), keeps
 	/// its session in `panes.json`, so the next start brings its omp back with `--restore` and its turn goes on; the
-	/// others reopen idle with `--continue`. The omps of the panes Jocasta started are read while herdr still answers,
-	/// so their host entries can go once they ended (`remove_ended_hosts`).
+	/// others reopen idle with `--continue`.
 	pub async fn pause(&self) -> Result<()> {
 		let c = self.link.ctx();
 		let awaited = c.status.awaited_panes()?;
@@ -202,24 +175,6 @@ impl OmpTracker {
 				state.paused.push(thread);
 			}
 		}
-		// Read at once, each bounded: a herdr that stopped answering doesn't hold Stop everything (SRV-A-3).
-		let panes = c.launched.panes();
-		let reads = join_all(panes.iter().map(|pane_id| c.herdr.pane_root(pane_id, Some(STOP_PING_MS)))).await;
-		let mut roots: Vec<ProcessId> = Vec::new();
-		for (pane_id, read) in panes.iter().zip(reads) {
-			match read {
-				Ok(pid) => roots.extend(pid.and_then(process_id_of)),
-				Err(error) => {
-					log(LogLevel::Warn, "shutdown", &format!("pane {pane_id}'s omp wasn't read: {error}"), None)
-				}
-			}
-		}
-		let closing = if roots.is_empty() {
-			Vec::new()
-		} else {
-			omp_processes(&roots).into_iter().flat_map(|read| read.omp).collect()
-		};
-		self.state().closing = closing;
 		Ok(())
 	}
 
@@ -250,117 +205,32 @@ impl OmpTracker {
 		}
 	}
 
-	/// Stop everything's last step for omp (0547): the host registry entries (`~/.omp/run/collab-hosts`) of the omps
-	/// Jocasta ended, once each is gone (waited for up to `HOST_END_WAIT_MS`); never another omp's.
-	pub async fn remove_ended_hosts(&self) {
+	/// A thread pane's omp pushed its state over the bridge (0675): a dialog waiting, else a turn running, else idle. It
+	/// is handled as herdr's pushed state is, with omp's own as the source (0547); the thread's `host` holds it until the
+	/// omp's connection ends, when herdr and the session file decide as before. `state` is `None` when the omp is gone.
+	pub fn host_reports(&self, pane_id: &str, state: Option<AgentState>) {
 		let c = self.link.ctx();
-		let mut ended: Vec<ProcessId> = self.state().closing.clone();
-		for thread in c.threads.all() {
-			ended.extend(
-				thread
-					.with(|thread| thread.omp.as_ref()?.processes.as_ref().map(|processes| processes.omp.clone()))
-					.into_iter()
-					.flatten(),
-			);
-		}
-		ended.extend(self.state().ending.iter().flat_map(|(_, set)| set.omp.clone()));
-		if ended.is_empty() {
+		if !c.hosts || c.stopping() {
 			return;
 		}
-		let gone = || !ended.iter().any(|id| process_id_of(id.pid).map(|now| now.start) == Some(id.start));
-		let _ = wait_for(|| std::future::ready(Ok(gone())), HOST_END_WAIT_MS, HOST_END_POLL_MS).await;
-		let pids: HashSet<u32> = ended.iter().map(|id| id.pid).collect();
-		let removed = remove_host_entries(&pids, c.options.hosts_dir.as_deref());
-		if removed > 0 {
-			let said = format!("removed {removed} ended omp host entr{}", if removed == 1 { "y" } else { "ies" });
-			log(LogLevel::Info, "shutdown", &said, None);
-		}
-	}
-
-	/// Each thread pane's omp as omp itself reports it (0547, 0561): its host registry entry, matched by the pid of the
-	/// omp Jocasta started in the pane (`thread.omp`) and by the worktree, answers working (a turn runs), blocked (a
-	/// dialog of omp's waits: a question, an approval) or idle. A change is handled as a pushed one. A thread whose omp
-	/// has no entry that answers (the relay was down at its start, an omp Jocasta didn't start, no pid read yet) is
-	/// unknown, never idle: herdr's events and the session file decide it as before. A plan in omp's Plan Review isn't a
-	/// dialog to omp (`interactive-mode.ts` shows it without the collab host): idle here, the session file says it
-	/// waits.
-	///
-	/// The read starts on a task of its own at once, as the TypeScript's promise did; a call while one runs joins it.
-	pub async fn poll(&self) {
-		let existing = {
-			let mut state = self.state();
-			if state.host_poll.is_none() && !self.link.ctx().stopping() {
-				let c = self.link.ctx();
-				let run = tokio::spawn(async move { Self::read_hosts_once(&c).await });
-				let done: BoxFuture<'static, ()> = async move { drop(run.await) }.boxed();
-				state.host_poll = Some(done.shared());
+		let Some(thread) = c.threads.get(pane_id) else { return };
+		let (was, now_state, name) = thread.with(|thread| {
+			let was = thread.host;
+			thread.host = state;
+			(was, thread.state, subject(thread))
+		});
+		let Some(state) = state else {
+			if was.is_some() {
+				log(LogLevel::Info, "threads", &format!("{name}: omp's bridge is gone; herdr decides"), None);
 			}
-			state.host_poll.clone()
+			return;
 		};
-		if let Some(read) = existing {
-			read.await;
+		if Some(state) != was {
+			log(LogLevel::Info, "threads", &format!("{name}: omp reports {}", state.as_str()), None);
 		}
-	}
-
-	async fn read_hosts_once(c: &Arc<ServiceContext>) {
-		Self::read_hosts_and_report(c).await;
-		c.omps.state().host_poll = None;
-	}
-
-	async fn read_hosts_and_report(c: &Arc<ServiceContext>) {
-		let mut by_pid: HashMap<u32, ThreadRef> = HashMap::new();
-		for thread in c.threads.all() {
-			let pids: Vec<u32> = thread.with(|thread| {
-				thread
-					.omp
-					.as_ref()
-					.and_then(|omp| omp.processes.as_ref())
-					.map_or_else(Vec::new, |known| known.omp.iter().map(|id| id.pid).collect())
-			});
-			for pid in pids {
-				by_pid.insert(pid, thread.clone());
-			}
+		if state != settled(now_state) {
+			c.lifecycle.state_changed(pane_id, state, StateSource::Host);
 		}
-		let pids: HashSet<u32> = by_pid.keys().copied().collect();
-		let mut found: Vec<(ThreadRef, AgentState)> = Vec::new();
-		for host in read_hosts(&pids, c.options.hosts_dir.as_deref(), None).await {
-			let (Some(thread), Some(state)) = (by_pid.get(&host.pid), host_state(&host)) else { continue };
-			if !same_dir(&host.cwd, Path::new(&thread.with(|thread| thread.path.clone()))) {
-				continue;
-			}
-			match found.iter_mut().find(|(held, _)| held.same(thread)) {
-				Some(slot) => slot.1 = state,
-				None => found.push((thread.clone(), state)),
-			}
-		}
-		if c.stopping() {
-			return;
-		}
-		for thread in c.threads.all() {
-			let state = found.iter().find(|(held, _)| held.same(&thread)).map(|(_, state)| *state);
-			let (was, now_state, pane_id, name) = thread.with(|thread| {
-				let was = thread.host;
-				thread.host = state;
-				(was, thread.state, thread.pane_id.clone(), subject(thread))
-			});
-			let Some(state) = state else {
-				if was.is_some() {
-					log(LogLevel::Info, "threads", &format!("{name}: omp's host is gone; herdr decides"), None);
-				}
-				continue;
-			};
-			if Some(state) != was {
-				log(LogLevel::Info, "threads", &format!("{name}: omp's host reports {}", state.as_str()), None);
-			}
-			if state != settled(now_state) {
-				c.lifecycle.state_changed(&pane_id, state, StateSource::Host);
-			}
-		}
-	}
-
-	/// The host registry read still under way, for `stop` to wait for.
-	pub fn polling(&self) -> Option<HostPoll> {
-		self.state().host_poll.clone()
 	}
 }
 

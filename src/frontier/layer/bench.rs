@@ -4,13 +4,13 @@
 //! - the task file's brief and Done-when appended to the system prompt ([`task_prompt`], 0540), after the variant's own
 //!   prompt file (omp keeps only the last `--append-system-prompt`), titled as New thread titles a brief, with the
 //!   checkout's folder as the project (0577);
-//! - `jocasta mcp` as the trial's MCP server "jocasta", through an omp extension root (`-e <root>/layer/omp`, whose
-//!   `.mcp.json` omp reads), answering from this process: `report_result` (0539), `check` (0542, 0546, 0571) and
+//! - the bridge extension (0675) as the trial's only extension (`-e <config>/bridge-extension.ts`), connected to a bridge
+//!   that answers from this process: `report_result` (0539), `check` (0542, 0546, 0571) and
 //!   `history_search` (0604), which has no past sessions to search in a trial and answers as for an empty history;
 //! - the check runner on the trial's checkout, the project's own mise check as the product decides it.
 //!
 //! The ledger is the bench's own, from the trial's saved sessions (`src/shared/ledger.rs`). The layer's data (checks,
-//! `jocasta-service.json`) lives in a per-trial folder under the OS temp folder and goes on [`LayerSetup::close`].
+//! the bridge's name) lives in a per-trial folder under the OS temp folder and goes on [`LayerSetup::close`].
 //!
 //! The types are here, not in `evals/layer.rs` as the TypeScript had them: the library can't import from the bench's
 //! binary, which uses them from this module.
@@ -20,36 +20,30 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use axum::extract::Request;
-use axum::http::{Method, StatusCode};
-use axum::response::Response;
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
-use url::Url;
 
+use crate::frontier::server::boss::PANE_KEY_ENV;
+use crate::frontier::server::bridge::{Bridge, BridgeService, PaneAgent, PaneEvent, Resolved, Role};
 use crate::frontier::server::checks::{CheckRunner, CheckRunnerOptions, CheckSpec, checks_dir, gate_reply, short_tree};
-use crate::frontier::server::door_routes::decode_uri_component;
 use crate::frontier::server::history::{HISTORY_SEARCH, history_answer};
 use crate::frontier::server::mise::{Env, Mise, MiseCheck, MiseCheckTask, mise_check, skipped_said};
 use crate::frontier::server::report::{REPORT_RESULT, parse_report, report_line};
-use crate::frontier::server::routes::{Route, Served, ServerHandle, has_bearer, json_response, listen, text_response};
 use crate::frontier::server::task_file::{PromptFields, task_prompt};
-use crate::frontier::server::wording::{branch_slug, brief_title};
+use crate::frontier::server::tool_specs::{ToolSpec, tools_for};
+use crate::frontier::server::tools::{Caller, ToolReply};
+use crate::frontier::server::wording::brief_title;
+use crate::shared::bridge_wire::{BRIDGE_ENV, BRIDGE_EXTENSION};
 use crate::shared::clock::now_ms;
 use crate::shared::errors::{Context, Error, Result};
-use crate::shared::fsx::remove_tree;
+use crate::shared::fsx::{free_port, remove_tree};
+use crate::shared::install::shipped_config_dir;
 use crate::shared::jsonl::append_jsonl;
-use crate::shared::service_file::{ServiceFile, write_service_file};
+use crate::shared::process::AbortSignal;
+use crate::shared::push_hook::{PushAnswer, PushRequest};
 
 /// The project id the layer's parts know every trial by.
 const PROJECT_ID: &str = "bench";
-
-/// omp's time limit for the layer's MCP calls (0577): `check` runs up to 30 minutes, plus one, as setup writes on his
-/// global `jocasta` server.
-const MCP_TIMEOUT_MS: u64 = 1_860_000;
-
-/// Where `jocasta mcp` calls its tools.
-const MCP_PATH: &str = "/api/mcp/";
 
 /// One trial as the layer sees it.
 #[derive(Debug, Clone)]
@@ -122,13 +116,13 @@ struct Trial {
 struct Running {
 	data: PathBuf,
 	trial: Option<Arc<Trial>>,
-	server: Option<ServerHandle>,
+	bridge: Option<(Bridge, Arc<dyn BridgeService>)>,
 }
 
 impl Running {
 	async fn close(self) {
-		if let Some(server) = &self.server {
-			server.stop(true).await;
+		if let Some((bridge, _)) = &self.bridge {
+			bridge.stop();
 		}
 		if let Some(trial) = &self.trial {
 			trial.checks.stop().await;
@@ -189,91 +183,51 @@ async fn answer(trial: &Trial, tool: &str, args: Map<String, Value>) -> std::res
 	}
 }
 
-/// The `{text, isError?}` reply the tools answer with.
-fn reply(text: &str, is_error: bool, status: StatusCode) -> Response {
-	let body = if is_error { json!({ "text": text, "isError": true }) } else { json!({ "text": text }) };
-	json_response(status, &body)
-}
-
-/// The layer's endpoint: `POST /api/mcp/<tool>` with the token as the bearer, answering in this process what the
-/// service's tools answer there.
-struct McpRoute {
-	token: String,
+/// What the layer's bridge answers in this process for the trial's omp: the tools of a thread's pane (0675), with the
+/// results the service's tools give.
+struct TrialService {
 	trial: Arc<Trial>,
+	key: String,
 }
 
-impl Route for McpRoute {
-	fn matches(&self, _path: &str) -> bool {
-		true
+impl BridgeService for TrialService {
+	fn resolve(&self, key: &str) -> Option<Resolved> {
+		(key == self.key).then(|| Resolved {
+			pane_id: PROJECT_ID.to_owned(),
+			role: Role::Thread,
+			caller: Caller::default(),
+		})
 	}
 
-	fn handle(
-		&self,
-		request: Request,
-		url: Url,
-		_server: ServerHandle,
-	) -> crate::frontier::server::routes::BoxFuture<Response> {
-		let trial = self.trial.clone();
-		let authorized = has_bearer(&request, &self.token);
+	fn tools(&self, role: Role) -> Vec<Value> {
+		tools_for(role, true).iter().map(ToolSpec::to_value).collect()
+	}
+
+	fn call(&self, _who: Resolved, tool: String, args: Map<String, Value>) -> BoxFuture<'_, ToolReply> {
 		Box::pin(async move {
-			if !authorized {
-				return reply("invalid token", true, StatusCode::UNAUTHORIZED);
-			}
-			let Some(encoded) = url.path().strip_prefix(MCP_PATH).filter(|_| request.method() == Method::POST) else {
-				return reply("not found", true, StatusCode::NOT_FOUND);
-			};
-			let Some(tool) = decode_uri_component(encoded) else {
-				return text_response(StatusCode::INTERNAL_SERVER_ERROR, "Internal error");
-			};
-			let outcome = match read_args(request).await {
-				Ok(args) => answer(&trial, &tool, args).await,
-				Err(message) => Err(message),
-			};
-			match outcome {
-				Ok(text) => reply(&text, false, StatusCode::OK),
-				Err(message) => reply(&message, true, StatusCode::OK),
+			match answer(&self.trial, &tool, args).await {
+				Ok(text) => ToolReply { text, is_error: None },
+				Err(text) => ToolReply { text, is_error: Some(true) },
 			}
 		})
 	}
-}
 
-/// The request's `{args}` when it is an object, else `{}`; the error is what reading the body said.
-async fn read_args(request: Request) -> std::result::Result<Map<String, Value>, String> {
-	let bytes = axum::body::to_bytes(request.into_body(), 128 * 1024 * 1024).await.map_err(said)?;
-	match serde_json::from_slice::<Value>(&bytes).map_err(said)? {
-		Value::Null => Err("null is not an object (evaluating 'body.args')".to_owned()),
-		Value::Object(body) => Ok(body.get("args").and_then(Value::as_object).cloned().unwrap_or_default()),
-		_ => Ok(Map::new()),
+	fn cli(&self, command: String, _args: Map<String, Value>) -> BoxFuture<'_, ToolReply> {
+		Box::pin(async move { ToolReply { text: format!("no command {command}."), is_error: Some(true) } })
 	}
-}
 
-/// The `jocasta` executable `jocasta mcp` runs from: the one beside this process's own executable (the install's, or a
-/// cargo build's `target/<profile>/`; a test executable sits in that folder's `deps/`).
-fn jocasta_exe() -> PathBuf {
-	let exe = std::env::current_exe().unwrap_or_default();
-	let mut dir = exe.parent().unwrap_or(Path::new("")).to_path_buf();
-	if dir.file_name().is_some_and(|name| name == "deps") {
-		dir.pop();
+	fn push(&self, _request: PushRequest) -> BoxFuture<'_, PushAnswer> {
+		Box::pin(async { PushAnswer { allow: false, reason: Some("a trial pushes nothing".to_owned()) } })
 	}
-	dir.join(format!("jocasta{}", std::env::consts::EXE_SUFFIX))
+
+	fn stop(&self, _pane_key: String, _signal: AbortSignal) -> BoxFuture<'_, String> {
+		Box::pin(async { String::new() })
+	}
+
+	fn event(&self, _who: &Resolved, _event: &PaneEvent, _agent: &PaneAgent) {}
 }
 
-fn mcp_json(env: &Value) -> Result<String> {
-	let config = json!({
-		"mcpServers": {
-			"jocasta": {
-				"type": "stdio",
-				"command": jocasta_exe().display().to_string(),
-				"args": ["mcp"],
-				"env": env,
-				"timeout": MCP_TIMEOUT_MS,
-			}
-		}
-	});
-	Ok(format!("{}\n", serde_json::to_string_pretty(&config)?))
-}
-
-async fn start(trial: &LayerTrial, running: &mut Running, layer: &Path, plugin: &Path) -> Result<LayerSetup> {
+async fn start(trial: &LayerTrial, running: &mut Running, layer: &Path) -> Result<LayerSetup> {
 	let state = Arc::new(Trial {
 		repo: trial.repo.clone(),
 		project: trial.repo.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
@@ -285,39 +239,29 @@ async fn start(trial: &LayerTrial, running: &mut Running, layer: &Path, plugin: 
 		reports: layer.join("reports.jsonl"),
 	});
 	running.trial = Some(state.clone());
-	let token = random_hex::<24>()?;
-	let served = Served {
-		routes: vec![Box::new(McpRoute { token: token.clone(), trial: state.clone() })],
-		page: Box::new(|_, _, _| Box::pin(async { text_response(StatusCode::NOT_FOUND, "not found") })),
-	};
-	let server = listen(0, served)?;
-	let port = server.port();
-	running.server = Some(server);
-	// `jocasta mcp` finds this endpoint as it finds the service: `<data>/jocasta-service.json`, its process alive.
-	write_service_file(&ServiceFile { port, token, pid: std::process::id() }, Some(&running.data))?;
+	// The trial's omp loads the same extension a pane does, and its bridge answers from this process (0675). The
+	// bridge's name is made from a port number nothing needs to listen on.
+	let key = random_hex::<24>()?;
+	let service: Arc<dyn BridgeService> = Arc::new(TrialService { trial: state.clone(), key: key.clone() });
+	let bridge = Bridge::new();
+	bridge.listen(free_port()?, &random_hex::<24>()?, &service)?;
+	let address = bridge.address().unwrap_or_default();
+	running.bridge = Some((bridge, service));
 	let title = brief_title(&trial.prompt);
-	// `JOCASTA_THREAD` as a thread pane has it, so `jocasta mcp` lists report_result and check (0577, C6).
-	let slug = branch_slug(&title);
-	let env = json!({
-		"JOCASTA_DATA_DIR": running.data.display().to_string(),
-		"JOCASTA_THREAD": if slug.is_empty() { PROJECT_ID } else { slug.as_str() },
-	});
-	std::fs::write(plugin.join(".mcp.json"), mcp_json(&env)?)?;
 	let prompt = layer.join("prompt.md");
 	let fields = PromptFields { title: &title, project: &state.project, brief: &trial.prompt, done_when: &[] };
 	std::fs::write(&prompt, task_prompt(&fields, trial.append_system_prompt.as_deref(), true))?;
-	let env = env
-		.as_object()
-		.map(|object| {
-			object.iter().filter_map(|(name, value)| Some((name.clone(), value.as_str()?.to_owned()))).collect()
-		})
-		.unwrap_or_default();
+	let env = HashMap::from([
+		("JOCASTA_DATA_DIR".to_owned(), running.data.display().to_string()),
+		(BRIDGE_ENV.to_owned(), address),
+		(PANE_KEY_ENV.to_owned(), key),
+	]);
 	Ok(LayerSetup {
 		args: vec![
 			"--append-system-prompt".to_owned(),
 			prompt.display().to_string(),
 			"-e".to_owned(),
-			plugin.display().to_string(),
+			shipped_config_dir(None).join(BRIDGE_EXTENSION).display().to_string(),
 		],
 		settings: Map::new(),
 		env,
@@ -327,10 +271,9 @@ async fn start(trial: &LayerTrial, running: &mut Running, layer: &Path, plugin: 
 
 async fn set_up(trial: LayerTrial) -> Result<LayerSetup> {
 	let layer = trial.root.join("layer");
-	let plugin = layer.join("omp");
-	std::fs::create_dir_all(&plugin)?;
-	let mut running = Running { data: layer_data_dir()?, trial: None, server: None };
-	match start(&trial, &mut running, &layer, &plugin).await {
+	std::fs::create_dir_all(&layer)?;
+	let mut running = Running { data: layer_data_dir()?, trial: None, bridge: None };
+	match start(&trial, &mut running, &layer).await {
 		Ok(mut setup) => {
 			setup.closer = Some(Box::new(move || Box::pin(running.close())));
 			Ok(setup)
