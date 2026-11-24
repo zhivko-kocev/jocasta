@@ -65,6 +65,10 @@ impl KeyService for Keyed {
 		self.note(&["start", project, brief]);
 		Box::pin(async { Ok(said("Started.")) })
 	}
+	fn key_stop_all<'a>(&'a self) -> BoxFuture<'a, Result<String>> {
+		self.note(&["stop-all"]);
+		Box::pin(async { Ok("stopped 3 turns".to_owned()) })
+	}
 }
 
 /// How a question is answered: its choice and a form's fields.
@@ -270,6 +274,10 @@ impl KeyService for Notes {
 	fn key_start<'a>(&'a self, _project: &'a str, _brief: &'a str) -> BoxFuture<'a, Result<KeyOutcome>> {
 		async { Err(Error::user("no keys here")) }.boxed()
 	}
+
+	fn key_stop_all<'a>(&'a self) -> BoxFuture<'a, Result<String>> {
+		async { Err(Error::user("no keys here")) }.boxed()
+	}
 }
 
 struct Actors {
@@ -342,4 +350,18 @@ async fn an_outcome_is_broadcast_a_refusal_also_notifies_once_per_text_each_thir
 	state.report(said("bad \x1b[2J text"));
 	let last = locked(&a.broadcast).last().cloned();
 	assert_eq!(last, Some(ServerMessage::Action { text: pane_text("bad \x1b[2J text"), is_error: false }));
+}
+
+#[tokio::test]
+async fn stop_all_asks_first_and_only_a_yes_stops_every_turn_0686() {
+	let keys = key_deps();
+	let title = "Jocasta: Stop every running turn?";
+	let deps = &keys.deps;
+	// No is the default: nothing is stopped.
+	assert_eq!(text_of(run_action(PluginAction::StopAll, None, deps).await), "Stop all: every turn runs on.");
+	assert!(keys.service.calls.lock().unwrap().is_empty());
+	keys.answers.lock().unwrap().insert(title.to_owned(), json!({"choice": "Yes"}));
+	assert_eq!(text_of(run_action(PluginAction::StopAll, None, deps).await), "stopped 3 turns");
+	assert_eq!(*keys.service.calls.lock().unwrap(), vec![vec!["stop-all"]]);
+	assert_eq!(*keys.asked.lock().unwrap(), [title, title]);
 }

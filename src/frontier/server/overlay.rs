@@ -35,7 +35,7 @@ fn share_overlay() -> Vec<String> {
 }
 
 /// The overlay's text: omp's memory off (0606); no completion probe and no job widgets, which only the boss keeps
-/// (0601, 0602); a subagent starts no subagents of its own (0619); new sessions in plan mode; compaction at 300k tokens,
+/// (0601, 0602); a subagent starts no subagents of its own (0619); new sessions in plan mode; compaction at 200k tokens (0677),
 /// a handoff first (0399, 0448, 0592); private notes from `AGENTS.local.md` (0449); the project's lessons as the skill
 /// `lessons` (0459: omp lists `<dir>/<name>/SKILL.md`, so the project folder is the skill directory and `lessons/` its
 /// one skill); no reviewer model, so omp's bundled reviewer runs on his `slow` role (0488); the privacy settings,
@@ -58,7 +58,7 @@ pub fn overlay_text(project_id: &str) -> String {
 		"  defaultOnStartup: true",
 		"compaction:",
 		"  methodOrder: [handoff, remote, soft, shake, snapcompact]",
-		"  thresholdTokens: 300000",
+		"  thresholdTokens: 200000",
 		"  idleEnabled: true",
 		"  idleThresholdTokens: 100000",
 		"contextFiles:",

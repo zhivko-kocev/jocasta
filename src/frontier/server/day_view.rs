@@ -131,6 +131,9 @@ fn rail(t: &DayThread) -> RailItem {
 		diff: t.diff.clone(),
 		check: t.check,
 		stuck_for: None,
+		halted: t.halted.clone(),
+		progress: t.progress.clone(),
+		budget: t.budget,
 	}
 }
 
@@ -401,6 +404,12 @@ impl Day {
 		for t in threads.iter().filter(|t| t.state == ThreadState::Blocked) {
 			let line = if t.line.is_empty() { "awaiting you" } else { &t.line };
 			needs_you.push(needs_thread(NeedsYouKind::Blocked, format!("{} — {line}", t.title), t.changed_at, t));
+		}
+		// A thread the loop cap or the cost cap stopped waits for his word (0677, 0686).
+		for t in threads {
+			if let Some(why) = &t.halted {
+				needs_you.push(needs_thread(NeedsYouKind::Stuck, format!("{} — {why}", t.title), t.changed_at, t));
+			}
 		}
 		// A working thread whose session file wasn't written for 10 minutes (0668): since its last write.
 		for t in threads {

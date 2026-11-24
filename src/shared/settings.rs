@@ -53,6 +53,7 @@ const WEATHER_OFF: &str = "the weather is off";
 const NEWS_GONE: &str = "pollers.news.topics and pollers.news.limit are gone; use pollers.news.feeds (0442)";
 const NTFY_OFF: &str = "the phone check-in is off";
 const CHECKS_DEFAULT: &str = "the check queue uses the default memory reserve";
+const COST_DEFAULT: &str = "using the default cost cap, $75 a thread";
 
 fn rule(reason: &str, instead: &'static str, map: bool) -> KeyRule {
 	KeyRule { reason: reason.to_owned(), instead, map }
@@ -112,6 +113,10 @@ fn rule_of(key: &str) -> Option<KeyRule> {
 		"checks" => rule("checks must be a mapping", CHECKS_DEFAULT, true),
 		"checks.memoryReserveGb" => {
 			rule("checks.memoryReserveGb must be a number from 0 to 256", CHECKS_DEFAULT, false)
+		}
+		"threads" => rule("threads must be a mapping", COST_DEFAULT, true),
+		"threads.maxCostUsd" => {
+			rule("threads.maxCostUsd must be a number of dollars, 0 or more (0 = no cap)", COST_DEFAULT, false)
 		}
 		_ => return None,
 	})
@@ -240,6 +245,7 @@ fn validate(settings: &Map<String, Value>) -> Vec<Fault> {
 			"pollers" => check_pollers(value, &mut faults),
 			"ntfy" => check_ntfy(value, &mut faults),
 			"checks" => check_checks(value, &mut faults),
+			"threads" => check_threads(value, &mut faults),
 			_ => faults.push(fault(&[], name, true)),
 		}
 	}
@@ -288,6 +294,19 @@ fn check_checks(value: &Value, faults: &mut Vec<Fault>) {
 			}
 			"memoryReserveGb" => {}
 			_ => faults.push(fault(&["checks"], name, true)),
+		}
+	}
+}
+
+fn check_threads(value: &Value, faults: &mut Vec<Fault>) {
+	let Some(map) = value.as_object() else { return faults.push(fault(&[], "threads", false)) };
+	for (name, value) in map {
+		match name.as_str() {
+			"maxCostUsd" if !value.as_f64().is_some_and(|dollars| dollars >= 0.0) => {
+				faults.push(fault(&["threads"], name, false));
+			}
+			"maxCostUsd" => {}
+			_ => faults.push(fault(&["threads"], name, true)),
 		}
 	}
 }
@@ -516,6 +535,21 @@ pub fn read_check_reserve_gb() -> f64 {
 		.and_then(|checks| checks.get("memoryReserveGb"))
 		.and_then(Value::as_f64)
 		.filter(|gb| (0.0..=256.0).contains(gb))
+		.unwrap_or(DEFAULT)
+}
+
+/// `threads.maxCostUsd` (0686): a thread's cost cap in dollars; 75 when unset or bad, 0 = no cap.
+pub fn read_max_cost_usd() -> f64 {
+	const DEFAULT: f64 = 75.0;
+	let Ok(settings) = read_settings() else { return DEFAULT };
+	if check_settings(&settings, "threads.maxCostUsd").is_err() {
+		return DEFAULT;
+	}
+	settings
+		.get("threads")
+		.and_then(|threads| threads.get("maxCostUsd"))
+		.and_then(Value::as_f64)
+		.filter(|dollars| *dollars >= 0.0)
 		.unwrap_or(DEFAULT)
 }
 
@@ -936,5 +970,21 @@ mod tests {
 		assert!(ntfy.own_server && ntfy.token.is_none());
 		write_settings(&env, &["ntfy:", "  server: https://ntfy.example.org", "  ownServer: false"].join("\n"));
 		assert_eq!(settings_problems(), Vec::<String>::new());
+	}
+
+	#[test]
+	fn threads_max_cost_usd_is_75_unless_set_0_is_no_cap_and_a_bad_value_falls_back_0686() {
+		let env = temp_jocasta();
+		assert_eq!(read_max_cost_usd(), 75.0);
+		write_settings(&env, "threads:\n  maxCostUsd: 20.5\n");
+		assert_eq!(settings_problems(), Vec::<String>::new());
+		assert_eq!(read_max_cost_usd(), 20.5);
+		write_settings(&env, "threads:\n  maxCostUsd: 0\n");
+		assert_eq!(read_max_cost_usd(), 0.0);
+		write_settings(&env, "threads:\n  maxCostUsd: -1\n");
+		assert_eq!(read_max_cost_usd(), 75.0);
+		assert_eq!(settings_problems().len(), 1);
+		write_settings(&env, "threads:\n  maxCostUsd: lots\n");
+		assert_eq!(read_max_cost_usd(), 75.0);
 	}
 }

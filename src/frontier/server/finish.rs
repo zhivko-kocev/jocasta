@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::frontier::protocol::ToastPriority;
 use crate::frontier::server::allow::Confirmation;
@@ -21,6 +21,7 @@ use crate::frontier::server::worktrees::{GIT_MS, git_out, remove_checkout};
 use crate::shared::clock::now_ms;
 use crate::shared::errors::{Error, Result};
 use crate::shared::git::{GitOptions, git_async};
+use crate::shared::identity::normalize_origin;
 use crate::shared::process::{RunOptions, run_program};
 
 /// `thread_finish` waits this long for a `/handoff` that hasn't written its entry yet (CO-2).
@@ -31,6 +32,10 @@ const MERGE_TIMEOUT_MS: i64 = 60_000;
 const COMMIT_TIMEOUT_MS: i64 = 600_000;
 /// How long one gh call may take before it is ended (CO-8).
 const GH_TIMEOUT_MS: i64 = 60_000;
+/// `git push` of a thread's branch before its PR is opened by code (0677).
+const PUSH_TIMEOUT_MS: i64 = 120_000;
+/// How many lines of a failing command's stderr the finish error carries (0677).
+const FAIL_TAIL_LINES: usize = 20;
 
 /// What Finish says about a thread before it asks (`finishable`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,6 +104,48 @@ fn lines_of(out: Option<String>) -> Vec<String> {
 
 fn commits_said(count: u64) -> String {
 	format!("{count} commit{}", if count == 1 { "" } else { "s" })
+}
+
+/// Where a project's `origin` lives (0677): the hosts whose PR Jocasta opens itself, by `origin`'s address in any of
+/// its forms; any other host keeps the agent-made PR.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Remote {
+	GitHub,
+	Azure { org_url: String, project: String, repo: String },
+	Other,
+}
+
+fn remote_of(origin: &str) -> Remote {
+	let Ok(key) = normalize_origin(origin) else { return Remote::Other };
+	let mut parts = key.split('/');
+	match parts.next() {
+		Some("github.com") => Remote::GitHub,
+		Some("dev.azure.com") => match (parts.next(), parts.next(), parts.next()) {
+			(Some(org), Some(project), Some(repo)) => Remote::Azure {
+				org_url: format!("https://dev.azure.com/{org}"),
+				project: project.to_owned(),
+				repo: repo.to_owned(),
+			},
+			_ => Remote::Other,
+		},
+		_ => Remote::Other,
+	}
+}
+
+/// The last lines of a failing command's output.
+fn tail(text: &str) -> String {
+	let lines: Vec<&str> = text.trim().lines().collect();
+	lines[lines.len().saturating_sub(FAIL_TAIL_LINES)..].join("\n")
+}
+
+/// What a failing command says: its name, and the tail of its stderr (or its exit code when it said nothing).
+fn failed(command: &str, code: Option<i32>, said: &str) -> String {
+	let why = match (tail(said), code) {
+		(text, _) if !text.is_empty() => text,
+		(_, Some(code)) => format!("exit {code}"),
+		(_, None) => "it didn't answer in time".to_owned(),
+	};
+	format!("{command} failed:\n{why}\nNothing was retried; the thread, its worktree and its branch stay.")
 }
 
 /// Finish: `thread_finish` and what follows its PR turn.
@@ -177,7 +224,11 @@ impl Finisher {
 			detail.push(format!("Open threads touch the same files: {}.", overlap_said(&found.overlaps)));
 		}
 		let ask = Confirmation { message: mode.question(found), detail: detail.join("\n") };
-		self.link.ctx().allow.ask(&ask, mode.nothing(), door).await?;
+		let answer = self.link.ctx().allow.ask(&ask, mode.nothing(), door).await;
+		let what = if mode == Mode::Merge { "merge" } else { "pr" };
+		let said = if answer.is_ok() { "allow" } else { "deny" };
+		self.link.ctx().journal.thread("allow", &t, json!({ "what": what, "answer": said }));
+		answer?;
 		Ok(())
 	}
 
@@ -377,6 +428,7 @@ impl Finisher {
 			line: &line,
 			url: None,
 		})?;
+		self.journal_finished(thread, &t, "merge").await;
 		let merged = format!("Merged {name} into {trunk} as {commit} ({} squashed)", commits_said(ahead));
 		let commit_id = (!full.is_empty()).then(|| full.to_owned());
 		if let Some(removed) = self.remove_thread(thread, CloseHow::Merged, commit_id).await? {
@@ -494,6 +546,29 @@ impl Finisher {
 		Some(GhRun { code: run.code, out: format!("{}{}", run.stdout, run.stderr).trim().to_owned() })
 	}
 
+	/// Runs az in `cwd` (never prompting, at most a minute); `None` when az isn't installed, `code: None` when it
+	/// didn't answer in time.
+	async fn az(&self, args: &[&str], cwd: &Path) -> Option<GhRun> {
+		let c = self.link.ctx();
+		let mut argv = c.options.az.clone().unwrap_or_else(|| vec!["az".to_owned()]);
+		argv.extend(args.iter().map(|arg| (*arg).to_owned()));
+		let options = RunOptions {
+			cwd: Some(cwd.to_path_buf()),
+			timeout_ms: Some(c.options.gh_timeout_ms.unwrap_or(GH_TIMEOUT_MS)),
+			..RunOptions::default()
+		};
+		let run = run_program(&argv, options).await.ok()?;
+		Some(GhRun { code: run.code, out: format!("{}{}", run.stdout, run.stderr).trim().to_owned() })
+	}
+
+	/// The `finished` journal line (0688): how, what it cost and how long since its task began.
+	async fn journal_finished(&self, thread: &ThreadRef, t: &Thread, mode: &str) {
+		let c = self.link.ctx();
+		let cost = c.status.spend_of(thread).await;
+		let wall = t.task.as_ref().map(|task| now_ms() - task.created_at);
+		c.journal.thread("finished", t, json!({ "mode": mode, "cost_usd": cost, "wall_ms": wall }));
+	}
+
 	/// `gh pr view <url> --json number,state,statusCheckRollup` (0668): its output when gh answered, else why not. A PR's
 	/// url needs no repository, so it runs in the data folder.
 	pub(super) async fn pr_view(&self, url: &str) -> std::result::Result<String, String> {
@@ -506,31 +581,146 @@ impl Finisher {
 		}
 	}
 
-	/// `thread_finish` pr (0426): the thread is asked to push its branch and open the PR with gh; its turn's end, then
-	/// `pr_opened`, removes the worktree. Refuses when gh isn't installed or logged in, or the project has no remote.
+	/// `thread_finish` pr (0426, 0677): by code on GitHub and Azure DevOps remotes, after his Allow: the branch is pushed
+	/// and the PR opened with `gh` or `az`, and the worktree is removed at once. A failing command's stderr tail is the
+	/// error; nothing is retried. Any other host has the thread asked to push and open it (`pr_by_agent`).
 	pub async fn open_pr(&self, thread: &ThreadRef, trunk: &str, door: Door) -> Result<String> {
+		let t = thread.get();
+		let origin = git_out(&t.path, &["remote", "get-url", "origin"]).await?.unwrap_or_default();
+		match remote_of(&origin) {
+			Remote::GitHub => {
+				self.gh_ready(&t, door).await?;
+				let url = self.github_pr(&t, trunk).await?;
+				self.pr_done(thread, &url, "github").await
+			}
+			Remote::Azure { org_url, project, repo } => {
+				let url = self.azure_pr(&t, trunk, [&org_url, &project, &repo]).await?;
+				self.pr_done(thread, &url, "azure").await
+			}
+			Remote::Other => self.pr_by_agent(thread, trunk, door).await,
+		}
+	}
+
+	/// The PR's body (0677): the report's summary, `## Checks` (each gate's command and exit as the last review ran
+	/// them) and `## Commits` (`git log --format="- %s" <trunk>..HEAD`).
+	async fn pr_body(&self, t: &Thread, trunk: &str) -> Result<String> {
+		let summary = t.task.as_ref().and_then(|task| task.report.as_ref()).map(|report| report.value.summary.clone());
+		let checks = t.review.as_ref().and_then(|review| review.result.as_ref()).map(|result| result.checks.clone());
+		let range = format!("{trunk}..HEAD");
+		let commits = git_out(&t.path, &["log", "--format=- %s", &range]).await?.unwrap_or_default();
+		let mut body = String::new();
+		if let Some(summary) = summary.filter(|summary| !summary.trim().is_empty()) {
+			body.push_str(&format!("{}\n\n", summary.trim()));
+		}
+		body.push_str("## Checks\n\n| Command | Exit |\n| --- | --- |\n");
+		for check in checks.unwrap_or_default() {
+			let exit = check.exit.map_or_else(|| "not run".to_owned(), |exit| exit.to_string());
+			body.push_str(&format!("| `{}` | {exit} |\n", check.command.replace('|', "\\|")));
+		}
+		body.push_str(&format!("\n## Commits\n\n{commits}\n"));
+		Ok(body)
+	}
+
+	/// `git push -u origin <branch>`: a failure is the finish error.
+	async fn push_branch(&self, t: &Thread) -> Result<()> {
+		let args = ["push", "-u", "origin", t.branch.as_str()];
+		let pushed = git_async(&t.path, &args, PUSH_TIMEOUT_MS, GitOptions::default()).await?;
+		if pushed.code == Some(0) {
+			return Ok(());
+		}
+		Err(Error::user(failed(&format!("git push -u origin {}", t.branch), pushed.code, &pushed.stderr)))
+	}
+
+	/// The PR on GitHub: push, then `gh pr create --base <trunk> --head <branch> --title <title> --body-file <file>`;
+	/// the PR's URL.
+	async fn github_pr(&self, t: &Thread, trunk: &str) -> Result<String> {
+		self.push_branch(t).await?;
+		let title = t.task.as_ref().map_or_else(|| t.title.clone(), |task| task.title.clone());
+		let body = self.pr_body(t, trunk).await?;
+		let file = std::env::temp_dir().join(format!("jocasta-pr-{}-{}.md", std::process::id(), now_ms()));
+		std::fs::write(&file, body)?;
+		let file_arg = file.to_string_lossy().into_owned();
+		let run = self
+			.gh(
+				&["pr", "create", "--base", trunk, "--head", &t.branch, "--title", &title, "--body-file", &file_arg],
+				&t.path,
+			)
+			.await;
+		let _ = std::fs::remove_file(&file);
+		let Some(run) = run else { return Err(Error::user("gh isn't installed; no PR was opened.")) };
+		if run.code != Some(0) {
+			return Err(Error::user(failed("gh pr create", run.code, &run.out)));
+		}
+		let url = run.out.lines().rev().find(|line| line.starts_with("http")).or_else(|| run.out.lines().last());
+		Ok(url.unwrap_or_default().trim().to_owned())
+	}
+
+	/// The PR on Azure DevOps: push, then `az repos pr create …` against the org, project and repository `origin` names;
+	/// the PR's URL.
+	async fn azure_pr(&self, t: &Thread, trunk: &str, [org_url, project, repo]: [&str; 3]) -> Result<String> {
+		self.push_branch(t).await?;
+		let title = t.task.as_ref().map_or_else(|| t.title.clone(), |task| task.title.clone());
+		let body = self.pr_body(t, trunk).await?;
+		// az takes the description as one value per line (and a batch file can't carry a newline in an argument).
+		let description: Vec<&str> = body.lines().map(|line| if line.is_empty() { " " } else { line }).collect();
+		let mut args = vec![
+			"repos",
+			"pr",
+			"create",
+			"--org",
+			org_url,
+			"--project",
+			project,
+			"--repository",
+			repo,
+			"--source-branch",
+			t.branch.as_str(),
+			"--target-branch",
+			trunk,
+			"--title",
+			title.as_str(),
+			"--output",
+			"json",
+			"--description",
+		];
+		args.extend(description);
+		let Some(run) = self.az(&args, &t.path).await else {
+			return Err(Error::user("az isn't installed; no PR was opened."));
+		};
+		if run.code != Some(0) {
+			return Err(Error::user(failed("az repos pr create", run.code, &run.out)));
+		}
+		let id = serde_json::from_str::<Value>(&run.out)
+			.ok()
+			.and_then(|pr| pr.get("pullRequestId").and_then(Value::as_u64))
+			.ok_or_else(|| {
+				Error::user("az repos pr create answered without a pull request id; check the PR in Azure DevOps.")
+			})?;
+		Ok(format!("{org_url}/{project}/_git/{repo}/pullrequest/{id}"))
+	}
+
+	/// A PR Jocasta opened: the worktree and workspace go, it lands in today, and he hears it with its URL.
+	async fn pr_done(&self, thread: &ThreadRef, url: &str, platform: &str) -> Result<String> {
+		let c = self.link.ctx();
+		let t = thread.get();
+		let head = git_out(&t.path, &["rev-parse", "HEAD"]).await?;
+		c.journal.thread("published", &t, json!({ "platform": platform, "what": "pr" }));
+		let removed = self.pr_landed(thread, head, Some(url)).await?;
+		let how = match removed {
+			Some(removed) => format!(", but {removed}"),
+			None => "; its worktree and workspace are removed, the branch stays".to_owned(),
+		};
+		Ok(format!("Opened a PR for {}: {url}{how}.", subject(&t)))
+	}
+
+	/// `thread_finish` pr on a host Jocasta can't open a PR for (0426): the thread is asked to push its branch and open the
+	/// PR with gh; its turn's end, then `pr_opened`, removes the worktree. Refuses when gh isn't installed or logged in, or
+	/// the project has no remote.
+	async fn pr_by_agent(&self, thread: &ThreadRef, trunk: &str, door: Door) -> Result<String> {
 		let c = self.link.ctx();
 		let t = thread.get();
 		let name = subject(&t);
-		let Some(auth) = self.gh(&["auth", "status"], &t.path).await else {
-			return Err(Error::user(
-				"gh isn't installed: install GitHub CLI (https://cli.github.com), then gh auth login.",
-			));
-		};
-		let Some(code) = auth.code else {
-			return Err(Error::user("gh didn't answer in a minute; nothing was changed."));
-		};
-		if code != 0 {
-			let said =
-				format!("gh isn't logged in (gh auth status: {})", auth.out.split('\n').next().unwrap_or_default());
-			// Worded for the door (0581): the boss tells him; his key and the CLI tell him what to do.
-			let then = match door {
-				Door::Boss => "; he runs gh auth login.",
-				Door::Key => ": run gh auth login, then Finish again.",
-				Door::Cli => ": run gh auth login, then jocasta thread finish again.",
-			};
-			return Err(Error::user(format!("{said}{then}")));
-		}
+		self.gh_ready(&t, door).await?;
 		let remotes = lines_of(git_out(&t.path, &["remote"]).await?);
 		let Some(remote) = remotes.iter().find(|remote| *remote == "origin").or_else(|| remotes.first()) else {
 			return Err(Error::user(format!("{} has no git remote to push {} to.", t.project.name, t.branch)));
@@ -548,6 +738,30 @@ impl Finisher {
 			"Asked {name} to push {} and open a PR against {trunk}; once it's open, its worktree and workspace are removed and you hear it.",
 			t.branch
 		))
+	}
+
+	/// Refuses unless gh is installed and logged in (0426), worded for the door (0581): the boss tells him; his key and
+	/// the CLI tell him what to do.
+	async fn gh_ready(&self, t: &Thread, door: Door) -> Result<()> {
+		let Some(auth) = self.gh(&["auth", "status"], &t.path).await else {
+			return Err(Error::user(
+				"gh isn't installed: install GitHub CLI (https://cli.github.com), then gh auth login.",
+			));
+		};
+		let Some(code) = auth.code else {
+			return Err(Error::user("gh didn't answer in a minute; nothing was changed."));
+		};
+		if code != 0 {
+			let said =
+				format!("gh isn't logged in (gh auth status: {})", auth.out.split('\n').next().unwrap_or_default());
+			let then = match door {
+				Door::Boss => "; he runs gh auth login.",
+				Door::Key => ": run gh auth login, then Finish again.",
+				Door::Cli => ": run gh auth login, then jocasta thread finish again.",
+			};
+			return Err(Error::user(format!("{said}{then}")));
+		}
+		Ok(())
 	}
 
 	/// The PR turn ended (0426): an open PR on the pushed branch removes the worktree and workspace; else all stays.
@@ -586,23 +800,27 @@ impl Finisher {
 			c.events.thread(thread, &line, ToastPriority::Normal, None).await;
 			return Ok(());
 		}
-		let removed = self.remove_thread(thread, CloseHow::Pr, field("headRefOid")).await?;
-		let url = field("url").unwrap_or_else(|| "undefined".to_owned());
-		let pr = field("url");
-		let landing = Landing {
-			pane_id: &t.pane_id,
-			title: &t.title,
-			project_id: &t.project.id,
-			line: "PR open",
-			url: pr.as_deref(),
-		};
+		let url = field("url");
+		self.pr_landed(thread, field("headRefOid"), url.as_deref()).await?;
+		Ok(())
+	}
+
+	/// A PR is open on the thread's branch: its worktree and workspace are removed, the PR lands in today and he hears it.
+	/// What the removal said when it couldn't finish is the result.
+	async fn pr_landed(&self, thread: &ThreadRef, head: Option<String>, url: Option<&str>) -> Result<Option<String>> {
+		let c = self.link.ctx();
+		let t = thread.get();
+		self.journal_finished(thread, &t, "pr").await;
+		let removed = self.remove_thread(thread, CloseHow::Pr, head).await?;
+		let landing = Landing { pane_id: &t.pane_id, title: &t.title, project_id: &t.project.id, line: "PR open", url };
 		c.day.landed(&landing)?;
-		let how = match removed {
+		let how = match &removed {
 			Some(removed) => format!(", but {removed}"),
 			None => "; its worktree and workspace are removed, the branch stays".to_owned(),
 		};
-		c.events.thread(thread, &format!("PR open{how} · {url}"), ToastPriority::Normal, None).await;
-		Ok(())
+		let shown = url.unwrap_or("undefined");
+		c.events.thread(thread, &format!("PR open{how} · {shown}"), ToastPriority::Normal, None).await;
+		Ok(removed)
 	}
 }
 

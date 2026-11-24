@@ -3,8 +3,8 @@
 //! and the `check` tool. The Rust port of `review-flow.ts` (0625).
 //!
 //! The part's own state, each project pane's check state (0617), sits behind one lock that is never held across an
-//! `.await` and never while another part is called; the checks on idle and the pane checks that outlast their wait are
-//! counted in `idle_checks`, which `stop` waits for ([`ReviewFlow::settled`]).
+//! `.await` and never while another part is called; the pane checks that outlast their wait and the full checks run ahead
+//! of time are counted in `prechecks`, which `stop` waits for ([`ReviewFlow::settled`]).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -14,23 +14,29 @@ use std::time::Duration;
 use futures_util::FutureExt;
 use futures_util::future::{BoxFuture, Shared};
 use regex::Regex;
+use serde_json::json;
 use tokio::sync::Notify;
+use tokio::task::AbortHandle;
 
 use crate::frontier::protocol::{ServerMessage, ThreadState, ToastLevel, ToastPriority, ToastReason};
 use crate::frontier::server::bridge::Deliver;
-use crate::frontier::server::checks::{CheckRun, CheckSpec, gate_reply, short_tree};
+use crate::frontier::server::checks::{CheckRun, CheckSpec, How, gate_reply, short_tree};
 use crate::frontier::server::context::{Calls, Link, ServiceContext};
 use crate::frontier::server::herdr::{Direction, SplitOptions};
 use crate::frontier::server::hunk::{
 	ReviewContext, ReviewProof, hunk_diff_args, list_comments, proof_said, review_prompt, review_proof,
 };
-use crate::frontier::server::mise::{Mise, MiseCheck, MiseCheckTask, mise_check, mise_env, skipped_said, trust_copies};
-use crate::frontier::server::report::report_line;
-use crate::frontier::server::sessions::{SessionStats, TestsResult, check_exits, checked_tests};
-use crate::frontier::server::task_file::{CheckExit, TaskReview};
-use crate::frontier::server::thread::{
-	Phase, ReviewResult, ReviewRunning, Thread, ThreadRef, ThreadReview, is_idle, set_phase, show, subject,
+use crate::frontier::server::journal::About;
+use crate::frontier::server::mise::{
+	Found, Mise, mise_env, mise_task_among, mise_tasks_among, skipped_said, trust_copies,
 };
+use crate::frontier::server::report::{ReportedTest, report_line};
+use crate::frontier::server::sessions::{SessionStats, TestsResult, check_exits, checked_tests};
+use crate::frontier::server::task_file::{CheckExit, TaskReview, task_dir};
+use crate::frontier::server::thread::{
+	Phase, ReviewResult, ReviewRunning, Thread, ThreadRef, ThreadReview, set_phase, show, subject,
+};
+use crate::frontier::server::thread_facts::{CheckFact, review_facts, start_facts};
 use crate::frontier::server::wording::{HANDOFF_FOCUS, idle_check_text, quoted, review_said, tests_said};
 use crate::frontier::server::worktrees::git_out;
 use crate::shared::clock::now_ms;
@@ -69,7 +75,7 @@ impl Drop for LateCheck {
 		let tree = std::mem::take(&mut self.tree);
 		let pane_id = std::mem::take(&mut self.pane_id);
 		let (done, checking) = (self.done.take(), self.checking.clone());
-		self.c.review.idle_checks.spawn(async move {
+		self.c.review.prechecks.spawn(async move {
 			let text = match done {
 				Some(text) => text,
 				None => checking.await,
@@ -101,18 +107,68 @@ struct ReviewFound {
 	done_when: Vec<String>,
 }
 
+/// How deep a check goes (0677): `Quick` is what a turn's end runs, `Full` what `report_result` and the review run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Depth {
+	Quick,
+	Full,
+}
+
+impl Depth {
+	fn as_str(self) -> &'static str {
+		match self {
+			Self::Quick => "quick",
+			Self::Full => "full",
+		}
+	}
+}
+
 /// Where checks run: a thread's worktree, or a project pane's folder (0617).
 #[derive(Debug, Clone)]
 struct Place {
 	project: crate::shared::projects::Project,
 	path: PathBuf,
 	title: String,
+	/// The pane the checks are for: the loop cap and the precheck are kept per pane.
+	pane_id: String,
+	/// The thread's task id, when it has a task file: what the journal names it by.
+	task_id: Option<String>,
+	/// A thread's place: only a thread has the loop cap and the check ahead of time.
+	thread: bool,
 }
 
 impl Place {
 	fn of(thread: &Thread) -> Self {
-		Self { project: thread.project.clone(), path: thread.path.clone(), title: thread.title.clone() }
+		Self {
+			project: thread.project.clone(),
+			path: thread.path.clone(),
+			title: thread.title.clone(),
+			pane_id: thread.pane_id.clone(),
+			task_id: thread.task.as_ref().map(|task| task.id.clone()),
+			thread: true,
+		}
 	}
+
+	fn about(&self) -> About<'_> {
+		About { project: &self.project.id, thread: self.task_id.as_deref() }
+	}
+}
+
+/// The same gate failing this many times in a row stops the thread (0677).
+const LOOP_CAP: u32 = 3;
+/// How much of a failing gate's log the breaker keeps.
+const TAIL_LINES: usize = 20;
+
+/// A thread's loop cap (0677): the gate that failed last, how many times in a row, and its last output lines.
+#[derive(Debug, Clone, Default)]
+struct Breaker {
+	/// What identifies the gate; its `name` is what is said.
+	command: String,
+	name: String,
+	count: u32,
+	tail: Vec<String>,
+	/// Set at the cap: it ends only with his word.
+	tripped: bool,
 }
 
 /// What a project pane's checks remember (0617).
@@ -130,6 +186,10 @@ struct PaneCheckState {
 struct State {
 	/// Each project pane's check state, by pane id (0617).
 	pane_checks: HashMap<String, PaneCheckState>,
+	/// Each thread's loop cap, by pane id (0677).
+	breakers: HashMap<String, Breaker>,
+	/// The full check each thread's last passing quick check started ahead of time, by pane id: a newer tree ends it.
+	prechecking: HashMap<String, AbortHandle>,
 }
 
 /// How a task's commits are said in its review line (`ReviewFlow::commits_said`).
@@ -152,7 +212,7 @@ fn aborted(signal: &Option<AbortSignal>) -> bool {
 }
 
 /// Which mise the service runs (`options.mise`: `None` the one on PATH, `Some(None)` none, or an argv prefix).
-fn mise_of(c: &ServiceContext) -> Mise<'_> {
+pub(super) fn mise_of(c: &ServiceContext) -> Mise<'_> {
 	match &c.options.mise {
 		None => Mise::OnPath,
 		Some(None) => Mise::Absent,
@@ -173,12 +233,51 @@ fn exit_said(check: &CheckExit) -> String {
 	}
 }
 
+/// The last lines of a gate's log (0677's breaker keeps 20); none when it can't be read.
+fn tail_of(log: Option<&Path>) -> Vec<String> {
+	let Some(bytes) = log.and_then(|log| std::fs::read(log).ok()) else { return Vec::new() };
+	let text = String::from_utf8_lossy(&bytes);
+	let lines: Vec<&str> = text.lines().collect();
+	lines[lines.len().saturating_sub(TAIL_LINES)..].iter().map(|line| (*line).to_owned()).collect()
+}
+
+/// The first gate of a failed run that failed: its name, command and the tail of its log; a check that exited without
+/// naming gates stands for itself.
+fn failing_gate(run: &CheckRun) -> Option<(String, String, Vec<String>)> {
+	let gate = run.results.iter().flat_map(|result| &result.gates).find(|gate| !gate.pass);
+	if let Some(gate) = gate {
+		return Some((gate.name.clone(), gate.command.clone(), tail_of(gate.log.as_deref())));
+	}
+	let result = run.results.iter().find(|result| result.exit != Some(0))?;
+	Some((result.spec.name.clone(), result.spec.command.clone(), tail_of(Some(&result.log))))
+}
+
+/// What `report_result` answers while the thread's loop cap is tripped (0677).
+fn stopped_said(breaker: &Breaker) -> String {
+	format!(
+		"report_result: `{}` failed {LOOP_CAP} times in a row; this thread is stopped until he answers.",
+		breaker.name
+	)
+}
+
+/// A passing run as the report's tests (0677): one per gate, or one for a check that named none.
+fn tests_of(run: &CheckRun) -> Vec<ReportedTest> {
+	let mut tests = Vec::new();
+	for result in &run.results {
+		if result.gates.is_empty() {
+			tests.push(ReportedTest { command: result.spec.command.clone(), passed: result.exit == Some(0) });
+		}
+		tests.extend(result.gates.iter().map(|gate| ReportedTest { command: gate.command.clone(), passed: gate.pass }));
+	}
+	tests
+}
+
 pub struct ReviewFlow {
 	/// The service's context, reached only through here (SVC-15).
 	pub link: Link,
-	/// Checks on idle under way, and pane checks that outlast their wait: `stop` waits for them once their checks are
-	/// ended.
-	idle_checks: Calls,
+	/// The full checks run ahead of time and the pane checks that outlast their wait: `stop` waits for them once their
+	/// checks are ended.
+	prechecks: Calls,
 	/// Ends every pane check's wait under way (`end_pane_waits`, when the service stops).
 	pane_waits: Notify,
 	state: Mutex<State>,
@@ -186,7 +285,7 @@ pub struct ReviewFlow {
 
 impl ReviewFlow {
 	pub fn new(link: Link) -> Self {
-		Self { link, idle_checks: Calls::default(), pane_waits: Notify::new(), state: Mutex::new(State::default()) }
+		Self { link, prechecks: Calls::default(), pane_waits: Notify::new(), state: Mutex::new(State::default()) }
 	}
 
 	fn st(&self) -> MutexGuard<'_, State> {
@@ -337,8 +436,8 @@ impl ReviewFlow {
 		// Jocasta's runner checks the task's tree first (0542, 0546): the turn gets the failing gates, nothing on a pass.
 		let done_when = t.task.as_ref().map(|record| record.done_when.clone()).unwrap_or_default();
 		let place = Place::of(&t);
-		let (specs, skipped) = self.checks_for(&place, &done_when).await?;
-		let run = self.run_checks(&place, &specs, None).await;
+		let (specs, skipped) = self.checks_for(&place, &done_when, Depth::Full).await?;
+		let run = self.run_checks(&place, &specs, None, Depth::Full).await;
 		self.update_review(thread, at, |review| {
 			if let Some(running) = review.running.as_mut() {
 				if run.is_some() {
@@ -349,6 +448,7 @@ impl ReviewFlow {
 				}
 			}
 		});
+		let facts = self.review_facts_for(&t, range, run.as_ref()).await;
 		let record = t.task.as_ref();
 		let context = ReviewContext {
 			plan: plan.map(PathBuf::from),
@@ -362,6 +462,7 @@ impl ReviewFlow {
 					.filter(|_| self.report_in(&t))
 					.map(|report| report_line(&report.value)),
 			),
+			facts: Some(facts),
 		};
 		c.bridge.prompt(&t.pane_id, c.bridge.seal(&review_prompt(hunk, range, &context)), Deliver::FollowUp).await?;
 		Ok(())
@@ -412,6 +513,9 @@ impl ReviewFlow {
 	pub async fn ready(&self, thread: &ThreadRef) -> Result<()> {
 		let c = self.link.ctx();
 		let found = self.found(thread).await?;
+		thread.with(|t| {
+			c.journal.thread("review_ready", t, json!({ "notes": found.notes, "blocking": found.blocking }));
+		});
 		let said = self.record_result(thread, &found)?;
 		let counted = format!("done and reviewed: {said}");
 		let (merging, failed) = thread.with(|t| {
@@ -541,7 +645,7 @@ impl ReviewFlow {
 		};
 		let done_when = t.task.as_ref().map(|record| record.done_when.clone()).unwrap_or_default();
 		let run = match running.as_ref().and_then(|running| running.checks.as_ref()) {
-			Some(specs) => self.run_checks(&Place::of(&t), specs, None).await,
+			Some(specs) => self.run_checks(&Place::of(&t), specs, None, Depth::Full).await,
 			None => None,
 		};
 		let project = run.as_ref().and_then(|run| run.results.iter().find(|result| result.spec.mise));
@@ -634,13 +738,14 @@ impl ReviewFlow {
 		record.report.as_ref().is_some_and(|report| report.at > last)
 	}
 
-	/// The checks of `place`, a thread's worktree or a project pane's folder (0453, 0473, 0540, 0542, 0617): the project's
-	/// own (its trusted mise `verify`/`test` task, run as `mise run -c <task>` so a failing task doesn't stop the others,
-	/// 0559) and the `done_when` commands, with why the project's own can't run when mise may not load its config (0559).
-	/// The one place checks are decided: the review, the check on idle, the project pane's check and the `check` tool all
-	/// run these through the runner. The folder's unchanged copies of trusted mise configs are trusted first (0596), so a
-	/// copy a merge brought in from trunk is trusted again here.
-	async fn checks_for(&self, place: &Place, done_when: &[String]) -> Result<ChecksFor> {
+	/// The checks of `place`, a thread's worktree or a project pane's folder (0453, 0473, 0540, 0542, 0617, 0677): the
+	/// project's own and the `done_when` commands, with why the project's own can't run when mise may not load its config
+	/// (0559). `Full` is the project's trusted mise `verify` task, else `test`, plus each `done_when`; `Quick` (a turn's
+	/// end) is its `quick` task, else `verify`, else `test`, and no `done_when`. A task runs as `mise run -c <task>` so a
+	/// failing task doesn't stop the others (0559). The one place checks are decided: the review, `report_result`, the
+	/// turn-end check and the `check` tool all run these through the runner. The folder's unchanged copies of trusted mise
+	/// configs are trusted first (0596), so a copy a merge brought in from trunk is trusted again here.
+	async fn checks_for(&self, place: &Place, done_when: &[String], depth: Depth) -> Result<ChecksFor> {
 		let c = self.link.ctx();
 		let mise = mise_of(&c);
 		let env = c.panes.check_env();
@@ -648,7 +753,12 @@ impl ReviewFlow {
 		if own {
 			trust_copies(&place.project.id, &place.project.main_path, &place.path, Some(&env), mise).await;
 		}
-		let project = if own { mise_check(&place.project.id, &place.path, Some(&env), mise).await } else { None };
+		let names: &[&str] = match depth {
+			Depth::Quick => &["quick", "verify", "test"],
+			Depth::Full => &["verify", "test"],
+		};
+		let project =
+			if own { mise_task_among(&place.project.id, &place.path, names, Some(&env), mise).await } else { None };
 		let words: Vec<String> = match mise {
 			Mise::Argv(argv) => argv.to_vec(),
 			_ => vec!["mise".to_owned()],
@@ -658,19 +768,15 @@ impl ReviewFlow {
 			.map(|word| if PLAIN_WORD.is_match(&word) { word } else { format!("\"{word}\"") })
 			.collect();
 		let (task, skipped) = match project {
-			Some(MiseCheck::Task(MiseCheckTask::Verify)) => (Some("verify"), None),
-			Some(MiseCheck::Task(MiseCheckTask::Test)) => (Some("test"), None),
-			Some(MiseCheck::Skipped(why)) => (None, Some(why)),
+			Some(Found::Task(task)) => (Some(task), None),
+			Some(Found::Skipped(why)) => (None, Some(why)),
 			None => (None, None),
 		};
 		let mut specs: Vec<CheckSpec> = task
-			.map(|task| CheckSpec {
-				name: task.to_owned(),
-				command: format!("{} run -c {task}", argv.join(" ")),
-				mise: true,
-			})
+			.map(|task| CheckSpec { command: format!("{} run -c {task}", argv.join(" ")), name: task, mise: true })
 			.into_iter()
 			.collect();
+		let done_when: &[String] = if depth == Depth::Quick { &[] } else { done_when };
 		specs.extend(done_when.iter().enumerate().map(|(i, command)| CheckSpec {
 			name: if i == 0 { "done_when".to_owned() } else { format!("done_when-{}", i + 1) },
 			command: command.clone(),
@@ -681,8 +787,15 @@ impl ReviewFlow {
 
 	/// Runs `specs` on `place`'s folder through the runner (0542, 0559), with the env its panes get (mise's included,
 	/// Jocasta's own keys left out), on `tree` when the caller already keyed it (SRV-B-17); `None` without specs,
-	/// outside git, or when the runner fails (logged).
-	async fn run_checks(&self, place: &Place, specs: &[CheckSpec], tree: Option<&str>) -> Option<CheckRun> {
+	/// outside git, or when the runner fails (logged). Each check this call ran itself (not a stored result) is a `gate`
+	/// line of the journal (0688).
+	async fn run_checks(
+		&self,
+		place: &Place,
+		specs: &[CheckSpec],
+		tree: Option<&str>,
+		depth: Depth,
+	) -> Option<CheckRun> {
 		if specs.is_empty() {
 			return None;
 		}
@@ -697,6 +810,16 @@ impl ReviewFlow {
 			Ok(run) => {
 				if let Some(run) = &run {
 					c.thread_facts.note_check(&place.path, run.passed, c.day.now_ms());
+					for result in run.results.iter().filter(|result| result.how == How::Ran) {
+						let fields = json!({
+							"depth": depth.as_str(),
+							"command": result.spec.command,
+							"exit": result.exit,
+							"ms": result.ms,
+							"tree": run.tree,
+						});
+						c.journal.append("gate", place.about(), fields);
+					}
 				}
 				run
 			}
@@ -707,24 +830,10 @@ impl ReviewFlow {
 		}
 	}
 
-	/// Starts the check on idle beside the pane's state chain: a long check never holds its next state change. None with
-	/// the layer off (0576).
-	pub fn start_idle_check(&self, thread: &ThreadRef) {
-		let c = self.link.ctx();
-		if !c.layer {
-			return;
-		}
-		let thread = thread.clone();
-		self.idle_checks.spawn(async move {
-			if let Err(error) = c.review.idle_check(&thread).await {
-				c.warn(error);
-			}
-		});
-	}
-
-	/// Waits for the checks on idle still under way (`stop`, once the runner ended their checks).
+	/// Waits for the full checks run ahead of time and the pane checks still under way (`stop`, once the runner ended
+	/// their checks).
 	pub async fn settled(&self) {
-		self.idle_checks.settled().await;
+		self.prechecks.settled().await;
 	}
 
 	/// Ends the pane checks' waits, so their requests answer nothing at once (`stop`); their checks end with the runner.
@@ -732,39 +841,141 @@ impl ReviewFlow {
 		self.pane_waits.notify_waiters();
 	}
 
-	/// The check on idle (0513, v1 by 0542): a thread whose turn ended with edits not yet checked has its checks run on
-	/// its tree; failing gates go into its pane under 0583's frame, a pass says nothing. A tree already checked, or one
-	/// with no edits since the last commit, costs the tree key only: mise is asked for the checks after (SVC-10).
-	async fn idle_check(&self, thread: &ThreadRef) -> Result<()> {
+	/// The thread's loop cap, when it is tripped (0677).
+	fn tripped(&self, pane_id: &str) -> Option<Breaker> {
+		self.st().breakers.get(pane_id).filter(|breaker| breaker.tripped).cloned()
+	}
+
+	/// Counts `run` for the thread's loop cap (0677): a pass ends the count, a failure of the gate that failed last adds
+	/// one, a failure of another gate starts at one. The breaker returned is the one this run tripped, at the cap.
+	fn count_gate(&self, pane_id: &str, run: &CheckRun) -> Option<Breaker> {
+		let mut state = self.st();
+		if run.passed {
+			if state.breakers.get(pane_id).is_some_and(|breaker| !breaker.tripped) {
+				state.breakers.remove(pane_id);
+			}
+			return None;
+		}
+		let (name, command, tail) = failing_gate(run)?;
+		let breaker = state.breakers.entry(pane_id.to_owned()).or_default();
+		if breaker.tripped {
+			return None;
+		}
+		if breaker.command == command {
+			breaker.count += 1;
+		} else {
+			breaker.command = command;
+			breaker.count = 1;
+		}
+		breaker.name = name;
+		breaker.tail = tail;
+		if breaker.count < LOOP_CAP {
+			return None;
+		}
+		breaker.tripped = true;
+		Some(breaker.clone())
+	}
+
+	/// What a tripped breaker does (0677): the thread's stuck state, its journal line and a NEEDS YOU event.
+	async fn trip(&self, pane_id: &str, breaker: &Breaker) {
+		let c = self.link.ctx();
+		let Some(thread) = c.threads.get(pane_id) else { return };
+		let said = format!("stuck: {} failed {LOOP_CAP}×", breaker.name);
+		thread.with(|t| {
+			t.stuck = Some(said.clone());
+			c.journal.thread("stuck", t, json!({ "gate": breaker.name }));
+		});
+		let what = format!("{said} in a row; it is stopped until you answer");
+		c.events.thread(&thread, &what, ToastPriority::Urgent, None).await;
+	}
+
+	/// The last lines of the gate a tripped thread keeps failing (0678's stuck brief, today's news box); none when it
+	/// isn't tripped.
+	pub fn stuck_tail(&self, thread: &Thread) -> Vec<String> {
+		self.tripped(&thread.pane_id).map(|breaker| breaker.tail).unwrap_or_default()
+	}
+
+	/// His word ends a tripped breaker and the count (0677): `thread_send` calls it. An over-budget stop isn't ended
+	/// here, only by raising the budget.
+	pub fn reset_breaker(&self, thread: &ThreadRef) {
+		let pane_id = thread.with(|t| {
+			if t.stuck.as_deref().is_some_and(|stuck| stuck.starts_with("stuck:")) {
+				t.stuck = None;
+			}
+			t.pane_id.clone()
+		});
+		self.st().breakers.remove(&pane_id);
+	}
+
+	/// The gate `report_result` runs before it stores anything (0677): the full checks on the thread's tree. A pass is
+	/// the report's `tests`, one per gate; a failure is the tool's error with the gates; the third failure in a row of
+	/// the same gate trips the breaker, which ends the turn. A thread with no checks passes with no tests.
+	pub async fn full_gate(&self, thread: &ThreadRef) -> Result<Vec<ReportedTest>> {
 		let c = self.link.ctx();
 		let t = thread.get();
-		if t.phase != Phase::Task || plan_awaits(&t) {
-			return Ok(());
-		}
-		let Some(tree) = c.checks.tree_key(&t.path).await? else { return Ok(()) };
-		if !self.unchecked(&t.path, &tree, t.idle_tree.as_deref()).await? {
-			return Ok(());
+		if let Some(breaker) = self.tripped(&t.pane_id) {
+			return Err(Error::user(stopped_said(&breaker)));
 		}
 		let done_when = t.task.as_ref().map(|record| record.done_when.clone()).unwrap_or_default();
 		let place = Place::of(&t);
-		let (specs, _) = self.checks_for(&place, &done_when).await?;
-		if specs.is_empty() {
-			return Ok(());
+		let (specs, _) = self.checks_for(&place, &done_when, Depth::Full).await?;
+		let Some(run) = self.run_checks(&place, &specs, None, Depth::Full).await else { return Ok(Vec::new()) };
+		if let Some(breaker) = self.count_gate(&t.pane_id, &run) {
+			self.trip(&t.pane_id, &breaker).await;
+			let (c, pane_id) = (c.clone(), t.pane_id.clone());
+			self.prechecks.spawn(async move {
+				if let Err(error) = c.lifecycle.abort_turn(&pane_id).await {
+					c.warn(error);
+				}
+			});
+			return Err(Error::user(stopped_said(&breaker)));
 		}
-		thread.with(|t| t.idle_tree = Some(tree.clone()));
-		let Some(run) = self.run_checks(&place, &specs, Some(&tree)).await else { return Ok(()) };
-		if run.passed || c.stopping() || !c.threads.current(thread) {
-			return Ok(());
+		if !run.passed {
+			let reply = gate_reply(&run);
+			return Err(Error::user(format!(
+				"report_result: not stored, the checks fail:\n{reply}\nFix them and hand the report in again."
+			)));
 		}
-		// Only into a thread still idle on that tree: a turn since, or a plan or question waiting, leaves it alone.
-		let now = thread.get();
-		if now.phase != Phase::Task || plan_awaits(&now) || !is_idle(now.state) || c.lifecycle.busy(&now.pane_id) {
-			return Ok(());
+		Ok(tests_of(&run))
+	}
+
+	/// The files the thread changed against trunk, from git (0677): what `report_result` stores as the report's files.
+	pub async fn changed_files(&self, thread: &ThreadRef) -> Vec<String> {
+		let c = self.link.ctx();
+		let t = thread.get();
+		let trunk = c.places.trunk(&t.project).await.ok().flatten().filter(|trunk| !trunk.is_empty());
+		let Some(trunk) = trunk else { return Vec::new() };
+		let range = format!("{trunk}...HEAD");
+		let named = git_out(&t.path, &["diff", "--name-only", &range]).await.ok().flatten().unwrap_or_default();
+		named.lines().filter(|line| !line.is_empty()).map(str::to_owned).collect()
+	}
+
+	/// What a new thread's brief carries (0685): computed by code, so the thread doesn't spend turns on it.
+	pub async fn start_facts(&self, thread: &ThreadRef) -> String {
+		let c = self.link.ctx();
+		let t = thread.get();
+		let mise = mise_of(&c);
+		let env = c.panes.check_env();
+		if !matches!(mise, Mise::Absent) {
+			trust_copies(&t.project.id, &t.project.main_path, &t.path, Some(&env), mise).await;
 		}
-		let message = format!("{}: checks failed on tree {}", subject(&now), short_tree(&run.tree));
-		log(LogLevel::Info, "checks", &message, None);
-		c.bridge.prompt(&now.pane_id, c.bridge.seal(&idle_check_text(&gate_reply(&run))), Deliver::FollowUp).await?;
-		Ok(())
+		let tasks = mise_tasks_among(&t.project.id, &t.path, &["quick", "verify", "test"], Some(&env), mise).await;
+		let trunk = c.places.trunk(&t.project).await.ok().flatten();
+		start_facts(&t.path, trunk.as_deref(), &t.branch, &tasks).await
+	}
+
+	/// What a review prompt carries (0685): the range's commits and files and each check's exit on the tree.
+	async fn review_facts_for(&self, thread: &Thread, range: &str, run: Option<&CheckRun>) -> String {
+		let checks: Vec<CheckFact> = run
+			.map(|run| {
+				run.results
+					.iter()
+					.map(|result| CheckFact { command: result.spec.command.clone(), exit: result.exit })
+					.collect()
+			})
+			.unwrap_or_default();
+		let file = thread.task.as_ref().map(|task| task_dir(&thread.project.id, &task.id).join("facts.md"));
+		review_facts(&thread.path, range, &checks, run.map(|run| run.tree.as_str()), file.as_deref()).await
 	}
 
 	/// Whether `tree`, the tree of the folder `path` as it is now, has edits not yet checked (0513, 0617): it differs from
@@ -777,22 +988,23 @@ impl ReviewFlow {
 		Ok(git_out(path, &["rev-parse", "HEAD^{tree}"]).await?.as_deref() != Some(tree))
 	}
 
-	/// A project pane's check when its turn ends (0617), asked by the bridge extension as a `stop` request (0675): the
-	/// threads' rule on the pane's own folder. A tree with edits not yet checked has the project's check run (no
-	/// `done_when`), after the pane's previous check; a failure within the wait, counted from the request, is the answer,
-	/// in the threads' frame text, once per tree. A check still running when the wait ends, or when `signal` says the
-	/// pane stopped asking, goes on: if it then fails, `today` says so and the failure is owed to the pane's next request
-	/// on the same tree, once; a tree that changed meanwhile drops it. A pass says nothing; so does a pane that isn't a
-	/// project pane's (a thread's, the boss's, an unknown key) and the layer off (0576). The tree is noted before mise is
-	/// asked, so a project with no check costs the tree key alone until it changes. Empty: nothing to say.
+	/// A pane's check when its turn ends (0617, 0677), asked by the bridge extension as a `stop` request (0675): the
+	/// quick check on the pane's own folder, a thread's worktree or a project pane's folder. A tree with edits not yet
+	/// checked has the quick check run, after the pane's previous check; a failure within the wait, counted from the
+	/// request, is the answer, in the threads' frame text, once per tree. A check still running when the wait ends, or
+	/// when `signal` says the pane stopped asking, goes on: if it then fails, `today` says so and the failure is owed to
+	/// the pane's next request on the same tree, once; a tree that changed meanwhile drops it. A pass says nothing, and
+	/// for a thread starts its full check ahead of time; so does a pane that is neither (the boss's, an unknown key),
+	/// a thread past its task phase or waiting on a plan, a thread whose loop cap tripped, and the layer off (0576). The
+	/// tree is noted before mise is asked, so a project with no check costs the tree key alone until it changes. Empty:
+	/// nothing to say.
 	pub async fn pane_check(&self, pane_key: &str, signal: Option<AbortSignal>) -> Result<String> {
 		let c = self.link.ctx();
 		let ends = now_ms() + c.options.pane_check_wait_ms.unwrap_or(PANE_CHECK_WAIT_MS);
 		let Some(pane_id) = c.launched.pane_of_key(Some(pane_key)) else { return Ok(String::new()) };
-		let Some(path) = c.launched.cwd_of(&pane_id).map(PathBuf::from) else { return Ok(String::new()) };
-		let project = if c.layer { c.places.project_pane_at(&path)? } else { None };
-		let Some(project) = project else { return Ok(String::new()) };
-		let Some(tree) = c.checks.tree_key(&path).await? else { return Ok(String::new()) };
+		let place = if c.layer { self.place_of_pane(&pane_id)? } else { None };
+		let Some(place) = place else { return Ok(String::new()) };
+		let Some(tree) = c.checks.tree_key(&place.path).await? else { return Ok(String::new()) };
 		let owed = self.st().pane_checks.entry(pane_id.clone()).or_default().owed.take();
 		if let Some((owed_tree, text)) = owed
 			&& owed_tree == tree
@@ -800,11 +1012,11 @@ impl ReviewFlow {
 			return Ok(text);
 		}
 		let last = self.st().pane_checks.entry(pane_id.clone()).or_default().tree.replace(tree.clone());
-		if !self.unchecked(&path, &tree, last.as_deref()).await? {
+		if !self.unchecked(&place.path, &tree, last.as_deref()).await? {
 			return Ok(String::new());
 		}
-		let name = project.name.clone();
-		let checking = self.start_pane_check(&pane_id, Place { title: name.clone(), project, path }, &tree);
+		let name = place.title.clone();
+		let checking = self.start_pane_check(&pane_id, place, &tree);
 		let mut late =
 			LateCheck { c: c.clone(), name, tree, pane_id, checking: checking.clone(), done: None, armed: true };
 		let done = self.within(checking, ends, signal.clone()).await;
@@ -816,6 +1028,28 @@ impl ReviewFlow {
 		}
 		late.done = done;
 		Ok(String::new())
+	}
+
+	/// Where `pane_id`'s turn-end check runs: a thread's worktree while it is in its task phase with no plan waiting and
+	/// no tripped breaker, or the project pane's folder; `None` for any other pane.
+	fn place_of_pane(&self, pane_id: &str) -> Result<Option<Place>> {
+		let c = self.link.ctx();
+		if let Some(thread) = c.threads.get(pane_id) {
+			let t = thread.get();
+			if t.phase != Phase::Task || plan_awaits(&t) || self.tripped(pane_id).is_some() {
+				return Ok(None);
+			}
+			return Ok(Some(Place::of(&t)));
+		}
+		let Some(path) = c.launched.cwd_of(pane_id).map(PathBuf::from) else { return Ok(None) };
+		Ok(c.places.project_pane_at(&path)?.map(|project| Place {
+			title: project.name.clone(),
+			project,
+			path,
+			pane_id: pane_id.to_owned(),
+			task_id: None,
+			thread: false,
+		}))
 	}
 
 	/// Starts the pane's check of `tree` after the pane's previous one: the tree replaced while it waited is not run.
@@ -858,19 +1092,65 @@ impl ReviewFlow {
 		}
 	}
 
-	/// `place`'s project check on `tree` through the runner: the frame text of its failing gates, "" on a pass or no check.
+	/// `place`'s quick check on `tree` through the runner: the frame text of its failing gates, "" on a pass, no check,
+	/// or a thread whose loop cap is tripped. For a thread the run counts toward the cap, and a pass starts its full check
+	/// ahead of time.
 	async fn check_tree(&self, place: &Place, tree: &str) -> String {
 		let c = self.link.ctx();
-		let specs = match self.checks_for(place, &[]).await {
+		let specs = match self.checks_for(place, &[], Depth::Quick).await {
 			Ok((specs, _)) => specs,
 			Err(error) => {
 				c.warn(error);
 				return String::new();
 			}
 		};
-		match self.run_checks(place, &specs, Some(tree)).await {
-			Some(run) if !run.passed => idle_check_text(&gate_reply(&run)),
-			_ => String::new(),
+		let Some(run) = self.run_checks(place, &specs, Some(tree), Depth::Quick).await else {
+			if place.thread {
+				self.start_precheck(place, tree, &specs).await;
+			}
+			return String::new();
+		};
+		if place.thread {
+			if let Some(breaker) = self.count_gate(&place.pane_id, &run) {
+				self.trip(&place.pane_id, &breaker).await;
+			}
+			if self.tripped(&place.pane_id).is_some() {
+				return String::new();
+			}
+			if run.passed {
+				self.start_precheck(place, tree, &specs).await;
+			}
+		}
+		if run.passed { String::new() } else { idle_check_text(&gate_reply(&run)) }
+	}
+
+	/// Starts the thread's full check on `tree` ahead of time (0685), when it differs from the quick one: its result lands
+	/// in the check store, so `report_result` and the review on the same tree answer from it. A newer tree ends the
+	/// previous precheck's wait (the runner's own run goes on). Its failure is not sent to the pane.
+	async fn start_precheck(&self, place: &Place, tree: &str, quick: &[CheckSpec]) {
+		let c = self.link.ctx();
+		let done_when = c
+			.threads
+			.get(&place.pane_id)
+			.and_then(|thread| thread.with(|t| t.task.as_ref().map(|record| record.done_when.clone())))
+			.unwrap_or_default();
+		let full = match self.checks_for(place, &done_when, Depth::Full).await {
+			Ok((full, _)) => full,
+			Err(error) => return c.warn(error),
+		};
+		if full.is_empty() || full == quick {
+			return;
+		}
+		let (place, tree) = (place.clone(), tree.to_owned());
+		let pane_id = place.pane_id.clone();
+		let in_flight = self.prechecks.enter();
+		let owned = c.clone();
+		let handle = tokio::spawn(async move {
+			let _in_flight = in_flight;
+			owned.review.run_checks(&place, &full, Some(&tree), Depth::Full).await;
+		});
+		if let Some(previous) = self.st().prechecking.insert(pane_id, handle.abort_handle()) {
+			previous.abort();
 		}
 	}
 
@@ -886,7 +1166,7 @@ impl ReviewFlow {
 		let t = thread.get();
 		let done_when = t.task.as_ref().map(|record| record.done_when.clone()).unwrap_or_default();
 		let place = Place::of(&t);
-		let (specs, skipped) = self.checks_for(&place, &done_when).await?;
+		let (specs, skipped) = self.checks_for(&place, &done_when, Depth::Full).await?;
 		if specs.is_empty() {
 			return Ok(match skipped {
 				Some(why) => format!("No checks: {}, and the task has no done_when.", skipped_said(&why)),
@@ -896,7 +1176,7 @@ impl ReviewFlow {
 				}
 			});
 		}
-		let Some(run) = self.run_checks(&place, &specs, None).await else {
+		let Some(run) = self.run_checks(&place, &specs, None, Depth::Full).await else {
 			return Err(Error::user("check: the checks couldn't run here (see Jocasta's log)."));
 		};
 		let reply = gate_reply(&run);

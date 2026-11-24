@@ -538,8 +538,6 @@ impl ThreadLifecycle {
 			None => "finished its turn".to_owned(),
 		};
 		ctx.events.thread(thread, &said, ToastPriority::Normal, None).await;
-		// The check on idle runs beside the pane's state chain: a long check never holds its next state change.
-		ctx.review.start_idle_check(thread);
 		Ok(())
 	}
 
@@ -721,12 +719,20 @@ impl ThreadLifecycle {
 		let Some(thread) = ctx.threads.get(pane_id) else {
 			return Err(Error::user(format!("omp in {pane_id} can't be stopped from Jocasta; check the pin")));
 		};
+		self.restart(&thread).await
+	}
+
+	/// Starts the thread's omp again on its session (`--restore`): what an omp that can't abort gets, and what a raised
+	/// cost cap needs for its new `--max-cost` (0686).
+	pub async fn restart(&self, thread: &ThreadRef) -> Result<()> {
+		let ctx = self.link.ctx();
+		let pane_id = thread.with(|t| t.pane_id.clone());
 		let session =
-			ctx.bridge.session(pane_id).map(PathBuf::from).or_else(|| thread.with(|t| t.session_path.clone()));
+			ctx.bridge.session(&pane_id).map(PathBuf::from).or_else(|| thread.with(|t| t.session_path.clone()));
 		if let Some(session) = session {
-			ctx.launched.pause(pane_id, &session.display().to_string())?;
+			ctx.launched.pause(&pane_id, &session.display().to_string())?;
 		}
-		self.relaunch(&thread).await
+		self.relaunch(thread).await
 	}
 
 	/// Whether the thread waits on him now, before anything is typed into its pane (B1): a question (herdr's blocked) or

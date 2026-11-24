@@ -706,70 +706,88 @@ async fn the_check_tool_and_the_review_say_when_the_projects_mise_check_didnt_ru
 	);
 }
 
-#[tokio::test]
-async fn a_turn_ending_with_failing_edits_gets_the_gates_once_under_the_frame_and_a_pass_says_nothing_0513_0542() {
-	let clean = "git diff --quiet";
-	let w = World::with(Setup { done_when: vec![clean.to_owned()], ..Setup::default() }).await;
-	std::fs::write(w.wt.join("README.md"), "demo\nchanged\n").unwrap();
-	w.flow().start_idle_check(&w.thread);
-	w.flow().settled().await;
-	let typed = w.typed("t-1");
-	assert_eq!(typed.len(), 1);
-	assert!(typed[0].starts_with(&format!("{IDLE_CHECK_FRAME}\n\nchecks: FAIL")), "{}", typed[0]);
-	assert!(typed[0].contains(&format!("  FAIL  done_when  {clean}\n")));
-	assert!(typed[0].contains(&format!("        rerun: {clean}")));
-	// The check tool answers the same tree from the stored result, without the frame.
-	assert_eq!(w.flow().check_tool(Some("t-1"), "").await.unwrap(), typed[0][IDLE_CHECK_FRAME.len() + 2..]);
-	// The same tree is never checked or answered twice.
-	w.flow().start_idle_check(&w.thread);
-	w.flow().settled().await;
-	assert_eq!(w.typed("t-1").len(), 1);
-	// A tree with no edits since the last commit costs nothing; a pass says nothing.
-	commit_in(&w.wt, "demo\nchanged\n", "Change it");
-	w.flow().start_idle_check(&w.thread);
-	w.flow().settled().await;
-	assert_eq!(w.typed("t-1").len(), 1);
-	assert_eq!(w.thread().idle_tree.as_deref().map(str::len), Some(40));
+/// Edits the thread's worktree README, so its tree differs from the last one.
+fn edit_wt(w: &World, text: &str) {
+	std::fs::write(w.wt.join("README.md"), format!("demo\n{text}\n")).unwrap();
 }
 
 #[tokio::test]
-async fn the_check_on_idle_leaves_a_thread_alone_that_is_working_waits_on_a_plan_or_left_the_task_phase() {
-	let clean = "git diff --quiet";
-	let w = World::with(Setup { done_when: vec![clean.to_owned()], ..Setup::default() }).await;
-	std::fs::write(w.wt.join("README.md"), "demo\nchanged\n").unwrap();
-	let idle = async || {
-		w.flow().start_idle_check(&w.thread);
-		w.flow().settled().await;
-		w.typed("t-1").len()
-	};
+async fn a_threads_turn_end_with_failing_edits_gets_the_quick_checks_gates_once_under_the_frame_and_a_pass_says_nothing_0513_0677()
+ {
+	let w = World::with(Setup { mise: true, ..Setup::default() }).await;
+	// No edits since HEAD: nothing to check.
+	assert_eq!(ask(&w, "thread-key").await, "");
+	assert_eq!(w.lines("runs"), 0);
+	w.control("exit", 1);
+	edit_wt(&w, "one");
+	let text = ask(&w, "thread-key").await;
+	assert!(text.starts_with(&format!("{IDLE_CHECK_FRAME}\n\nchecks: FAIL")), "{text}");
+	assert_eq!(w.lines("runs"), 1);
+	// The same tree is never checked or answered twice.
+	assert_eq!(ask(&w, "thread-key").await, "");
+	assert_eq!(w.lines("runs"), 1);
+	// A pass says nothing; a tree with no edits since the last commit costs nothing.
+	w.control("exit", 0);
+	edit_wt(&w, "two");
+	assert_eq!(ask(&w, "thread-key").await, "");
+	w.flow().settled().await;
+	commit_in(&w.wt, "demo\ntwo\n", "Add two");
+	assert_eq!(ask(&w, "thread-key").await, "");
+	w.flow().settled().await;
+	assert_eq!(w.lines("runs"), 2);
+}
+
+#[tokio::test]
+async fn the_turn_end_check_leaves_a_thread_alone_that_waits_on_a_plan_or_left_the_task_phase() {
+	let w = World::with(Setup { mise: true, ..Setup::default() }).await;
+	w.control("exit", 1);
+	edit_wt(&w, "one");
 	w.thread.with(|t| {
 		t.plan = Some(crate::frontier::server::thread::ThreadPlan {
 			awaiting: Some("A plan".to_owned()),
 			..Default::default()
 		})
 	});
-	assert_eq!(idle().await, 0);
+	assert_eq!(ask(&w, "thread-key").await, "");
 	w.thread.with(|t| t.plan = None);
 	w.thread.with(|t| set_phase(t, Phase::Review, "test"));
-	assert_eq!(idle().await, 0);
+	assert_eq!(ask(&w, "thread-key").await, "");
+	assert_eq!(w.lines("runs"), 0);
 	w.thread.with(|t| set_phase(t, Phase::Task, "test"));
-	// Working when its check ends: the gates wait for its next turn end.
-	w.thread.with(|t| t.state = AgentState::Working);
-	assert_eq!(idle().await, 0);
-	w.thread.with(|t| t.idle_tree = None);
-	w.thread.with(|t| t.state = AgentState::Idle);
-	assert_eq!(idle().await, 1);
+	assert!(ask(&w, "thread-key").await.starts_with(IDLE_CHECK_FRAME));
 }
 
 #[tokio::test]
-async fn with_the_layer_off_the_check_on_idle_runs_nothing_0576() {
-	let w = World::with(Setup { layer_off: true, done_when: vec!["git diff --quiet".to_owned()], ..Setup::default() })
-		.await;
-	std::fs::write(w.wt.join("README.md"), "demo\nchanged\n").unwrap();
-	w.flow().start_idle_check(&w.thread);
-	w.flow().settled().await;
-	assert!(w.typed("t-1").is_empty());
-	assert_eq!(w.thread().idle_tree, None);
+async fn with_the_layer_off_a_threads_turn_end_check_runs_nothing_0576() {
+	let w = World::with(Setup { mise: true, layer_off: true, ..Setup::default() }).await;
+	w.control("exit", 1);
+	edit_wt(&w, "one");
+	assert_eq!(ask(&w, "thread-key").await, "");
+	assert_eq!(w.lines("runs"), 0);
+}
+
+#[tokio::test]
+async fn the_same_gate_failing_three_turn_ends_in_a_row_ends_the_turn_and_stops_the_thread_0677() {
+	let w = World::with(Setup { mise: true, ..Setup::default() }).await;
+	w.control("exit", 1);
+	edit_wt(&w, "one");
+	assert!(ask(&w, "thread-key").await.starts_with(IDLE_CHECK_FRAME));
+	edit_wt(&w, "two");
+	assert!(ask(&w, "thread-key").await.starts_with(IDLE_CHECK_FRAME));
+	assert_eq!(w.thread().stuck, None);
+	edit_wt(&w, "three");
+	// The third failure: the context is empty, so the turn ends and no model turn follows.
+	assert_eq!(ask(&w, "thread-key").await, "");
+	assert_eq!(w.thread().stuck.as_deref(), Some("stuck: verify failed 3×"));
+	let runs = w.lines("runs");
+	// Every later stop answers empty and runs nothing.
+	edit_wt(&w, "four");
+	assert_eq!(ask(&w, "thread-key").await, "");
+	assert_eq!(w.lines("runs"), runs);
+	// Only his word resets it.
+	w.flow().reset_breaker(&w.thread);
+	assert_eq!(w.thread().stuck, None);
+	assert!(ask(&w, "thread-key").await.starts_with(IDLE_CHECK_FRAME));
 }
 
 /// A project pane's check as its extension asks for it; "" for nothing.
@@ -827,10 +845,11 @@ async fn a_project_panes_turn_end_with_edits_not_yet_checked_gets_the_failing_ch
 }
 
 #[tokio::test]
-async fn a_threads_key_the_bosss_key_and_an_unknown_key_get_nothing_and_run_nothing_0617() {
+async fn the_bosss_key_and_an_unknown_key_get_nothing_and_run_nothing_0617() {
 	let w = World::with(Setup { mise: true, ..Setup::default() }).await;
 	w.control("exit", 1);
 	edit(&w, "one");
+	// A thread's key checks its own worktree, which has no edits here.
 	assert_eq!(ask(&w, "thread-key").await, "");
 	assert_eq!(ask(&w, "boss-key").await, "");
 	assert_eq!(ask(&w, "no such key").await, "");
@@ -943,4 +962,88 @@ async fn stopping_the_service_ends_a_pane_checks_wait_at_once_and_writes_no_toda
 	w.flow().settled().await;
 	assert!(!w.today().iter().any(|line| line.contains("checks failed")));
 	w.release();
+}
+
+#[tokio::test]
+async fn a_failing_full_gate_stores_nothing_and_says_the_gates_and_a_pass_is_one_test_per_gate_0677() {
+	let w = World::with(Setup { mise: true, ..Setup::default() }).await;
+	w.control("exit", 1);
+	let said = w.flow().full_gate(&w.thread).await.unwrap_err().to_string();
+	assert!(said.starts_with("report_result: not stored, the checks fail:\n"), "{said}");
+	assert!(said.ends_with("Fix them and hand the report in again."), "{said}");
+	// The same tree answers from the store, failing; a changed tree is checked again.
+	w.control("exit", 0);
+	edit_wt(&w, "fixed");
+	let tests = w.flow().full_gate(&w.thread).await.unwrap();
+	assert_eq!(tests.len(), 1);
+	assert!(tests[0].passed, "{tests:?}");
+	assert!(tests[0].command.contains("verify"), "{tests:?}");
+}
+
+#[tokio::test]
+async fn the_third_failure_of_a_gate_in_report_result_trips_the_breaker_aborts_the_turn_and_every_later_call_says_so_0677()
+ {
+	let w = World::with(Setup { mise: true, ..Setup::default() }).await;
+	w.control("exit", 1);
+	for _ in 0..2 {
+		let said = w.flow().full_gate(&w.thread).await.unwrap_err().to_string();
+		assert!(said.starts_with("report_result: not stored"), "{said}");
+	}
+	assert_eq!(w.thread().stuck, None);
+	let stopped = w.flow().full_gate(&w.thread).await.unwrap_err().to_string();
+	assert!(stopped.starts_with("report_result: `"), "{stopped}");
+	assert!(stopped.ends_with(" failed 3 times in a row; this thread is stopped until he answers."), "{stopped}");
+	assert_eq!(w.thread().stuck.as_deref(), Some("stuck: verify failed 3×"));
+	until(|| !w.t.herdr.of("stop").is_empty()).await;
+	assert_eq!(w.t.herdr.of("stop")[0][0], json!("t-1"));
+	// A later call answers the same error and runs nothing.
+	let runs = w.lines("runs");
+	assert_eq!(w.flow().full_gate(&w.thread).await.unwrap_err().to_string(), stopped);
+	assert_eq!(w.lines("runs"), runs);
+	// The stuck tail holds the gate's output for the thread's brief.
+	assert!(w.flow().stuck_tail(&w.thread()).iter().any(|line| line.contains("boom")));
+}
+
+#[tokio::test]
+async fn a_quick_pass_starts_the_full_check_ahead_of_time_and_report_result_answers_from_the_store_0685() {
+	let w = World::with(Setup { mise: true, done_when: vec!["git --version".to_owned()], ..Setup::default() }).await;
+	edit_wt(&w, "one");
+	// The turn end's quick check passes: nothing goes back into the turn, and verify has run once.
+	assert_eq!(ask(&w, "thread-key").await, "");
+	w.flow().settled().await;
+	assert_eq!(w.lines("runs"), 1);
+	// The report's full check, on the same tree, runs nothing more: its verify and done_when answer from the store.
+	let tests = w.flow().full_gate(&w.thread).await.unwrap();
+	assert_eq!(tests.len(), 2, "{tests:?}");
+	assert_eq!(w.lines("runs"), 1);
+}
+
+#[tokio::test]
+async fn the_journal_gets_a_gate_line_for_each_run_and_a_stuck_line_when_the_breaker_trips_0688() {
+	let w = World::with(Setup { mise: true, ..Setup::default() }).await;
+	w.thread.with(|t| t.task.as_mut().expect("the world's thread has a task").id = "t-0001".to_owned());
+	w.control("exit", 1);
+	edit_wt(&w, "one");
+	ask(&w, "thread-key").await;
+	let journal = || -> Vec<serde_json::Value> {
+		std::fs::read_to_string(crate::shared::paths::data_dir().join("journal.jsonl"))
+			.unwrap_or_default()
+			.lines()
+			.map(|line| serde_json::from_str(line).unwrap())
+			.collect()
+	};
+	let gates: Vec<_> = journal().into_iter().filter(|line| line["kind"] == "gate").collect();
+	assert_eq!(gates.len(), 1);
+	assert_eq!(gates[0]["depth"], "quick");
+	assert_eq!(gates[0]["thread"], "t-0001", "a thread's gate line names it by its task id");
+	assert_ne!(gates[0]["exit"], 0);
+	assert!(gates[0]["tree"].as_str().is_some_and(|tree| tree.len() >= 6));
+	assert!(gates[0]["ms"].as_i64().is_some());
+	for text in ["two", "three"] {
+		edit_wt(&w, text);
+		ask(&w, "thread-key").await;
+	}
+	let stuck: Vec<_> = journal().into_iter().filter(|line| line["kind"] == "stuck").collect();
+	assert_eq!(stuck.len(), 1);
+	assert_eq!(stuck[0]["gate"], "verify");
 }

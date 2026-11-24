@@ -137,7 +137,7 @@ async fn a_heavy_threads_omp_starts_again_with_heavy_yml_after_the_overlay_resum
 	let task = migrate(Some(true));
 	let thread = thread_of(Some(task.clone()));
 	let prompt = task_dir(&task.project_id, &task.id).join("prompt.md").display().to_string();
-	let heavy = strings(&["--config", &shipped("heavy.yml")]);
+	let heavy = strings(&["--config", &shipped("heavy.yml"), "--max-cost", "150"]);
 	let flags = strings(&THREAD_FLAGS);
 	let resuming = respawned(&t, Respawn { thread: Some(&thread), ..plain(&cwd, Some(Vec::new())) }).await;
 	assert_eq!(
@@ -260,12 +260,33 @@ async fn the_boss_pane_starts_with_the_hook_too() {
 }
 
 #[test]
-fn after_overlay_is_heavy_yml_for_a_heavy_task_and_nothing_for_another_or_none() {
+fn after_overlay_is_heavy_yml_and_the_cost_cap_for_a_thread_and_nothing_for_none() {
 	let heavy = migrate(Some(true));
-	assert_eq!(after_overlay(Some(&heavy)), strings(&["--config", &shipped("heavy.yml")]));
-	assert!(after_overlay(Some(&migrate(None))).is_empty());
-	assert!(after_overlay(Some(&migrate(Some(false)))).is_empty());
+	// A heavy thread without a budget gets twice `threads.maxCostUsd` (0686).
+	assert_eq!(after_overlay(Some(&heavy)), strings(&["--config", &shipped("heavy.yml"), "--max-cost", "150"]));
+	assert_eq!(after_overlay(Some(&migrate(None))), strings(&["--max-cost", "75"]));
+	assert_eq!(after_overlay(Some(&migrate(Some(false)))), strings(&["--max-cost", "75"]));
+	// A budget overrides both.
+	let mut budgeted = migrate(Some(true));
+	budgeted.budget = Some(5.0);
+	assert_eq!(after_overlay(Some(&budgeted)), strings(&["--config", &shipped("heavy.yml"), "--max-cost", "5"]));
+	// The boss and the project panes have no task, so no cap.
 	assert!(after_overlay(None).is_empty());
+}
+
+#[test]
+fn a_cost_cap_of_0_in_the_settings_is_no_cap_but_a_budget_still_holds_0686() {
+	let jocasta = crate::shared::testing::temp_jocasta();
+	std::fs::create_dir_all(crate::shared::paths::config_dir()).unwrap();
+	std::fs::write(crate::shared::paths::config_dir().join("jocasta.yaml"), "threads:\n  maxCostUsd: 0\n").unwrap();
+	assert_eq!(thread_budget(&migrate(None)), None);
+	assert_eq!(thread_budget(&migrate(Some(true))), None);
+	assert!(after_overlay(Some(&migrate(None))).is_empty());
+	let mut budgeted = migrate(None);
+	budgeted.budget = Some(12.5);
+	assert_eq!(thread_budget(&budgeted), Some(12.5));
+	assert_eq!(after_overlay(Some(&budgeted)), strings(&["--max-cost", "12.5"]));
+	drop(jocasta);
 }
 
 #[test]

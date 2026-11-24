@@ -143,6 +143,47 @@ pub fn new_thread_question(projects: &[String], project: Option<&str>) -> PopupV
 	}
 }
 
+/// The stop-all key's confirm buttons (0686): every running turn ends on Yes; No is the default.
+pub const YES: &str = "Yes";
+/// The stop-all confirm's default.
+pub const NO: &str = "No";
+
+/// The stop-all key's confirm (0686): no code, since nothing is lost.
+pub fn stop_all_question() -> PopupView {
+	PopupView {
+		title: "Jocasta: Stop every running turn?".to_owned(),
+		message: "Stop every running turn?".to_owned(),
+		detail: Some(
+			"Each omp's current turn ends, the boss's too. Threads keep their phases and stuck states.".to_owned(),
+		),
+		choices: choices(&[YES, NO]),
+		fallback: NO.to_owned(),
+		code: None,
+		form: None,
+	}
+}
+
+/// The over-budget question's buttons (0686): `Raise by $<setting>` and Stop the thread, the default.
+pub const STOP_THREAD: &str = "Stop the thread";
+
+/// The label of the raise answer: `Raise by $75`.
+pub fn raise_label(by: f64) -> String {
+	format!("Raise by ${}", crate::frontier::protocol::js_number_text(by))
+}
+
+/// A thread that reached its cost cap (0686): raise the cap by `raise_by` dollars and carry on, or stop it.
+pub fn over_budget_question(name: &str, said: &str, raise_by: f64) -> PopupView {
+	PopupView {
+		title: format!("Jocasta: {name} is over budget"),
+		message: format!("{name} reached its cost cap. Raise it, or stop the thread?"),
+		detail: Some(said.to_owned()),
+		choices: vec![raise_label(raise_by), STOP_THREAD.to_owned()],
+		fallback: STOP_THREAD.to_owned(),
+		code: None,
+		form: None,
+	}
+}
+
 /// How a question ended (0578): his answer (`Answered`, his Deny or Cancel included), three wrong codes
 /// (`WrongCodes`), the terminal it showed in left without an answer (`Closed`), or the asker stopped waiting
 /// (`Withdrawn`: the wait ran out, Jocasta is closing).

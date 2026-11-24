@@ -136,3 +136,77 @@ fn at_most_ten_prs_are_watched_the_one_asked_about_longest_ago_goes() {
 	assert!(state.prs.contains_key(&url(0)) && state.prs.contains_key(&url(10)));
 	assert!(!state.prs.contains_key(&url(1)));
 }
+
+/// Commits `files` (name, text) in `repo` as one commit.
+fn commit_files(repo: &Path, files: &[(&str, &str)], message: &str) {
+	for (name, text) in files {
+		fs::write(repo.join(name), text).unwrap();
+	}
+	sh(repo, &["add", "."]);
+	sh(repo, &["commit", "-q", "-m", message]);
+}
+
+#[tokio::test]
+async fn a_review_gets_its_ranges_commits_and_files_under_the_facts_line_computed_by_code_0685() {
+	let dir = temp_dir("thread-facts");
+	let repo = copy_repo(&dir.path().join("demo"));
+	sh(&repo, &["checkout", "-q", "-b", "feature/x"]);
+	commit_files(&repo, &[("a.txt", "a\n"), ("b.txt", "b\n")], "Add a and b");
+	commit_files(&repo, &[("c.txt", "c\n")], "Add c");
+	commit_files(&repo, &[("d.txt", "d\n"), ("e.txt", "e\ne\n")], "Add d and e");
+	let sha = sh(&repo, &["rev-parse", "--short=7", "HEAD"]);
+	let checks = [CheckFact { command: "mise run verify".to_owned(), exit: Some(0) }];
+	let facts = review_facts(&repo, "main...feature/x", &checks, Some("0123456789abcdef"), None).await;
+	let lines: Vec<&str> = facts.lines().collect();
+	assert_eq!(
+		lines[0],
+		format!(
+			"Facts as of {sha} (computed by Jocasta; don't re-run git status, git log or git diff --stat for them):"
+		)
+	);
+	assert_eq!(lines[1], "Commits (3):");
+	assert!(lines[2..5].iter().all(|line| line.starts_with("  ")));
+	assert!(lines[2].ends_with("Add d and e") && lines[4].ends_with("Add a and b"), "{facts}");
+	assert_eq!(lines[5], "Changed files, added/removed (5):");
+	assert_eq!(lines[6..11].iter().filter(|line| line.contains(".txt")).count(), 5, "{facts}");
+	assert!(lines[6..11].contains(&"  2 0 e.txt"), "{facts}");
+	assert_eq!(lines[11], "Checks on tree 012345:");
+	assert_eq!(lines[12], "  `mise run verify` exit 0");
+	assert_eq!(lines.len(), 13);
+}
+
+#[tokio::test]
+async fn a_start_gets_branch_trunk_head_and_the_mise_tasks_0685() {
+	let dir = temp_dir("thread-facts");
+	let repo = copy_repo(&dir.path().join("demo"));
+	let sha = sh(&repo, &["rev-parse", "--short=7", "HEAD"]);
+	let tasks = ["quick".to_owned(), "verify".to_owned()];
+	let facts = start_facts(&repo, Some("main"), "feature/x", &tasks).await;
+	assert_eq!(
+		facts,
+		format!(
+			"Facts as of {sha} (computed by Jocasta; don't re-run git status, git log or git diff --stat for them):\n- branch: feature/x\n- trunk: main\n- HEAD: {sha}\n- mise tasks: quick, verify"
+		)
+	);
+	let none = start_facts(&repo, None, "feature/x", &[]).await;
+	assert!(none.contains("- trunk: none") && none.ends_with("- mise tasks: none of quick, verify, test"), "{none}");
+}
+
+#[tokio::test]
+async fn a_block_over_60_lines_is_written_whole_and_the_prompt_carries_40_lines_and_the_path_0685() {
+	let dir = temp_dir("thread-facts");
+	let repo = copy_repo(&dir.path().join("demo"));
+	sh(&repo, &["checkout", "-q", "-b", "feature/x"]);
+	let names: Vec<String> = (0..70).map(|n| format!("f{n:02}.txt")).collect();
+	let files: Vec<(&str, &str)> = names.iter().map(|name| (name.as_str(), "x\n")).collect();
+	commit_files(&repo, &files, "Add many");
+	let file = dir.path().join("facts.md");
+	let facts = review_facts(&repo, "main...feature/x", &[], None, Some(&file)).await;
+	let lines: Vec<&str> = facts.lines().collect();
+	assert_eq!(lines.len(), 41);
+	assert_eq!(lines[40], format!("Full facts: {}", file.display()));
+	let whole = fs::read_to_string(&file).unwrap();
+	assert!(whole.contains("  … 10 more files"), "{whole}");
+	assert_eq!(whole.lines().count(), 1 + 1 + 1 + 1 + 60 + 1);
+	assert!(whole.starts_with(&lines[..40].join("\n")));
+}

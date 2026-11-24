@@ -111,3 +111,5 @@ Phase 1 (the bridge, 0675) is built in the working tree, not yet green: library 
 Phase 1 (the bridge, 0675) is built in the working tree and not yet green: the library and the extension are done; the test suite and the bench callers are not migrated yet.
 
 Phase 2 (process diet, 0676) is built in the working tree: sleep and wake, pressure sleep, sleepers as new project panes; the live 16-minute check and the daemon-worker look (step 9) are left to the parent.
+
+Phase 3 (deterministic loops, stages and breakers, 0677, 0682, 0685, 0686, 0688) is built in the working tree: the quick check at every turn end, the `report_result` gate, the 3-failure loop cap, PR by code, facts blocks, the cost cap, stop-all (`X`) and the journal; the live omp checks (turn-end loop, real `gh`/`az`, the `--max-cost` refusal) are left to the parent.

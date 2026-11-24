@@ -427,7 +427,8 @@ pub(crate) fn task_dir_of(project_id: &str, title: &str) -> PathBuf {
 	found.unwrap_or_else(|| panic!("no task file for {title}")).0
 }
 
-/// A thread pane's omp as started again: its task's launch prompt where the shipped prompt goes (0540).
+/// A thread pane's omp as started again: its task's launch prompt where the shipped prompt goes (0540), and its cost
+/// cap, `threads.maxCostUsd` (0686).
 pub(crate) fn thread_omp(project_id: &str, title: &str) -> Vec<String> {
 	let prompt = task_dir_of(project_id, title).join("prompt.md");
 	let mut argv = strings(&["omp", "--continue", "--append-system-prompt"]);
@@ -436,6 +437,7 @@ pub(crate) fn thread_omp(project_id: &str, title: &str) -> Vec<String> {
 	argv.extend(bridge_flags());
 	argv.extend(strings(&["--warn-cost", "50", "--config"]));
 	argv.push(overlay_file(project_id).display().to_string());
+	argv.extend(strings(&["--max-cost", "75"]));
 	argv
 }
 

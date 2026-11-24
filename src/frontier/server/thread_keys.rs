@@ -16,7 +16,7 @@ use super::close::CloseOutcome;
 use super::events::Toast;
 use super::herdr::pane_text;
 use super::keys::{FinishHow, KeyFinishable, KeyOutcome, Keys, NewThreadForm};
-use super::popups::{MERGE, PR, Popup, START, finish_question, new_thread_question};
+use super::popups::{MERGE, PR, Popup, START, YES, finish_question, new_thread_question, stop_all_question};
 use crate::frontier::protocol::{PluginAction, PopupView, ServerMessage, ToastLevel, ToastReason};
 use crate::shared::errors::Result;
 use crate::shared::log::{LogLevel, log};
@@ -44,9 +44,14 @@ pub trait KeyService: Send + Sync {
 	fn key_finish<'a>(&'a self, pane_id: &'a str, how: FinishHow) -> BoxFuture<'a, Result<KeyOutcome>>;
 	fn new_thread_form<'a>(&'a self, pane_id: Option<&'a str>) -> BoxFuture<'a, Result<NewThreadForm>>;
 	fn key_start<'a>(&'a self, project: &'a str, brief: &'a str) -> BoxFuture<'a, Result<KeyOutcome>>;
+	fn key_stop_all<'a>(&'a self) -> BoxFuture<'a, Result<String>>;
 }
 
 impl KeyService for Keys {
+	fn key_stop_all<'a>(&'a self) -> BoxFuture<'a, Result<String>> {
+		Box::pin(self.stop_all())
+	}
+
 	fn key_stop<'a>(&'a self, pane_id: Option<&'a str>) -> BoxFuture<'a, Result<String>> {
 		Box::pin(self.stop(pane_id))
 	}
@@ -142,6 +147,17 @@ async fn finish_key(pane_id: Option<&str>, deps: &ActionDeps) -> Result<Option<A
 	Ok(Some(deps.service.key_finish(&finish.pane_id, how).await?))
 }
 
+async fn stop_all_key(deps: &ActionDeps) -> Result<Option<ActionOutcome>> {
+	if reask(deps, "stop-all") {
+		return Ok(None);
+	}
+	let popup = ask_once(deps, "stop-all", &stop_all_question()).await;
+	if popup.answer().await != YES {
+		return Ok(Some(said("Stop all: every turn runs on.")));
+	}
+	Ok(Some(said(deps.service.key_stop_all().await?)))
+}
+
 async fn new_thread_key(pane_id: Option<&str>, deps: &ActionDeps) -> Result<Option<ActionOutcome>> {
 	if reask(deps, "new-thread") {
 		return Ok(None);
@@ -175,6 +191,7 @@ pub async fn run_action(
 		PluginAction::Review => Ok(Some(said(deps.service.key_review(pane_id).await?))),
 		PluginAction::Finish => finish_key(pane_id, deps).await,
 		PluginAction::NewThread => new_thread_key(pane_id, deps).await,
+		PluginAction::StopAll => stop_all_key(deps).await,
 		PluginAction::Quit => {
 			let text =
 				if (deps.quit)().await? == CloseOutcome::Kept { "Jocasta keeps running." } else { "Jocasta stopped." };

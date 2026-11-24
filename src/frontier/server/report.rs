@@ -51,7 +51,10 @@ pub struct ReportedDecision {
 pub struct ThreadReport {
 	pub outcome: Outcome,
 	pub summary: String,
+	/// Taken from git and the check run by `report_result` (0677); an older record or a report parsed here has none.
+	#[serde(default)]
 	pub files: Vec<String>,
+	#[serde(default)]
 	pub tests: Vec<ReportedTest>,
 	pub decisions: Vec<ReportedDecision>,
 	pub questions: Vec<String>,
@@ -59,12 +62,12 @@ pub struct ThreadReport {
 }
 
 /// The tool's description as thread panes see it.
-pub const REPORT_DESCRIPTION: &str = "Hand in this task's report once its work is committed.\nGive the outcome, a summary of at most 200 characters, the files changed, the tests you ran, the decisions you settled, open questions for him and follow-ups. Jocasta stores it with the thread and its review reads it; a test you mark passed is your claim, the review runs its own.";
+pub const REPORT_DESCRIPTION: &str = "Hand in this task's report once its work is committed.\nJocasta runs the project's full check first and stores nothing while it fails; its answer is the failing gates. Give the outcome, a summary of at most 200 characters, the decisions you settled, open questions for him and follow-ups. The files changed and the tests run are taken from git and the check run, not from you. Jocasta stores the report with the thread and its review reads it.";
 
 /// The schema's shape, one tree that both `report_schema` and the checker read.
 enum Shape {
 	Text { min: usize, max: Option<usize>, description: &'static str },
-	Flag { description: &'static str },
+
 	List { items: Box<Shape>, description: &'static str },
 	Record { fields: Vec<(&'static str, Shape)>, description: Option<&'static str> },
 	Outcome { description: &'static str },
@@ -79,13 +82,6 @@ fn list_of(items: Shape, description: &'static str) -> Shape {
 }
 
 fn report_shape() -> Shape {
-	let test = Shape::Record {
-		fields: vec![
-			("command", text("The test command as you ran it")),
-			("passed", Shape::Flag { description: "Whether it passed" }),
-		],
-		description: None,
-	};
 	let decision = Shape::Record {
 		fields: vec![
 			("question", text("What had to be decided")),
@@ -101,8 +97,6 @@ fn report_shape() -> Shape {
 				"summary",
 				Shape::Text { min: 1, max: Some(200), description: "What the task did, at most 200 characters" },
 			),
-			("files", list_of(text("A file path"), "The files the task changed")),
-			("tests", list_of(test, "The tests you ran and whether each passed")),
 			("decisions", list_of(decision, "Choices you settled that later work shouldn't reopen")),
 			("questions", list_of(text("A question"), "Open questions for him")),
 			("followUps", list_of(text("A follow-up"), "Work left for later")),
@@ -123,7 +117,7 @@ impl Shape {
 				schema["description"] = json!(description);
 				schema
 			}
-			Self::Flag { description } => json!({"type": "boolean", "description": description}),
+
 			Self::List { items, description } => {
 				json!({"type": "array", "items": items.schema(), "description": description})
 			}
@@ -173,7 +167,7 @@ fn message(path: &[String], text: &str) -> Option<Found> {
 fn type_name(shape: &Shape) -> &'static str {
 	match shape {
 		Shape::Text { .. } | Shape::Outcome { .. } => "string",
-		Shape::Flag { .. } => "boolean",
+
 		Shape::List { .. } => "array",
 		Shape::Record { .. } => "object",
 	}
@@ -191,7 +185,7 @@ fn first_error(shape: &Shape, value: &Value, path: &mut Vec<String>) -> Option<F
 			max.filter(|max| length > *max)
 				.and_then(|max| message(path, &format!("must not have more than {max} characters")))
 		}
-		(Shape::Flag { .. }, Value::Bool(_)) => None,
+
 		(Shape::Outcome { .. }, Value::String(text)) => (text != Outcome::Done.as_str())
 			.then(|| (path.clone(), Mismatch::Message("must be equal to constant".to_owned()))),
 		(Shape::List { items, .. }, Value::Array(values)) => values.iter().enumerate().find_map(|(i, item)| {
@@ -230,6 +224,13 @@ fn record_error(
 
 /// The report, or the first reason it doesn't fit the schema (`report_result: <path> <message>`).
 pub fn parse_report(value: &Value) -> Result<ThreadReport, String> {
+	// The files and the tests are Jocasta's to fill (0677): a thread that sends them is not refused for it.
+	let mut value = value.clone();
+	if let Value::Object(object) = &mut value {
+		object.remove("files");
+		object.remove("tests");
+	}
+	let value = &value;
 	let Some((path, mismatch)) = first_error(&report_shape(), value, &mut Vec::new()) else {
 		return serde_json::from_value(value.clone())
 			.map_err(|_| format!("{REPORT_RESULT}: the report doesn't fit its schema"));
@@ -284,8 +285,7 @@ mod tests {
 		json!({
 			"outcome": "done",
 			"summary": "s",
-			"files": ["a"],
-			"tests": [{"command": "c", "passed": true}],
+
 			"decisions": [{"question": "q", "choice": "c", "why": "w"}],
 			"questions": ["q"],
 			"followUps": ["f"],
@@ -307,7 +307,10 @@ mod tests {
 		let report = parse_report(&ok()).unwrap();
 		assert_eq!(report.outcome, Outcome::Done);
 		assert_eq!(report.follow_ups, ["f"]);
-		assert_eq!(serde_json::to_value(&report).unwrap(), ok());
+		let mut stored = ok();
+		stored["files"] = json!([]);
+		stored["tests"] = json!([]);
+		assert_eq!(serde_json::to_value(&report).unwrap(), stored);
 		assert!(parse_report(&with("summary", json!("😀".repeat(150)))).is_ok());
 		assert!(parse_report(&with("summary", json!("x".repeat(200)))).is_ok());
 	}
@@ -319,28 +322,17 @@ mod tests {
 			(json!([]), "report_result: the report must be object"),
 			(
 				json!({}),
-				"report_result: the report must have required properties outcome, summary, files, tests, decisions, questions, followUps",
+				"report_result: the report must have required properties outcome, summary, decisions, questions, followUps",
 			),
 			(
 				json!({"outcome": "done"}),
-				"report_result: the report must have required properties summary, files, tests, decisions, questions, followUps",
+				"report_result: the report must have required properties summary, decisions, questions, followUps",
 			),
 			(with("outcome", json!("x")), "report_result: outcome must be equal to constant"),
 			(with("outcome", json!(1)), "report_result: outcome must be string"),
 			(with("summary", json!("")), "report_result: summary must not have fewer than 1 characters"),
 			(with("summary", json!("x".repeat(201))), "report_result: summary must not have more than 200 characters"),
 			(with("summary", json!(3)), "report_result: summary must be string"),
-			(with("files", json!("a")), "report_result: files must be array"),
-			(with("files", Value::Null), "report_result: files must be array"),
-			(with("files", json!([""])), "report_result: files.0 must not have fewer than 1 characters"),
-			(with("files", json!([1])), "report_result: files.0 must be string"),
-			(with("tests", json!([{"command": "c"}])), "report_result: tests.0 must have required properties passed"),
-			(with("tests", json!([{"command": "c", "passed": "y"}])), "report_result: tests.0.passed must be boolean"),
-			(with("tests", json!(["a"])), "report_result: tests.0 must be object"),
-			(
-				with("tests", json!([{"command": "c", "passed": true}, {"command": 1, "passed": true}])),
-				"report_result: tests.1.command must be string",
-			),
 			(
 				with("decisions", json!([{"question": "q", "choice": "c"}])),
 				"report_result: decisions.0 must have required properties why",
@@ -359,8 +351,8 @@ mod tests {
 		let mut both = both;
 		both["extra"] = json!(1);
 		assert_eq!(problem(&both), "report_result: unknown field extra in the report");
-		let tests = with("tests", json!([{"command": "c", "passed": true, "x": 1}]));
-		assert_eq!(problem(&tests), "report_result: unknown field x in tests.0");
+		let sent = with("files", json!("not even a list"));
+		assert!(parse_report(&sent).unwrap().files.is_empty());
 		let decisions = with("decisions", json!([{"question": "q", "choice": "c", "why": "w", "z": 1}]));
 		assert_eq!(problem(&decisions), "report_result: unknown field z in decisions.0");
 		// The first unknown key named is the first in the JSON text, as typebox names it: not the alphabetical first.
@@ -369,20 +361,22 @@ mod tests {
 		)
 		.unwrap();
 		assert_eq!(problem(&text), "report_result: unknown field zeta in the report");
-		let tests: Value = serde_json::from_str(
-			r#"{"outcome":"done","summary":"s","files":[],"tests":[{"command":"c","passed":true,"zz":1,"aa":2}],"decisions":[],"questions":[],"followUps":[]}"#,
-		)
+		// A report from before 0677 still reads: its files and tests are kept by the record, not asked of the thread.
+		let old: ThreadReport = serde_json::from_value(json!({
+			"outcome": "done", "summary": "s", "files": ["a"], "tests": [{"command": "c", "passed": true}],
+			"decisions": [], "questions": [], "followUps": []
+		}))
 		.unwrap();
-		assert_eq!(problem(&tests), "report_result: unknown field zz in tests.0");
+		assert_eq!(old.files, ["a"]);
 		// An array-index key comes first in a JavaScript object, whatever its place in the text.
 		let indexed: Value = serde_json::from_str(
 			r#"{"outcome":"done","zeta":1,"10":2,"2":3,"summary":"s","files":[],"tests":[],"decisions":[],"questions":[],"followUps":[]}"#,
 		)
 		.unwrap();
 		assert_eq!(problem(&indexed), "report_result: unknown field 2 in the report");
-		// Missing properties come before unknown ones in the same object.
-		let tests = with("tests", json!([{"x": 1}]));
-		assert_eq!(problem(&tests), "report_result: tests.0 must have required properties command, passed");
+		// The files and the tests are Jocasta's: sent, they are dropped before the schema looks (0677).
+		let sent = with("tests", json!([{"x": 1}]));
+		assert!(parse_report(&sent).unwrap().tests.is_empty());
 	}
 
 	#[test]
@@ -390,10 +384,7 @@ mod tests {
 		let schema = report_schema();
 		assert_eq!(schema["type"], "object");
 		assert_eq!(schema["additionalProperties"], false);
-		assert_eq!(
-			schema["required"],
-			json!(["outcome", "summary", "files", "tests", "decisions", "questions", "followUps"])
-		);
+		assert_eq!(schema["required"], json!(["outcome", "summary", "decisions", "questions", "followUps"]));
 		assert_eq!(
 			schema["properties"]["outcome"],
 			json!({"anyOf": [{"type": "string", "const": "done"}, {"type": "string", "const": "blocked"}, {"type": "string", "const": "failed"}], "description": "done, blocked or failed"})
@@ -402,10 +393,7 @@ mod tests {
 			schema["properties"]["summary"],
 			json!({"type": "string", "minLength": 1, "maxLength": 200, "description": "What the task did, at most 200 characters"})
 		);
-		assert_eq!(
-			schema["properties"]["tests"],
-			json!({"type": "array", "items": {"type": "object", "required": ["command", "passed"], "properties": {"command": {"type": "string", "minLength": 1, "description": "The test command as you ran it"}, "passed": {"type": "boolean", "description": "Whether it passed"}}, "additionalProperties": false}, "description": "The tests you ran and whether each passed"})
-		);
+		assert!(schema["properties"].get("files").is_none() && schema["properties"].get("tests").is_none());
 		assert_eq!(
 			schema["properties"]["decisions"]["items"]["properties"]["why"],
 			json!({"type": "string", "minLength": 1, "description": "Why"})
@@ -421,7 +409,7 @@ mod tests {
 		let mut report = parse_report(&ok()).unwrap();
 		assert_eq!(
 			report_line(&report),
-			"outcome done · \"s\" · tests 1/1 · files: a · decisions: q = c · questions: q · follow-ups: f"
+			"outcome done · \"s\" · tests 0/0 · decisions: q = c · questions: q · follow-ups: f"
 		);
 		report.summary = "two\n  lines \"quoted\"".to_owned();
 		report.tests.push(ReportedTest { command: "d".to_owned(), passed: false });
@@ -431,7 +419,7 @@ mod tests {
 		report.follow_ups.clear();
 		assert_eq!(
 			report_line(&report),
-			"outcome done · \"two lines \\\"quoted\\\"\" · tests 1/2 · files: a b, c · questions: x y; z"
+			"outcome done · \"two lines \\\"quoted\\\"\" · tests 0/1 · files: a b, c · questions: x y; z"
 		);
 		let bare = ThreadReport {
 			outcome: Outcome::Blocked,

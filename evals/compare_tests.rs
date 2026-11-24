@@ -249,7 +249,7 @@ fn the_arms_a0_a4_build_on_each_other_and_give_each_harness_its_flags_0482() {
 		]
 	);
 	let settings = settings_of(&a1);
-	assert_eq!(settings["compaction"]["thresholdTokens"], json!(300_000));
+	assert_eq!(settings["compaction"]["thresholdTokens"], json!(200_000));
 	assert_eq!(settings["dev"]["autoqa"], json!(false));
 	let a2 = shipped("a2");
 	assert_eq!(

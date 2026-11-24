@@ -104,6 +104,105 @@ pub fn check_of(checks: &[CheckExit]) -> Option<bool> {
 	(!checks.is_empty()).then(|| checks.iter().all(|check| check.exit == Some(0)))
 }
 
+/// A block of facts this long goes whole into the thread's `facts.md`, and the prompt carries its first lines (0685).
+const FACTS_BLOCK_MAX: usize = 60;
+/// How many lines of such a block the prompt carries.
+const FACTS_PROMPT_LINES: usize = 40;
+/// The most commits and changed files a review's facts list.
+const FACTS_COMMITS: usize = 30;
+const FACTS_FILES: usize = 60;
+
+/// A check as the review's facts say it: its command and exit (`None`: not run).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckFact {
+	pub command: String,
+	pub exit: Option<i32>,
+}
+
+/// The first line of every facts block (0685).
+fn facts_heading(sha: &str) -> String {
+	format!("Facts as of {sha} (computed by Jocasta; don't re-run git status, git log or git diff --stat for them):")
+}
+
+/// `HEAD` of `worktree` as 7 hex, or `unknown` when git doesn't say.
+async fn head7(worktree: &Path) -> String {
+	git_out(worktree, &["rev-parse", "--short=7", "HEAD"])
+		.await
+		.ok()
+		.flatten()
+		.filter(|sha| !sha.is_empty())
+		.unwrap_or_else(|| "unknown".to_owned())
+}
+
+/// What a new thread's brief carries (0685): its branch, trunk, `HEAD` and which of the mise tasks `quick`, `verify` and
+/// `test` the project has.
+pub async fn start_facts(worktree: &Path, trunk: Option<&str>, branch: &str, tasks: &[String]) -> String {
+	let sha = head7(worktree).await;
+	let tasks = if tasks.is_empty() { "none of quick, verify, test".to_owned() } else { tasks.join(", ") };
+	[
+		facts_heading(&sha),
+		format!("- branch: {branch}"),
+		format!("- trunk: {}", trunk.filter(|trunk| !trunk.is_empty()).unwrap_or("none")),
+		format!("- HEAD: {sha}"),
+		format!("- mise tasks: {tasks}"),
+	]
+	.join("\n")
+}
+
+/// A block as the prompt carries it: whole when it is at most 60 lines; else its first 40 lines and `Full facts: <path>`,
+/// the whole block written to `file` (when that can't be written the cut block says so).
+fn carried(block: Vec<String>, file: Option<&Path>) -> String {
+	if block.len() <= FACTS_BLOCK_MAX {
+		return block.join("\n");
+	}
+	let written = file.and_then(|file| {
+		crate::shared::fsx::write_atomically(file, format!("{}\n", block.join("\n")), None).ok().map(|()| file)
+	});
+	let mut shown: Vec<String> = block.into_iter().take(FACTS_PROMPT_LINES).collect();
+	match written {
+		Some(file) => shown.push(format!("Full facts: {}", file.display())),
+		None => shown.push("Full facts: not written".to_owned()),
+	}
+	shown.join("\n")
+}
+
+/// What a review is given (0685): up to 30 commits of the range (`git log --format="%h %s"`), up to 60 changed files
+/// (`git diff --numstat`, then `… <n> more files`) and each check's command and exit with the tree key. `range` is the
+/// review's `<trunk>...<branch>`; the commits are the branch's own. A block over 60 lines is written to `file`.
+pub async fn review_facts(
+	worktree: &Path,
+	range: &str,
+	checks: &[CheckFact],
+	tree: Option<&str>,
+	file: Option<&Path>,
+) -> String {
+	let sha = head7(worktree).await;
+	let commits_range = range.replace("...", "..");
+	let log = git_out(worktree, &["log", "--format=%h %s", &commits_range]).await.ok().flatten().unwrap_or_default();
+	let stat = git_out(worktree, &["diff", "--numstat", range]).await.ok().flatten().unwrap_or_default();
+	let commits: Vec<&str> = log.lines().filter(|line| !line.is_empty()).collect();
+	let files: Vec<&str> = stat.lines().filter(|line| !line.is_empty()).collect();
+	let mut block = vec![facts_heading(&sha), format!("Commits ({}):", commits.len())];
+	block.extend(commits.iter().take(FACTS_COMMITS).map(|line| format!("  {line}")));
+	if commits.len() > FACTS_COMMITS {
+		block.push(format!("  … {} more commits", commits.len() - FACTS_COMMITS));
+	}
+	block.push(format!("Changed files, added/removed ({}):", files.len()));
+	block.extend(files.iter().take(FACTS_FILES).map(|line| format!("  {}", line.replace('\t', " "))));
+	if files.len() > FACTS_FILES {
+		block.push(format!("  … {} more files", files.len() - FACTS_FILES));
+	}
+	if !checks.is_empty() {
+		let at = tree.map(|tree| format!(" on tree {}", tree.chars().take(6).collect::<String>())).unwrap_or_default();
+		block.push(format!("Checks{at}:"));
+		block.extend(checks.iter().map(|check| match check.exit {
+			Some(code) => format!("  `{}` exit {code}", check.command),
+			None => format!("  `{}` not run", check.command),
+		}));
+	}
+	carried(block, file)
+}
+
 fn mtime_ms(file: &Path) -> Option<i64> {
 	let modified = std::fs::metadata(file).ok()?.modified().ok()?;
 	i64::try_from(modified.duration_since(UNIX_EPOCH).ok()?.as_millis()).ok()

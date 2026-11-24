@@ -337,6 +337,15 @@ impl Peer {
 	}
 }
 
+/// A prompt as a test double's sink sees it: without the facts block code computed (0685), whose lines depend on the
+/// repository's commits. The facts have their own tests, which read the whole text from `Recording::sent`.
+#[cfg(test)]
+fn without_facts(text: &str) -> String {
+	let Some(at) = text.find("Facts as of ") else { return text.to_owned() };
+	let end = text[at..].find("\n\n").map_or(text.len(), |end| at + end + 2);
+	format!("{}{}", text[..at].trim_end(), &text[end..])
+}
+
 /// What a test double records instead of sending (`Bridge::recording`).
 #[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
@@ -464,7 +473,16 @@ impl Bridge {
 
 	/// The panes whose omp is connected.
 	pub fn panes(&self) -> Vec<String> {
-		locked(&self.inner.peers).keys().cloned().collect()
+		let panes: Vec<String> = locked(&self.inner.peers).keys().cloned().collect();
+		#[cfg(test)]
+		let panes = {
+			let mut panes = panes;
+			if let Some(recording) = locked(&self.inner.recording).as_ref() {
+				panes.extend(recording.agents.keys().filter(|pane| !panes.contains(pane)).cloned().collect::<Vec<_>>());
+			}
+			panes
+		};
+		panes
 	}
 
 	/// What omp in `pane_id` reported, or `None` while it isn't connected.
@@ -549,7 +567,7 @@ impl Bridge {
 		// The sink runs unlocked: a test's sink may take its time, and the bridge is used meanwhile.
 		if let Some(sink) = sink {
 			let (method, args) = match &sent {
-				Sent::Prompt { pane, text, .. } => ("prompt", vec![json!(pane), json!(text)]),
+				Sent::Prompt { pane, text, .. } => ("prompt", vec![json!(pane), json!(without_facts(text))]),
 				Sent::Compact { pane, instructions } => {
 					("prompt", vec![json!(pane), json!(format!("/handoff {instructions}"))])
 				}

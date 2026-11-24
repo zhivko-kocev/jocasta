@@ -91,10 +91,10 @@
 					},
 					{
 						"name": "report_result",
-						"description": "Hand in this task's report once its work is committed.\nGive the outcome, a summary of at most 200 characters, the files changed, the tests you ran, the decisions you settled, open questions for him and follow-ups. Jocasta stores it with the thread and its review reads it; a test you mark passed is your claim, the review runs its own.",
+						"description": "Hand in this task's report once its work is committed.\nJocasta runs the project's full check first and stores nothing while it fails; its answer is the failing gates. Give the outcome, a summary of at most 200 characters, the decisions you settled, open questions for him and follow-ups. The files changed and the tests run are taken from git and the check run, not from you. Jocasta stores the report with the thread and its review reads it.",
 						"inputSchema": {
 							"type": "object",
-							"required": ["outcome", "summary", "files", "tests", "decisions", "questions", "followUps"],
+							"required": ["outcome", "summary", "decisions", "questions", "followUps"],
 							"properties": {
 								"outcome": {
 									"anyOf": [
@@ -118,35 +118,6 @@
 									"minLength": 1,
 									"maxLength": 200,
 									"description": "What the task did, at most 200 characters"
-								},
-								"files": {
-									"type": "array",
-									"items": {
-										"type": "string",
-										"minLength": 1,
-										"description": "A file path"
-									},
-									"description": "The files the task changed"
-								},
-								"tests": {
-									"type": "array",
-									"items": {
-										"type": "object",
-										"required": ["command", "passed"],
-										"properties": {
-											"command": {
-												"type": "string",
-												"minLength": 1,
-												"description": "The test command as you ran it"
-											},
-											"passed": {
-												"type": "boolean",
-												"description": "Whether it passed"
-											}
-										},
-										"additionalProperties": false
-									},
-									"description": "The tests you ran and whether each passed"
 								},
 								"decisions": {
 									"type": "array",
@@ -293,6 +264,11 @@
 								"heavy": {
 									"type": "boolean",
 									"description": "Run the thread on his slow role, his strongest model, for ambitious or open-ended work (a migration, a deep bug, a large refactor); it spends his Fable allowance fastest. Leave it out otherwise"
+								},
+								"budget": {
+									"type": "number",
+									"minimum": 1,
+									"description": "Cost cap in dollars for this thread (its omp stops at it; you are asked whether to raise it). Leave it out for the default cap"
 								}
 							},
 							"required": ["project", "title", "brief"],

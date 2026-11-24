@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
+use crate::frontier::protocol::js_number_text;
 use crate::frontier::server::boss::{EnsureBossOptions, PANE_KEY_ENV, boss_command, ensure_boss_pane, new_pane_key};
 use crate::frontier::server::context::{Link, Shared};
 use crate::frontier::server::events::BossPane;
@@ -39,6 +40,7 @@ use crate::shared::proctree::{ProcessId, end_processes, process_start};
 use crate::shared::projects::Project;
 use crate::shared::prompt::without_leading_comment;
 use crate::shared::push_hook::push_hook_env;
+use crate::shared::settings::read_max_cost_usd;
 
 #[cfg(test)]
 #[path = "pane_launch_tests.rs"]
@@ -83,14 +85,32 @@ fn process_env() -> HashMap<String, String> {
 		.collect()
 }
 
-/// What a thread's omp loads after the project's overlay (0590): `config/heavy.yml` for a heavy thread, which makes its
-/// `default` role his `slow` one; nothing for another. Its first launch and every relaunch take it from here.
-pub fn after_overlay(task: Option<&TaskRecord>) -> Vec<String> {
-	if task.is_some_and(|task| task.heavy == Some(true)) {
-		vec!["--config".to_owned(), shipped("heavy.yml")]
-	} else {
-		Vec::new()
+/// A thread's cost cap in dollars (0686): the task's own `budget`, else `threads.maxCostUsd` (twice that for a heavy
+/// thread); `None` for no cap (the setting is 0).
+pub fn thread_budget(task: &TaskRecord) -> Option<f64> {
+	if let Some(budget) = task.budget.filter(|budget| *budget > 0.0) {
+		return Some(budget);
 	}
+	let setting = read_max_cost_usd();
+	if setting <= 0.0 {
+		return None;
+	}
+	Some(if task.heavy == Some(true) { setting * 2.0 } else { setting })
+}
+
+/// What a thread's omp loads after the project's overlay (0590, 0686): `config/heavy.yml` for a heavy thread, which makes
+/// its `default` role his `slow` one, and `--max-cost <budget>` for any thread with a cost cap. Its first launch and every
+/// relaunch take it from here; none for the boss and project panes (no task).
+pub fn after_overlay(task: Option<&TaskRecord>) -> Vec<String> {
+	let Some(task) = task else { return Vec::new() };
+	let mut argv = Vec::new();
+	if task.heavy == Some(true) {
+		argv.extend(["--config".to_owned(), shipped("heavy.yml")]);
+	}
+	if let Some(budget) = thread_budget(task) {
+		argv.extend(["--max-cost".to_owned(), js_number_text(budget)]);
+	}
+	argv
 }
 
 /// Whether `name` is one of the keys mise's env must not override in a pane (0484): herdr's, Jocasta's and omp's

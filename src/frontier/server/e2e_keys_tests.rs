@@ -26,7 +26,7 @@ use crate::frontier::server::overlay::overlay_file;
 use crate::frontier::server::popups::{AnswerTaken, Popup, PopupEnd};
 use crate::frontier::server::server::ServerOptions;
 use crate::frontier::server::tools::ToolReply;
-use crate::frontier::server::wording::{HANDOFF_PROMPT, IDLE_CHECK_FRAME, REPORT_STEER, WHEN_YOU_FINISH};
+use crate::frontier::server::wording::{HANDOFF_PROMPT, REPORT_STEER, WHEN_YOU_FINISH};
 use crate::shared::pathkey::same_dir;
 use crate::shared::paths::data_dir;
 use crate::shared::schema::open_catalog;
@@ -332,7 +332,7 @@ async fn thread_starts_brief_and_done_when_go_into_the_task_file_and_every_launc
 		expected.extend(bridge_flags());
 		expected.extend(words(&["--config"]));
 		expected.push(overlay_file(&project.id).display().to_string());
-		expected.extend(words(&["--warn-cost", "50"]));
+		expected.extend(words(&["--max-cost", "75", "--warn-cost", "50"]));
 		assert_eq!(server.herdr.of("createWorktree")[0][1]["command"], json!(expected));
 		// Then how to finish (0577, PRM-7).
 		assert_eq!(
@@ -479,11 +479,13 @@ async fn report_result_a_threads_report_is_validated_stored_in_its_task_file_and
 		let pane_id = started.pane_id;
 		let boss = boss_pane(&server.herdr).expect("a boss pane");
 		state_of(&boss, &server, AgentState::Idle, None);
+		// The report's files come from git and its tests from the check run, whatever the thread says (0677).
+		commit_in(&started.path, "demo\nA line.\n", "Add a README line");
 		let report = json!({
 			"outcome": "done",
 			"summary": "Readme line added",
-			"files": ["README.md"],
-			"tests": [{ "command": "bun test", "passed": true }],
+			"files": ["ignored.txt"],
+			"tests": [{ "command": "bun test", "passed": false }],
 			"decisions": [{ "question": "Where the line goes", "choice": "The top", "why": "Read first" }],
 			"questions": [],
 			"followUps": ["Translate it"],
@@ -503,7 +505,7 @@ async fn report_result_a_threads_report_is_validated_stored_in_its_task_file_and
 		let task = read(&task_dir_of(&project.id, "Readme line").join("task.md"));
 		assert!(
 			task.contains(
-				"## Report\noutcome done · \"Readme line added\" · tests 1/1 · files: README.md · decisions: Where the line goes = The top · follow-ups: Translate it\n"
+				"## Report\noutcome done · \"Readme line added\" · tests 0/0 · files: README.md · decisions: Where the line goes = The top · follow-ups: Translate it\n"
 			),
 			"{task}"
 		);
@@ -513,7 +515,7 @@ async fn report_result_a_threads_report_is_validated_stored_in_its_task_file_and
 		);
 		let status = call(&server, "thread_status", &json!({ "thread": "Readme line" })).await;
 		assert!(status.text.ends_with(
-			"\nreport: outcome done · \"Readme line added\" · tests 1/1 · files: README.md · decisions: Where the line goes = The top · follow-ups: Translate it"
+			"\nreport: outcome done · \"Readme line added\" · tests 0/0 · files: README.md · decisions: Where the line goes = The top · follow-ups: Translate it"
 		));
 		let catalog = open_catalog().expect("the catalog");
 		let hits = search_history(&catalog, &project.id, "goes", 10).unwrap();
@@ -648,21 +650,31 @@ async fn the_check_tool_answers_a_thread_with_its_checks_on_its_tree_a_turn_endi
 		let clean_text = from_pane(&server, "check", &json!({}), Some(&pane_id)).await.text;
 		assert!(Regex::new(r"^checks: PASS \(tree [0-9a-f]{6}\)$").unwrap().is_match(&clean_text), "{clean_text}");
 
-		// A turn ends with an uncommitted edit: the check on idle fails it, and the gates go into the pane under
-		// Jocasta's frame (0583, PRM-16).
+		// A turn ends with an uncommitted edit: the turn-end check is the quick one (0677), and this project has no
+		// quick, verify or test task, so nothing goes back into the turn; the full check, with the done_when, runs ahead
+		// of time on that tree, and the check tool answers from its stored result.
 		write_readme(&path, "demo\nchanged\n");
 		let file = session_file(&path, &[Msg::new("Edited the README.", 0.25)]);
 		state_of(&pane_id, &server, AgentState::Working, Some(&file));
 		state_of(&pane_id, &server, AgentState::Idle, None);
-		let gates = || -> Vec<String> {
-			typed_to(&server, &pane_id).into_iter().filter(|text| text.starts_with(IDLE_CHECK_FRAME)).collect()
-		};
-		until(|| gates().len() == 1).await;
-		let block = gates()[0][IDLE_CHECK_FRAME.len() + 2..].to_owned();
-		assert!(block.starts_with("checks: FAIL"), "{block}");
+		let key = server
+			.herdr
+			.env_of(&pane_id)
+			.and_then(|env| env.into_iter().find(|(name, _)| name == "JOCASTA_PANE_KEY").map(|(_, key)| key))
+			.expect("the pane's key");
+		let (hold, signal) = tokio::sync::watch::channel(None::<String>);
+		assert_eq!(crate::frontier::server::bridge::BridgeService::stop(&*server.service, key, signal).await, "");
+		drop(hold);
+		let mut block = from_pane(&server, "check", &json!({}), Some(&pane_id)).await.text;
+		for _ in 0..100 {
+			if block.starts_with("checks: FAIL") {
+				break;
+			}
+			tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+			block = from_pane(&server, "check", &json!({}), Some(&pane_id)).await.text;
+		}
 		assert!(block.contains(&format!("  FAIL  done_when  {clean}\n")), "{block}");
 		assert!(block.contains(&format!("        rerun: {clean}")), "{block}");
-		// The check tool answers the same tree from the stored result, without the frame.
 		assert_eq!(from_pane(&server, "check", &json!({}), Some(&pane_id)).await.text, block);
 
 		let status = call(&server, "thread_status", &json!({})).await;
@@ -805,4 +817,87 @@ async fn a_thread_key_on_a_pane_that_isnt_a_threads_gets_the_plain_refusal_0581_
 		);
 	})
 	.await;
+}
+
+/// What a thread over its budget left: the question it asked, its record, `thread_status` and the aborts sent.
+struct OverBudget {
+	view: crate::frontier::protocol::PopupView,
+	record: Value,
+	status: String,
+	stops: Vec<Vec<Value>>,
+}
+
+/// A thread started with `budget: 5` whose ledger reaches $5.10 at a turn's end (0686), asking him a question that
+/// `choice` answers by its choices' index.
+async fn over_budget(choice: usize) -> OverBudget {
+	let j = temp_jocasta();
+	let project = demo_project(j.root(), "demo").await;
+	let shown: Arc<Mutex<Vec<Popup>>> = Arc::default();
+	let told = Arc::clone(&shown);
+	let options = ServerOptions {
+		agent_wait_ms: Some(10_000),
+		on_question: Some(Arc::new(move |popup| {
+			told.lock().unwrap_or_else(PoisonError::into_inner).push(popup.clone())
+		})),
+		..ServerOptions::default()
+	};
+	let project_id = project.id.clone();
+	let out: Arc<Mutex<Option<OverBudget>>> = Arc::default();
+	let keep = Arc::clone(&out);
+	with_server(options, |server| async move {
+		let asked = server.clone();
+		let args = json!({ "project": "demo", "title": "Readme line", "brief": BRIEF, "budget": 5 });
+		let replied = tokio::spawn(async move { call(&asked, "thread_start", &args).await });
+		until(|| server.herdr.of("createWorktree").len() == 1).await;
+		let pane = server.herdr.state().pane_list.last().cloned().expect("a thread pane");
+		let path = pane.cwd.clone().expect("no thread pane");
+		server.herdr.set_state(&pane.pane_id, AgentState::Idle, None, true);
+		replied.await.expect("the call ran");
+		states_settled(&server).await;
+		let boss = boss_pane(&server.herdr).expect("a boss pane");
+		state_of(&boss, &server, AgentState::Idle, None);
+		let record_file = task_dir_of(&project_id, "Readme line").join("thread.json");
+		// The ledger reaches $5.10; the turn ends.
+		let file = session_file(&path, &[Msg::new("A long turn.", 5.10)]);
+		state_of(&pane.pane_id, &server, AgentState::Working, Some(&file));
+		let idle = PaneAgent { idle_reported: true, ..PaneAgent::default() };
+		pane_reports(&server, &pane.pane_id, &PaneEvent::AgentEnd { idle: true, jobs: 0 }, idle);
+		let find = || shown.lock().unwrap_or_else(PoisonError::into_inner).iter().find(|p| p.open()).cloned();
+		until(|| find().is_some()).await;
+		let popup = find().expect("the question");
+		let view = popup.view().clone();
+		let status = call(&server, "thread_status", &json!({})).await.text;
+		assert_eq!(server.answer(popup.code(), &json!({ "choice": view.choices[choice] })).0, AnswerTaken::Taken);
+		until(|| !popup.open()).await;
+		states_settled(&server).await;
+		if choice == 0 {
+			until(|| read(&record_file).contains("\"budget\": 80") || read(&record_file).contains("\"budget\":80"))
+				.await;
+		} else {
+			until(|| !server.herdr.of("stop").is_empty()).await;
+		}
+		let record = serde_json::from_str(&read(&record_file)).unwrap_or(Value::Null);
+		let stops = server.herdr.of("stop");
+		*keep.lock().unwrap_or_else(PoisonError::into_inner) = Some(OverBudget { view, record, status, stops });
+	})
+	.await;
+	let left = out.lock().unwrap_or_else(PoisonError::into_inner).take();
+	left.expect("the test ran")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_thread_at_its_budget_is_stuck_over_budget_and_asked_to_raise_or_stop_and_a_raise_adds_the_setting_0686() {
+	let left = over_budget(0).await;
+	assert_eq!(left.view.choices, ["Raise by $75", "Stop the thread"]);
+	assert_eq!(left.view.detail.as_deref(), Some("over budget: $5.10 of $5"));
+	assert!(left.status.contains("spend $5.10"), "{}", left.status);
+	// The raise adds $75 to the thread's own budget.
+	assert_eq!(left.record["budget"].as_f64(), Some(80.0), "{}", left.record);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_thread_at_its_budget_that_he_stops_gets_its_turn_aborted_0686() {
+	let left = over_budget(1).await;
+	assert!(!left.stops.is_empty(), "no abort reached the pane");
+	assert_eq!(left.record["budget"].as_f64(), Some(5.0), "{}", left.record);
 }

@@ -9,7 +9,7 @@ use std::sync::{Arc, PoisonError};
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::frontier::protocol::ToastPriority;
 use crate::frontier::server::allow::Confirmation;
@@ -17,11 +17,11 @@ use crate::frontier::server::bridge::Deliver;
 use crate::frontier::server::context::ServiceContext;
 use crate::frontier::server::history::{HISTORY_SEARCH, HistoryEntry, add_history, history_answer, search_history};
 use crate::frontier::server::lessons::ensure_lessons_skill;
-use crate::frontier::server::report::{REPORT_RESULT, ReportedDecision, parse_report};
+use crate::frontier::server::report::{REPORT_RESULT, ReportedDecision, ThreadReport, parse_report};
 use crate::frontier::server::task_file::{CloseFacts, CloseHow, NewTask, TaskReport, close_task, find_task, new_task};
 use crate::frontier::server::thread::{ThreadRef, subject};
 use crate::frontier::server::thread_lifecycle::Awaiting;
-use crate::frontier::server::thread_start::{StartOptions, done_when_of, heavy_of};
+use crate::frontier::server::thread_start::{StartOptions, budget_of, done_when_of, heavy_of};
 use crate::frontier::server::wording::{Door, asker, asks, branch_slug, brief_title, person, quoted};
 use crate::frontier::server::worktrees::remove_checkout;
 use crate::shared::clock::now_ms;
@@ -359,8 +359,9 @@ impl Tools {
 		}
 		let done_when = done_when_of(args.values.get("done_when"), door)?;
 		let heavy = heavy_of(args.values.get("heavy"), door)?;
+		let budget = budget_of(args.values.get("budget"), door)?;
 		let started =
-			self.c.starts.start_with(&project, &title, &brief, StartOptions { door, done_when, heavy }).await?;
+			self.c.starts.start_with(&project, &title, &brief, StartOptions { door, done_when, heavy, budget }).await?;
 		Ok(started.text)
 	}
 
@@ -580,6 +581,13 @@ impl Tools {
 			self.refuse_send(thread, door).await?;
 		}
 		self.c.sleep.wake_thread(thread).await?;
+		// His word ends a tripped breaker (0677) and goes into the journal as a send back after a ready review.
+		self.c.review.reset_breaker(thread);
+		thread.with(|t| {
+			if t.review.as_ref().is_some_and(|review| review.result.is_some()) {
+				self.c.journal.thread("sent_back", t, json!({}));
+			}
+		});
 		let pane_id = thread.with(|t| {
 			t.sent_at = Some(now_ms());
 			t.pane_id.clone()
@@ -628,6 +636,11 @@ impl Tools {
 			)));
 		};
 		let report = parse_report(&Value::Object(args.clone())).map_err(Error::user)?;
+		// The full check decides before anything is stored (0677); what it ran and what git says are the report's tests
+		// and files, whatever the thread said of them.
+		let tests = c.review.full_gate(&thread).await?;
+		let files = c.review.changed_files(&thread).await;
+		let report = ThreadReport { files, tests, ..report };
 		let at = now_ms();
 		let title = thread.with(|t| {
 			if t.task.is_none() {
@@ -651,6 +664,7 @@ impl Tools {
 			t.title.clone()
 		});
 		c.status.write_task(&thread);
+		thread.with(|t| c.journal.thread("report", t, json!({ "outcome": report.outcome })));
 		if !report.decisions.is_empty() {
 			self.index_decisions(&thread, at, &report.decisions);
 			let said = report

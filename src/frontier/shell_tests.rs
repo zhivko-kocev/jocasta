@@ -104,6 +104,17 @@ fn the_docks_keys_pick_rows_go_to_a_thread_act_on_it_and_give_the_rest_back() {
 }
 
 #[test]
+fn uppercase_x_stops_every_turn_with_no_thread_picked_and_lowercase_x_stays_remove_0686() {
+	let mut shell = with_today();
+	drawn(&mut shell, 100, 34, false);
+	let shifted = KeyEvent::new(KeyCode::Char('X'), KeyModifiers::SHIFT);
+	assert_eq!(sends(&shell.dock_key(shifted)), [(SHELL_ACTION.to_owned(), json!({"action": "stop-all"}))]);
+	assert_eq!(sends(&shell.dock_key(char_key('X'))), [(SHELL_ACTION.to_owned(), json!({"action": "stop-all"}))]);
+	let lower = shell.dock_key(char_key('x'));
+	assert!(!sends(&lower).iter().any(|(_, data)| data["action"] == "stop-all"));
+}
+
+#[test]
 fn a_click_on_a_row_picks_it_and_does_what_enter_does_and_one_elsewhere_does_nothing() {
 	let mut shell = with_today();
 	drawn(&mut shell, 100, 34, false);

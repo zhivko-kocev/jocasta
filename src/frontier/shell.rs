@@ -373,6 +373,11 @@ impl ShellExtension for JocastaShell {
 		if key.ctrl || key.meta {
 			return Reply { pass: true, ..Reply::default() };
 		}
+		// Uppercase `X` (0686) before `x`, whose name it shares: Stop all needs no picked thread.
+		if key.sequence == "X" {
+			let action = ShellAction { action: PluginAction::StopAll, pane_id: None };
+			return Reply { send: vec![sent(SHELL_ACTION, &action)], redraw: true, ..Reply::default() };
+		}
 		match key.name.as_str() {
 			"up" | "k" => self.step(-1),
 			"down" | "j" => self.step(1),

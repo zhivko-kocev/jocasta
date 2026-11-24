@@ -84,3 +84,11 @@ fn thread_start_arguments_are_typed() {
 	bad["heavy"] = json!("yes");
 	assert_eq!(bad_arguments(&start, &args(bad)), Some("thread_start: heavy must be true or false".to_owned()));
 }
+
+#[test]
+fn thread_start_takes_a_budget_of_at_least_one_dollar_0686() {
+	let start = tools_for(Role::Boss, true).into_iter().find(|spec| spec.name == "thread_start").unwrap();
+	let base = json!({ "project": "acme", "title": "t", "brief": "b", "budget": 5 });
+	assert_eq!(bad_arguments(&start, &args(base)), None);
+	assert_eq!(start.parameters["properties"]["budget"]["minimum"], json!(1));
+}

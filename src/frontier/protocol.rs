@@ -94,13 +94,22 @@ pub enum PluginAction {
 	Review,
 	#[serde(rename = "new-thread")]
 	NewThread,
+	/// Every running turn ends, the boss's too (0686).
+	#[serde(rename = "stop-all")]
+	StopAll,
 	#[serde(rename = "quit")]
 	Quit,
 }
 
 /// `PLUGIN_ACTIONS`.
-pub const PLUGIN_ACTIONS: [PluginAction; 5] =
-	[PluginAction::Finish, PluginAction::Stop, PluginAction::Review, PluginAction::NewThread, PluginAction::Quit];
+pub const PLUGIN_ACTIONS: [PluginAction; 6] = [
+	PluginAction::Finish,
+	PluginAction::Stop,
+	PluginAction::Review,
+	PluginAction::NewThread,
+	PluginAction::StopAll,
+	PluginAction::Quit,
+];
 
 /// A JavaScript number: a whole value goes out without a fraction (`1`, not `1.0`), as `JSON.stringify` writes it.
 pub fn js_number<S: Serializer>(value: &f64, serializer: S) -> Result<S::Ok, S::Error> {
@@ -264,6 +273,15 @@ pub struct RailItem {
 	/// Ms with no write to its session file, only when stuck (0668).
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub stuck_for: Option<i64>,
+	/// Why the loop cap or the cost cap stopped it (0677, 0686): `stuck: quick failed 3×`, `over budget: $5.10 of $5`.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub halted: Option<String>,
+	/// Its todo count and context use, `4/9 · 62%`; a part that is unknown is left out (0677).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub progress: Option<String>,
+	/// Its cost cap in dollars (0686): the row reads `$spent/$budget`.
+	#[serde(default, skip_serializing_if = "Option::is_none", serialize_with = "js_number_opt")]
+	pub budget: Option<f64>,
 }
 
 /// A `RailItem` whose pane may be gone: `Omit<RailItem, "paneId"> & { paneId?: string }`.
@@ -846,6 +864,9 @@ mod tests {
 			diff: Some(ThreadDiff { added: 84, removed: 12 }),
 			check: Some(false),
 			stuck_for: Some(660_000),
+			halted: None,
+			progress: None,
+			budget: None,
 		};
 		let today = Today {
 			date: "2026-10-08".to_owned(),
@@ -1010,9 +1031,12 @@ mod tests {
 	}
 
 	#[test]
-	fn the_plugin_actions_are_finish_stop_review_new_thread_and_quit() {
+	fn the_plugin_actions_are_finish_stop_review_new_thread_stop_all_and_quit() {
 		let names: Vec<Value> = PLUGIN_ACTIONS.iter().map(|action| serde_json::to_value(action).unwrap()).collect();
-		assert_eq!(names, json!(["finish", "stop", "review", "new-thread", "quit"]).as_array().unwrap().clone());
+		assert_eq!(
+			names,
+			json!(["finish", "stop", "review", "new-thread", "stop-all", "quit"]).as_array().unwrap().clone()
+		);
 		assert_eq!(serde_json::from_value::<PluginAction>(json!("new-thread")).unwrap(), PluginAction::NewThread);
 	}
 

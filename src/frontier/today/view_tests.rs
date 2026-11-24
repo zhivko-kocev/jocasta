@@ -55,6 +55,9 @@ fn rail(pane: &str, title: &str, project: &str, state: Option<ThreadState>) -> R
 		diff: None,
 		check: None,
 		stuck_for: None,
+		halted: None,
+		progress: None,
+		budget: None,
 	}
 }
 
@@ -216,7 +219,7 @@ fn today_header_needs_you_first_with_kind_glyphs_underway_landed_calendar_his_no
 	assert_eq!(shown.len(), 34);
 	assert_eq!(shown.last().unwrap(), KEY_LINE);
 	assert_eq!(KEY_LINE, KEYS.join(" · "));
-	assert_eq!(KEY_LINE, "↑↓ pick · Enter go/open · f Finish · s Stop · r Review · n New · x Remove");
+	assert_eq!(KEY_LINE, "↑↓ pick · Enter go/open · f Finish · s Stop · r Review · n New · X Stop all · x Remove");
 	// No greeting.
 	let all = shown.join("\n").to_lowercase();
 	assert!(!["good morning", "good afternoon", "good evening"].iter().any(|g| all.contains(g)));

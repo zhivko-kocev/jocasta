@@ -20,11 +20,13 @@ use serde_json::json;
 use crate::frontier::protocol::{
 	Hud, Leftover, ServerMessage, ThreadState, ToastLevel, ToastPriority, ToastReason, Today, TopThread,
 };
+use crate::frontier::server::bridge::PaneAgent;
 use crate::frontier::server::context::{Link, ServiceContext};
 use crate::frontier::server::day::DayThread;
 use crate::frontier::server::events::Toast;
 use crate::frontier::server::herdr::{AgentState, HerdrResult, PaneMetadata, STOP_PING_MS, Tokens, WorkspaceInfo};
 use crate::frontier::server::native::{PIN_TOKEN, PIN_VALUE};
+use crate::frontier::server::pane_launch::thread_budget;
 use crate::frontier::server::report::report_line;
 use crate::frontier::server::sessions::SessionIndex;
 use crate::frontier::server::spend::{SpendTracker, spend_settled, spend_today};
@@ -177,6 +179,20 @@ pub struct StatusViews {
 	task_writes: Mutex<()>,
 }
 
+/// A thread's todo count and context use as its row says them, `4/9 · 62%` (0677); a part its omp hasn't reported is
+/// left out.
+fn progress_of(agent: Option<&PaneAgent>) -> Option<String> {
+	let agent = agent?;
+	let parts: Vec<String> = [
+		agent.todo.map(|(done, total)| format!("{done}/{total}")),
+		agent.usage_percent.map(|percent| format!("{}%", percent.round() as i64)),
+	]
+	.into_iter()
+	.flatten()
+	.collect();
+	(!parts.is_empty()).then(|| parts.join(" · "))
+}
+
 /// A sleeping thread's row says so after its line (0676): `review ready · asleep`.
 fn asleep_after(line: String, pane_id: &str, launched: &crate::frontier::server::boss::LaunchedPanes) -> String {
 	match (launched.asleep(pane_id), line.is_empty()) {
@@ -266,6 +282,12 @@ impl StatusViews {
 		let ctx = self.link.ctx();
 		let mut sessions = ctx.sessions.lock().await;
 		f(&mut sessions)
+	}
+
+	/// A thread's spend in dollars over every omp session of its task, read as the files are now (0686); `None` before
+	/// its first model call or when the session index can't say.
+	pub async fn spend_of(&self, thread: &ThreadRef) -> Option<f64> {
+		self.ledger_waiting(thread, true).await.map(|ledger| ledger.spend)
 	}
 
 	/// A thread's spend past $50 (0541, PRM-11): omp warned in its pane, and the boss hears it once. A thread found in
@@ -653,6 +675,7 @@ impl StatusViews {
 		let overlaps: Vec<String> = self.overlaps_known(thread).into_iter().map(|o| o.title).collect();
 		// The diff, last check and last write as `ThreadFacts` last read them (0668); a cheap, synchronous read.
 		let facts = c.thread_facts.get(&thread.with(|t| t.path.clone()));
+		let agent = c.bridge.agent(&thread.with(|t| t.pane_id.clone()));
 		thread.with(|t| DayThread {
 			pane_id: t.pane_id.clone(),
 			title: t.title.clone(),
@@ -667,6 +690,9 @@ impl StatusViews {
 			diff: facts.diff,
 			check: facts.check,
 			last_write_ms: facts.last_write_ms,
+			halted: t.stuck.clone(),
+			progress: progress_of(agent.as_ref()),
+			budget: t.task.as_ref().and_then(thread_budget),
 		})
 	}
 

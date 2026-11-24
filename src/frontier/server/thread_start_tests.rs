@@ -163,6 +163,10 @@ impl World {
 		command.extend(guard());
 		command.extend(["--config".to_owned(), overlay_file(&self.project_id(project)).display().to_string()]);
 		command.extend(strings(extra));
+		// A thread's cost cap, `threads.maxCostUsd` (75); a heavy thread's extra names its own (0686).
+		if !extra.contains(&"--max-cost") {
+			command.extend(strings(&["--max-cost", "75"]));
+		}
 		command.extend(strings(&["--warn-cost", "50"]));
 		command
 	}
@@ -290,7 +294,7 @@ async fn a_heavy_thread_start_is_recorded_on_its_task_and_loads_heavy_yml_after_
 		reply.text,
 		"Started demo/Readme line on branch feature/readme-line. It opens in plan mode and waits for his approval of its plan in its pane. Heavy: it runs on his slow role."
 	);
-	let heavy = ["--config", &shipped("heavy.yml")];
+	let heavy = ["--config", &shipped("heavy.yml"), "--max-cost", "150"];
 	let record: Value =
 		serde_json::from_str(&fs::read_to_string(w.task_dir_of("demo", "Readme line").join("thread.json")).unwrap())
 			.unwrap();
@@ -303,6 +307,34 @@ async fn a_heavy_thread_start_is_recorded_on_its_task_and_loads_heavy_yml_after_
 		reply.text,
 		"Started demo/Second on feature/second: it plans first; approve its plan in its pane. Heavy: it runs on your slow role."
 	);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_budget_is_recorded_on_the_task_and_is_the_threads_max_cost_0686() {
+	let w = world();
+	w.project("demo");
+	let options = StartOptions { budget: Some(5.0), ..StartOptions::new(Door::Boss) };
+	w.t.ctx.starts.start_with("demo", "Readme line", "Migrate it.", options).await.unwrap();
+	let record: Value =
+		serde_json::from_str(&fs::read_to_string(w.task_dir_of("demo", "Readme line").join("thread.json")).unwrap())
+			.unwrap();
+	assert_eq!(record["budget"].as_f64(), Some(5.0));
+	let command = w.worktrees()[0]["command"].clone();
+	assert_eq!(command, json!(w.thread_command("demo", "Readme line", &["--max-cost", "5"])));
+	let argv = command.as_array().unwrap();
+	assert_eq!(argv[argv.len() - 4..], [json!("--max-cost"), json!("5"), json!("--warn-cost"), json!("50")]);
+}
+
+#[test]
+fn a_budget_is_a_number_of_dollars_of_at_least_one_at_both_doors_0686() {
+	assert_eq!(budget_of(None, Door::Boss).unwrap(), None);
+	assert_eq!(budget_of(Some(&Value::Null), Door::Boss).unwrap(), None);
+	assert_eq!(budget_of(Some(&json!(5)), Door::Boss).unwrap(), Some(5.0));
+	assert_eq!(budget_of(Some(&json!(1)), Door::Cli).unwrap(), Some(1.0));
+	let refused = |value: Value, door| budget_of(Some(&value), door).unwrap_err().to_string();
+	assert_eq!(refused(json!(0.5), Door::Boss), "thread_start: budget is a number of dollars, 1 or more.");
+	assert_eq!(refused(json!("5"), Door::Cli), "jocasta thread new: budget is a number of dollars, 1 or more.");
+	assert_eq!(refused(json!(-3), Door::Key), "New thread: budget is a number of dollars, 1 or more.");
 }
 
 #[test]

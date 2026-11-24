@@ -293,26 +293,24 @@ pub fn skipped_said(why: &str) -> String {
 	format!("the project's check didn't run: {why}")
 }
 
-/// What [`task_among`] found.
-enum Found {
+/// What [`mise_task_among`] found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Found {
 	Task(String),
 	Skipped(String),
 }
 
-/// The first of `names` the folder's mise config defines as a task, when mise may load that config (0473): the task, or
-/// why it can't be run when the folder has a repo config mise may not load for Jocasta (0559); `None` when mise is
-/// absent or none is defined. Jocasta's own per-project config counts through `MISE_ENV`.
-async fn task_among(
+/// The tasks the folder's mise config defines, when mise may load that config (0473): `Err` with why it can't be run
+/// when the folder has a repo config mise may not load for Jocasta (0559), empty when there is no reason to say.
+async fn defined_tasks(
 	project_id: &str,
 	cwd: &Path,
-	names: &[&str],
 	base: &Env,
-	mise: Option<&[String]>,
-) -> Option<Found> {
-	let mise = mise?;
+	mise: &[String],
+) -> std::result::Result<HashSet<String>, String> {
 	let env = jocasta_env(project_id, base);
 	if let Some(why) = distrust(mise, cwd, &env).await {
-		return if why.is_empty() { None } else { Some(Found::Skipped(why)) };
+		return Err(why);
 	}
 	let out = run_mise(mise, &["tasks", "ls", "--json"], cwd, &env).await;
 	let mut defined: HashSet<String> = HashSet::new();
@@ -330,7 +328,52 @@ async fn task_among(
 			}
 		}
 	}
+	Ok(defined)
+}
+
+/// The first of `names` the folder's mise config defines as a task, when mise may load that config (0473): the task, or
+/// why it can't be run when the folder has a repo config mise may not load for Jocasta (0559); `None` when mise is
+/// absent or none is defined. Jocasta's own per-project config counts through `MISE_ENV`.
+async fn task_among(
+	project_id: &str,
+	cwd: &Path,
+	names: &[&str],
+	base: &Env,
+	mise: Option<&[String]>,
+) -> Option<Found> {
+	let defined = match defined_tasks(project_id, cwd, base, mise?).await {
+		Ok(defined) => defined,
+		Err(why) => return if why.is_empty() { None } else { Some(Found::Skipped(why)) },
+	};
 	names.iter().find(|name| defined.contains(**name)).map(|name| Found::Task((*name).to_owned()))
+}
+
+/// [`task_among`] for a caller that names the tasks to look for (0677: `quick` for a turn's end, `verify` for the full
+/// check).
+pub async fn mise_task_among(
+	project_id: &str,
+	cwd: &Path,
+	names: &[&str],
+	base: Option<&Env>,
+	mise: Mise<'_>,
+) -> Option<Found> {
+	let base = base.cloned().unwrap_or_else(process_env);
+	task_among(project_id, cwd, names, &base, mise.argv().as_deref()).await
+}
+
+/// Which of `names` the folder's mise config defines as tasks, in `names`' order; none when mise is absent or may not
+/// load the config (0685's start facts).
+pub async fn mise_tasks_among(
+	project_id: &str,
+	cwd: &Path,
+	names: &[&str],
+	base: Option<&Env>,
+	mise: Mise<'_>,
+) -> Vec<String> {
+	let base = base.cloned().unwrap_or_else(process_env);
+	let Some(argv) = mise.argv() else { return Vec::new() };
+	let Ok(defined) = defined_tasks(project_id, cwd, &base, &argv).await else { return Vec::new() };
+	names.iter().filter(|name| defined.contains(**name)).map(|name| (*name).to_owned()).collect()
 }
 
 /// The project's own check as a mise task (0453, 0473, 0477): `verify`, else `test`, when the folder's config may be

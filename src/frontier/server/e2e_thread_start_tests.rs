@@ -127,7 +127,7 @@ fn expected_overlay(project: &Project) -> Value {
 		"plan": { "defaultOnStartup": true },
 		"compaction": {
 			"methodOrder": ["handoff", "remote", "soft", "shake", "snapcompact"],
-			"thresholdTokens": 300_000,
+			"thresholdTokens": 200_000,
 			"idleEnabled": true,
 			"idleThresholdTokens": 100_000,
 		},
@@ -179,7 +179,7 @@ fn check_first_start(
 	thread_command.extend(bridge_flags());
 	thread_command.extend(["--config".to_owned(), path_text(&overlay)]);
 	// Every thread warns at $50 (0541) and appends its task's brief and done-when (0540).
-	thread_command.extend(strings(&["--warn-cost", "50"]));
+	thread_command.extend(strings(&["--max-cost", "75", "--warn-cost", "50"]));
 	assert_eq!(
 		recorded,
 		json!({
@@ -293,7 +293,7 @@ async fn a_heavy_thread_start_0590_is_recorded_on_its_task_and_loads_heavy_yml_a
 			started.reply,
 			"Started demo/Readme line on branch feature/readme-line. It opens in plan mode and waits for his approval of its plan in its pane. Heavy: it runs on his slow role."
 		);
-		let heavy = strings(&["--config", &path_text(&shipped_config_dir(None).join("heavy.yml"))]);
+		let heavy = strings(&["--config", &path_text(&shipped_config_dir(None).join("heavy.yml")), "--max-cost", "150"]);
 		let record = read_json(&task_dir_of(&project.id, "Readme line").join("thread.json"));
 		assert_eq!(record["heavy"], json!(true));
 		let mut command = strings(&["omp", "--append-system-prompt"]);
@@ -318,7 +318,9 @@ async fn a_heavy_thread_start_0590_is_recorded_on_its_task_and_loads_heavy_yml_a
 				.find(|o| path_key(Path::new(o["cwd"].as_str().unwrap())) == path_key(dir))
 				.map(|o| o["command"].clone())
 		};
+		// heavy.yml comes after the overlay and carries the heavy cap, twice the setting, in place of the plain one.
 		let mut again = thread_omp(&project.id, "Readme line");
+		again.truncate(again.len() - 2);
 		again.extend(heavy.clone());
 		assert_eq!(command_in(&started.path), Some(json!(again)));
 		// The project pane is never heavy.
@@ -397,7 +399,7 @@ async fn project_panes_append_the_shipped_ponytail_prompt_thread_panes_append_it
 		thread_command.extend(guard());
 		thread_command.extend(bridge_flags());
 		thread_command.extend(["--config".to_owned(), path_text(&overlay_file(&project.id))]);
-		thread_command.extend(strings(&["--warn-cost", "50"]));
+		thread_command.extend(strings(&["--max-cost", "75", "--warn-cost", "50"]));
 		assert_eq!(server.herdr.of("createWorktree")[0][1]["command"], json!(thread_command));
 		// Then the task's sections, ending with how to finish (0577, PRM-7).
 		let tail = WHEN_YOU_FINISH.join("\n");

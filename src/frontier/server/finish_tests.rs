@@ -695,13 +695,16 @@ async fn main_ready_refuses_a_changed_or_off_trunk_main_checkout_and_ignores_unt
 }
 
 /// The state `fake-gh.ts` took from its state file: `auth status` passes unless `auth_fails`; `pr view` prints an open
-/// PR whose head is `head` (exit 1 when unset, as gh does with no PR); `hang` never answers (CO-8).
+/// PR whose head is `head` (exit 1 when unset, as gh does with no PR); `hang` never answers (CO-8); `pr create` leaves
+/// its arguments in `gh-create.txt` and the body file it was given in `gh-body.md` beside it, then prints the PR's URL.
 #[derive(Default, Clone)]
 struct GhState {
 	auth_fails: bool,
 	head: Option<String>,
 	state: Option<&'static str>,
 	hang: bool,
+	/// `pr create` exits 1 after 25 lines on stderr.
+	create_fails: bool,
 }
 
 /// Writes the fake gh for `state` into `dir` and returns how to start it. The same path every time: a test changes
@@ -720,8 +723,15 @@ fn fake_gh(dir: &Path, state: &GhState) -> Vec<String> {
 			Some(pr) => format!("echo {pr}\r\nexit /b 0"),
 			None => "echo no pull requests found for branch \"%3\" 1>&2\r\nexit /b 1".to_owned(),
 		};
+		let create = if state.create_fails {
+			"for /l %%i in (1,1,25) do echo line %%i 1>&2\r\nexit /b 1".to_owned()
+		} else {
+			format!(
+				"set \"here=%~dp0\"\r\n>\"%here%gh-create.txt\" echo %*\r\n:scan\r\nif \"%~1\"==\"\" goto scanned\r\nif \"%~1\"==\"--body-file\" copy /y \"%~2\" \"%here%gh-body.md\" >nul\r\nshift\r\ngoto scan\r\n:scanned\r\necho {PR_URL}\r\nexit /b 0"
+			)
+		};
 		let script = format!(
-			"@echo off\r\n{wait}if \"%1 %2\"==\"auth status\" goto auth\r\nif \"%1 %2\"==\"pr view\" goto view\r\nexit /b 0\r\n:auth\r\n{auth}\r\nexit /b 0\r\n:view\r\n{view}\r\n"
+			"@echo off\r\n{wait}if \"%1 %2\"==\"auth status\" goto auth\r\nif \"%1 %2\"==\"pr view\" goto view\r\nif \"%1 %2\"==\"pr create\" goto create\r\nexit /b 0\r\n:auth\r\n{auth}\r\nexit /b 0\r\n:view\r\n{view}\r\nexit /b 0\r\n:create\r\n{create}\r\n"
 		);
 		("gh.cmd", script)
 	} else {
@@ -731,8 +741,16 @@ fn fake_gh(dir: &Path, state: &GhState) -> Vec<String> {
 			Some(pr) => format!("echo '{pr}'"),
 			None => "echo \"no pull requests found for branch \\\"$3\\\"\" >&2; exit 1".to_owned(),
 		};
-		let script =
-			format!("#!/bin/sh\n{wait}case \"$1 $2\" in\n\"auth status\") {auth};;\n\"pr view\") {view};;\nesac\n");
+		let create = if state.create_fails {
+			"for i in $(seq 1 25); do echo \"line $i\" >&2; done; exit 1".to_owned()
+		} else {
+			format!(
+				"dir=$(dirname \"$0\"); echo \"$@\" > \"$dir/gh-create.txt\"; while [ $# -gt 0 ]; do if [ \"$1\" = --body-file ]; then cp \"$2\" \"$dir/gh-body.md\"; fi; shift; done; echo {PR_URL}"
+			)
+		};
+		let script = format!(
+			"#!/bin/sh\n{wait}case \"$1 $2\" in\n\"auth status\") {auth};;\n\"pr view\") {view};;\n\"pr create\") {create};;\nesac\n"
+		);
 		("gh", script)
 	};
 	let path = dir.join(file);
@@ -755,8 +773,22 @@ fn pr_world(state: &GhState, extra: impl FnOnce(&mut ServiceOptions)) -> (World,
 		options.gh = Some(argv);
 		extra(options);
 	});
-	sh(&w.main, &["remote", "add", "origin", "https://github.com/test/demo.git"]);
+	sh(&w.main, &["remote", "add", "origin", GITHUB_REMOTE]);
+	// The push stays on this machine: GitHub's URL pushes to a bare repository of the test's.
+	let bare = w._root.path().join("remote.git");
+	fs::create_dir_all(&bare).unwrap();
+	sh(&bare, &["init", "--bare", "-q"]);
+	let key = format!("url.{}.pushInsteadOf", bare.to_string_lossy().replace('\\', "/"));
+	sh(&w.main, &["config", &key, GITHUB_REMOTE]);
 	(w, dir, gh)
+}
+
+const GITHUB_REMOTE: &str = "https://github.com/test/demo.git";
+
+/// The words of the arguments the fake gh's `pr create` got, without quotes.
+fn created_with(dir: &Path) -> Vec<String> {
+	let said = fs::read_to_string(dir.join("gh-create.txt")).expect("gh pr create ran");
+	said.replace('"', "").split_whitespace().map(str::to_owned).collect()
 }
 
 const PR_URL: &str = "https://github.com/test/demo/pull/7";
@@ -794,9 +826,106 @@ async fn thread_finish_pr_logged_out_gh_refuses_worded_for_the_door_0426_0581() 
 }
 
 #[tokio::test]
-async fn thread_finish_pr_has_the_thread_push_and_open_the_pr_and_an_open_pr_on_its_last_commit_removes_the_worktree_0426()
+async fn thread_finish_pr_on_github_pushes_and_opens_the_pr_by_code_and_removes_the_worktree_0426_0677() {
+	let (w, dir, _) = pr_world(&GhState::default(), |_| {});
+	w.t.with_boss(AgentState::Idle);
+	w.one_commit();
+	let reply = w.finish("pr").await.unwrap();
+	assert_eq!(
+		reply,
+		format!(
+			"Opened a PR for demo/Readme line: {PR_URL}; its worktree and workspace are removed, the branch stays."
+		)
+	);
+	// gh's argv is exactly the plan's, and no prompt went to the pane.
+	let argv = created_with(dir.path());
+	assert_eq!(argv[..8], ["pr", "create", "--base", "main", "--head", "feature/readme-line", "--title", "Readme"]);
+	assert_eq!(argv[8], "line");
+	assert_eq!(argv[9], "--body-file");
+	assert!(w.t.herdr.of("prompt").iter().all(|args| args[0] != json!("p_1")), "a prompt went to the thread's pane");
+	// The branch reached the remote; the body has the checks and the commits.
+	let bare = w._root.path().join("remote.git");
+	assert!(sh(&bare, &["branch", "--list", "feature/readme-line"]).contains("feature/readme-line"));
+	let body = fs::read_to_string(dir.path().join("gh-body.md")).unwrap();
+	assert!(body.contains("## Checks"), "{body}");
+	assert!(body.contains("## Commits\n\n- Add a README line"), "{body}");
+	// Closed as a PR on its head commit; the worktree and workspace are gone.
+	let head = sh(&bare, &["rev-parse", "feature/readme-line"]);
+	let closed = w.closed_as();
+	assert_eq!((closed["how"].as_str(), closed["commit"].as_str()), (Some("pr"), Some(head.as_str())));
+	assert!(!w.path.exists());
+	assert_eq!(w.closed_workspaces(), 1);
+	assert!(sh(&w.main, &["branch", "--list", "feature/readme-line"]).contains("feature/readme-line"));
+}
+
+#[tokio::test]
+async fn thread_finish_pr_by_code_that_fails_says_its_last_20_stderr_lines_and_retries_nothing_0677() {
+	let (w, _dir, _) = pr_world(&GhState { create_fails: true, ..GhState::default() }, |_| {});
+	w.t.with_boss(AgentState::Idle);
+	w.one_commit();
+	let said = w.refused("pr").await;
+	let lines: Vec<&str> = said.lines().collect();
+	assert_eq!(lines[0], "gh pr create failed:");
+	assert_eq!(lines[1].trim(), "line 6");
+	assert_eq!(lines[20].trim(), "line 25");
+	assert_eq!(lines[21], "Nothing was retried; the thread, its worktree and its branch stay.");
+	assert!(w.t.herdr.of("prompt").iter().all(|args| args[0] != json!("p_1")), "a prompt went to the thread's pane");
+	assert_eq!(w.thread.with(|t| t.phase), Phase::Task);
+	w.assert_in_place();
+}
+
+#[tokio::test]
+async fn thread_finish_pr_on_azure_opens_the_pr_with_az_after_the_push_0677() {
+	let dir = temp_dir("finish-az");
+	let argv = fake_az(dir.path());
+	let (w, _dir, _) = pr_world(&GhState::default(), move |options| options.az = Some(argv));
+	let remote = "https://dev.azure.com/example-org/client-a/_git/app";
+	sh(&w.main, &["remote", "set-url", "origin", remote]);
+	let bare = w._root.path().join("remote.git");
+	let key = format!("url.{}.pushInsteadOf", bare.to_string_lossy().replace('\\', "/"));
+	sh(&w.main, &["config", &key, remote]);
+	w.t.with_boss(AgentState::Idle);
+	w.one_commit();
+	let reply = w.finish("pr").await.unwrap();
+	assert_eq!(
+		reply,
+		"Opened a PR for demo/Readme line: https://dev.azure.com/example-org/client-a/_git/app/pullrequest/42; its worktree and workspace are removed, the branch stays."
+	);
+	assert!(sh(&bare, &["branch", "--list", "feature/readme-line"]).contains("feature/readme-line"));
+	assert!(w.t.herdr.of("prompt").iter().all(|args| args[0] != json!("p_1")), "a prompt went to the thread's pane");
+	let said = fs::read_to_string(dir.path().join("az-create.txt")).unwrap().replace('"', "");
+	let words: Vec<&str> = said.split_whitespace().collect();
+	assert_eq!(words[..3], ["repos", "pr", "create"]);
+	let after = |flag: &str| words[words.iter().position(|word| *word == flag).unwrap() + 1];
+	assert_eq!(after("--org"), "https://dev.azure.com/example-org");
+	assert_eq!(after("--project"), "client-a");
+	assert_eq!(after("--repository"), "app");
+	assert_eq!(after("--source-branch"), "feature/readme-line");
+	assert_eq!(after("--target-branch"), "main");
+}
+
+/// A fake az that logs its first arguments to `az-create.txt` and answers a created PR's JSON.
+fn fake_az(dir: &Path) -> Vec<String> {
+	let (file, text) = if cfg!(windows) {
+		("az.cmd", "@echo off\r\n>\"%~dp0az-create.txt\" echo %*\r\necho {\"pullRequestId\":42}\r\n")
+	} else {
+		("az", "#!/bin/sh\necho \"$@\" > \"$(dirname \"$0\")/az-create.txt\"\necho '{\"pullRequestId\":42}'\n")
+	};
+	let path = dir.join(file);
+	fs::write(&path, text).unwrap();
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::PermissionsExt;
+		fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+	}
+	vec![path.display().to_string()]
+}
+
+#[tokio::test]
+async fn thread_finish_pr_on_another_host_has_the_thread_push_and_open_the_pr_and_an_open_pr_on_its_last_commit_removes_the_worktree_0426_0677()
  {
 	let (w, dir, gh) = pr_world(&GhState::default(), |_| {});
+	sh(&w.main, &["remote", "set-url", "origin", "https://git.example.org/test/demo.git"]);
 	let boss = w.t.with_boss(AgentState::Idle);
 	w.one_commit();
 	let reply = w.finish("pr").await.unwrap();

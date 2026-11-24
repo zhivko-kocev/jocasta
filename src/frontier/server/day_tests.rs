@@ -51,6 +51,9 @@ pub(super) fn thread(change: impl FnOnce(&mut DayThread)) -> DayThread {
 		diff: None,
 		check: None,
 		last_write_ms: None,
+		halted: None,
+		progress: None,
+		budget: None,
 	};
 	change(&mut thread);
 	thread

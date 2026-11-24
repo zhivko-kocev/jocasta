@@ -527,6 +527,7 @@ fn build_service(
 	service.dock = shell.clone().map(|shell| heal_of(herdr, shell));
 	service.herdr_changed = shell.map(changes_of);
 	service.confirm = Some(confirm.unwrap_or_else(|| allow_box(Arc::clone(&asking.question))));
+	service.ask = Some(Arc::clone(&asking.question));
 	let row = whiteboard.cloned();
 	service.services =
 		Some(Arc::new(move || -> BoxFuture<'static, Vec<ServiceHealth>> { services_row(row.clone()).boxed() }));

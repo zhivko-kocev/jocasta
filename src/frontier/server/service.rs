@@ -27,12 +27,13 @@ use crate::frontier::protocol::{
 	ToastLevel, ToastReason, Today,
 };
 use crate::frontier::server::allow::Confirm;
-use crate::frontier::server::asker::Notifier;
+use crate::frontier::server::asker::{Ask, Notifier};
 use crate::frontier::server::boss::fresh_session;
 use crate::frontier::server::bridge::{Bridge, BridgeService, PaneAgent, PaneEvent, Resolved, Role};
 use crate::frontier::server::checks::CheckRunner;
 use crate::frontier::server::close::CloseService;
 use crate::frontier::server::context::{Link, ServiceContext};
+use crate::frontier::server::cost_cap;
 use crate::frontier::server::day::{AlertDetails, Day, DayHooks, DayOptions, DayThread, ScheduleStart, SharedCatalog};
 use crate::frontier::server::events::{Toast, clean};
 use crate::frontier::server::feed::{FeedService, Reply};
@@ -110,6 +111,8 @@ pub struct ServiceOptions {
 	pub pane_prompt: Option<Option<PathBuf>>,
 	/// How gh starts for `thread_finish(…, "pr")`: `["gh"]` by default (test seam).
 	pub gh: Option<Vec<String>>,
+	/// How az starts for `thread_finish(…, "pr")` on Azure DevOps: `["az"]` by default (test seam).
+	pub az: Option<Vec<String>>,
 	/// How long one gh call may take before it is ended; `GH_TIMEOUT_MS`, a minute (test seam).
 	pub gh_timeout_ms: Option<i64>,
 	/// omp's sessions dir; `~/.omp/agent/sessions` by default.
@@ -159,6 +162,9 @@ pub struct ServiceOptions {
 	pub pane_idle_minutes: Option<f64>,
 	/// The machine's free memory in bytes, `None` when unknown (0676); read from the machine by default (test seam).
 	pub available_memory: Option<Arc<dyn Fn() -> Option<u64> + Send + Sync>>,
+	/// Asks him a question through the service's question API (0686: the over-budget question): the server's own by
+	/// default; without it nothing is asked (test seam).
+	pub ask: Option<Ask>,
 }
 
 impl ServiceOptions {
@@ -179,6 +185,7 @@ impl ServiceOptions {
 			boss_command: None,
 			pane_prompt: None,
 			gh: None,
+			az: None,
 			gh_timeout_ms: None,
 			sessions_dir: None,
 			agent_wait_ms: None,
@@ -201,6 +208,7 @@ impl ServiceOptions {
 			plan_settle_ms: None,
 			pane_idle_minutes: None,
 			available_memory: None,
+			ask: None,
 		}
 	}
 
@@ -806,6 +814,15 @@ impl JocastaService {
 					AgentState::Idle
 				};
 				c.omps.host_reports(&who.pane_id, Some(state));
+				if matches!(event, PaneEvent::AgentEnd { .. }) {
+					// A thread at its cost cap is stopped and asked about after the turn that reached it (0686).
+					let (c, pane_id) = (self.ctx.clone(), who.pane_id.clone());
+					tokio::spawn(async move {
+						if let Err(error) = cost_cap::after_turn(&c, &pane_id).await {
+							c.warn(error);
+						}
+					});
+				}
 			}
 			_ => {}
 		}
@@ -1007,6 +1024,10 @@ impl KeyService for JocastaService {
 
 	fn key_start<'a>(&'a self, project: &'a str, brief: &'a str) -> BoxFuture<'a, Result<KeyOutcome>> {
 		Box::pin(JocastaService::key_start(self, project, brief))
+	}
+
+	fn key_stop_all<'a>(&'a self) -> BoxFuture<'a, Result<String>> {
+		Box::pin(self.keys.stop_all())
 	}
 }
 

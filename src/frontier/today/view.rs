@@ -11,7 +11,7 @@ use std::ops::Range;
 
 use crate::frontier::protocol::{
 	Dashboard, Hud, NeedsYouKind, PrCi, QuotaAccount, QuotaCapacity, QuotaSpan, QuotaWindow, ServiceState, ThreadState,
-	Today, quota_high, quota_percent, wait_label,
+	Today, js_number_text, quota_high, quota_percent, wait_label,
 };
 use crate::frontier::tui::{Line, Segment, TOKYO_NIGHT, columns, cut, fit, line_columns, wrap};
 use crate::shared::day::{DayRef, day_label, hhmm, weekday};
@@ -86,10 +86,11 @@ pub const NEWS_LINES: usize = 5;
 pub const SAID_MS: i64 = 60_000;
 
 /// The pane's keys, most important first: the key line drops the last ones that don't fit (0581, UX-7, UX-16). `x`
-/// (0670) drops first.
-const KEYS: [&str; 7] = ["↑↓ pick", "Enter go/open", "f Finish", "s Stop", "r Review", "n New", "x Remove"];
+/// (0670) and `X` (0686) drop first.
+const KEYS: [&str; 8] =
+	["↑↓ pick", "Enter go/open", "f Finish", "s Stop", "r Review", "n New", "X Stop all", "x Remove"];
 /// The keys joined as the key line shows them when they all fit.
-pub const KEY_LINE: &str = "↑↓ pick · Enter go/open · f Finish · s Stop · r Review · n New · x Remove";
+pub const KEY_LINE: &str = "↑↓ pick · Enter go/open · f Finish · s Stop · r Review · n New · X Stop all · x Remove";
 
 /// The title of a row keeps at least this many columns before its facts give way (0581, UX-4).
 const MIN_TITLE: i64 = 18;
@@ -447,7 +448,9 @@ fn underway_rows(state: &TodayState, today: &Today, now: i64, width: usize) -> V
 	}
 	for u in &today.underway {
 		// Kept in this order as the row narrows, the last dropping first: the state last of all (0581, UX-4, 0668).
-		let (label, colour) = if u.stuck_for.is_some() {
+		let (label, colour) = if let Some(why) = &u.halted {
+			(why.as_str(), P.red)
+		} else if u.stuck_for.is_some() {
 			("stuck", P.red)
 		} else {
 			let colour = if u.state == Some(ThreadState::Idle) { P.fg3 } else { P.green };
@@ -465,11 +468,21 @@ fn underway_rows(state: &TodayState, today: &Today, now: i64, width: usize) -> V
 			u.since.filter(|s| *s != 0).map(|s| format!("  {}", wait_label(now - s))).unwrap_or_default(),
 			P.fg2,
 		));
-		facts.push(Segment::new(u.cost.map(|c| format!("  {}", money(c))).unwrap_or_default(), P.fg2));
+		// With a cost cap the cost reads `$spent/$budget` (0686).
+		let spent = match (u.cost, u.budget) {
+			(spent, Some(budget)) => Some(format!("{}/${}", money(spent.unwrap_or(0.0)), js_number_text(budget))),
+			(Some(spent), None) => Some(money(spent)),
+			(None, None) => None,
+		};
+		facts.push(Segment::new(spent.map(|spent| format!("  {spent}")).unwrap_or_default(), P.fg2));
 		facts.push(Segment::new(u.context.map(|c| format!("  {}", tokens(c))).unwrap_or_default(), P.purple));
 		let project = u.project.as_deref().filter(|p| !p.is_empty()).map(|p| format!("{p}/")).unwrap_or_default();
 		let name = format!("{project}{}", u.title);
-		let left = [Segment::new(name, P.fg)];
+		let mut left = vec![Segment::new(name, P.fg)];
+		// The todo count and the context use, after the title (0677): `4/9 · 62%`.
+		if let Some(progress) = &u.progress {
+			left.push(Segment::new(format!("  {progress}"), P.fg3));
+		}
 		out.push(row(
 			&spread(&left, &facts, width.saturating_sub(2), None),
 			pick_of(Some(&u.pane_id), None),

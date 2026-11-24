@@ -156,6 +156,11 @@ pub struct DayThread {
 	pub diff: Option<ThreadDiff>,
 	pub check: Option<bool>,
 	pub last_write_ms: Option<i64>,
+	/// Why the loop cap or the cost cap stopped it (0677, 0686), its todo count and context use as one text, and its cost
+	/// cap in dollars: the row's `stuck: …`, `4/9 · 62%` and `$spent/$budget`.
+	pub halted: Option<String>,
+	pub progress: Option<String>,
+	pub budget: Option<f64>,
 }
 
 /// What starting a scheduled thread came to (0673): started, or skipped with the reason he is told.

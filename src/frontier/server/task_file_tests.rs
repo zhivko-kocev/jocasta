@@ -31,6 +31,7 @@ fn thread(how: Option<CloseHow>, hours: i64, ago: i64) -> TaskRecord {
 		brief: String::new(),
 		done_when: Vec::new(),
 		heavy: None,
+		budget: None,
 		id: "t-0000".to_owned(),
 		close: how.map(|how| TaskClose {
 			at,

@@ -20,7 +20,7 @@ pub const HANDOFF_FOCUS: &str = handoff_focus!();
 pub const HANDOFF_PROMPT: &str = concat!("/handoff ", handoff_focus!());
 
 /// The one steer a task end without its report gets (0539), typed into the thread's pane like the boss's steers.
-pub const REPORT_STEER: &str = "Your task ended without its report. Call the report_result tool now, once, with this task's outcome, summary, files, tests, decisions, open questions and follow-ups. Don't change code in this turn.";
+pub const REPORT_STEER: &str = "Your task ended without its report. Call the report_result tool now, once, with this task's outcome, summary, decisions, open questions and follow-ups. Don't change code in this turn.";
 
 /// The first of the lines every thread brief ends with (0459): the project's lessons before planning, cited in the plan.
 pub const LESSONS_LINE: &str = "Before you plan, read skill://lessons and cite each lesson your plan relies on as (lesson: <file>); a plan that goes against one says why.";
@@ -35,7 +35,7 @@ pub const WHEN_YOU_FINISH: [&str; 4] = [
 	"## When you finish",
 	"- Run the task's checks with the `check` tool (the project's check and every Done-when command, cached by tree); use bash only for a single test file while you iterate.",
 	"- Commit the approved work on this branch with a short message; the review starts from your commit.",
-	"- Then call `report_result` once.",
+	"- Then call `report_result` once: it runs the full check first and stores nothing while that fails; the files and tests come from git and that run.",
 ];
 
 /// How the review prompt (`hunk.ts` `reviewPrompt`) begins.

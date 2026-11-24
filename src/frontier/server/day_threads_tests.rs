@@ -119,6 +119,9 @@ async fn awaiting_you_lists_reviewed_unfinished_threads_oldest_first_with_their_
 			diff: None,
 			check: None,
 			stuck_for: None,
+			halted: None,
+			progress: None,
+			budget: None,
 		}]
 	);
 	let text = s.day.today_text().unwrap();

@@ -162,6 +162,10 @@ pub struct TaskRecord {
 	/// it runs on his `slow` role. Absent: not heavy (records written before it was kept read the same).
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub heavy: Option<bool>,
+	/// The thread's cost cap in dollars (0686): its omp runs with `--max-cost <budget>`. Absent: the setting's default
+	/// (or its double for a heavy thread) applies at launch.
+	#[serde(default, skip_serializing_if = "Option::is_none", serialize_with = "js_number")]
+	pub budget: Option<f64>,
 	/// `t-` and 4 hex digits, unique in the project.
 	pub id: String,
 	/// Absent while it is open, and on a record closed before 0621.
@@ -186,6 +190,7 @@ pub struct NewTask {
 	pub session: Option<String>,
 	pub parent: Option<String>,
 	pub heavy: Option<bool>,
+	pub budget: Option<f64>,
 }
 
 /// `<data>/projects/<pid>/threads`.
@@ -232,6 +237,7 @@ pub fn new_task(fields: NewTask, now: Option<i64>) -> TaskRecord {
 		brief: fields.brief,
 		done_when: fields.done_when,
 		heavy: fields.heavy,
+		budget: fields.budget,
 		id,
 		close: None,
 		extra: serde_json::Map::new(),

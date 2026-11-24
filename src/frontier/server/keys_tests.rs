@@ -351,3 +351,23 @@ async fn start_gives_the_brief_to_the_thread_start_and_an_unfinished_start_is_an
 	assert!(outcome.text.ends_with(": it plans first; approve its plan in its pane."), "{}", outcome.text);
 	assert!(t.ctx.calls.is_empty());
 }
+
+#[tokio::test]
+async fn stop_all_aborts_every_connected_pane_the_boss_included_and_journals_it_0686() {
+	let t = test_context(|_| {});
+	for pane in ["boss-1", "1-1", "1-2"] {
+		t.ctx
+			.bridge
+			.record(|recording| {
+				recording.agents.insert(pane.to_owned(), crate::frontier::server::bridge::PaneAgent::default())
+			})
+			.expect("a recording bridge");
+	}
+	assert_eq!(keys(&t).stop_all().await.unwrap(), "stopped 3 turns");
+	let mut aborted: Vec<String> = stops(&t).iter().map(|args| args[0].as_str().unwrap().to_owned()).collect();
+	aborted.sort();
+	assert_eq!(aborted, ["1-1", "1-2", "boss-1"]);
+	let journal = fs::read_to_string(crate::shared::paths::data_dir().join("journal.jsonl")).unwrap();
+	let line: serde_json::Value = serde_json::from_str(journal.lines().last().unwrap()).unwrap();
+	assert_eq!((line["kind"].as_str(), line["panes"].as_i64()), (Some("stop_all"), Some(3)));
+}

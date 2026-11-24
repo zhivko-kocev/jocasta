@@ -23,11 +23,11 @@ theme:
 memory:
   backend: mnemopi
 
-# One continuous thread (0399, 0448, 0592): compaction at 300k tokens, not a percent of a 1M window. A handoff first,
+# One continuous thread (0399, 0448, 0592, 0677): compaction at 200k tokens, not a percent of a 1M window. A handoff first,
 # prepared in the background; remote takes an overflow, shake and snapcompact are the no-model last resorts.
 compaction:
   methodOrder: [handoff, remote, soft, shake, snapcompact]
-  thresholdTokens: 300000
+  thresholdTokens: 200000
   idleEnabled: true
   idleThresholdTokens: 100000
 

@@ -175,8 +175,11 @@ pub struct Thread {
 	pub task: Option<TaskRecord>,
 	/// This task's end already steered it once to hand in its report (0539).
 	pub report_asked: bool,
-	/// The tree its last check on idle ran on (0513, 0542): an unchanged tree isn't checked again.
-	pub idle_tree: Option<String>,
+	/// Why it is stopped until he answers (0677, 0686): `stuck: <gate> failed 3×` or `over budget: $<spent> of
+	/// $<budget>`; the row shows it. Cleared by his `thread_send`, a raised budget or a new task.
+	pub stuck: Option<String>,
+	/// The over-budget question is open (0686): it is asked once.
+	pub budget_asked: bool,
 	/// Its review is ready and its handoff is written: it sleeps once its omp is idle (0676). Cleared when it works or
 	/// wakes again.
 	pub sleep_when_idle: bool,
@@ -221,7 +224,8 @@ impl Thread {
 			omp: None,
 			task: None,
 			report_asked: false,
-			idle_tree: None,
+			stuck: None,
+			budget_asked: false,
 			sleep_when_idle: false,
 		}
 	}

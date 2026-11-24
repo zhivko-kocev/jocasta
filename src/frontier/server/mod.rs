@@ -8,6 +8,7 @@ pub mod check_costs;
 pub mod checks;
 pub mod close;
 pub mod context;
+pub mod cost_cap;
 pub mod day;
 pub mod door_routes;
 #[cfg(test)]
@@ -48,6 +49,7 @@ pub mod herdr;
 pub mod history;
 pub mod hunk;
 pub mod instance;
+pub mod journal;
 pub mod keys;
 pub mod launch;
 pub mod lessons;

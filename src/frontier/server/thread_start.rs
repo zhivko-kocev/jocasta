@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::frontier::protocol::ThreadState;
 use crate::frontier::server::allow::Confirmation;
@@ -15,7 +15,7 @@ use crate::frontier::server::context::{Link, Shared};
 use crate::frontier::server::day::ScheduleStart;
 use crate::frontier::server::herdr::{AgentState, Env, PaneInfo, Prepare, WorktreeOptions};
 use crate::frontier::server::overlay::ensure_overlay;
-use crate::frontier::server::pane_launch::{THREAD_FLAGS, after_overlay};
+use crate::frontier::server::pane_launch::{THREAD_FLAGS, after_overlay, thread_budget};
 use crate::frontier::server::task_file::{NewTask, TaskRecord, new_task, task_dir};
 use crate::frontier::server::thread::{Thread, ThreadPlan, ThreadRef, subject};
 use crate::frontier::server::thread_lifecycle::StateSource;
@@ -60,6 +60,16 @@ pub fn heavy_of(value: Option<&Value>, door: Door) -> Result<bool> {
 	value.as_bool().ok_or_else(|| Error::user(format!("{}: heavy is true or false.", start_prefix(door))))
 }
 
+/// `budget` as given (0686): absent, or a number of dollars, 1 or more; anything else is a refusal named by the door.
+pub fn budget_of(value: Option<&Value>, door: Door) -> Result<Option<f64>> {
+	let Some(value) = value.filter(|value| !value.is_null()) else { return Ok(None) };
+	value
+		.as_f64()
+		.filter(|dollars| dollars.is_finite() && *dollars >= 1.0)
+		.map(Some)
+		.ok_or_else(|| Error::user(format!("{}: budget is a number of dollars, 1 or more.", start_prefix(door))))
+}
+
 /// The shipped guard's rules (0450, 0580), read once: every `done_when` is checked against them before it's stored.
 fn shipped_guard() -> Result<&'static [GuardRule]> {
 	static RULES: OnceLock<Vec<GuardRule>> = OnceLock::new();
@@ -79,18 +89,19 @@ pub struct Started {
 }
 
 /// What a start is given beyond its project, title and brief: the door it came through (the boss's by default), the
-/// commands that must pass (0540) and whether the thread is heavy (0590).
+/// commands that must pass (0540), whether the thread is heavy (0590) and its cost cap in dollars (0686).
 #[derive(Debug, Clone)]
 pub struct StartOptions {
 	pub door: Door,
 	pub done_when: Vec<String>,
 	pub heavy: bool,
+	pub budget: Option<f64>,
 }
 
 impl StartOptions {
-	/// A start through `door` with no `done_when`, not heavy.
+	/// A start through `door` with no `done_when`, not heavy, with the default cost cap.
 	pub fn new(door: Door) -> Self {
-		Self { door, done_when: Vec::new(), heavy: false }
+		Self { door, done_when: Vec::new(), heavy: false, budget: None }
 	}
 }
 
@@ -101,6 +112,7 @@ struct Request<'a> {
 	checks: Vec<String>,
 	door: Door,
 	heavy: bool,
+	budget: Option<f64>,
 }
 
 /// What a start's worktree step needs.
@@ -241,7 +253,7 @@ impl ThreadStarts {
 			}
 			Err(denied) => return Ok(ScheduleStart::Skipped(denied.to_string())),
 		}
-		let options = StartOptions { door: Door::Key, done_when: checks, heavy: schedule.heavy };
+		let options = StartOptions { door: Door::Key, done_when: checks, heavy: schedule.heavy, budget: None };
 		self.start_with(&project.name, &title, &schedule.brief, options).await?;
 		Ok(ScheduleStart::Started)
 	}
@@ -278,7 +290,8 @@ impl ThreadStarts {
 			return Err(Error::user(format!("{prefix}: each done_when is one command on one line.")));
 		}
 		let prompted = Self::vet_done_when(prefix, &checks, options.door)?;
-		let request = Request { title, brief, checks, door: options.door, heavy: options.heavy };
+		let request =
+			Request { title, brief, checks, door: options.door, heavy: options.heavy, budget: options.budget };
 		// A boss's start in a project other than the one of the last project pane he focused, or with a done_when the
 		// guard asks about, waits for his Allow (0484, 0492, 0580); one he started with his own key and form, or with
 		// `jocasta thread new`, needs none: the thread waits at its plan for him (0544).
@@ -300,6 +313,7 @@ impl ThreadStarts {
 				brief: js_trim(brief).to_owned(),
 				done_when: request.checks.clone(),
 				heavy: request.heavy.then_some(true),
+				budget: request.budget,
 				base,
 				..NewTask::default()
 			},
@@ -537,6 +551,8 @@ impl ThreadStarts {
 		self.st().last_started_in = Some(project);
 		c.status.write_task(thread);
 		c.omps.remember(thread, None).await;
+		let budget = thread.with(|t| t.task.as_ref().and_then(thread_budget));
+		thread.with(|t| c.journal.thread("thread_started", t, json!({ "heavy": request.heavy, "budget": budget })));
 		let (label, branch, heavy) = thread
 			.with(|t| (subject(t), t.branch.clone(), t.task.as_ref().is_some_and(|task| task.heavy == Some(true))));
 		let started = if request.door == Door::Boss {
@@ -546,7 +562,9 @@ impl ThreadStarts {
 		};
 		// The commit step is in `prompt.md`'s When you finish (0577); with the layer off there is none, so it ends the brief.
 		let commit = if c.layer { String::new() } else { format!("\n{COMMIT_LINE}") };
-		let said = format!("{}\n\n{LESSONS_LINE}{commit}", request.brief.trim_end());
+		// What code already knows, so the thread doesn't spend turns on git for it (0685).
+		let facts = c.review.start_facts(thread).await;
+		let said = format!("{}\n\n{LESSONS_LINE}{commit}\n\n{facts}", request.brief.trim_end());
 		if !self.agent_up(&created.pane_id).await? {
 			let wait = ((self.agent_wait_ms() as f64) / 1000.0 + 0.5).floor() as i64;
 			return Ok(Started {

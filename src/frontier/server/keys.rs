@@ -6,9 +6,12 @@
 
 use std::sync::Arc;
 
+use crate::frontier::protocol::{ToastLevel, ToastReason};
 use crate::frontier::server::context::ServiceContext;
+use crate::frontier::server::events::Toast;
 use crate::frontier::server::finish::Finishable;
 use crate::frontier::server::herdr::AgentState;
+use crate::frontier::server::journal::About;
 use crate::frontier::server::thread::{Phase, ThreadRef, subject};
 use crate::frontier::server::thread_lifecycle::Awaiting;
 use crate::frontier::server::wording::{Door, brief_title, overlap_said};
@@ -119,6 +122,28 @@ impl Keys {
 			"{}: the focused pane isn't a thread's; focus a thread or pick one in today.",
 			action.name()
 		)))
+	}
+
+	/// Stop all (0686): `abort` to every connected pane, the boss's included. Phases and stuck states stay. An omp that
+	/// can't abort (0684) isn't counted. The toast says how many turns ended; the journal gets `stop_all`.
+	pub async fn stop_all(&self) -> Result<String> {
+		self.track(async {
+			let c = &self.ctx;
+			let panes = c.bridge.panes();
+			let mut stopped = 0_usize;
+			for pane in &panes {
+				match c.bridge.abort(pane) {
+					Ok(true) => stopped += 1,
+					Ok(false) => {}
+					Err(error) => c.warn(error),
+				}
+			}
+			c.journal.append("stop_all", About::project(""), serde_json::json!({ "panes": panes.len() }));
+			let text = format!("stopped {stopped} {}", if stopped == 1 { "turn" } else { "turns" });
+			c.events.send(Toast::new(ToastReason::Event, ToastLevel::Info, text.clone()).into());
+			Ok(text)
+		})
+		.await
 	}
 
 	/// Stop (0544): one Escape into the thread's omp, while it works or asks him.

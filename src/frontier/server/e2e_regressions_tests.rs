@@ -266,7 +266,7 @@ fn fake_gh(dir: &Path) -> Vec<String> {
 async fn svc_6_an_omp_started_again_mid_pr_goes_back_to_its_task_and_the_boss_hears_to_finish_it_again_0582() {
 	let j = temp_jocasta();
 	let project = demo_project(j.root(), "demo").await;
-	sh(&project.main_path, &["remote", "add", "origin", "https://github.com/test/demo.git"]);
+	sh(&project.main_path, &["remote", "add", "origin", "https://git.example.org/test/demo.git"]);
 	let gh_dir = temp_dir("regressions-gh");
 	let options = ServerOptions { gh: Some(fake_gh(gh_dir.path())), ..ServerOptions::default() };
 	with_server(options, |server| async move {

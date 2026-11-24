@@ -21,6 +21,7 @@ use crate::frontier::server::day::{Day, SharedCatalog};
 use crate::frontier::server::events::{BossPane, Events};
 use crate::frontier::server::finish::Finisher;
 use crate::frontier::server::herdr::Herdr;
+use crate::frontier::server::journal::Journal;
 use crate::frontier::server::omp_processes::OmpTracker;
 use crate::frontier::server::pane_launch::PaneLauncher;
 use crate::frontier::server::places::{Places, PlacesHooks};
@@ -223,6 +224,8 @@ pub struct ServiceContext {
 	pub sleep: PaneSleeps,
 	/// Each open thread's diff, last check and last write, read on the refresh tick (0668).
 	pub thread_facts: ThreadFacts,
+	/// The orchestrator's events, one line each (0688).
+	pub journal: Journal,
 }
 
 impl ServiceContext {
@@ -275,6 +278,7 @@ impl ServiceContext {
 			weekly: WeeklyReviews::new(link.clone()),
 			sleep: PaneSleeps::new(link.clone()),
 			thread_facts: ThreadFacts::new(),
+			journal: Journal::default(),
 			catalog,
 			options,
 			day,

@@ -141,6 +141,14 @@ fn boss_thread_tools() -> Vec<ToolSpec> {
 							"description": "Run the thread on his slow role, his strongest model, for ambitious or open-ended work (a migration, a deep bug, a large refactor); it spends his Fable allowance fastest. Leave it out otherwise",
 						}),
 					),
+					(
+						"budget",
+						json!({
+							"type": "number",
+							"minimum": 1,
+							"description": "Cost cap in dollars for this thread (its omp stops at it; you are asked whether to raise it). Leave it out for the default cap",
+						}),
+					),
 				],
 				&["project", "title", "brief"],
 			),

@@ -122,6 +122,8 @@ pub struct ReviewContext {
 	/// The thread's `report_result` as one line (0539); `Some(None)` when it handed in none (the TypeScript's `null`);
 	/// `None` without a task file.
 	pub report: Option<Option<String>>,
+	/// The facts block code computed for the range (0685): after the lead line; `None` adds nothing.
+	pub facts: Option<String>,
 }
 
 /// JavaScript's `\s` (and `trim`): these characters, and none of Rust's others (U+0085).
@@ -204,6 +206,9 @@ pub fn review_prompt(hunk: &[String], range: &str, context: &ReviewContext) -> S
 	});
 	let rubric = slash(&shipped_config_dir(None).join("design-rubric.md"));
 	let mut parts: Vec<String> = vec![REVIEW_LEAD.to_owned()];
+	if let Some(facts) = context.facts.as_deref().filter(|facts| !facts.is_empty()) {
+		parts.push(format!("\n\n{facts}\n\n"));
+	}
 	parts.extend(failed);
 	if ran_tests {
 		parts.push(

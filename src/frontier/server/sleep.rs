@@ -14,6 +14,7 @@ use futures_util::future::join_all;
 
 use crate::frontier::server::context::{Link, ServiceContext};
 use crate::frontier::server::herdr::{HerdrSnapshot, PaneInfo};
+use crate::frontier::server::journal::About;
 use crate::frontier::server::pane_launch::Respawn;
 use crate::frontier::server::thread::{Phase, ThreadRef, subject};
 use crate::shared::clock::now_ms;
@@ -240,6 +241,7 @@ impl PaneSleeps {
 		self.end_omp(&c, pane_id, processes).await;
 		let new_pane = c.panes.respawn_asleep(pane_id, &cwd, &text, session.as_deref()).await?;
 		claim.also(&new_pane);
+		self.journal(&c, "slept", &cwd, thread.as_ref());
 		if let Some(thread) = thread {
 			c.threads.drop_pane(pane_id);
 			thread.with(|t| {
@@ -300,7 +302,9 @@ impl PaneSleeps {
 		if !c.launched.asleep(&pane_id) {
 			return Ok(());
 		}
-		c.lifecycle.relaunch(thread).await
+		c.lifecycle.relaunch(thread).await?;
+		thread.with(|t| c.journal.thread("woke", t, serde_json::json!({})));
+		Ok(())
 	}
 
 	/// Brings a sleeping project pane's omp back (`--restore <session>`, `--continue` when none was kept).
@@ -318,7 +322,17 @@ impl PaneSleeps {
 		let restore = c.launched.paused(pane_id).map(PathBuf::from);
 		let how = Respawn { cwd: &cwd, project_id: &project.id, env: None, restore: restore.as_deref(), thread: None };
 		c.panes.respawn(pane_id, how).await?;
+		self.journal(&c, "woke", &cwd, None);
 		Ok(())
+	}
+
+	/// The journal's `slept` or `woke` (0688) for the thread, or the project at `cwd`.
+	fn journal(&self, c: &ServiceContext, kind: &str, cwd: &std::path::Path, thread: Option<&ThreadRef>) {
+		if let Some(thread) = thread {
+			thread.with(|t| c.journal.thread(kind, t, serde_json::json!({})));
+		} else if let Ok(Some(project)) = c.places.project_pane_at(cwd) {
+			c.journal.append(kind, About::project(&project.id), serde_json::json!({}));
+		}
 	}
 
 	/// A key was pressed in a sleeper (its pane key, 0578): its omp starts again. A key for a pane that is awake, or

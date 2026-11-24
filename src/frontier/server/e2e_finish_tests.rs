@@ -354,7 +354,7 @@ async fn thread_finish_pr_gh_missing_or_logged_out_is_a_clear_refusal_else_the_t
  {
 	let j = temp_jocasta();
 	let project = demo_project(j.root(), "demo").await;
-	sh(&project.main_path, &["remote", "add", "origin", "https://github.com/test/demo.git"]);
+	sh(&project.main_path, &["remote", "add", "origin", "https://git.example.org/test/demo.git"]);
 	let missing = ServerOptions { gh: Some(vec!["jocasta-test-no-such-gh".to_owned()]), ..wait_options() };
 	with_server(missing, |server| async move {
 		let started = start_thread(&server, ThreadOptions::default()).await;

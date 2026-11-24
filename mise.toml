@@ -38,6 +38,10 @@ run = [
 	"cargo machete ./Cargo.toml",
 ]
 
+[tasks.quick]
+description = "the turn-end check (0677, 0682): rustfmt and cargo's type check of every target, seconds, no tests"
+run = ["cargo fmt --check", "cargo check --locked --all-targets"]
+
 [tasks.check]
 description = "the TypeScript and Rust checks (runs verify)"
 depends = ["verify"]
