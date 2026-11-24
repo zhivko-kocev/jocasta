@@ -27,6 +27,7 @@ use crate::frontier::server::places::{Places, PlacesHooks};
 use crate::frontier::server::review_flow::ReviewFlow;
 use crate::frontier::server::service::ServiceOptions;
 use crate::frontier::server::sessions::SessionIndex;
+use crate::frontier::server::sleep::PaneSleeps;
 use crate::frontier::server::status::StatusViews;
 use crate::frontier::server::thread::ThreadRegistry;
 use crate::frontier::server::thread_facts::ThreadFacts;
@@ -218,6 +219,8 @@ pub struct ServiceContext {
 	pub status: StatusViews,
 	pub starts: ThreadStarts,
 	pub weekly: WeeklyReviews,
+	/// Panes whose omp sleeps (0676).
+	pub sleep: PaneSleeps,
 	/// Each open thread's diff, last check and last write, read on the refresh tick (0668).
 	pub thread_facts: ThreadFacts,
 }
@@ -270,6 +273,7 @@ impl ServiceContext {
 			lifecycle: ThreadLifecycle::new(link.clone()),
 			starts: ThreadStarts::new(link.clone()),
 			weekly: WeeklyReviews::new(link.clone()),
+			sleep: PaneSleeps::new(link.clone()),
 			thread_facts: ThreadFacts::new(),
 			catalog,
 			options,

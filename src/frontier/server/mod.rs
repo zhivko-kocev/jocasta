@@ -74,6 +74,7 @@ pub mod routes;
 pub mod server;
 pub mod service;
 pub mod sessions;
+pub mod sleep;
 pub mod spend;
 pub mod status;
 pub mod stop_sequence;

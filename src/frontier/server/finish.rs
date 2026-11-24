@@ -535,9 +535,11 @@ impl Finisher {
 		let Some(remote) = remotes.iter().find(|remote| *remote == "origin").or_else(|| remotes.first()) else {
 			return Err(Error::user(format!("{} has no git remote to push {} to.", t.project.name, t.branch)));
 		};
+		c.sleep.wake_thread(thread).await?;
 		thread.with(|t| set_phase(t, Phase::Finish, "it is asked to open its PR"));
+		let pane_id = thread.with(|t| t.pane_id.clone());
 		if let Err(error) =
-			c.bridge.prompt(&t.pane_id, c.bridge.seal(&pr_request(remote, &t.branch, trunk)), Deliver::FollowUp).await
+			c.bridge.prompt(&pane_id, c.bridge.seal(&pr_request(remote, &t.branch, trunk)), Deliver::FollowUp).await
 		{
 			thread.with(|t| set_phase(t, Phase::Task, "it didn't take the PR request"));
 			return Err(Error::user(format!("{name} didn't take the request: {error}")));

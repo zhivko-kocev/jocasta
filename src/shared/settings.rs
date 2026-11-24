@@ -73,6 +73,11 @@ fn rule_of(key: &str) -> Option<KeyRule> {
 		"service" => rule("service must be a mapping", PORT_QUIET, true),
 		"service.port" => rule("service.port must be a port number from 1 to 65535", "using 47400", false),
 		"service.quietHours" => rule("service.quietHours must be like \"22:00-08:00\"", "quiet hours are off", false),
+		"service.paneIdleMinutes" => rule(
+			"service.paneIdleMinutes must be a number of minutes, 0 or more (0 = panes never sleep)",
+			"using 15",
+			false,
+		),
 		"frontier" => rule("frontier must be a mapping", PORT_QUIET, true),
 		"frontier.port" => rule("frontier.port must be a port number from 1 to 65535", "using 47400", false),
 		"frontier.quietHours" => rule("frontier.quietHours must be like \"22:00-08:00\"", "quiet hours are off", false),
@@ -144,14 +149,19 @@ fn is_quiet_hours(value: &Value) -> bool {
 	}
 }
 
-/// `service` and the old `frontier` group: a port and quiet hours; `frontier` also knows two keys that are gone.
+/// `service` and the old `frontier` group: a port and quiet hours; `service` also the minutes an idle pane waits before
+/// it sleeps (0676); `frontier` also knows two keys that are gone.
 fn check_service(group: &str, value: &Value, faults: &mut Vec<Fault>) {
 	let Some(map) = value.as_object() else { return faults.push(fault(&[], group, false)) };
 	for (name, value) in map {
 		match name.as_str() {
 			"port" if !integer_between(value, 1.0, 65_535.0) => faults.push(fault(&[group], name, false)),
 			"quietHours" if !is_quiet_hours(value) => faults.push(fault(&[group], name, false)),
+			"paneIdleMinutes" if group == "service" && !value.as_f64().is_some_and(|minutes| minutes >= 0.0) => {
+				faults.push(fault(&[group], name, false));
+			}
 			"port" | "quietHours" => {}
+			"paneIdleMinutes" if group == "service" => {}
 			"autostart" | "dashboard" if group == "frontier" => {}
 			_ => faults.push(fault(&[group], name, true)),
 		}
@@ -506,6 +516,21 @@ pub fn read_check_reserve_gb() -> f64 {
 		.and_then(|checks| checks.get("memoryReserveGb"))
 		.and_then(Value::as_f64)
 		.filter(|gb| (0.0..=256.0).contains(gb))
+		.unwrap_or(DEFAULT)
+}
+
+/// `service.paneIdleMinutes` (0676): minutes a pane's omp idles before it sleeps; 15 when unset or bad, 0 = never.
+pub fn read_pane_idle_minutes() -> f64 {
+	const DEFAULT: f64 = 15.0;
+	let Ok(settings) = read_settings() else { return DEFAULT };
+	if check_settings(&settings, "service.paneIdleMinutes").is_err() {
+		return DEFAULT;
+	}
+	settings
+		.get("service")
+		.and_then(|service| service.get("paneIdleMinutes"))
+		.and_then(Value::as_f64)
+		.filter(|minutes| *minutes >= 0.0)
 		.unwrap_or(DEFAULT)
 }
 

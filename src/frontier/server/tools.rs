@@ -482,6 +482,8 @@ impl Tools {
 		let args = Args::new(args, format!("jocasta {command}"));
 		match command {
 			"ping" => Ok("ok".to_owned()),
+			// A sleeping pane's key was pressed (0676): its sleeper asks for its omp back. Internal, no Allow.
+			"wake" => c.sleep.wake_by_key(&args.text("key")?).await,
 			"thread new" => self.start_tool(&args, Door::Cli).await,
 			"thread list" => {
 				let project = args.optional("project").map(|name| c.places.find(&name)).transpose()?;
@@ -577,6 +579,7 @@ impl Tools {
 			self.c.allow.ask(&ask, "nothing was sent", door).await?;
 			self.refuse_send(thread, door).await?;
 		}
+		self.c.sleep.wake_thread(thread).await?;
 		let pane_id = thread.with(|t| {
 			t.sent_at = Some(now_ms());
 			t.pane_id.clone()
@@ -588,6 +591,9 @@ impl Tools {
 	/// `thread_stop` and `jocasta thread stop` (0544): one Escape into its omp; the command waits for his Allow first.
 	pub async fn stop(&self, thread: &ThreadRef, door: Door) -> Result<String> {
 		let name = thread.with(|t| subject(t));
+		if self.c.launched.asleep(&thread.with(|t| t.pane_id.clone())) {
+			return Ok(format!("{name} is asleep; nothing is running to stop."));
+		}
 		if door == Door::Cli {
 			let ask = Confirmation {
 				message: format!("Stop {name}'s run?"),

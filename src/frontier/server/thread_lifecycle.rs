@@ -427,6 +427,12 @@ impl ThreadLifecycle {
 
 	/// A thread at work.
 	async fn working(&self, thread: &ThreadRef) {
+		// At work on a task again (not the handoff of its review): it no longer waits to sleep (0676).
+		thread.with(|t| {
+			if t.phase != Phase::Handoff {
+				t.sleep_when_idle = false;
+			}
+		});
 		// Reviewed and not finished, and at work again on a task: he sent the reviewed work back (0471). When the
 		// boss's own `thread_send` started it, it carried his word, which may not be a rejection: the boss knows.
 		let relayed = thread.with(|t| {

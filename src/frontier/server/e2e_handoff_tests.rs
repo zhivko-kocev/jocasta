@@ -323,6 +323,10 @@ async fn panes_herdr_restored_as_shells_while_the_service_runs_get_omp_again_wit
 		let herdr = server.herdr.clone();
 		let started = start_thread(&server, ThreadOptions::default()).await;
 		let path = started.path;
+		// A new project pane starts as a sleeper (0676); a key brings its omp.
+		let ctx = server.service.context().clone();
+		let sleeper = project_pane(&herdr);
+		ctx.sleep.wake_by_key(&ctx.launched.key_of(&sleeper).expect("the sleeper's key")).await.unwrap();
 		// The refresh tick notes each new pane's terminal.
 		server.service.refresh().await;
 		herdr.restore();
@@ -351,6 +355,10 @@ async fn an_omp_that_ends_in_a_jocasta_pane_left_open_starts_again_there_resumin
 		let started = start_thread(&server, ThreadOptions::default()).await;
 		let (pane_id, path) = (started.pane_id, started.path);
 		let boss = boss_pane(&herdr).expect("the boss pane");
+		// A new project pane starts as a sleeper (0676); a key brings its omp.
+		let ctx = server.service.context().clone();
+		let sleeper = project_pane(&herdr);
+		ctx.sleep.wake_by_key(&ctx.launched.key_of(&sleeper).expect("the sleeper's key")).await.unwrap();
 		let own = project_pane(&herdr);
 		herdr.set_state(&boss, AgentState::Idle, None, true);
 		herdr.set_state(&own, AgentState::Idle, None, true);

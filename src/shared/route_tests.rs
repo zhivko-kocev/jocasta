@@ -123,6 +123,13 @@ fn the_command_word_routes_to_the_hook_with_gits_arguments_and_stays_out_of_the_
 }
 
 #[test]
+fn the_pane_sleep_role_takes_its_text_and_stays_out_of_the_help_0676() {
+	assert!(!help().contains("pane-sleep"));
+	assert_eq!(go(&["pane-sleep", "acme · asleep"]), Route::PaneSleep { args: words(&["acme · asleep"]) });
+	assert_eq!(go(&["pane-sleep"]), Route::PaneSleep { args: vec![] });
+}
+
+#[test]
 fn the_service_and_plugin_words_are_hidden_from_the_help() {
 	let text = help();
 	for line in text.lines().map(str::trim_start) {

@@ -58,10 +58,11 @@ run = "cargo run --locked --release --bin jocasta-bench -- evals"
 # bridge round trip against bench/footprint-budget.json, which only goes down. Not part of `check`.
 [tasks.footprint]
 description = "the release build against the footprint budget (jocasta-bench footprint [--write-budget])"
-run = ["cargo build --release --locked --bin jocasta --bin jocasta-bench", "target/release/jocasta-bench footprint"]
+# `cargo run` names the binary portably (cmd refuses `target/release/...`); the first step builds `jocasta` beside it.
+run = ["cargo build --release --locked --bin jocasta --bin jocasta-bench", "cargo run --release --locked --bin jocasta-bench -- footprint"]
 
 [tasks.smoke]
-# One test at a time: the service's collab relay has one fixed port (0561), so two services at once would refuse the second.
+# One test at a time: each starts its own herdr server and service on this machine.
 description = "the opt-in smoke on this machine: throwaway herdr sessions, one at a time"
 env = { JOCASTA_HERDR_SMOKE = "1" }
 run = "cargo nextest run --locked -j 1 -E 'test(/live_smoke/)'"

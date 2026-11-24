@@ -7,7 +7,8 @@ use clap::{Parser, Subcommand};
 /// The `jocasta` command's words (0387, 0467, 0468, 0472, 0544): open the work surface, `setup [--refresh <file>]`,
 /// `uninstall`, `diagnose`, `project …`, `thread …`, `worktree leftover|remove <path>`, `--version`;
 /// and, not listed in the help, `push-hook <remote> <address>`, the `pre-push` hook git runs in every Jocasta pane
-/// (0613). Every other word of
+/// (0613), and `pane-sleep <text>`, what a sleeping pane runs (0676).
+/// Every other word of
 /// herdr's (the fork built in, `crates/herdr`) is
 /// [`Route::Herdr`]: herdr's own entry reads the command line. `--help` and a word that is no command are not routes:
 /// [`route`] returns clap's error for them.
@@ -21,6 +22,7 @@ pub enum Route {
 	Thread { args: Vec<String> },
 	Worktree { args: Vec<String> },
 	PushHook { args: Vec<String> },
+	PaneSleep { args: Vec<String> },
 	Version,
 	Herdr,
 }
@@ -131,6 +133,12 @@ enum Word {
 		#[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "ARGS")]
 		args: Vec<String>,
 	},
+	/// What a sleeping pane runs instead of omp (0676)
+	#[command(name = "pane-sleep", hide = true, disable_help_flag = true)]
+	PaneSleep {
+		#[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "TEXT")]
+		args: Vec<String>,
+	},
 }
 
 impl From<Word> for Route {
@@ -143,6 +151,7 @@ impl From<Word> for Route {
 			Word::Thread { args } => Self::Thread { args },
 			Word::Worktree { args } => Self::Worktree { args },
 			Word::PushHook { args } => Self::PushHook { args },
+			Word::PaneSleep { args } => Self::PaneSleep { args },
 		}
 	}
 }

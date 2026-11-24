@@ -13,9 +13,11 @@ use serde_json::Value;
 
 use super::*;
 use crate::frontier::protocol::ServerMessage;
+use crate::frontier::server::bridge::PaneAgent;
 use crate::frontier::server::context::{TestContext, test_context};
 use crate::frontier::server::herdr::AgentState::{Idle, Unknown, Working};
 use crate::frontier::server::herdr::WorkspaceInfo;
+use crate::frontier::server::service::ServiceOptions;
 use crate::shared::git::git;
 use crate::shared::pathkey::real_path;
 use crate::shared::paths::projects_file;
@@ -58,9 +60,14 @@ fn add_pane(t: &TestContext, (pane_id, workspace_id, label): (&str, &str, &str),
 }
 
 async fn world() -> World {
+	world_with(|_| {}).await
+}
+
+async fn world_with(more: impl FnOnce(&mut ServiceOptions)) -> World {
 	let t = test_context(|options| {
 		options.mise = Some(None);
 		options.hunk = Some(None);
+		more(options);
 	});
 	let dir = temp_dir("refresh");
 	let base = real_path(dir.path());
@@ -631,4 +638,305 @@ async fn a_boss_pane_that_keeps_closing_opens_again_at_once_then_waits() {
 	w.tick().await;
 	w.tick().await;
 	assert_eq!(w.t.herdr.of("ensureWorkspace").len(), 2, "the second waits 10 s");
+}
+
+// ── panes that sleep (0676) ─────────────────────────────────────────────────────────────────────────────────────────
+
+/// A world whose machine has plenty of free memory and whose idle limit is `minutes`.
+async fn sleepy(minutes: f64) -> World {
+	world_with(|options| {
+		options.pane_idle_minutes = Some(minutes);
+		options.available_memory = Some(Arc::new(|| Some(1 << 40)));
+	})
+	.await
+}
+
+impl World {
+	/// What omp in `pane` reported: idle with nothing running, since `ago_ms` ago, and the session file it runs.
+	fn reports_idle(&self, pane: &str, ago_ms: i64, session: Option<&str>) {
+		let agent = PaneAgent {
+			idle_reported: true,
+			jobs: Some(0),
+			active_at: crate::shared::clock::now_ms() - ago_ms,
+			..PaneAgent::default()
+		};
+		let session = session.map(str::to_owned);
+		self.t
+			.ctx
+			.bridge
+			.record(|recording| {
+				recording.agents.insert(pane.to_owned(), agent);
+				if let Some(session) = session {
+					recording.sessions.insert(pane.to_owned(), session);
+				}
+			})
+			.unwrap();
+	}
+
+	fn sleepers(&self) -> Vec<(String, Vec<String>)> {
+		self.respawned()
+			.into_iter()
+			.map(|(pane, call)| (pane, command_of(&call)))
+			.filter(|(_, command)| command.iter().any(|word| word == "pane-sleep"))
+			.collect()
+	}
+
+	/// The pane now in `cwd`'s place.
+	fn pane_in(&self, cwd: &Path) -> String {
+		self.t
+			.herdr
+			.state()
+			.pane_list
+			.iter()
+			.find(|pane| pane.cwd.as_deref().is_some_and(|dir| same_dir(dir, cwd)))
+			.unwrap()
+			.pane_id
+			.clone()
+	}
+}
+
+#[tokio::test]
+async fn an_idle_project_pane_sleeps_after_the_idle_minutes_and_a_key_brings_the_same_session_back_0676() {
+	let w = sleepy(0.02).await;
+	w.up();
+	w.tick().await;
+	// Idle for a minute: more than 0.02 minutes.
+	w.reports_idle("p-demo", 60_000, Some("session-a.jsonl"));
+	w.tick().await;
+	let asleep = w.sleepers();
+	assert_eq!(asleep.len(), 1);
+	assert_eq!(asleep[0].0, "p-demo");
+	assert_eq!(asleep[0].1.last().map(String::as_str), Some("demo · asleep"));
+	assert_eq!(w.t.herdr.of("shutdown"), [vec![serde_json::json!("p-demo")]], "omp is asked to end first");
+	let sleeper = w.pane_in(&w.main);
+	assert!(w.t.ctx.launched.asleep(&sleeper));
+	assert_eq!(w.t.ctx.launched.paused(&sleeper).as_deref(), Some("session-a.jsonl"));
+	// A key in the sleeper: its pane key asks for the wake.
+	let key = w.t.ctx.launched.key_of(&sleeper).unwrap();
+	assert_eq!(w.t.ctx.sleep.wake_by_key(&key).await.unwrap(), "woke");
+	let woken = w.respawned().pop().unwrap();
+	assert_eq!(woken.0, sleeper);
+	let command = command_of(&woken.1);
+	let at = command.iter().position(|word| word == "--restore").expect("omp restores the session");
+	assert_eq!(command[at + 1], "session-a.jsonl");
+	assert!(!command.iter().any(|word| word == "pane-sleep"));
+	let omp_pane = w.pane_in(&w.main);
+	assert!(!w.t.ctx.launched.asleep(&omp_pane));
+	// Asked again, it is awake: nothing happens.
+	assert_eq!(w.t.ctx.sleep.wake_by_key(&key).await.unwrap(), "not asleep");
+}
+
+#[tokio::test]
+async fn a_wake_with_no_session_known_continues_the_last_one_0676() {
+	let w = sleepy(0.02).await;
+	w.up();
+	w.tick().await;
+	w.reports_idle("p-demo", 60_000, None);
+	w.tick().await;
+	let sleeper = w.pane_in(&w.main);
+	let key = w.t.ctx.launched.key_of(&sleeper).unwrap();
+	w.t.ctx.sleep.wake_by_key(&key).await.unwrap();
+	let command = command_of(&w.respawned().pop().unwrap().1);
+	assert!(command.iter().any(|word| word == "--continue"));
+	assert!(!command.iter().any(|word| word == "--restore"));
+}
+
+#[tokio::test]
+async fn a_pane_idle_for_less_than_the_limit_a_working_one_and_an_open_dialog_stay_awake_0676() {
+	let w = sleepy(15.0).await;
+	w.up();
+	w.tick().await;
+	w.reports_idle("p-demo", 60_000, None);
+	w.tick().await;
+	assert!(w.sleepers().is_empty(), "a minute is less than 15");
+	drop(w);
+	let w = sleepy(0.02).await;
+	w.up();
+	w.tick().await;
+	let mut agent = PaneAgent { idle_reported: true, jobs: Some(0), active_at: 1, ..PaneAgent::default() };
+	agent.working = true;
+	w.t.ctx.bridge.record(|r| r.agents.insert("p-demo".to_owned(), agent.clone())).unwrap();
+	w.tick().await;
+	agent.working = false;
+	agent.input_open = true;
+	w.t.ctx.bridge.record(|r| r.agents.insert("p-demo".to_owned(), agent.clone())).unwrap();
+	w.tick().await;
+	agent.input_open = false;
+	agent.jobs = Some(2);
+	w.t.ctx.bridge.record(|r| r.agents.insert("p-demo".to_owned(), agent.clone())).unwrap();
+	w.tick().await;
+	assert!(w.sleepers().is_empty());
+}
+
+#[tokio::test]
+async fn zero_idle_minutes_never_sleeps_by_itself_and_the_boss_never_sleeps_0676() {
+	let w = sleepy(0.0).await;
+	w.up();
+	w.tick().await;
+	w.reports_idle("p-demo", 3_600_000, None);
+	w.tick().await;
+	assert!(w.sleepers().is_empty());
+	drop(w);
+	let w = sleepy(0.02).await;
+	w.up();
+	w.tick().await;
+	w.reports_idle(&w.boss(), 3_600_000, None);
+	w.tick().await;
+	assert!(w.sleepers().is_empty(), "the boss is never put to sleep");
+}
+
+#[tokio::test]
+async fn an_omp_that_cannot_shut_down_has_its_tree_ended_and_is_still_put_to_sleep_without_a_message_0684() {
+	let w = sleepy(0.02).await;
+	w.up();
+	w.tick().await;
+	w.reports_idle("p-demo", 60_000, Some("s.jsonl"));
+	w.t.ctx.bridge.record(|r| r.no_shutdown.insert("p-demo".to_owned())).unwrap();
+	w.tick().await;
+	assert!(w.t.herdr.of("shutdown").is_empty(), "no shutdown message");
+	assert_eq!(w.sleepers().len(), 1, "the pane still goes to the sleeper");
+}
+
+#[tokio::test]
+async fn a_pane_being_put_to_sleep_is_no_crashed_omp_0676() {
+	let w = sleepy(15.0).await;
+	w.up();
+	w.tick().await;
+	// omp ended in the project pane while a sleep of it is under way: not started again.
+	let claim = w.t.ctx.sleep.claim("p-demo").expect("free");
+	w.ended(&["p-demo".to_owned()]);
+	w.tick().await;
+	assert!(w.respawned().iter().all(|(pane, _)| pane != "p-demo"));
+	drop(claim);
+	// Without the sleep it is a crash, and omp starts again.
+	w.tick().await;
+	assert!(w.respawned().iter().any(|(pane, _)| pane == "p-demo"));
+}
+
+#[tokio::test]
+async fn under_the_memory_reserve_one_idle_pane_sleeps_per_tick_the_longest_idle_first_and_never_a_working_one_0676() {
+	// No idle limit: only the memory pressure puts panes to sleep.
+	let w = world_with(|options| {
+		options.pane_idle_minutes = Some(0.0);
+		options.available_memory = Some(Arc::new(|| Some(0)));
+	})
+	.await;
+	w.up();
+	w.tick().await;
+	let thread = w.t.ctx.threads.all().remove(0);
+	thread.with(|t| t.sleep_when_idle = true);
+	w.reports_idle("p-demo", 5_000, Some("demo.jsonl"));
+	w.reports_idle("p-thread", 60_000, Some("thread.jsonl"));
+	w.tick().await;
+	let first = w.sleepers();
+	assert_eq!(first.len(), 1, "one pane per tick");
+	assert_eq!(first[0].0, "p-thread", "the longest idle");
+	assert!(w.t.ctx.launched.asleep(&w.thread_pane()), "the thread's row follows its new pane");
+	w.tick().await;
+	assert_eq!(w.sleepers().len(), 2);
+	// A working omp is never ended for memory.
+	drop(w);
+	let w = world_with(|options| {
+		options.pane_idle_minutes = Some(0.0);
+		options.available_memory = Some(Arc::new(|| Some(0)));
+	})
+	.await;
+	w.up();
+	w.tick().await;
+	let working = PaneAgent { working: true, active_at: 1, ..PaneAgent::default() };
+	w.t.ctx.bridge.record(|r| r.agents.insert("p-demo".to_owned(), working)).unwrap();
+	w.tick().await;
+	assert!(w.sleepers().is_empty());
+}
+
+#[tokio::test]
+async fn the_focused_pane_is_not_put_to_sleep_for_memory_0676() {
+	let w = world_with(|options| {
+		options.pane_idle_minutes = Some(0.0);
+		options.available_memory = Some(Arc::new(|| Some(0)));
+	})
+	.await;
+	w.up();
+	w.tick().await;
+	for pane in &mut w.t.herdr.state().pane_list {
+		pane.focused = pane.pane_id == "p-demo";
+	}
+	w.reports_idle("p-demo", 60_000, None);
+	w.tick().await;
+	assert!(w.sleepers().is_empty());
+}
+
+#[tokio::test]
+async fn the_focused_pane_does_not_sleep_past_the_idle_minutes_and_does_once_he_looks_elsewhere_0676() {
+	let w = sleepy(0.02).await;
+	w.up();
+	w.tick().await;
+	for pane in &mut w.t.herdr.state().pane_list {
+		pane.focused = pane.pane_id == "p-demo";
+	}
+	// He may be reading it, or typing a prompt omp hasn't been sent: no turn starts, so the idle clock alone can't tell.
+	w.reports_idle("p-demo", 60_000, Some("session-a.jsonl"));
+	w.tick().await;
+	assert!(w.sleepers().is_empty());
+	assert!(w.t.herdr.of("shutdown").is_empty());
+	for pane in &mut w.t.herdr.state().pane_list {
+		pane.focused = false;
+	}
+	w.tick().await;
+	assert_eq!(w.sleepers().len(), 1);
+}
+
+#[tokio::test]
+async fn a_thread_that_reported_sleeps_at_once_and_wakes_before_he_sends_it_something_0676() {
+	let w = sleepy(15.0).await;
+	w.up();
+	w.tick().await;
+	let thread = w.t.ctx.threads.all().remove(0);
+	w.reports_idle("p-thread", 100, Some("thread.jsonl"));
+	w.tick().await;
+	assert!(w.sleepers().is_empty(), "a thread that hasn't reported stays awake");
+	thread.with(|t| t.sleep_when_idle = true);
+	w.tick().await;
+	assert_eq!(w.sleepers().len(), 1);
+	let asleep = w.thread_pane();
+	assert_ne!(asleep, "p-thread");
+	assert!(w.t.ctx.launched.asleep(&asleep));
+	assert!(w.t.ctx.threads.get(&asleep).is_some_and(|found| found.same(&thread)));
+	// A message for it wakes it first, with its session.
+	w.t.ctx.sleep.wake_thread(&thread).await.unwrap();
+	let command = command_of(&w.respawned().pop().unwrap().1);
+	assert!(command.iter().any(|word| word == "--restore"));
+	assert!(!thread.with(|t| t.sleep_when_idle));
+	assert!(!w.t.ctx.launched.asleep(&w.thread_pane()));
+}
+
+#[tokio::test]
+async fn nothing_sleeps_while_one_of_jocastas_own_questions_waits_for_his_answer_0676() {
+	use crate::frontier::server::allow::{Confirm, Confirmation};
+	use crate::frontier::server::wording::Door;
+	// An Allow box that nobody answers.
+	let waiting: Confirm = Arc::new(|_, _| Box::pin(std::future::pending()));
+	let w = world_with(|options| {
+		options.pane_idle_minutes = Some(0.02);
+		options.available_memory = Some(Arc::new(|| Some(0)));
+		options.confirm = Some(waiting);
+	})
+	.await;
+	w.up();
+	w.tick().await;
+	let thread = w.t.ctx.threads.all().remove(0);
+	thread.with(|t| t.sleep_when_idle = true);
+	w.reports_idle("p-thread", 600_000, Some("thread.jsonl"));
+	w.reports_idle("p-demo", 600_000, None);
+	let ctx = w.t.ctx.clone();
+	let asking = tokio::spawn(async move {
+		let ask = Confirmation { message: "Finish it?".to_owned(), detail: String::new() };
+		let _ = ctx.allow.ask(&ask, "nothing was done", Door::Boss).await;
+	});
+	while w.t.ctx.allow.open() == 0 {
+		tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+	}
+	w.tick().await;
+	assert!(w.sleepers().is_empty(), "past the idle limit and under memory pressure, with a question open");
+	asking.abort();
 }

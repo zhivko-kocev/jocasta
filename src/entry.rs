@@ -11,8 +11,8 @@ use std::sync::Arc;
 use futures_util::future::BoxFuture;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-use crate::frontier::client::ask_push;
-use crate::frontier::server::boss::{EnsureBossOptions, LaunchedPanes, boss_command, ensure_boss_pane};
+use crate::frontier::client::{ask_push, ask_wake};
+use crate::frontier::server::boss::{EnsureBossOptions, LaunchedPanes, PANE_KEY_ENV, boss_command, ensure_boss_pane};
 use crate::frontier::server::embedded::{SERVICE_ENV, register, serves};
 use crate::frontier::server::herdr::{HerdrOptions, connect_herdr};
 use crate::frontier::server::launch::{service_health, service_state};
@@ -33,6 +33,7 @@ use crate::shared::git::git;
 use crate::shared::herdr_session::{DEFAULT_SESSION, herdr_program, herdr_session, session_args};
 use crate::shared::install::{install_dir, self_command, shipped_config_dir};
 use crate::shared::log::logs_dir;
+use crate::shared::pane_sleep::{Keys, run_pane_sleep};
 use crate::shared::paths::{config_dir, data_dir};
 use crate::shared::process::{RunOptions, on_path, run_program, run_program_sync};
 use crate::shared::project_cli::project_command;
@@ -267,6 +268,14 @@ async fn run_push_hook_route(args: &[String]) -> Result<i32> {
 	Ok(run_push_hook(args, &stdin, &hook).await)
 }
 
+/// A sleeping pane (0676): shows its text, and on a key asks the service to start omp in the pane again.
+async fn run_pane_sleep_route(args: &[String]) -> Result<i32> {
+	let key = env::var_nonempty(PANE_KEY_ENV).unwrap_or_default();
+	let mut keys = Keys::new();
+	let mut out = std::io::stdout();
+	Ok(run_pane_sleep(args, &mut out, || keys.wait_key(), || ask_wake(&key)).await)
+}
+
 /// `thread` and `worktree` go through the running service, which asks him first for the changes (0544).
 struct ServiceCli;
 
@@ -372,6 +381,7 @@ async fn run_route(target: Route, calendar_env: Option<String>) -> Result<i32> {
 		Route::Thread { args } => run_service_cli(CliWord::Thread, &args).await,
 		Route::Worktree { args } => run_service_cli(CliWord::Worktree, &args).await,
 		Route::PushHook { args } => run_push_hook_route(&args).await,
+		Route::PaneSleep { args } => run_pane_sleep_route(&args).await,
 		Route::Setup { refresh } => run_setup_route(refresh, calendar_env).await,
 		Route::Uninstall => run_uninstall_route().await,
 		Route::Diagnose => run_diagnose_route().await,

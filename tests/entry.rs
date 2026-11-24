@@ -178,7 +178,7 @@ fn help_goes_to_stdout_and_exits_0_without_the_internal_words() {
 	for word in ["setup", "uninstall", "diagnose", "project", "thread", "worktree", "--version"] {
 		assert!(out.stdout.contains(word), "{word} missing from {}", out.stdout);
 	}
-	for hidden in ["push-hook", "\n  plugin "] {
+	for hidden in ["push-hook", "pane-sleep", "\n  plugin "] {
 		assert!(!out.stdout.contains(hidden), "{hidden} in {}", out.stdout);
 	}
 	// herdr's commands, built in, are named after Jocasta's own.

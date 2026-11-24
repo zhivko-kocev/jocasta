@@ -205,14 +205,12 @@ async fn thread_start_makes_the_project_workspace_the_overlay_a_worktree_on_feat
 		fs::read_to_string(lessons).unwrap(),
 		fs::read_to_string(shipped_config_dir(None).join("lessons").join("SKILL.md")).unwrap()
 	);
-	// The project workspace: label = project name, cwd = main checkout, its pane running omp with Jocasta's
-	// turn-end extension (0617).
-	let mut command = strings(&["omp", "--continue"]);
-	command.extend(guard());
-	command.extend(["--config".to_owned(), overlay.display().to_string()]);
+	// The project workspace: label = project name, cwd = main checkout, its pane the sleeper until a key starts its omp
+	// (0676).
 	let ensured = &w.t.herdr.of("ensureWorkspace");
 	assert_eq!(ensured.len(), 1);
-	assert_eq!(ensured[0][..3], [json!("demo"), pane_json(&main), json!(command)]);
+	let sleeper = w.t.ctx.panes.sleeper_command("demo · press any key to start");
+	assert_eq!(ensured[0][..3], [json!("demo"), pane_json(&main), json!(sleeper)]);
 	let project_env = ensured[0][3].as_object().unwrap();
 	assert!(project_env.contains_key(PANE_KEY_ENV) && project_env.contains_key("HUNK_MCP_PORT"));
 	let project_ws = w.t.herdr.state().workspace_list.iter().find(|ws| ws.label == "demo").unwrap().id.clone();
@@ -359,10 +357,8 @@ async fn project_panes_append_the_shipped_ponytail_prompt_and_thread_panes_appen
 	let stripped = crate::shared::paths::data_dir().join("ponytail.md");
 	let wanted = crate::shared::prompt::without_leading_comment(&shipped_text);
 	assert_eq!(lf(&fs::read_to_string(&stripped).unwrap()), lf(wanted.trim_start()));
-	let mut command = strings(&["omp", "--continue", "--append-system-prompt", &stripped.display().to_string()]);
-	command.extend(guard());
-	command.extend(["--config".to_owned(), overlay_file(&w.project_id("demo")).display().to_string()]);
-	assert_eq!(w.t.herdr.of("ensureWorkspace")[0][..3], [json!("demo"), pane_json(&main), json!(command)]);
+	let sleeper = w.t.ctx.panes.sleeper_command("demo · press any key to start");
+	assert_eq!(w.t.herdr.of("ensureWorkspace")[0][..3], [json!("demo"), pane_json(&main), json!(sleeper)]);
 	// omp 18.18 takes one --append-system-prompt (the last), so Ponytail and the task share `prompt.md`.
 	let prompt = w.task_dir_of("demo", "Readme line").join("prompt.md");
 	assert_eq!(w.worktrees()[0]["command"], json!(w.thread_command("demo", "Readme line", &[])));

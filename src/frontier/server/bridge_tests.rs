@@ -260,6 +260,26 @@ async fn a_pane_with_its_key_is_welcomed_with_its_role_and_tools_and_is_connecte
 	until(|| !rig.bridge.connected(PANE)).await;
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn the_latest_session_file_a_caps_or_agent_end_event_carries_replaces_the_hellos_0676() {
+	let rig = Rig::new();
+	let mut raw = rig.raw().await;
+	// The extension's hello comes before omp's session_start: no session yet.
+	let mut hello = pane_hello(KEY, &["prompt"]);
+	hello["session"] = Value::Null;
+	raw.send(&hello).await;
+	assert_eq!(raw.line().await["t"], "welcome");
+	assert_eq!(rig.bridge.session(PANE), None);
+	raw.send(&json!({ "t": "event", "name": "caps", "caps": ["abort"], "session": "first.jsonl" })).await;
+	until(|| rig.bridge.session(PANE).is_some()).await;
+	assert_eq!(rig.bridge.session(PANE).as_deref(), Some("first.jsonl"));
+	raw.send(&json!({ "t": "event", "name": "agent_end", "idle": true, "jobs": 0, "session": "second.jsonl" })).await;
+	until(|| rig.bridge.session(PANE).as_deref() == Some("second.jsonl")).await;
+	assert_eq!(rig.bridge.session(PANE).as_deref(), Some("second.jsonl"));
+	let agent = rig.bridge.agent(PANE).unwrap();
+	assert!(agent.idle_reported && agent.active_at > 0);
+}
+
 // ---- (b) the boss's tools are refused to a thread's pane, on the real service ----
 
 /// The key `pane_id` was started with, and a thread's peer on the server's own bridge.
@@ -560,6 +580,7 @@ async fn events_update_what_the_bridge_knows_of_the_pane_and_the_service_hears_e
 			usage_tokens: Some(1200),
 			todo: Some((1, 3)),
 			idle_reported: false,
+			active_at: agent.active_at,
 		}
 	);
 

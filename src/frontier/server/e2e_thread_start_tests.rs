@@ -157,14 +157,11 @@ fn check_first_start(
 		fs::read_to_string(lessons_dir(&project.id).join("SKILL.md")).unwrap(),
 		fs::read_to_string(shipped_config_dir(None).join("lessons").join("SKILL.md")).unwrap()
 	);
-	let mut command = strings(&["omp", "--continue"]);
-	command.extend(guard());
-	command.extend(bridge_flags());
-	command.extend(["--config".to_owned(), path_text(&overlay)]);
-	// The project workspace: label = project name, cwd = main checkout, the project pane running omp with Jocasta's
-	// turn-end extension (0617).
+	// The project workspace: label = project name, cwd = main checkout, the project pane as the sleeper until a key
+	// starts its omp (0676).
 	let ensured = server.herdr.of("ensureWorkspace");
-	assert_eq!(ensured[1][..3], [json!("demo"), json!(path_text(&project.main_path)), json!(command)]);
+	let sleeper = server.service.context().panes.sleeper_command("demo · press any key to start");
+	assert_eq!(ensured[1][..3], [json!("demo"), json!(path_text(&project.main_path)), json!(sleeper)]);
 	assert_eq!(expected_env(HUNK_PORT, &[], true), env_of(&ensured[1][3]));
 	let project_ws =
 		server.herdr.state().workspace_list.iter().find(|w| w.label == "demo").map(|w| w.id.clone()).unwrap();
@@ -384,7 +381,14 @@ async fn project_panes_append_the_shipped_ponytail_prompt_thread_panes_append_it
 		command.extend(bridge_flags());
 		command.extend(["--config".to_owned(), path_text(&overlay_file(&project.id))]);
 		let ensured = server.herdr.of("ensureWorkspace");
-		assert_eq!(ensured[1][..3], [json!("demo"), json!(path_text(&project.main_path)), json!(command)]);
+		// The project pane opens as the sleeper (0676); a key starts its omp with Ponytail and the overlay.
+		let sleeper = server.service.context().panes.sleeper_command("demo · press any key to start");
+		assert_eq!(ensured[1][..3], [json!("demo"), json!(path_text(&project.main_path)), json!(sleeper)]);
+		let ctx = server.service.context().clone();
+		let pane = ctx.launched.sleepers().remove(0);
+		ctx.sleep.wake_by_key(&ctx.launched.key_of(&pane).unwrap()).await.unwrap();
+		let woken = server.herdr.of("respawn").pop().unwrap();
+		assert_eq!(woken[1]["command"], json!(command));
 		assert_eq!(expected_env(HUNK_PORT, &[], true), env_of(&ensured[1][3]));
 		// omp 18.18 takes one --append-system-prompt (the last), so Ponytail and the task share `prompt.md`.
 		let prompt = task_dir_of(&project.id, "Readme line").join("prompt.md");

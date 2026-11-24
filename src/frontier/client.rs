@@ -1,4 +1,5 @@
-//! How Jocasta's own programs reach the running Jocasta service: the push hook (0613). Its port and token come from
+//! How Jocasta's own programs reach the running Jocasta service: the push hook (0613) and a sleeping pane's wake (0676).
+//! Its port and token come from
 //! `<data>/jocasta-service.json` when its process is alive; the call goes over the bridge pipe as a CLI peer (0675).
 
 use std::time::Duration;
@@ -32,6 +33,22 @@ pub async fn ask_push(request: &PushRequest) -> PushReply {
 		return Err(format!("Jocasta answered: {answer}"));
 	}
 	serde_json::from_value(answer).map_err(|error| format!("Jocasta's answer wasn't a push answer: {error}"))
+}
+
+/// Asks the service to wake the sleeping pane started with `pane_key` (0676): resolves once the service has started omp
+/// in it again (which ends the asker's own process, so an answer is only seen for a refusal). `Err` is why not.
+pub async fn ask_wake(pane_key: &str) -> Result<(), String> {
+	let at = running_service().ok_or_else(|| NOT_RUNNING.to_owned())?;
+	let mut peer = CliPeer::open(at.port, &at.token).await.map_err(|error| failed(&error))?;
+	let message = json!({ "t": "cli", "command": "wake", "args": { "key": pane_key } });
+	let answer = tokio::time::timeout(Duration::from_secs(60), peer.request(message))
+		.await
+		.map_err(|_| "Jocasta didn't answer in time".to_owned())?
+		.map_err(|error| failed(&error))?;
+	if answer.get("ok") == Some(&json!(false)) {
+		return Err(answer.get("error").and_then(serde_json::Value::as_str).unwrap_or("Jocasta refused it").to_owned());
+	}
+	Ok(())
 }
 
 #[cfg(test)]

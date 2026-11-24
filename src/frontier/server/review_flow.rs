@@ -302,6 +302,8 @@ impl ReviewFlow {
 	/// The review's start: the hunk pane beside the thread, the task's checks, then the review turn asked for.
 	async fn begin_review(&self, thread: &ThreadRef, hunk: &[String], range: &str, at: i64) -> Result<()> {
 		let c = self.link.ctx();
+		// A sleeping thread's omp comes back before the review is asked of it (0676).
+		c.sleep.wake_thread(thread).await?;
 		let t = thread.get();
 		let known = t.review.as_ref().and_then(|review| review.pane.clone());
 		let open = match &known {
@@ -436,6 +438,8 @@ impl ReviewFlow {
 		if merging && failed.is_none() {
 			return c.finisher.after_review(thread, &said).await;
 		}
+		// It has reported and awaits his review: once its handoff is written and its omp idle, the pane sleeps (0676).
+		thread.with(|t| t.sleep_when_idle = true);
 		self.handoff(thread).await
 	}
 

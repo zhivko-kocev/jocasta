@@ -270,6 +270,7 @@ impl Inner {
 		self.step("thread panes", self.thread_panes(tick)).await;
 		self.step("the thread panes' omp", self.thread_omps(tick)).await;
 		self.step("project panes", self.project_panes(tick)).await;
+		self.step("pane sleep", c.sleep.tick(snapshot)).await;
 		// The dock's workspace and the Agents view (0553), healed like the boss pane (0518, 0549).
 		if let Some(dock) = c.options.dock.clone() {
 			let boss_id = c.boss().map(|boss| boss.with(|boss| boss.pane_id.clone()));
@@ -332,6 +333,10 @@ impl Inner {
 		for (pane_id, thread) in &tick.known {
 			// Finished, relaunched or dropped meanwhile: not this list's to judge.
 			if !c.threads.get(pane_id).is_some_and(|current| current.same(thread)) {
+				continue;
+			}
+			// Being put to sleep or woken: its pane id is about to change, which is no closed pane (0676).
+			if c.sleep.busy(pane_id) {
 				continue;
 			}
 			match tick.by_id.get(pane_id) {
@@ -504,6 +509,7 @@ impl Inner {
 	/// before panes had keys (0578): a few at once (PERF-5), each on its own (SVC-3).
 	async fn thread_panes(&self, tick: &Tick) -> Result<()> {
 		let c = &self.ctx;
+		let mut resleep: Vec<(String, PathBuf)> = Vec::new();
 		let due: Vec<(ThreadRef, PathBuf)> = c
 			.threads
 			.all()
@@ -511,7 +517,14 @@ impl Inner {
 			.filter_map(|thread| {
 				let (pane_id, path) = thread.with(|t| (t.pane_id.clone(), t.path.clone()));
 				let pane = tick.by_id.get(&pane_id)?;
-				if !self.backoff.due(Some(&path)) {
+				if !self.backoff.due(Some(&path)) || c.sleep.busy(&pane_id) {
+					return None;
+				}
+				// A sleeping thread stays asleep (0676): herdr restoring its pane as a shell starts the sleeper again.
+				if c.launched.asleep(&pane_id) {
+					if c.launched.restored(pane) {
+						resleep.push((pane_id, path));
+					}
 					return None;
 				}
 				let relaunch =
@@ -519,6 +532,9 @@ impl Inner {
 				relaunch.then_some((thread, path))
 			})
 			.collect();
+		for (pane_id, path) in &resleep {
+			self.backoff.respawning(path, c.sleep.resleep(pane_id)).await;
+		}
 		for chunk in due.chunks(RELAUNCH_POOL) {
 			join_all(chunk.iter().map(|(thread, path)| self.backoff.respawning(path, c.lifecycle.relaunch(thread))))
 				.await;
@@ -572,6 +588,11 @@ impl Inner {
 				continue;
 			}
 			if labels.get(pane.workspace_id.as_str()) != Some(&project.name.as_str()) {
+				continue;
+			}
+			if c.launched.restored(pane) && c.launched.asleep(&pane.pane_id) {
+				// A sleeper herdr restored as a shell is the sleeper again (0676), not an omp.
+				self.backoff.respawning(cwd, c.sleep.resleep(&pane.pane_id)).await;
 				continue;
 			}
 			if c.launched.restored(pane) || unkeyed || self.backoff.omp_ended(pane) {

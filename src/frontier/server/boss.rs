@@ -145,7 +145,7 @@ impl LaunchedPanes {
 				continue;
 			}
 			let mut kept = Map::new();
-			for field in ["cwd", "terminal", "restore", "key"] {
+			for field in ["cwd", "terminal", "restore", "key", "asleep"] {
 				if let Some(value) = text(fields, field) {
 					kept.insert(field.to_owned(), Value::String(value.to_owned()));
 				}
@@ -171,10 +171,28 @@ impl LaunchedPanes {
 
 	/// Jocasta started omp in `pane_id`, in `cwd`, with pane key `key`: an omp not yet seen running (0521, 0578).
 	pub fn add(&self, pane_id: &str, cwd: &str, key: Option<&str>) -> Result<()> {
+		self.put(pane_id, cwd, key, None)
+	}
+
+	/// `pane_id` runs the sleeper (`jocasta pane-sleep`, 0676) instead of omp, in `cwd`, started with pane key `key`;
+	/// `session` is the omp session file to come back to (kept as `restore`, so a wake resumes it; none: `--continue`).
+	/// The record is persisted, so a sleeper herdr restored as a shell after a restart is a sleeper again.
+	pub fn add_asleep(&self, pane_id: &str, cwd: &str, key: Option<&str>, session: Option<&str>) -> Result<()> {
+		self.put(pane_id, cwd, key, Some(session.unwrap_or_default()))
+	}
+
+	/// The record of `pane_id`, made again: a sleeper (`asleep`: its session, maybe empty) or an omp.
+	fn put(&self, pane_id: &str, cwd: &str, key: Option<&str>, asleep: Option<&str>) -> Result<()> {
 		let mut entry = Map::new();
 		entry.insert("cwd".to_owned(), Value::String(cwd.to_owned()));
 		if let Some(key) = key.filter(|key| !key.is_empty()) {
 			entry.insert("key".to_owned(), Value::String(key.to_owned()));
+		}
+		if let Some(session) = asleep {
+			entry.insert("asleep".to_owned(), Value::String("true".to_owned()));
+			if !session.is_empty() {
+				entry.insert("restore".to_owned(), Value::String(session.to_owned()));
+			}
 		}
 		let mut state = locked(&self.state);
 		match state.entries.iter_mut().find(|(id, _)| id == pane_id) {
@@ -183,6 +201,21 @@ impl LaunchedPanes {
 		}
 		state.ran.remove(pane_id);
 		self.save(&state)
+	}
+
+	/// Whether `pane_id` runs the sleeper (0676): its omp is ended, and a wake starts it again.
+	pub fn asleep(&self, pane_id: &str) -> bool {
+		locked(&self.state).entry(pane_id).is_some_and(|entry| text(entry, "asleep") == Some("true"))
+	}
+
+	/// The panes that run the sleeper.
+	pub fn sleepers(&self) -> Vec<String> {
+		locked(&self.state)
+			.entries
+			.iter()
+			.filter(|(_, entry)| text(entry, "asleep") == Some("true"))
+			.map(|(id, _)| id.clone())
+			.collect()
 	}
 
 	/// The key `pane_id` was started with (0578); `None` for a pane started before panes had keys, or not Jocasta's.
@@ -196,6 +229,14 @@ impl LaunchedPanes {
 		let state = locked(&self.state);
 		let found = state.entries.iter().find(|(_, entry)| same_token(Some(key), text(entry, "key").unwrap_or("")));
 		found.map(|(pane_id, _)| pane_id.clone())
+	}
+
+	/// Drops the record of `pane_id`, a pane that was replaced by a respawn (it has a new id).
+	pub fn forget(&self, pane_id: &str) -> Result<()> {
+		let mut state = locked(&self.state);
+		state.entries.retain(|(id, _)| id != pane_id);
+		state.ran.remove(pane_id);
+		self.save(&state)
 	}
 
 	/// `pane_id`'s omp was mid-turn in session file `session` as Jocasta stopped (0549): its next start restores it.

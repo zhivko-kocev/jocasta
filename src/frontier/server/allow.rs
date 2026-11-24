@@ -87,6 +87,12 @@ impl AllowGate {
 		}
 	}
 
+	/// How many Allow questions wait for his answer now (0676: no pane sleeps meanwhile, since the question may be
+	/// about one's thread or project and its answer starts something in it).
+	pub fn open(&self) -> usize {
+		locked(&self.asking).len()
+	}
+
 	/// His Allow (0484), asked through the service's question API (0552). Deny, three wrong codes, a popup closed
 	/// unanswered, another program reading the question (0578), no answer within the wait (2 minutes), a stopping
 	/// service or nothing to ask with refuse with `nothing` (what stays as it was), worded for the door (0581), so the

@@ -20,6 +20,7 @@ pub mod line_rpc;
 pub mod link;
 pub mod log;
 pub mod omp_session;
+pub mod pane_sleep;
 pub mod pathkey;
 pub mod paths;
 pub mod poll;

@@ -109,3 +109,5 @@ Update this file when a slice's records are written, when its build lands, and w
 Phase 1 (the bridge, 0675) is built in the working tree, not yet green: library and extension done, test suite and bench callers not migrated; see the BridgeBuilder report.
 
 Phase 1 (the bridge, 0675) is built in the working tree and not yet green: the library and the extension are done; the test suite and the bench callers are not migrated yet.
+
+Phase 2 (process diet, 0676) is built in the working tree: sleep and wake, pressure sleep, sleepers as new project panes; the live 16-minute check and the daemon-worker look (step 9) are left to the parent.

@@ -221,3 +221,19 @@ test("hello, welcome tools, a call's result and a prompt through sendUserMessage
 	delete process.env.JOCASTA_BRIDGE;
 	expect(sent).toEqual([]);
 });
+
+test("the session file goes up with the caps event and with each agent_end, since the hello comes before session_start (0676)", async () => {
+	let file = "first.jsonl";
+	const run = await connected({
+		isIdle: () => true,
+		abort() {},
+		shutdown() {},
+		sessionManager: { getSessionFile: () => file },
+	});
+	expect(await until(() => run.lines.some((line) => line.t === "event" && line.name === "caps"))).toBe(true);
+	expect(run.lines.find((line) => line.t === "event" && line.name === "caps")?.session).toBe("first.jsonl");
+	file = "second.jsonl";
+	await run.handlers.get("agent_end")?.({}, { isIdle: () => true, sessionManager: { getSessionFile: () => file } });
+	expect(await until(() => run.lines.some((line) => line.name === "agent_end"))).toBe(true);
+	expect(run.lines.find((line) => line.name === "agent_end")).toMatchObject({ idle: true, session: "second.jsonl" });
+});

@@ -11,15 +11,14 @@ use serde_json::{Value, json};
 use crate::frontier::protocol::{ClientMessage, ServerMessage};
 use crate::frontier::server::bridge::{BridgeService, Role};
 use crate::frontier::server::helpers::{
-	HunkDaemon, Page, README_THREAD_ENV, TEST_BOSS_KEY, TestServer, ThreadOptions, boss_pane, bridge_flags, call,
-	call_as, commit_in, demo_project, guard, keyed, project_keyed, push_state, review, sh, start_test_server_with,
-	start_thread, thread_omp, thread_pane, until, use_hunk_daemon, with_server,
+	HunkDaemon, Page, README_THREAD_ENV, TEST_BOSS_KEY, TestServer, ThreadOptions, boss_pane, call, call_as, commit_in,
+	demo_project, keyed, push_state, review, sh, start_test_server_with, start_thread, thread_omp, thread_pane, until,
+	use_hunk_daemon, with_server,
 };
 use crate::frontier::server::helpers_procs::{ShimTree, with_server_on};
 use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
 use crate::frontier::server::herdr::{AgentState, Env, Herdr, SplitOptions};
 use crate::frontier::server::hunk::hunk_env;
-use crate::frontier::server::overlay::overlay_file;
 use crate::frontier::server::server::ServerOptions;
 use crate::frontier::server::tools::{TOOLS, ToolReply};
 use crate::frontier::server::wording::HANDOFF_PROMPT;
@@ -232,11 +231,6 @@ fn keyed_of(vars: &[(String, String)]) -> crate::frontier::server::helpers::Keye
 	keyed(&pairs)
 }
 
-fn project_keyed_of(vars: &[(String, String)]) -> crate::frontier::server::helpers::Keyed {
-	let pairs: Vec<(&str, &str)> = vars.iter().map(|(name, value)| (name.as_str(), value.as_str())).collect();
-	project_keyed(&pairs)
-}
-
 fn same(a: &str, b: &Path) -> bool {
 	Path::new(a) == b
 }
@@ -277,21 +271,12 @@ async fn herdr_restored_its_panes_as_shells_jocasta_goes_first_the_boss_project_
 	with_server_on(herdr.clone(), options(None, None), |server| async move {
 		let (herdr, path) = keep;
 		let respawned = respawns_since(&herdr, before);
-		let mut overlay: Vec<String> = vec!["omp".to_owned(), "--continue".to_owned()];
-		overlay.extend(guard());
-		overlay.extend(bridge_flags());
-		overlay.push("--config".to_owned());
-		overlay.push(overlay_file(&project_id).display().to_string());
 		let thread = thread_omp(&project_id, "Readme line");
 		let heads: Vec<Vec<String>> = respawned.iter().map(|r| r.command[..3].to_vec()).collect();
 		let words = |list: &[&str]| list.iter().map(|w| (*w).to_owned()).collect::<Vec<_>>();
 		assert_eq!(
-			heads,
-			vec![
-				words(&["omp", "--continue", "--config"]),
-				words(&["omp", "--continue", "--append-system-prompt"]),
-				words(&["omp", "--continue", "--config"]),
-			]
+			heads[..2],
+			[words(&["omp", "--continue", "--config"]), words(&["omp", "--continue", "--append-system-prompt"])]
 		);
 		assert!(respawned[0].command[3].ends_with("boss.yml"), "{:?}", respawned[0].command);
 		assert!(respawned[0].cwd.ends_with("home"), "{}", respawned[0].cwd);
@@ -304,9 +289,9 @@ async fn herdr_restored_its_panes_as_shells_jocasta_goes_first_the_boss_project_
 		let expected = keyed_of(&with_vars(hunk_env(port), &README_THREAD_ENV));
 		assert!(expected == thread_env, "{thread_env:?}");
 		assert!(same(&respawned[2].cwd, &main_path), "{}", respawned[2].cwd);
-		assert_eq!(respawned[2].command, overlay);
-		let project_env = respawned[2].env.clone().expect("the project pane's env");
-		assert!(project_keyed_of(&hunk_env(port)) == project_env, "{project_env:?}");
+		// A project pane that was asleep is the sleeper again (0676), with only its own pane key.
+		assert_eq!(respawned[2].command[1], "pane-sleep");
+		assert!(respawned[2].env.as_ref().is_some_and(|env| env.iter().any(|(name, _)| name == "JOCASTA_PANE_KEY")));
 		let keys: std::collections::HashSet<Option<String>> = respawned
 			.iter()
 			.map(|r| {

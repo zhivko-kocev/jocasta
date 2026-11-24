@@ -177,6 +177,15 @@ pub struct StatusViews {
 	task_writes: Mutex<()>,
 }
 
+/// A sleeping thread's row says so after its line (0676): `review ready · asleep`.
+fn asleep_after(line: String, pane_id: &str, launched: &crate::frontier::server::boss::LaunchedPanes) -> String {
+	match (launched.asleep(pane_id), line.is_empty()) {
+		(false, _) => line,
+		(true, true) => "asleep".to_owned(),
+		(true, false) => format!("{line} · asleep"),
+	}
+}
+
 /// A thread row's line in `today` (0409): its question or plan while it waits on him, its review while done, else the
 /// last line its session said.
 fn rail_line(t: &Thread, brief: Option<&Brief>) -> String {
@@ -648,7 +657,7 @@ impl StatusViews {
 			pane_id: t.pane_id.clone(),
 			title: t.title.clone(),
 			project: Some(t.project.name.clone()),
-			line: rail_line(t, look.as_ref().map(|look| &look.brief)),
+			line: asleep_after(rail_line(t, look.as_ref().map(|look| &look.brief)), &t.pane_id, &c.launched),
 			overlaps: (!overlaps.is_empty()).then_some(overlaps),
 			state: t.shown,
 			changed_at: t.changed_at,

@@ -155,6 +155,10 @@ pub struct ServiceOptions {
 	pub checks: Option<Arc<CheckRunner>>,
 	/// How long a plan-mode turn's end waits for the session to show its proposal; `PLAN_SETTLE_MS` (test seam).
 	pub plan_settle_ms: Option<i64>,
+	/// How many idle minutes a project pane's omp may run before it sleeps (0676); `service.paneIdleMinutes` (test seam).
+	pub pane_idle_minutes: Option<f64>,
+	/// The machine's free memory in bytes, `None` when unknown (0676); read from the machine by default (test seam).
+	pub available_memory: Option<Arc<dyn Fn() -> Option<u64> + Send + Sync>>,
 }
 
 impl ServiceOptions {
@@ -195,6 +199,8 @@ impl ServiceOptions {
 			ask_report: None,
 			checks: None,
 			plan_settle_ms: None,
+			pane_idle_minutes: None,
+			available_memory: None,
 		}
 	}
 

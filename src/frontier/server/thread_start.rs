@@ -108,7 +108,6 @@ struct Launch<'a> {
 	project: &'a Project,
 	title: &'a str,
 	task: &'a TaskRecord,
-	command: &'a [String],
 	fresh: &'a [String],
 	main_env: &'a Env,
 	key: &'a str,
@@ -320,7 +319,6 @@ impl ThreadStarts {
 			project: &project,
 			title: title_trimmed,
 			task: &task,
-			command: &command,
 			fresh: &fresh,
 			main_env: &main_env,
 			key: &key,
@@ -449,13 +447,19 @@ impl ThreadStarts {
 				let mut env = launch.main_env.clone();
 				set_env(&mut env, PANE_KEY_ENV, &project_key);
 				let env = c.panes.bridged(env);
-				let pane_command = launch.command.to_vec();
+				// A project's own omp starts on demand (0676): the pane opens as the sleeper until a key wakes it.
+				let pane_command = c.panes.sleeper_command(&format!("{} · press any key to start", project.name));
 				let made = c
 					.herdr
 					.ensure_workspace(&project.name, &project.main_path, Some(&pane_command), Some(&env))
 					.await?;
 				if let Some(pane) = c.herdr.panes().await?.iter().find(|p| p.workspace_id == made) {
-					c.launched.add(&pane.pane_id, &project.main_path.to_string_lossy(), Some(&project_key))?;
+					c.launched.add_asleep(
+						&pane.pane_id,
+						&project.main_path.to_string_lossy(),
+						Some(&project_key),
+						None,
+					)?;
 				}
 				made
 			}

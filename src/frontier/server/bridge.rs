@@ -20,6 +20,7 @@ use tokio::task::JoinHandle;
 use crate::frontier::server::push_gate::parse_push_request;
 use crate::frontier::server::tools::{Caller, ToolReply};
 use crate::shared::bridge_wire::{MAX_LINE, Stream, VERSION, bridge_address};
+use crate::shared::clock::now_ms;
 use crate::shared::errors::{Error, Result};
 use crate::shared::fsx::same_token;
 use crate::shared::line_rpc::LineReader;
@@ -124,6 +125,8 @@ pub struct PaneAgent {
 	pub todo: Option<(u32, u32)>,
 	/// `agent_end` was seen with `idle: true`.
 	pub idle_reported: bool,
+	/// When omp last started or ended a turn, or connected (epoch ms): how long it has been idle (0676).
+	pub active_at: i64,
 }
 
 impl PaneAgent {
@@ -132,10 +135,12 @@ impl PaneAgent {
 			PaneEvent::AgentStart => {
 				self.working = true;
 				self.idle_reported = false;
+				self.active_at = now_ms();
 			}
 			PaneEvent::AgentEnd { idle, jobs } => {
 				self.working = !idle;
 				self.idle_reported = *idle;
+				self.active_at = now_ms();
 				self.jobs = Some(*jobs);
 			}
 			PaneEvent::Usage { tokens, percent } => {
@@ -276,6 +281,9 @@ struct PeerState {
 	/// The `caps` event came: a missing capability is then missing, not just not reported yet.
 	caps_known: bool,
 	agent: PaneAgent,
+	/// The omp session file it runs now: from its hello, then from each `caps` and `agent_end` event, since a handoff or
+	/// a new session changes it (0676).
+	session: Option<String>,
 }
 
 /// One connected pane.
@@ -283,7 +291,6 @@ struct Peer {
 	conn: u64,
 	who: Resolved,
 	pid: Option<u64>,
-	session: Option<String>,
 	version: String,
 	lines: mpsc::UnboundedSender<String>,
 	state: Mutex<PeerState>,
@@ -348,6 +355,10 @@ pub(crate) type Sink = Arc<dyn Fn(&str, Vec<Value>) -> std::result::Result<(), S
 pub(crate) struct Recording {
 	pub sent: Vec<Sent>,
 	pub agents: HashMap<String, PaneAgent>,
+	/// The session file each pane's omp runs (`session`).
+	pub sessions: HashMap<String, String>,
+	/// Panes whose omp reported no `shutdown` capability (0684): `shutdown` answers `Ok(false)` for them.
+	pub no_shutdown: HashSet<String>,
 	/// A pane whose prompts are refused with this text.
 	pub refused: HashMap<String, String>,
 	/// Where each recorded call is also reported, by the method name a test double knows it by (`prompt`, `stop`,
@@ -467,9 +478,15 @@ impl Bridge {
 		self.peer(pane_id).map(|peer| locked(&peer.state).agent.clone())
 	}
 
-	/// The session file omp in `pane_id` said it runs, from its hello.
+	/// The session file omp in `pane_id` runs, as its hello and its latest `caps` or `agent_end` said it.
 	pub fn session(&self, pane_id: &str) -> Option<String> {
-		self.peer(pane_id).and_then(|peer| peer.session.clone())
+		#[cfg(test)]
+		if let Some(recording) = locked(&self.inner.recording).as_ref()
+			&& let Some(session) = recording.sessions.get(pane_id)
+		{
+			return Some(session.clone());
+		}
+		self.peer(pane_id).and_then(|peer| locked(&peer.state).session.clone())
 	}
 
 	/// Whether omp in `pane_id` can do `cap` (`prompt`, `compact`, `abort`, `shutdown`, `usage`, `jobs`): what it reported;
@@ -599,6 +616,12 @@ impl Bridge {
 
 	/// Asks the omp in `pane_id` to end (`ctx.shutdown`). `Ok(false)` when its omp can't (0684).
 	pub fn shutdown(&self, pane_id: &str) -> Result<bool> {
+		#[cfg(test)]
+		if self.peer(pane_id).is_none()
+			&& locked(&self.inner.recording).as_ref().is_some_and(|recording| recording.no_shutdown.contains(pane_id))
+		{
+			return Ok(false);
+		}
 		#[cfg(test)]
 		if let Some(done) = self.recorded(pane_id, Sent::Shutdown { pane: pane_id.to_owned() }) {
 			return done.map(|()| true);
@@ -799,16 +822,22 @@ fn accept(bridge: &Bridge, hello: &Value, lines: &Lines) -> Option<Identity> {
 	let peer = Arc::new(Peer {
 		conn: bridge.inner.next.fetch_add(1, Ordering::Relaxed),
 		pid: hello.get("pid").and_then(Value::as_u64),
-		session: hello.get("session").and_then(Value::as_str).map(str::to_owned),
 		version: hello.get("harness_version").and_then(Value::as_str).unwrap_or("unknown").to_owned(),
 		lines: lines.clone(),
-		state: Mutex::new(PeerState::default()),
+		state: Mutex::new(PeerState {
+			session: hello.get("session").and_then(Value::as_str).map(str::to_owned),
+			..PeerState::default()
+		}),
 		acks: Mutex::new(HashMap::new()),
 		closed,
 		who,
 	});
 	let caps = strings(hello.get("caps"));
-	locked(&peer.state).caps = caps.iter().cloned().collect();
+	{
+		let mut state = locked(&peer.state);
+		state.caps = caps.iter().cloned().collect();
+		state.agent.active_at = now_ms();
+	}
 	let welcome =
 		json!({ "t": "welcome", "v": VERSION, "role": peer.who.role.as_str(), "tools": service.tools(peer.who.role) });
 	let _ = lines.send(format!("{welcome}\n"));
@@ -817,7 +846,8 @@ fn accept(bridge: &Bridge, hello: &Value, lines: &Lines) -> Option<Identity> {
 	if let Some(before) = before {
 		before.closed.send_replace(true);
 	}
-	let event = PaneEvent::Connected { version: peer.version.clone(), caps, session: peer.session.clone() };
+	let session = locked(&peer.state).session.clone();
+	let event = PaneEvent::Connected { version: peer.version.clone(), caps, session };
 	service.event(&peer.who, &event, &PaneAgent::default());
 	bridge.inner.hellos.send_modify(|count| *count += 1);
 	Some(Identity::Pane(peer))
@@ -886,6 +916,9 @@ fn event(bridge: &Bridge, peer: &Arc<Peer>, message: &Value) {
 	let Some(event) = PaneEvent::parse(message) else { return };
 	let agent = {
 		let mut state = locked(&peer.state);
+		if let Some(session) = message.get("session").and_then(Value::as_str).filter(|session| !session.is_empty()) {
+			state.session = Some(session.to_owned());
+		}
 		if let PaneEvent::Caps(caps) = &event {
 			state.caps.extend(caps.iter().cloned());
 			state.caps_known = true;

@@ -177,6 +177,9 @@ pub struct Thread {
 	pub report_asked: bool,
 	/// The tree its last check on idle ran on (0513, 0542): an unchanged tree isn't checked again.
 	pub idle_tree: Option<String>,
+	/// Its review is ready and its handoff is written: it sleeps once its omp is idle (0676). Cleared when it works or
+	/// wakes again.
+	pub sleep_when_idle: bool,
 }
 
 /// A thread shared between the parts: see the module's note.
@@ -219,6 +222,7 @@ impl Thread {
 			task: None,
 			report_asked: false,
 			idle_tree: None,
+			sleep_when_idle: false,
 		}
 	}
 }

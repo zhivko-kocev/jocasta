@@ -30,6 +30,7 @@ use crate::shared::fsx::write_atomically;
 use crate::shared::install::{self_command, shipped_config_dir};
 use crate::shared::layer::LAYER_ENV;
 use crate::shared::log::{LogLevel, log};
+use crate::shared::pane_sleep::PANE_SLEEP_ROLE;
 use crate::shared::pathkey::{path_key, real_path};
 use crate::shared::paths::data_dir;
 #[cfg(windows)]
@@ -393,6 +394,35 @@ impl PaneLauncher {
 		let opts = RespawnOptions { cwd: cwd.to_path_buf(), command, env: Some(pane_env) };
 		let respawned = c.herdr.respawn(pane_id, &opts).await?;
 		c.launched.add(&respawned.pane_id, &cwd.display().to_string(), Some(&key))?;
+		if respawned.pane_id != pane_id {
+			c.launched.forget(pane_id)?;
+		}
+		Ok(respawned.pane_id)
+	}
+
+	/// A sleeping pane's argv (0676): this Jocasta's `pane-sleep` role showing `text`.
+	pub fn sleeper_command(&self, text: &str) -> Vec<String> {
+		let mut command: Vec<String> = self_command(None).iter().map(|word| word.display().to_string()).collect();
+		command.extend([PANE_SLEEP_ROLE.to_owned(), text.to_owned()]);
+		command
+	}
+
+	/// The pane `pane_id` (its tab replaced, as every respawn does) now runs the sleeper showing `text`, in `cwd`;
+	/// returns the new pane. The sleeper's own pane key lets it ask for its wake; `session` is the omp session the wake
+	/// brings back (none: `--continue`). The record is kept as a sleeper's (0676).
+	pub async fn respawn_asleep(&self, pane_id: &str, cwd: &Path, text: &str, session: Option<&str>) -> Result<String> {
+		let c = self.link.ctx();
+		let key = new_pane_key();
+		let opts = RespawnOptions {
+			cwd: cwd.to_path_buf(),
+			command: self.sleeper_command(text),
+			env: Some(vec![(PANE_KEY_ENV.to_owned(), key.clone())]),
+		};
+		let respawned = c.herdr.respawn(pane_id, &opts).await?;
+		c.launched.add_asleep(&respawned.pane_id, &cwd.display().to_string(), Some(&key), session)?;
+		if respawned.pane_id != pane_id {
+			c.launched.forget(pane_id)?;
+		}
 		Ok(respawned.pane_id)
 	}
 
@@ -566,6 +596,11 @@ impl OmpBackoff {
 
 	fn omp_ended_at(&self, pane: &PaneInfo, now: i64) -> bool {
 		let Some(cwd) = pane.cwd.as_deref().filter(|cwd| !cwd.as_os_str().is_empty()) else { return false };
+		// A pane being put to sleep or woken, or asleep, ends its omp on purpose: that is no crash (0676).
+		let c = self.link.ctx();
+		if c.sleep.busy(&pane.pane_id) || c.launched.asleep(&pane.pane_id) {
+			return false;
+		}
 		if !self.link.ctx().launched.ended(pane) {
 			return false;
 		}

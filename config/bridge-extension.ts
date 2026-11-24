@@ -211,6 +211,15 @@ export default async function bridge(pi: Pi): Promise<void> {
 		next.on("error", () => {});
 	};
 
+	// The session file omp runs now: the hello goes out before omp's `session_start`, so it is null there, and a handoff or
+	// a new session changes it later; the service keeps the latest to bring a sleeping pane back to it (0676).
+	const session = (): string | null => {
+		try {
+			return ctx?.sessionManager?.getSessionFile?.() ?? null;
+		} catch {
+			return null;
+		}
+	};
 	const sendCaps = (): void => {
 		const caps: string[] = [];
 		if (typeof ctx?.abort === "function") caps.push("abort");
@@ -218,7 +227,7 @@ export default async function bridge(pi: Pi): Promise<void> {
 		if (typeof ctx?.getContextUsage === "function") caps.push("usage");
 		if (typeof ctx?.getAsyncJobSnapshot === "function") caps.push("jobs");
 		if (typeof ctx?.compact === "function") caps.push("compact");
-		send({ t: "event", name: "caps", caps });
+		send({ t: "event", name: "caps", caps, session: session() });
 	};
 	const event = (name: string, fields: Json = {}): void => void send({ t: "event", name, ...fields });
 	const jobs = (): number => {
@@ -247,7 +256,7 @@ export default async function bridge(pi: Pi): Promise<void> {
 	});
 	pi.on("agent_end", (_event: Ev, context: Ctx) => {
 		ctx = context;
-		event("agent_end", { idle: Boolean(ctx?.isIdle?.()), jobs: jobs() });
+		event("agent_end", { idle: Boolean(ctx?.isIdle?.()), jobs: jobs(), session: session() });
 	});
 	pi.on("turn_end", (_event: Ev, context: Ctx) => {
 		ctx = context;
