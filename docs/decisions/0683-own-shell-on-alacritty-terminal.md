@@ -41,3 +41,8 @@ Lighter surface, if it proves itself.
 ## Consequences
 - Amends 0649 (one binary, one server) and 0659–0666 (sidebar, ConPTY runtime, strip and workspace choices) on pass.
 - Nothing in phases 0–5 depends on phase 6.
+
+## Spike result (2026-11-24)
+`docs/research/own-shell-spike.md`. Rows 7 and 8 pass on Windows and WSL Ubuntu: 50 MiB through one pane at 21.7 MB/s against the fork's 9.2 MB/s (WSL 81 MB/s); 4 idle panes for 60 s at 68.8 MB and 0.00% CPU against the phase-5 budget of 82.57 MB and 1.85%. Rows 1–6 wait for his keyboard. One blocker: with the bundled ConPTY runtime (`conpty/`, 0661), `alacritty_terminal`'s own pty holds a child's output past about 64 KB per burst until the child exits; the fork on the same runtime does not stall.
+
+His answer of 2026-11-24: the own shell creates its terminals through the vendored portable-pty (the fork's, which works with the bundled runtime) under `alacritty_terminal`'s `Term`, so 0661's runtime stays. On pass, the build keeps `portable-pty` and its `[patch.crates-io]` entry (the build's deletion list loses them); `crates/herdr/`, Zig and `config/herdr.toml` still go. Rows 1–6 he runs later; the phase 6 build waits for them.
