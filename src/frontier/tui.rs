@@ -7,7 +7,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 
-/// Tokyo Night as `palette.css` holds it (0474): the one palette file's hex values, as terminal colours.
+/// Tokyo Night as herdr draws it, as terminal colours.
 pub struct Palette {
 	pub bg0: Color,
 	pub bg1: Color,
@@ -28,7 +28,7 @@ pub struct Palette {
 	pub orange: Color,
 }
 
-/// Tokyo Night; a test keeps these equal to `src/frontier/canvas/palette.css`.
+/// Tokyo Night; a test keeps these equal to `src/frontier/brief/page/brief.css` (the colours it names).
 pub const TOKYO_NIGHT: Palette = Palette {
 	bg0: Color::Rgb(0x1a, 0x1b, 0x26),
 	bg1: Color::Rgb(0x23, 0x26, 0x36),

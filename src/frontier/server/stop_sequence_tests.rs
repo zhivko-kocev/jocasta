@@ -122,10 +122,6 @@ impl StopService for FakeService {
 	fn end_thread_leftovers(&self) -> BoxFuture<'_, Result<()>> {
 		self.call("endThreadLeftovers")
 	}
-
-	fn end_hunk_daemon(&self) -> BoxFuture<'_, Result<()>> {
-		self.call("endHunkDaemon")
-	}
 }
 
 struct World {
@@ -160,7 +156,6 @@ impl World {
 			session: "jocasta".to_owned(),
 			service: self.service.clone(),
 			extra_stops,
-			whiteboard: None,
 			bridge,
 			server: step(&server_log, "server").run,
 			bounds: StopBounds::default(),
@@ -173,7 +168,7 @@ fn names(steps: &[StopStep]) -> Vec<&str> {
 }
 
 #[test]
-fn the_sequence_stops_everything_in_its_order_with_the_extra_stops_after_the_hunk_daemon() {
+fn the_sequence_stops_everything_in_its_order_with_the_extra_stops_after_the_leftovers() {
 	let world = World::new();
 	let extra = step(&world.log, "the test's stop");
 	let steps = stop_steps(world.parts(vec![extra]));
@@ -187,7 +182,6 @@ fn the_sequence_stops_everything_in_its_order_with_the_extra_stops_after_the_hun
 			"the turns at work",
 			"herdr session jocasta",
 			"the threads' leftovers",
-			"hunk's daemon",
 			"the test's stop",
 			"the bridge",
 			"the server",
@@ -200,14 +194,13 @@ fn the_sequence_stops_everything_in_its_order_with_the_extra_stops_after_the_hun
 	assert_eq!(by("herdr session jocasta").ms, Some(15_000));
 	assert_eq!(by("the server").when, StopWhen::Finally);
 	assert_eq!(by("the bridge").when, StopWhen::Always);
-	assert_eq!(by("hunk's daemon").when, StopWhen::All);
 }
 
 #[test]
 fn the_bounds_can_be_changed_one_by_one() {
 	let world = World::new();
 	let mut parts = world.parts(Vec::new());
-	parts.bounds = StopBounds { service: Some(200), herdr: None, whiteboard: Some(10) };
+	parts.bounds = StopBounds { service: Some(200), herdr: None };
 	let steps = stop_steps(parts);
 	let by = |name: &str| steps.iter().find(|step| step.name == name).unwrap().ms;
 	assert_eq!((by("the service"), by("noting the threads at work")), (Some(200), Some(15_000)));
@@ -223,16 +216,7 @@ async fn stopping_everything_stops_the_service_then_herdrs_server_then_the_rest(
 	run_stop_steps(&steps, true, &mut |name, error| panic!("{name}: {error}")).await;
 	assert_eq!(
 		seen(&world.log),
-		[
-			"pauseWorking",
-			"stop",
-			"cutPausedTurns",
-			"endThreadLeftovers",
-			"endHunkDaemon",
-			"the test's stop",
-			"bridge",
-			"server",
-		]
+		["pauseWorking", "stop", "cutPausedTurns", "endThreadLeftovers", "the test's stop", "bridge", "server",]
 	);
 	// The server stops once.
 	assert_eq!(world.herdr.of("stopServer").len(), 1);

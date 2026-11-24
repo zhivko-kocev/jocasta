@@ -1,7 +1,7 @@
 # The Rust checks (rustfmt, clippy, nextest with the syntax-tree test, cargo-deny, cargo-machete; 0627, 0639, 0644,
 # 0645) and the Bun checks that remain (type check (0037), lint (0036), knip and the advisory audit (0614), the tests)
 # on windows, ubuntu and macos (plan section 7). Tools: the runners' own rustup, and mise from its official install
-# script (0476) at a pinned version, reading the repo's mise.toml and mise.lock (`mise install --locked`: Bun, Node,
+# script (0476) at a pinned version, reading the repo's mise.toml and mise.lock (`mise install --locked`: Bun,
 # Rust, cargo-deny, cargo-machete, nextest and Zig as pinned there). The herdr fork in crates/herdr builds too; its
 # terminal library is compiled with Zig.
 # Evals run his real omp and never run here (0384); opt-in smokes (herdr, omp's SDK, dictation) stay off. Read-only
@@ -70,7 +70,7 @@ jobs:
       # Needs the network (the advisory database); the same on every OS, as `mise run check` runs it.
       - run: mise exec -- cargo deny --log-level error check
         shell: bash
-      # Unused dependencies of Cargo.toml (0645); the manifest alone, so the whiteboard submodule's crates aren't read.
+      # Unused dependencies of Cargo.toml (0645); the manifest alone.
       - run: mise exec -- cargo machete ./Cargo.toml
         shell: bash
       - run: mise exec -- bun run typecheck

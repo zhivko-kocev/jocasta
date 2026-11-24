@@ -99,7 +99,7 @@ impl Keys {
 		self.ctx.calls.run(run).await
 	}
 
-	/// The thread `pane_id` belongs to: its own pane, or another pane of its workspace (its hunk pane, a shell beside
+	/// The thread `pane_id` belongs to: its own pane, or another pane of its workspace (a shell beside
 	/// it). Refused for any other pane, the boss's among them; in `today`'s own pane the refusal names `today`'s key for
 	/// the action (0581, UX-16).
 	async fn thread_of_pane(&self, pane_id: Option<&str>, action: KeyAction) -> Result<ThreadRef> {
@@ -182,8 +182,8 @@ impl Keys {
 		Ok(finish_outcome(text))
 	}
 
-	/// Review (0394, 0406, 0554): the review step on demand, as at a task's end: hunk beside the thread at half width
-	/// on `<trunk>...<branch>`, and the thread asked to test and review its commits. Not while it works, awaits him or
+	/// Review (0394, 0406, 0554): the review step on demand, as at a task's end: the thread is asked to test and review
+	/// its commits on `<trunk>...<branch>`. Not while it works, awaits him or
 	/// is in another step; nothing to review without commits ahead of trunk.
 	pub async fn review(&self, pane_id: Option<&str>) -> Result<String> {
 		self.track(self.review_now(pane_id)).await
@@ -207,9 +207,6 @@ impl Keys {
 		if phase != Phase::Task {
 			return Err(Error::user(format!("Review: {name} is in its {} step; wait for it.", phase.as_str())));
 		}
-		if c.panes.hunk().is_none() {
-			return Err(Error::user("Review: hunk isn't installed, so nothing can show the diff."));
-		}
 		let (trunk, head) = tokio::join!(c.places.trunk(&project), git_out(&path, &["rev-parse", "HEAD"]));
 		let trunk = trunk?.filter(|trunk| !trunk.is_empty());
 		let head = head?.filter(|head| !head.is_empty());
@@ -223,7 +220,7 @@ impl Keys {
 		}
 		let found = c.review.commits_said(&thread, None, head).await?;
 		c.review.task_ended(&thread, &found.said, found.subject.as_deref()).await?;
-		Ok(format!("Reviewing {name}: hunk beside it, the thread tests and reviews {}.", found.said))
+		Ok(format!("Reviewing {name}: the thread tests and reviews {}.", found.said))
 	}
 
 	/// New thread's form (0554, 0581): his git projects with one always picked: the project of `pane_id` (a thread

@@ -6,14 +6,14 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value, json};
 
 use super::snapshot::plan_snapshot;
-use super::steps::{SetupChange, Step, folder_undo, json, mcp_step, owned_step, shown};
+use super::steps::{SetupChange, Step, folder_undo, json, owned_step, shown};
 use super::{
 	HerdrCheck, RunOutput, RunProgram, SetupDeps, SetupIo, SetupPaths, TOKYO_NIGHT_SCHEME, answered_yes,
 	default_herdr_check,
 };
-use crate::frontier::server::whiteboard::WHITEBOARD_ENV;
 use crate::setup::markers::{Marker, Undo, fingerprint, markers_dir};
 use crate::setup::mise::MISE_FRAGMENT;
+use crate::setup::uninstall::holds_install_marker;
 use crate::shared::errors::{Error, Result};
 use crate::shared::fsx::remove_tree;
 use crate::shared::yaml::parse_value;
@@ -24,7 +24,6 @@ pub(super) type Servers = Map<String, Value>;
 pub(super) struct PlanContext<'a> {
 	pub paths: &'a SetupPaths,
 	pub deps: &'a SetupDeps,
-	pub notes: &'a mut Vec<String>,
 	/// This migration's marker, when it has one.
 	pub marker: Option<Marker>,
 }
@@ -51,16 +50,6 @@ const IGNORED_KEYS_NOTE: &str = "herdr ignores the keys named above: fix them in
 /// The migrations, in the order they apply. Numbers 1, 3, 4, 6, 9–13, 15 and 17 were the merges into omp's files and
 /// the clean-ups of earlier versions: the omp snapshot (19) replaced them, and their markers are ignored.
 pub(super) static MIGRATIONS: [Migration; 8] = [
-	Migration {
-		// The boss's tools only in its own folder (0392: project-level MCP config), with omp's request timeout past
-		// their own bounds (0577); whiteboard's tools for drawing (0393, 0607) on the service's whiteboard state,
-		// telemetry off.
-		id: 2,
-		slug: "boss-mcp",
-		refresh: Some("mcp.json"),
-		servers: Some(boss_servers),
-		plan: plan_boss_mcp,
-	},
 	Migration {
 		// Jocasta's own herdr config follows the shipped template (0440). herdr then checks what was written and names
 		// each key it ignores (0608).
@@ -121,31 +110,69 @@ pub(super) static MIGRATIONS: [Migration; 8] = [
 		servers: None,
 		plan: plan_jocasta_mcp_gone,
 	},
+	Migration {
+		// Whiteboard and hunk are gone (0679): the installed folders, and the boss's whiteboard MCP entry.
+		id: 21,
+		slug: "whiteboard-hunk-gone",
+		refresh: None,
+		servers: None,
+		plan: plan_whiteboard_hunk_gone,
+	},
 ];
 
-/// Desktop server, instance `stable`) through DEV_REVIEW_HOME.
-fn whiteboard_server(paths: &SetupPaths) -> Option<Value> {
-	let whiteboard = paths.whiteboard.as_ref()?;
-	let mut env = Map::new();
-	env.insert("DEV_REVIEW_HOME".to_owned(), json!(paths.data_dir.join("whiteboard").display().to_string()));
-	for (name, value) in WHITEBOARD_ENV {
-		env.insert(name.to_owned(), json!(value));
-	}
-	Some(json!({
-		"type": "stdio",
-		"command": whiteboard.node.display().to_string(),
-		"args": [whiteboard.cli.display().to_string(), "mcp"],
-		"env": env,
-	}))
+/// The folders and file a release shipped for whiteboard and hunk (appendix I), beside `jocasta.exe`.
+const WHITEBOARD_HUNK_FOLDERS: [&str; 5] = ["whiteboard", "whiteboard-canvas", "node", "hunk", "editor.worker.js"];
+
+/// The boss's own `mcp.json`, where migration 2 once wrote whiteboard's server.
+fn boss_mcp_file(paths: &SetupPaths) -> PathBuf {
+	paths.data_dir.join("home").join(".omp").join("mcp.json")
 }
 
-/// The boss's `jocasta --boss` server and whiteboard's (0607), in its folder's `mcp.json` (migration 2).
-fn boss_servers(paths: &SetupPaths) -> Servers {
-	let mut servers = Servers::new();
-	if let Some(whiteboard) = whiteboard_server(paths) {
-		servers.insert("whiteboard".to_owned(), whiteboard);
+fn names_whiteboard(path: &Path) -> bool {
+	fs::read_to_string(path)
+		.ok()
+		.and_then(|text| serde_json::from_str::<Value>(&text).ok())
+		.is_some_and(|value| value.get("mcpServers").and_then(|servers| servers.get("whiteboard")).is_some())
+}
+
+/// Takes the installed whiteboard, canvas, node and hunk out (0679), only from the folder that holds `install.json`
+/// naming itself, never a source run's repo; and whiteboard's entry out of the boss's `mcp.json`.
+fn plan_whiteboard_hunk_gone(c: &mut PlanContext) -> Result<Option<Step>> {
+	let install = c.paths.assets_dir.parent().filter(|dir| holds_install_marker(dir)).map(Path::to_path_buf);
+	let folders: Vec<PathBuf> = install
+		.iter()
+		.flat_map(|dir| WHITEBOARD_HUNK_FOLDERS.iter().map(|name| dir.join(name)))
+		.filter(|path| path.exists())
+		.collect();
+	let mcp = Some(boss_mcp_file(c.paths)).filter(|path| names_whiteboard(path));
+	let Some(first) = folders.first().cloned().or_else(|| mcp.clone()) else { return Ok(None) };
+	let mut step = Step::new(&first, fingerprint("whiteboard-hunk-gone"), Vec::new());
+	let mut diff: Vec<String> = folders.iter().map(|path| format!("- {}", path.display())).collect();
+	if let Some(path) = &mcp {
+		diff.push(format!("- mcpServers.whiteboard in {}", path.display()));
 	}
-	servers
+	step.change = Some(SetupChange {
+		title: "Whiteboard and hunk are gone: their installed files and the boss's whiteboard server leave".to_owned(),
+		path: shown(&first),
+		diff,
+		kept: Vec::new(),
+		apply: Box::new(move |_io| {
+			Box::pin(async move {
+				for path in &folders {
+					remove_tree(path)?;
+				}
+				if let Some(path) = mcp {
+					let mut value: Value = serde_json::from_str(&fs::read_to_string(&path)?)?;
+					if let Some(servers) = value.get_mut("mcpServers").and_then(Value::as_object_mut) {
+						servers.remove("whiteboard");
+					}
+					fs::write(&path, json(&value))?;
+				}
+				Ok(())
+			})
+		}),
+	});
+	Ok(Some(step))
 }
 
 /// The shipped file `relative` under `config/`.
@@ -153,18 +180,6 @@ pub(super) fn asset(paths: &SetupPaths, relative: &[&str]) -> Result<String> {
 	let mut path = paths.assets_dir.clone();
 	path.extend(relative);
 	Ok(fs::read_to_string(path)?)
-}
-
-fn plan_boss_mcp(c: &mut PlanContext) -> Result<Option<Step>> {
-	if c.paths.whiteboard.is_none() {
-		c.notes.push(
-			"whiteboard isn't built: run `mise run build` (or install a release), then `jocasta setup` again."
-				.to_owned(),
-		);
-	}
-	let servers = boss_servers(c.paths);
-	let path = c.paths.data_dir.join("home").join(".omp").join("mcp.json");
-	mcp_step(&path, &servers, servers.keys().cloned().collect()).map(Some)
 }
 
 /// Runs `herdr config check` on `path` (`HERDR_CONFIG_PATH`) and prints what it reports, each unknown-key line (0608).

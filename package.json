@@ -17,16 +17,5 @@
 		"knip": "6.44.2",
 		"typescript": "7.0.2",
 		"typescript5": "npm:typescript@5.9.3"
-	},
-	"dependencies": {
-		"monaco-editor": "0.57.0"
-	},
-	"overrides": {
-		"dompurify": "3.4.17"
-	},
-	"optionalDependencies": {
-		"hunkdiff-darwin-arm64": "0.23.0",
-		"hunkdiff-linux-x64": "0.23.0",
-		"hunkdiff-windows-x64": "0.23.0"
 	}
 }

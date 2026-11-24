@@ -1,32 +1,21 @@
-//! The browser's pages and their cookie (the Rust port of `page-routes.ts`): launch codes, the earlier-run page,
-//! whiteboard's connection and the responder that serves all of it.
+//! The browser's pages and their cookie (the Rust port of `page-routes.ts`): launch codes, the earlier-run page, and
+//! the responder that serves the briefs (0678) behind them.
 
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::Request;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::Response;
-use serde_json::{Value, json};
 use url::{Url, form_urlencoded};
 
-use crate::frontier::protocol::{ServiceState, TOKEN_QUERY, token_cookie};
-use crate::frontier::server::assets::ui_asset;
-use crate::frontier::server::routes::{BoxFuture, PageRoute, has_bearer, json_response, text_response};
-use crate::frontier::server::service::{FindReview, OpenReview};
-use crate::frontier::server::whiteboard::{
-	CANVAS_PATH, CONNECTION_PATH, WHITEBOARD_VERSION, WORKER_PATH, Whiteboard, canvas_asset, canvas_dir, canvas_files,
-	monaco_worker,
-};
-use crate::shared::errors::Error;
+use crate::frontier::brief::routes::BriefRoutes;
+use crate::frontier::protocol::{TOKEN_QUERY, token_cookie};
+use crate::frontier::server::routes::{BoxFuture, PageRoute, has_bearer, text_response};
 use crate::shared::fsx::same_token;
 
 /// How long a page URL's one-time launch code may wait for the browser to open it (SEC-LOC-11).
 const LAUNCH_CODE_MS: i64 = 60_000;
-
-/// How long whiteboard's review lookup may take.
-const REVIEW_LOOKUP: Duration = Duration::from_secs(10);
 
 fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 	mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -89,13 +78,12 @@ pub fn cookie_value<B>(request: &axum::http::Request<B>, cookie: &str) -> Option
 }
 
 /// What a browser that opens a page without a valid cookie sees (0581, UX-9): the page is from an earlier run (every
-/// run has its own page token), and what brings a fresh one. No token is in it.
+/// run has its own page token), and what brings a fresh one. No token is in it, and no style: the content policy
+/// (0678) allows none inline.
 const EARLIER_RUN_PAGE: &str = r#"<!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><title>Jocasta</title>
-<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#1a1b26;color:#c0caf5;font:16px/1.5 system-ui,sans-serif}p{max-width:36em;padding:0 1.5em}</style>
-</head>
-<body><p>This Jocasta page is from an earlier run. Ask the boss to show the review again; it opens a fresh page.</p></body>
+<head><meta charset="utf-8"><title>Jocasta</title></head>
+<body><p>This Jocasta page is from an earlier run. Ask the boss to show it again; it opens a fresh page.</p></body>
 </html>
 "#;
 
@@ -112,101 +100,16 @@ pub fn refused_page<B>(request: &axum::http::Request<B>) -> Response {
 	}
 }
 
-fn unavailable(error: &str) -> Response {
-	json_response(StatusCode::SERVICE_UNAVAILABLE, &json!({ "error": error }))
-}
-
-/// What the canvas page mounts whiteboard's canvas with (0393): the server's url and token, once it answers, and the
-/// canvas build's files; 503 with the reason when either is missing, or when the server stopped answering since (its
-/// process died, B-3): the page then shows its own failed state, not whiteboard's.
-async fn whiteboard_connection(whiteboard: Option<&Whiteboard>) -> Response {
-	let dir = canvas_dir();
-	let (Some(whiteboard), Some(dir)) = (whiteboard, dir) else {
-		return unavailable(if whiteboard.is_some() {
-			"whiteboard's canvas isn't built: run `mise run build`"
-		} else {
-			"whiteboard is off"
-		});
-	};
-	let connection = match whiteboard.ready().await {
-		Ok(connection) => connection,
-		Err(error) => return unavailable(&error.to_string()),
-	};
-	if whiteboard.check().await.state != ServiceState::Up {
-		return unavailable(&format!("whiteboard's server at {} stopped answering", connection.url));
-	}
-	match canvas_files(&dir) {
-		Ok(files) => json_response(
-			StatusCode::OK,
-			&json!({
-				"url": connection.url,
-				"token": connection.token,
-				"version": WHITEBOARD_VERSION,
-				"canvas": { "script": files.script, "styles": files.styles, "wasm": files.wasm },
-				"worker": WORKER_PATH,
-			}),
-		),
-		Err(error) => unavailable(&error.to_string()),
-	}
-}
-
-/// `encodeURIComponent`.
-fn encode_uri_component(text: &str) -> String {
-	let mut out = String::with_capacity(text.len());
-	for byte in text.bytes() {
-		if byte.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&byte) {
-			out.push(char::from(byte));
-		} else {
-			out.push_str(&format!("%{byte:02X}"));
-		}
-	}
-	out
-}
-
-/// What the boss's `show` needs of whiteboard (0552): the two service options it fills.
-pub struct WhiteboardReviews {
-	pub find_review: FindReview,
-	pub open_review: OpenReview,
-}
-
-/// The boss's `show` with whiteboard (0552): it checks the review exists first (whiteboard's `GET /reviews-api/:id`,
-/// `None` when none), then opens it in his browser on this server's canvas page with a fresh one-time launch code
-/// (`open` is given the query that carries the review's id).
-pub fn whiteboard_reviews(whiteboard: Arc<Whiteboard>, open: Arc<dyn Fn(&str) + Send + Sync>) -> WhiteboardReviews {
-	let find_review: FindReview = Arc::new(move |id: String| {
-		let whiteboard = whiteboard.clone();
-		Box::pin(async move {
-			let connection = whiteboard.ready().await?;
-			let client = reqwest::Client::builder().timeout(REVIEW_LOOKUP).build()?;
-			let response = client
-				.get(format!("{}/reviews-api/{}?full=true", connection.url, encode_uri_component(&id)))
-				.header("x-review-token", &connection.token)
-				.send()
-				.await?;
-			if response.status() == reqwest::StatusCode::NOT_FOUND {
-				return Ok(None);
-			}
-			if !response.status().is_success() {
-				return Err(Error::other(format!("whiteboard answered {}", response.status().as_u16())));
-			}
-			let body: Value = response.json().await?;
-			let title = body.get("title").and_then(Value::as_str).filter(|title| !title.is_empty());
-			Ok(Some(title.map_or(id, str::to_owned)))
-		})
-	});
-	let open_review: OpenReview = Arc::new(move |id: &str| open(&format!("&review={}", encode_uri_component(id))));
-	WhiteboardReviews { find_review, open_review }
-}
-
 /// What the pages need.
 pub struct PageParts {
 	pub token: String,
-	/// The browser's own token (SEC-NET-4): its cookie authorizes the pages and whiteboard's connection only.
+	/// The browser's own token (SEC-NET-4): its cookie authorizes the pages only.
 	pub page_token: String,
 	pub codes: Arc<LaunchCodes>,
 	/// The server's port, for the cookie's name.
 	pub port: Arc<dyn Fn() -> u16 + Send + Sync>,
-	pub whiteboard: Option<Arc<Whiteboard>>,
+	/// The briefs' routes (0678), behind the cookie.
+	pub briefs: BriefRoutes,
 	/// The bearer's routes answered here, after the launch code: `/health` and his questions.
 	pub bearer_routes: Vec<Box<dyn PageRoute>>,
 }
@@ -218,18 +121,8 @@ fn not_found() -> Response {
 	text_response(StatusCode::NOT_FOUND, "Not found")
 }
 
-/// A canvas build file as a response: its type and cache headers, its bytes.
-async fn canvas_response(dir: &std::path::Path, pathname: &str) -> Option<Response> {
-	let asset = canvas_asset(dir, pathname)?;
-	let bytes = tokio::fs::read(&asset.path).await.ok()?;
-	let mut response = Response::new(Body::from(bytes));
-	let headers = response.headers_mut();
-	headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(asset.content_type));
-	headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(asset.cache_control));
-	Some(response)
-}
-
-/// The launch code swapped for the page cookie (`/?t=<code>`): the redirect that sets it, else the refusal.
+/// The launch code swapped for the page cookie (`/brief/<id>?t=<code>`): the redirect that sets it and goes on to the
+/// page without the code, else the refusal.
 fn swap_launch_code(parts: &PageParts, request: &Request, url: &Url, given: &str) -> Response {
 	if !parts.codes.take(given) {
 		return refused_page(request);
@@ -240,7 +133,7 @@ fn swap_launch_code(parts: &PageParts, request: &Request, url: &Url, given: &str
 		.map(|(n, v)| (n.into_owned(), v.into_owned()))
 		.collect();
 	let query = form_urlencoded::Serializer::new(String::new()).extend_pairs(rest).finish();
-	let location = format!("/{}", if query.is_empty() { String::new() } else { format!("?{query}") });
+	let location = format!("{}{}", url.path(), if query.is_empty() { String::new() } else { format!("?{query}") });
 	let cookie = format!("{}={}; Path=/; HttpOnly; SameSite=Strict", token_cookie((parts.port)()), parts.page_token);
 	let mut response = Response::new(Body::empty());
 	*response.status_mut() = StatusCode::FOUND;
@@ -260,31 +153,19 @@ async fn respond(parts: &PageParts, request: Request, url: Url) -> Response {
 	if let Some(route) = parts.bearer_routes.iter().find(|route| route.matches(url.path())) {
 		return route.handle(request, url).await;
 	}
-	// The page token as this port's cookie (the browser's pages and whiteboard's connection only; SEC-NET-4).
+	// The page token as this port's cookie (the browser's pages only; SEC-NET-4).
 	let page_cookie = same_token(cookie_value(&request, &token_cookie((parts.port)())).as_deref(), &parts.page_token);
 	if !has_bearer(&request, &parts.token) && !page_cookie {
 		return refused_page(&request);
 	}
-	if request.method() != axum::http::Method::GET {
-		return not_found();
+	if BriefRoutes::matches(url.path()) {
+		return parts.briefs.handle(request).await;
 	}
-	let pathname = url.path();
-	if pathname == CONNECTION_PATH {
-		return whiteboard_connection(parts.whiteboard.as_deref()).await;
-	}
-	if pathname == WORKER_PATH {
-		return monaco_worker();
-	}
-	let canvas = if pathname.starts_with(CANVAS_PATH) { canvas_dir() } else { None };
-	let served = match canvas {
-		Some(dir) => canvas_response(&dir, pathname).await,
-		None => ui_asset(pathname).await,
-	};
-	served.unwrap_or_else(not_found)
+	not_found()
 }
 
-/// The bearer's routes (`/health`, his questions) and the browser's pages: `/?t=<code>` swaps a live launch code for
-/// the page cookie; the pages and their files need the cookie (or the bearer).
+/// The bearer's routes (`/health`, his questions) and the browser's pages: `/brief/<id>?t=<code>` swaps a live launch
+/// code for the page cookie; the pages and their files need the cookie (or the bearer).
 pub fn page_responder(parts: PageParts) -> PageResponder {
 	let parts = Arc::new(parts);
 	Arc::new(move |request, url| {

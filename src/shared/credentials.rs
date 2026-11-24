@@ -1,7 +1,7 @@
 //! Windows Credential Manager (0430): generic credentials read and written through `advapi32.dll`'s `CredReadW`,
 //! `CredWriteW` and `CredDeleteW` (windows-sys). The calendar's secret iCal URL lives in target `jocasta/calendar-ical`;
 //! the env var `JOCASTA_CALENDAR_ICAL_SECRET` stays a fallback (0301), taken out of this process's environment at the
-//! service's start so no child (herdr and its panes, whiteboard, omp) inherits it (SEC-5). Off Windows there is no
+//! service's start so no child (herdr and its panes, omp) inherits it (SEC-5). Off Windows there is no
 //! store: reads find nothing and writes refuse.
 
 use std::sync::Mutex;
@@ -123,7 +123,7 @@ pub fn delete_credential(_target: &str) -> bool {
 static CALENDAR_ENV_TAKEN: Mutex<Option<String>> = Mutex::new(None);
 
 /// Moves `JOCASTA_CALENDAR_ICAL_SECRET` out of the environment into this module (SEC-5) and returns it: every process
-/// started afterwards (herdr's server and so every pane, whiteboard, omp) inherits an environment without it. The
+/// started afterwards (herdr's server and so every pane, omp) inherits an environment without it. The
 /// service and the `jocasta` command call it before they start anything; later calls return the value taken.
 pub fn take_calendar_env() -> Option<String> {
 	let mut taken = CALENDAR_ENV_TAKEN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());

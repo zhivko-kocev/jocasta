@@ -12,7 +12,7 @@ use crate::frontier::protocol::Leftover;
 use crate::frontier::server::close::CloseOutcome;
 use crate::frontier::server::helpers::{
 	BRIEF, Msg, TestServer, ThreadOptions, boss_idle, boss_pane, call, commit_in, demo_project, handoff_entry,
-	proposed_plan_file, relaunch_idle, review, session_file, sh, start_thread, to_handoff, until, use_hunk_daemon,
+	proposed_plan_file, relaunch_idle, review, session_file, sh, start_thread, to_handoff, until,
 };
 use crate::frontier::server::helpers_procs::{Hooked, with_server_on};
 use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
@@ -54,11 +54,9 @@ fn awaiting(server: &TestServer) -> usize {
 	server.service.busy_threads().unwrap().awaiting
 }
 
-/// The default options of the relaunch cases: omp comes up in 10 s at most, hunk's daemon answers.
+/// The default options of the relaunch cases: omp comes up in 10 s at most.
 async fn options() -> ServerOptions {
-	let mut options = ServerOptions { agent_wait_ms: Some(10_000), ..ServerOptions::default() };
-	use_hunk_daemon().await.apply(&mut options);
-	options
+	ServerOptions { agent_wait_ms: Some(10_000), ..ServerOptions::default() }
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -55,29 +55,9 @@ fn allowing(allow: bool, asked: &Arc<Mutex<Vec<Confirmation>>>) -> Confirm {
 	})
 }
 
-/// A stand-in for hunk's session daemon: answers every request on a free loopback port `200 {"ok":true}` for as long
-/// as the test process lives, so the service finds it up and never starts a real `hunk` that would outlive the test.
-fn health_port() -> u16 {
-	let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listening");
-	let port = listener.local_addr().expect("the daemon's address").port();
-	std::thread::spawn(move || {
-		for mut stream in listener.incoming().flatten() {
-			let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
-			let _ = std::io::Read::read(&mut stream, &mut [0u8; 1024]);
-			let body = r#"{"ok":true}"#;
-			let head =
-				format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n", body.len());
-			let _ = std::io::Write::write_all(&mut stream, format!("{head}connection: close\r\n\r\n{body}").as_bytes());
-		}
-	});
-	port
-}
-
-/// The options most cases run with: his Allow given, hunk installed (a new review can run) and its daemon up.
+/// The options most cases run with: his Allow given.
 fn standard(options: &mut ServiceOptions) {
 	options.confirm = Some(allowing(true, &Arc::default()));
-	options.hunk = Some(Some(vec!["hunk".to_owned()]));
-	options.hunk_port = Some(health_port());
 }
 
 /// The TypeScript's `demoProject` and `startThread`: a repo with a README on `main`, a thread `Readme line` in a linked
@@ -614,22 +594,6 @@ async fn merge_when_trunk_moved_brings_it_into_the_branch_for_a_new_review_0454(
 	assert_eq!(w.thread.with(|t| t.head.clone()), Some(w.head(&w.path)));
 	assert!(w.path.join("other.txt").exists());
 	assert_eq!(w.head(&w.main), trunk_head);
-	w.assert_in_place();
-}
-
-#[tokio::test]
-async fn merge_when_trunk_moved_and_hunk_isnt_installed_refuses_0454() {
-	let w = world(|options| {
-		options.confirm = Some(allowing(true, &Arc::default()));
-		options.hunk = Some(None);
-	});
-	w.one_commit();
-	trunk_moves_on(&w, "other.txt");
-	assert_eq!(
-		w.refused("merge").await,
-		"main moved since demo/Readme line's review and no new review can run (hunk isn't installed); nothing was merged."
-	);
-	assert!(!w.thread.with(|t| t.merge_after_review));
 	w.assert_in_place();
 }
 

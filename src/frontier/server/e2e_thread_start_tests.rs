@@ -4,7 +4,6 @@
 //! Plan Review; a task's end through its review and `/handoff`; a task end with no trunk; the sidebar tokens and the
 //! HUD file; and the settings every writer of the overlay agrees on.
 
-use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
@@ -13,25 +12,24 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use crate::frontier::protocol::{NeedsYouKind, ServerMessage, ToastReason};
+use crate::frontier::server::helpers::review_asked;
 use crate::frontier::server::helpers::{
 	BRIEF, Keyed, Msg, Page, TestServer, ThreadOptions, boss_pane, bridge_flags, call, call_as, cli, commit_in,
 	demo_project, guard, keyed, project_keyed, proposed_plan_file, push_state, review, session_file, sh,
-	start_test_server_with, start_thread, task_dir_of, thread_omp, until, until_async, use_hunk_daemon, with_server,
+	start_test_server_with, start_thread, task_dir_of, thread_omp, until, until_async, with_server,
 };
 use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
 use crate::frontier::server::herdr::{AgentState, Env};
-use crate::frontier::server::hunk::{HUNK_PORT, ReviewContext, hunk_diff_args, hunk_env, review_prompt};
 use crate::frontier::server::overlay::{overlay_file, overlay_text};
 use crate::frontier::server::server::ServerOptions;
 use crate::frontier::server::tools::ToolReply;
 use crate::frontier::server::wording::{HANDOFF_PROMPT, WHEN_YOU_FINISH, short_model};
 use crate::frontier::server::worktrees::reviewed_file;
-use crate::shared::install::{self_command, shipped_config_dir};
+use crate::shared::install::shipped_config_dir;
 use crate::shared::pathkey::path_key;
 use crate::shared::paths::{data_dir, lessons_dir, project_dir};
 use crate::shared::projects::Project;
 use crate::shared::prompt::without_leading_comment;
-use crate::shared::push_hook::push_hook_env;
 use crate::shared::testing::temp_jocasta;
 use crate::shared::yaml::parse_value;
 
@@ -74,13 +72,9 @@ fn env_of(value: &Value) -> Env {
 		.collect()
 }
 
-/// A pane's env as the test expects it: hunk's variables for `port`, then `extra`, with the hook's entries (a project
-/// pane's with its turn-end check).
-fn expected_env(port: u16, extra: &[(&str, &str)], project: bool) -> Keyed {
-	let hunk = hunk_env(port);
-	let mut vars: Vec<(&str, &str)> = hunk.iter().map(|(name, value)| (name.as_str(), value.as_str())).collect();
-	vars.extend_from_slice(extra);
-	if project { project_keyed(&vars) } else { keyed(&vars) }
+/// A pane's env as the test expects it: `extra`, with the hook's entries.
+fn expected_env(extra: &[(&str, &str)], project: bool) -> Keyed {
+	if project { project_keyed(extra) } else { keyed(extra) }
 }
 
 fn strings(words: &[&str]) -> Vec<String> {
@@ -162,11 +156,10 @@ fn check_first_start(
 	let ensured = server.herdr.of("ensureWorkspace");
 	let sleeper = server.service.context().panes.sleeper_command("demo · press any key to start");
 	assert_eq!(ensured[1][..3], [json!("demo"), json!(path_text(&project.main_path)), json!(sleeper)]);
-	assert_eq!(expected_env(HUNK_PORT, &[], true), env_of(&ensured[1][3]));
+	assert_eq!(expected_env(&[], true), env_of(&ensured[1][3]));
 	let project_ws =
 		server.herdr.state().workspace_list.iter().find(|w| w.label == "demo").map(|w| w.id.clone()).unwrap();
-	// Thread panes get Jocasta's hunk daemon port, as the review's hunk commands run in them (F-02, F-03), and their
-	// own variables (0457); a new thread starts a fresh session, never `--continue` (0455).
+	// Thread panes get their own variables (0457); a new thread starts a fresh session, never `--continue` (0455).
 	let made = server.herdr.of("createWorktree");
 	assert_eq!(made.len(), 1);
 	assert_eq!(made[0][0], json!(project_ws));
@@ -196,7 +189,7 @@ fn check_first_start(
 		("COMPOSE_PROJECT_NAME", "demo-readme-line"),
 		("JOCASTA_PORT_OFFSET", "10"),
 	];
-	assert_eq!(expected_env(HUNK_PORT, &thread_env, false), env_of(&env));
+	assert_eq!(expected_env(&thread_env, false), env_of(&env));
 	// Not heavy: its record has no `heavy` and its omp no heavy.yml (0590).
 	assert!(read_json(&task_dir_of(&project.id, "Readme line").join("thread.json")).get("heavy").is_none());
 	assert_eq!(started.path, root.join("demo.wt").join("readme-line"));
@@ -391,7 +384,7 @@ async fn project_panes_append_the_shipped_ponytail_prompt_thread_panes_append_it
 		ctx.sleep.wake_by_key(&ctx.launched.key_of(&pane).unwrap()).await.unwrap();
 		let woken = server.herdr.of("respawn").pop().unwrap();
 		assert_eq!(woken[1]["command"], json!(command));
-		assert_eq!(expected_env(HUNK_PORT, &[], true), env_of(&ensured[1][3]));
+		assert_eq!(expected_env(&[], true), env_of(&ensured[1][3]));
 		// omp 18.18 takes one --append-system-prompt (the last), so Ponytail and the task share `prompt.md`.
 		let prompt = task_dir_of(&project.id, "Readme line").join("prompt.md");
 		let mut thread_command = strings(&["omp", "--append-system-prompt"]);
@@ -505,43 +498,22 @@ async fn a_plan_waiting_in_omps_plan_review_herdr_says_idle_waits_on_him_like_a_
 	.await;
 }
 
-/// The review turn's first half: hunk beside the thread and the review prompt, nothing announced yet (UX-21).
-async fn check_review_opens(server: &TestServer, pane: &str, path: &Path, boss: &str, hunk_port: u16) {
+/// The review turn's first half: the review prompt, nothing announced yet (UX-21); then the reviewer hands in two notes
+/// with `review_note` (0678), which the review counts.
+async fn check_review_opens(server: &TestServer, pane: &str, boss: &str) {
 	let range = "main...feature/readme-line";
-	let hunk = crate::frontier::server::helpers::hunk();
 	let asked = review(range, Some(BRIEF));
 	until(|| prompts(server).iter().any(|(to, text)| to == pane && *text == asked)).await;
-	// 1. hunk to the right at half width on trunk...branch, watching, named "review", on Jocasta's hunk daemon;
-	// 2. the review prompt.
-	let mut split_env: BTreeMap<String, String> = hunk_env(hunk_port).into_iter().collect();
-	split_env.extend(push_hook_env(&self_command(None).iter().map(|word| path_text(word)).collect::<Vec<_>>(), None));
-	assert_eq!(
-		server.herdr.of("splitBeside"),
-		[vec![
-			json!(pane),
-			json!({
-				"command": hunk_diff_args(&hunk, range),
-				"cwd": path_text(path),
-				"env": split_env,
-				"label": "review",
-				"direction": "right",
-				"ratio": 0.5,
-			})
-		]]
-	);
-	let mut diff = hunk.clone();
-	diff.extend(strings(&["diff", "--theme", "tokyo-night", range, "--watch"]));
-	assert_eq!(hunk_diff_args(&hunk, range), diff);
-	assert_eq!(
-		hunk_env(1),
-		[("HUNK_MCP_PORT".to_owned(), "1".to_owned()), ("HUNK_DISABLE_UPDATE_NOTICE".to_owned(), "1".to_owned())]
-	);
 	assert!(!prompts(server).iter().any(|(to, _)| to == boss));
 	assert!(!prompts(server).iter().any(|(_, text)| text == HANDOFF_PROMPT));
-	let prompt = review_prompt(&hunk, range, &ReviewContext::default());
-	assert!(prompt.contains("session comment apply --repo . --stdin"));
-	assert!(prompt.contains("First run the project's tests"));
-	assert!(prompt.contains("`TESTS: pass — <the test command you ran>`"));
+	assert!(asked.contains("review_note"));
+	assert!(asked.contains("First run the project's tests"));
+	assert!(asked.contains("`TESTS: pass — <the test command you ran>`"));
+	for text in ["Say what the line is for.", "Name the file."] {
+		let note = json!({ "file": "README.md", "line": 2, "quote": "A line.", "severity": "P2", "text": text });
+		let said = crate::frontier::server::helpers::call_as(server, "review_note", &note, Some(pane), None).await;
+		assert!(said.is_error.is_none(), "{}", said.text);
+	}
 }
 
 fn call_index(server: &TestServer, method: &str, text: Option<&str>) -> Option<usize> {
@@ -559,7 +531,6 @@ async fn check_review_ends(server: &TestServer, page: &Page, pane: &str, path: &
 	// What the review covered comes first, so the next task's line differs (N-2).
 	let ready = "[event] demo/Readme line — done and reviewed: 1 new commit «Add a README line», +1/−0 in 1 file, no test files changed, 2 notes, tests pass, no report";
 	let order = [
-		call_index(server, "splitBeside", None),
 		call_index(server, "prompt", Some(&review(range, Some(BRIEF)))),
 		call_index(server, "prompt", Some(ready)),
 		call_index(server, "prompt", Some(HANDOFF_PROMPT)),
@@ -598,13 +569,11 @@ async fn check_review_ends(server: &TestServer, page: &Page, pane: &str, path: &
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn task_end_hunk_opens_beside_the_thread_the_thread_tests_and_reviews_into_it_the_task_is_announced_once_when_its_review_is_ready_then_handoff_neither_turn_retriggers_and_a_handoff_herdr_never_reports_doesnt_swallow_the_next_task_0394_0400_0406_0425_ux_21_f_01()
+async fn task_end_the_thread_tests_and_reviews_handing_notes_in_the_task_is_announced_once_when_its_review_is_ready_then_handoff_neither_turn_retriggers_and_a_handoff_herdr_never_reports_doesnt_swallow_the_next_task_0394_0400_0406_0425_ux_21_f_01()
  {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
-	let hunk = use_hunk_daemon().await;
-	let mut options = options_with_wait();
-	hunk.apply(&mut options);
+	let options = options_with_wait();
 	with_server(options, |server| async move {
 		let page = Page::open(&server, "").await;
 		let started = start_thread(&server, ThreadOptions::default()).await;
@@ -620,9 +589,9 @@ async fn task_end_hunk_opens_beside_the_thread_the_thread_tests_and_reviews_into
 		fs::write(path.join("README.md"), "demo\nA line.\n").unwrap();
 		sh(&path, &["commit", "-qam", "Add a README line"]);
 		server.herdr.set_state(&pane, AgentState::Idle, None, true);
-		check_review_opens(&server, &pane, &path, &boss, hunk.hunk_port).await;
+		check_review_opens(&server, &pane, &boss).await;
 
-		// The review turn ends on its test line: 3. hunk's notes counted, 4. the boss hears it (and it is spoken and
+		// The review turn ends on its test line: 3. the notes counted, 4. the boss hears it (and it is spoken and
 		// toasted, once), 5. /handoff.
 		let tests = Msg::new("Ran bun test, then the review: two notes.\n\n**TESTS: pass — `bun test`**", 0.1)
 			.bash("bun test", true);
@@ -643,17 +612,16 @@ async fn task_end_hunk_opens_beside_the_thread_the_thread_tests_and_reviews_into
 			.calls
 			.iter()
 			.skip(before)
-			.filter(|c| c.method == "prompt" || c.method == "splitBeside")
+			.filter(|c| c.method == "prompt")
 			.map(|c| c.method.clone())
 			.collect();
 		assert!(after.is_empty(), "{after:?}");
 
-		// The next task reviews in the same hunk pane (it watches the range).
+		// The next task is reviewed too.
 		server.herdr.set_state(&pane, AgentState::Working, None, true);
 		commit_in(&path, "demo\nA line.\nAnother.\n", "Another line");
 		server.herdr.set_state(&pane, AgentState::Idle, None, true);
 		until(|| reviews(&server) == 2).await;
-		assert_eq!(server.herdr.of("splitBeside").len(), 1);
 		server.herdr.set_state(&pane, AgentState::Working, None, true);
 		server.herdr.set_state(&pane, AgentState::Idle, None, true);
 		until(|| handoffs(&server) == 2).await;
@@ -673,12 +641,10 @@ async fn task_end_hunk_opens_beside_the_thread_the_thread_tests_and_reviews_into
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn task_end_with_no_trunk_to_diff_against_no_review_pane_handoff_at_once_0400() {
+async fn task_end_with_no_trunk_to_diff_against_no_review_handoff_at_once_0400() {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
-	let hunk = use_hunk_daemon().await;
-	let mut options = options_with_wait();
-	hunk.apply(&mut options);
+	let options = options_with_wait();
 	let root = j.root().to_path_buf();
 	with_server(options, |server| async move {
 		// No trunk to diff against: no origin/HEAD, main, master or trunk, and the main checkout on a detached HEAD (from
@@ -692,7 +658,7 @@ async fn task_end_with_no_trunk_to_diff_against_no_review_pane_handoff_at_once_0
 		sh(&started.path, &["commit", "-qam", "Add a README line"]);
 		server.herdr.set_state(&started.pane_id, AgentState::Idle, None, true);
 		until(|| prompts(&server).iter().any(|(_, text)| text == HANDOFF_PROMPT)).await;
-		assert!(server.herdr.of("splitBeside").is_empty());
+		assert_eq!(review_asked(&server.herdr), 0);
 		// A finished task without a review count reads "done" once, not "done — done".
 		assert_eq!(status(&server).await, "demo/Readme line [feature/readme-line] done");
 	})

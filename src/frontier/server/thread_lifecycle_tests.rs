@@ -17,7 +17,6 @@ use crate::frontier::server::context::{TestContext, test_context};
 use crate::frontier::server::day::DayOptions;
 use crate::frontier::server::herdr::AgentState::{Blocked, Idle, Unknown, Working};
 use crate::frontier::server::herdr::PaneInfo;
-use crate::frontier::server::hunk::fake_hunk::{fake_hunk, health_daemon};
 use crate::frontier::server::sessions::TestsResult;
 use crate::frontier::server::task_file::TaskRecord;
 use crate::frontier::server::thread::{ReviewResult, ReviewRunning, ThreadPlan, ThreadReview};
@@ -34,8 +33,6 @@ struct World {
 	thread: ThreadRef,
 	repo: std::path::PathBuf,
 	_folder: TempDir,
-	/// The fake hunk's folder, for a world whose reviews run.
-	_hunk: Option<TempDir>,
 }
 
 fn sh(dir: &Path, args: &[&str]) -> String {
@@ -82,24 +79,18 @@ fn world(options: impl FnOnce(&mut crate::frontier::server::service::ServiceOpti
 		th.plan = Some(ThreadPlan { sent_back: Some(0), ..ThreadPlan::default() });
 	});
 	add_pane(&t, "p-1", Idle);
-	World { t, thread, repo, _folder: folder, _hunk: None }
+	World { t, thread, repo, _folder: folder }
 }
 
-/// The same world with the real review in place, as the service has it: the fake hunk and its daemon, and trunk `main`
-/// (the repository itself is the project's main checkout), so a task end opens the review step instead of skipping it.
+/// The same world with the real review in place, as the service has it: trunk `main` (the repository itself is the
+/// project's main checkout), so a task end opens the review step instead of skipping it.
 async fn reviewing(options: impl FnOnce(&mut crate::frontier::server::service::ServiceOptions)) -> World {
-	let dir = temp_dir("lifecycle-hunk");
-	let hunk = fake_hunk(dir.path());
-	let port = health_daemon().await;
-	let mut w = world(|o| {
-		o.hunk = Some(Some(hunk));
-		o.hunk_port = Some(port);
+	let w = world(|o| {
 		o.mise = Some(None);
 		options(o);
 	});
 	let main = w.repo.clone();
 	w.thread.with(|t| t.project.main_path = main);
-	w._hunk = Some(dir);
 	w
 }
 
@@ -436,10 +427,9 @@ async fn r3_a_thread_whose_plan_awaits_him_relaunched_still_awaits_him() {
 }
 
 #[tokio::test]
-async fn a_relaunch_forgets_the_review_pane_and_the_old_omp() {
+async fn a_relaunch_forgets_the_old_omp() {
 	let w = world(|_| {});
 	w.thread.with(|t| {
-		t.review = Some(ThreadReview { pane: Some("p-9".to_owned()), ..ThreadReview::default() });
 		t.omp = Some(crate::frontier::server::thread::ThreadOmp {
 			terminal: Some("term".to_owned()),
 			shim: None,
@@ -448,14 +438,7 @@ async fn a_relaunch_forgets_the_review_pane_and_the_old_omp() {
 	});
 	w.t.ctx.lifecycle.relaunch(&w.thread).await.unwrap();
 	// The old omp's terminal is forgotten; `remember` (0490) notes the new pane's, which names none yet.
-	assert_eq!(
-		w.thread.with(|t| (
-			t.review.as_ref().and_then(|r| r.pane.clone()),
-			t.omp.as_ref().and_then(|o| o.terminal.clone()),
-			t.host
-		)),
-		(None, None, None)
-	);
+	assert_eq!(w.thread.with(|t| (t.omp.as_ref().and_then(|o| o.terminal.clone()), t.host)), (None, None));
 }
 
 // ── service-regressions.test.ts ─────────────────────────────────────────────────────────────────────────────────────

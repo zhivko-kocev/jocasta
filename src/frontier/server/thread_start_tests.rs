@@ -216,9 +216,9 @@ async fn thread_start_makes_the_project_workspace_the_overlay_a_worktree_on_feat
 	let sleeper = w.t.ctx.panes.sleeper_command("demo · press any key to start");
 	assert_eq!(ensured[0][..3], [json!("demo"), pane_json(&main), json!(sleeper)]);
 	let project_env = ensured[0][3].as_object().unwrap();
-	assert!(project_env.contains_key(PANE_KEY_ENV) && project_env.contains_key("HUNK_MCP_PORT"));
+	assert!(project_env.contains_key(PANE_KEY_ENV));
 	let project_ws = w.t.herdr.state().workspace_list.iter().find(|ws| ws.label == "demo").unwrap().id.clone();
-	// Thread panes get Jocasta's hunk daemon port and their own variables (0457); a new thread starts a fresh session,
+	// Thread panes get their own variables (0457); a new thread starts a fresh session,
 	// never `--continue` (0455).
 	let worktrees = w.t.herdr.of("createWorktree");
 	assert_eq!(worktrees.len(), 1);
@@ -232,7 +232,7 @@ async fn thread_start_makes_the_project_workspace_the_overlay_a_worktree_on_feat
 	// Every thread warns at $50 (0541) and appends its task's brief and done-when (0540).
 	assert_eq!(made["command"], json!(w.thread_command("demo", "Readme line", &[])));
 	let env = made["env"].as_object().unwrap();
-	assert!(env.contains_key(PANE_KEY_ENV) && env.contains_key("HUNK_MCP_PORT"));
+	assert!(env.contains_key(PANE_KEY_ENV));
 	assert_eq!(env["JOCASTA_THREAD"], "readme-line");
 	assert_eq!(env["COMPOSE_PROJECT_NAME"], "demo-readme-line");
 	assert_eq!(env["JOCASTA_PORT_OFFSET"], "10");

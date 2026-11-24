@@ -91,7 +91,7 @@ const USER_PATH_QUERY = ["reg", "query", "HKCU\\Environment", "/v", "Path"];
 
 /**
  * A fake windows-x64 zip: a harmless stand-in for jocasta.exe (whoami, which only complains about `--version`), a
- * config file with `config` in it, and with `programs` copies of PING.EXE as hunk.exe and as a pane's ConPTY host
+ * config file with `config` in it, and with `programs` a copy of PING.EXE as a pane's ConPTY host
  * `conpty\x64\OpenConsole.exe` (0661), which a test can keep running.
  */
 function fakeZip(config = "fake config\n", programs = false) {
@@ -102,8 +102,6 @@ function fakeZip(config = "fake config\n", programs = false) {
 	copyFileSync(join(SYSTEM32, "whoami.exe"), join(stage, "jocasta.exe"));
 	writeFileSync(join(stage, "config", "boss.md"), config);
 	if (programs) {
-		mkdirSync(join(stage, "hunk"));
-		copyFileSync(join(SYSTEM32, "PING.EXE"), join(stage, "hunk", "hunk.exe"));
 		mkdirSync(join(stage, "conpty", "x64"), { recursive: true });
 		copyFileSync(join(SYSTEM32, "PING.EXE"), join(stage, "conpty", "x64", "OpenConsole.exe"));
 	}
@@ -213,12 +211,11 @@ test.if(windows)(
 );
 
 test.if(windows)(
-	"install.ps1 upgrades over running programs: a busy hunk.exe moves aside, a busy OpenConsole.exe out of conpty\\, an old companion stops, install.json stays (CR-06, 0661)",
+	"install.ps1 upgrades over running programs: a busy OpenConsole.exe out of conpty\\, an old companion stops, install.json stays (CR-06, 0661)",
 	async () => {
 		fakeZip("fake config\n", true);
 		expect(installPs1().code).toBe(0);
-		// An omp session's hunk pane, and an earlier install's companion under app\.
-		const hunk = holdRunning(join(dir, "hunk", "hunk.exe"));
+		// An earlier install's companion under app\.
 		// A pane's ConPTY host.
 		const host = holdRunning(join(dir, "conpty", "x64", "OpenConsole.exe"));
 		mkdirSync(join(dir, "app", "bin"), { recursive: true });
@@ -230,22 +227,19 @@ test.if(windows)(
 		expect(upgrade.err.trim()).toBe("");
 		expect(upgrade.code).toBe(0);
 		expect(upgrade.out).toContain("jocasta install: stopping the companion app an earlier install left running.");
-		expect(upgrade.out).toContain("omp sessions and hunk panes started before the upgrade run the old build");
+		expect(upgrade.out).toContain("omp sessions started before the upgrade run the old build");
 		await companion.exited;
 		expect(existsSync(join(dir, "app"))).toBe(false);
 		expect(readFileSync(join(dir, "config", "boss.md"), "utf8")).toBe("the newer config\n");
-		expect(readdirSync(join(dir, "hunk")).some((name) => /^hunk\.exe\.old-\d+$/.test(name))).toBe(true);
 		// herdr loads the bundle only with exactly its own files in it.
 		expect(readdirSync(join(dir, "conpty", "x64"))).toEqual(["OpenConsole.exe"]);
 		expect(readdirSync(dir).some((name) => /^conpty-x64-OpenConsole\.exe\.old-\d+$/.test(name))).toBe(true);
 		expect(readInstallRecord(dir).dir).toBe(dir);
 
 		// Once they exit, the next install removes what moved aside.
-		hunk.kill();
 		host.kill();
-		await Promise.all([hunk.exited, host.exited]);
+		await host.exited;
 		expect(installPs1().code).toBe(0);
-		expect(readdirSync(join(dir, "hunk"))).toEqual(["hunk.exe"]);
 		expect(readdirSync(dir).some((name) => name.includes(".old-"))).toBe(false);
 	},
 	120_000,

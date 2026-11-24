@@ -1,6 +1,6 @@
 //! Tests of `server.rs`: the cases of `test/frontier/server/server.test.ts` that need a running server (the pure ones
 //! are in `page_routes_tests.rs`, `routes_tests.rs` and `close_tests.rs`), and the server-level cases of
-//! `pane-hook-env.test.ts`. The pieces of `shutdown.test.ts`, `popups.test.ts`, `whiteboard.test.ts` and
+//! `pane-hook-env.test.ts`. The pieces of `shutdown.test.ts`, `popups.test.ts` and
 //! `weekly-scorecard.test.ts` are in their own files beside it.
 
 use std::fs;
@@ -48,25 +48,34 @@ async fn the_api_takes_the_token_as_a_bearer_only_a_pages_one_time_code_becomes_
 		assert_eq!(status(get("/health").header("cookie", &token_cookie_header)).await, 403);
 		assert_eq!(status(get("/health").header("authorization", "Bearer wrong")).await, 403);
 
-		let url = server.url();
+		let url = server.server.page_url("/brief/show-1");
 		let shape = regex_lite_code(&url, &base);
 		assert!(shape, "{url}");
 		assert!(!url.contains(&server.token));
 		let login = client.get(&url).send().await.unwrap();
 		assert_eq!(login.status().as_u16(), 302);
-		assert_eq!(login.headers()["location"], "/");
+		assert_eq!(login.headers()["location"], "/brief/show-1");
 		let set_cookie = login.headers()["set-cookie"].to_str().unwrap().to_owned();
 		assert!(set_cookie.starts_with(&format!("{}=", token_cookie(server.port))), "{set_cookie}");
 		assert!(set_cookie.contains("HttpOnly"));
 		assert!(!set_cookie.contains(&server.token));
 		// The code is single use.
 		assert_eq!(status(client.get(&url)).await, 403);
-		let review = client.get(format!("{}&review=r-1", server.url())).send().await.unwrap();
-		assert_eq!(review.headers()["location"], "/?review=r-1");
+		let more = client.get(format!("{}&x=1", server.server.page_url("/brief/show-1"))).send().await.unwrap();
+		assert_eq!(more.headers()["location"], "/brief/show-1?x=1");
 		let cookie = set_cookie.split(';').next().unwrap().to_owned();
 
 		// The page cookie opens the pages, nothing of the API.
-		assert_eq!(status(get("/whiteboard/connection").header("cookie", &cookie)).await, 503);
+		assert_eq!(status(get("/brief/show-9.json").header("cookie", &cookie)).await, 404);
+		assert_eq!(status(get("/brief/show-9.json")).await, 403);
+		// A brief's action from another origin is refused (0678).
+		let evil = client
+			.post(format!("{base}/brief/show-9/act"))
+			.header("cookie", &cookie)
+			.header("origin", "http://evil.test")
+			.header("content-type", "application/json")
+			.body("{}");
+		assert_eq!(status(evil).await, 403);
 		assert_eq!(status(get("/health").header("cookie", &cookie)).await, 403);
 		assert_eq!(status(get("/ws").header("cookie", &cookie).header("upgrade", "websocket")).await, 403);
 
@@ -91,7 +100,7 @@ async fn the_api_takes_the_token_as_a_bearer_only_a_pages_one_time_code_becomes_
 
 /// Whether `url` is `<base>/?t=` and 64 lowercase hex digits.
 fn regex_lite_code(url: &str, base: &str) -> bool {
-	url.strip_prefix(&format!("{base}/?t=")).is_some_and(|code| {
+	url.strip_prefix(&format!("{base}/brief/show-1?t=")).is_some_and(|code| {
 		code.len() == 64 && code.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 	})
 }
@@ -111,7 +120,7 @@ async fn a_browsers_page_from_an_earlier_run_gets_a_page_saying_so_and_what_to_d
 		assert!(response.headers()["content-type"].to_str().unwrap().contains("text/html"));
 		let html = response.text().await.unwrap();
 		assert!(html.contains(
-			"This Jocasta page is from an earlier run. Ask the boss to show the review again; it opens a fresh page."
+			"This Jocasta page is from an earlier run. Ask the boss to show it again; it opens a fresh page."
 		));
 		assert!(!html.contains(&server.token));
 	})

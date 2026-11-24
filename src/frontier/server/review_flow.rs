@@ -1,4 +1,4 @@
-//! The review step after a task (0394, 0406, 0425, 0453, 0540, 0542): hunk beside the thread on its diff, the task's
+//! The review step after a task (0394, 0406, 0425, 0453, 0540, 0542): the reviewer's notes on the diff, the task's
 //! checks through the runner, the review turn, its outcome said once, then `/handoff` (0400); the check on idle (0513)
 //! and the `check` tool. The Rust port of `review-flow.ts` (0625).
 //!
@@ -22,20 +22,20 @@ use crate::frontier::protocol::{ServerMessage, ThreadState, ToastLevel, ToastPri
 use crate::frontier::server::bridge::Deliver;
 use crate::frontier::server::checks::{CheckRun, CheckSpec, How, gate_reply, short_tree};
 use crate::frontier::server::context::{Calls, Link, ServiceContext};
-use crate::frontier::server::herdr::{Direction, SplitOptions};
-use crate::frontier::server::hunk::{
-	ReviewContext, ReviewProof, hunk_diff_args, list_comments, proof_said, review_prompt, review_proof,
-};
 use crate::frontier::server::journal::About;
 use crate::frontier::server::mise::{
 	Found, Mise, mise_env, mise_task_among, mise_tasks_among, skipped_said, trust_copies,
 };
 use crate::frontier::server::report::{ReportedTest, report_line};
+use crate::frontier::server::review_notes::{NoteCounts, ReviewNotes, head_of, review_file};
+use crate::frontier::server::review_prompt::{ReviewContext, review_prompt};
+use crate::frontier::server::review_proof::{ReviewProof, proof_said, review_proof};
 use crate::frontier::server::sessions::{SessionStats, TestsResult, check_exits, checked_tests};
 use crate::frontier::server::task_file::{CheckExit, TaskReview, task_dir};
 use crate::frontier::server::thread::{
 	Phase, ReviewResult, ReviewRunning, Thread, ThreadRef, ThreadReview, set_phase, show, subject,
 };
+use crate::frontier::server::thread_brief::{BriefExtras, refresh as refresh_brief};
 use crate::frontier::server::thread_facts::{CheckFact, review_facts, start_facts};
 use crate::frontier::server::wording::{HANDOFF_FOCUS, idle_check_text, quoted, review_said, tests_said};
 use crate::frontier::server::worktrees::git_out;
@@ -105,6 +105,8 @@ struct ReviewFound {
 	proof: Option<ReviewProof>,
 	checks: Vec<CheckExit>,
 	done_when: Vec<String>,
+	/// How long each check took, by command, for the thread's brief (0678).
+	check_ms: Vec<(String, i64)>,
 }
 
 /// How deep a check goes (0677): `Quick` is what a turn's end runs, `Full` what `report_result` and the review run.
@@ -348,27 +350,18 @@ impl ReviewFlow {
 		Ok(CommitsSaid { said, subject: None })
 	}
 
-	/// A thread finished a task (0394, 0406, 0425) with `commits`, the last of them `last`: hunk opens to the right of
-	/// its pane at half width on `<trunk>...<branch>` (`--watch`, so a later task's commits show in the same pane), and
-	/// the thread is asked to run the project's tests (its trusted mise `verify`/`test` task when it has one, 0473) and
+	/// A thread finished a task (0394, 0406, 0425) with `commits`, the last of them `last`: the thread is asked to run the project's tests (its trusted mise `verify`/`test` task when it has one, 0473) and
 	/// its `verify` skill, then omp's reviewer with the approved plan, the project's rules and lessons (0453, 0459,
-	/// 0460), posting its findings into hunk and ending on its test command; the task is announced once, when its review
-	/// is ready (UX-21). Without hunk, a trunk or a branch the review is skipped (and its commit counts as reviewed): the
+	/// 0460), handing its findings in with `review_note` and ending on its test command; the task is announced once, when its review
+	/// is ready (UX-21). Without a trunk or a branch the review is skipped (and its commit counts as reviewed): the
 	/// task is announced done and the handoff follows at once (0400).
 	pub async fn task_ended(&self, thread: &ThreadRef, commits: &str, last: Option<&str>) -> Result<()> {
 		let c = self.link.ctx();
 		let t = thread.get();
-		let hunk = c.panes.hunk();
 		let (trunk, head) = tokio::try_join!(c.places.trunk(&t.project), git_out(&t.path, &["rev-parse", "HEAD"]))?;
 		let trunk = trunk.filter(|trunk| !trunk.is_empty());
-		let (Some(hunk), Some(trunk), false) = (&hunk, &trunk, t.branch.is_empty()) else {
-			let why = if hunk.is_none() {
-				"hunk isn't installed"
-			} else if trunk.is_none() {
-				"the project has no trunk branch"
-			} else {
-				"the thread has no branch"
-			};
+		let (Some(trunk), false) = (&trunk, t.branch.is_empty()) else {
+			let why = if trunk.is_none() { "the project has no trunk branch" } else { "the thread has no branch" };
 			c.warn(Error::other(format!("no review for {}: {why}", t.title)));
 			c.reviewed.mark(&t.path, head.as_deref())?;
 			self.announce_done(thread, commits).await;
@@ -385,43 +378,24 @@ impl ReviewFlow {
 			set_phase(t, Phase::Review, "its task ended");
 			let running =
 				ReviewRunning { head, at, commits: covered, range: range.clone(), checks: None, skipped: None };
-			t.review = Some(ThreadReview {
-				pane: t.review.as_ref().and_then(|review| review.pane.clone()),
-				running: Some(running),
-				result: None,
-			});
+			t.review = Some(ThreadReview { running: Some(running), result: None });
 		});
-		if let Err(error) = self.begin_review(thread, hunk, &range, at).await {
+		if let Err(error) = self.begin_review(thread, &range, at).await {
 			c.warn(&error);
 			self.review_failed(thread, commits, &error).await?;
 		}
 		Ok(())
 	}
 
-	/// The review's start: the hunk pane beside the thread, the task's checks, then the review turn asked for.
-	async fn begin_review(&self, thread: &ThreadRef, hunk: &[String], range: &str, at: i64) -> Result<()> {
+	/// The review's start: a clean notes file, the task's checks, then the review turn asked for.
+	async fn begin_review(&self, thread: &ThreadRef, range: &str, at: i64) -> Result<()> {
 		let c = self.link.ctx();
 		// A sleeping thread's omp comes back before the review is asked of it (0676).
 		c.sleep.wake_thread(thread).await?;
 		let t = thread.get();
-		let known = t.review.as_ref().and_then(|review| review.pane.clone());
-		let open = match &known {
-			Some(pane) => c.herdr.panes().await?.iter().any(|open| open.pane_id == *pane),
-			None => false,
-		};
-		if !open {
-			// Started from the home folder first, the session daemon never holds the worktree open (F-02).
-			c.panes.ensure_hunk_daemon(hunk).await;
-			let split = SplitOptions {
-				command: hunk_diff_args(hunk, range),
-				cwd: t.path.clone(),
-				env: Some(c.panes.pane_env().clone()),
-				label: Some("review".to_owned()),
-				direction: Some(Direction::Right),
-				ratio: Some(0.5),
-			};
-			let pane = c.herdr.split_beside(&t.pane_id, &split).await?;
-			self.update_review(thread, at, |review| review.pane = Some(pane));
+		// A new review starts with no notes (0678): `review.json` holds the reviewed HEAD and what the reviewer hands in.
+		if let (Some(task), Ok(head)) = (t.task.as_ref(), head_of(&t.path).await) {
+			ReviewNotes { head, notes: Vec::new() }.write(&review_file(&t.project.id, &task.id))?;
 		}
 		// After "Approve and execute" the session is a new one without the plan: the plan recorded at approval (0453, 0540).
 		let from_session = match &t.session_path {
@@ -464,7 +438,7 @@ impl ReviewFlow {
 			),
 			facts: Some(facts),
 		};
-		c.bridge.prompt(&t.pane_id, c.bridge.seal(&review_prompt(hunk, range, &context)), Deliver::FollowUp).await?;
+		c.bridge.prompt(&t.pane_id, c.bridge.seal(&review_prompt(range, &context)), Deliver::FollowUp).await?;
 		Ok(())
 	}
 
@@ -522,6 +496,13 @@ impl ReviewFlow {
 			let merging = std::mem::take(&mut t.merge_after_review);
 			(merging, if merging { self.failed(t) } else { None })
 		});
+		// The thread's brief is built by code from the review's result (0678) before anything is said, so no slow step
+		// sits between the line to the boss and the `/handoff`; the toast opens it.
+		let extras = BriefExtras { check_ms: found.check_ms.clone(), gate_tail: Vec::new() };
+		let url = match (refresh_brief(&c, thread, &extras).await, c.options.briefs.as_ref()) {
+			(Some(id), Some(briefs)) => Some(briefs.url(&id)),
+			_ => None,
+		};
 		// A review `thread_finish` asked for after main moved (0454) is said once, with the merge's outcome (beta day P3).
 		if !merging {
 			c.events.thread(thread, &counted, ToastPriority::Normal, None).await;
@@ -536,7 +517,7 @@ impl ReviewFlow {
 			text: format!("{title} — {}", counted.replace(['«', '»'], "")),
 			pane_id: Some(pane_id),
 			priority: None,
-			url: None,
+			url,
 		});
 		c.status.report().await?;
 		if merging && failed.is_none() {
@@ -551,7 +532,7 @@ impl ReviewFlow {
 	/// the line it says.
 	fn record_result(&self, thread: &ThreadRef, found: &ReviewFound) -> Result<String> {
 		let c = self.link.ctx();
-		let ReviewFound { notes, blocking, tests, proof, checks, done_when } = found;
+		let ReviewFound { notes, blocking, tests, proof, checks, done_when, .. } = found;
 		let at = now_ms();
 		let (running, reported, path) = thread.with(|t| {
 			let reported = self.report_in(t);
@@ -564,11 +545,7 @@ impl ReviewFlow {
 				checks: checks.clone(),
 				at: Some(at),
 			};
-			t.review = Some(ThreadReview {
-				pane: t.review.as_ref().and_then(|review| review.pane.clone()),
-				running: None,
-				result: Some(result),
-			});
+			t.review = Some(ThreadReview { running: None, result: Some(result) });
 			show(t, ThreadState::Done);
 			(running, reported, t.path.clone())
 		});
@@ -616,8 +593,7 @@ impl ReviewFlow {
 		Ok(said.join(", "))
 	}
 
-	/// What the review turn found: hunk's notes since the review was asked for, counted with the blocking ones (a count
-	/// hunk can't give is said, not hidden, F-03); the tests checked against the turn's bash results (0453); the diff's
+	/// What the review turn found: the notes it handed in with `review_note`, counted with the blocking ones; the tests checked against the turn's bash results (0453); the diff's
 	/// size and test edits from git; and the checks: the runner's on the reviewed tree (its stored result when the turn
 	/// changed nothing), the project's check first, then each done_when (0453, 0540, 0542); without the project's check,
 	/// the test command the turn named and its `TESTS:` line, as the session's bash runs show them.
@@ -626,15 +602,14 @@ impl ReviewFlow {
 		let t = thread.get();
 		let running = t.review.as_ref().and_then(|review| review.running.clone());
 		let since = running.as_ref().map_or(0, |running| running.at);
-		let (mut notes, mut blocking) = (None, None);
-		let counted = match c.panes.hunk() {
-			Some(hunk) => list_comments(&hunk, &t.path, since, c.panes.hunk_port()).await,
-			None => Err(Error::other("hunk isn't installed")),
+		let (notes, blocking);
+		// The notes the reviewer handed in through `review_note` (0678): `review.json` is reset when a review starts, so
+		// every note in it is this review's; none written is none found.
+		let counts = match t.task.as_ref() {
+			Some(task) => ReviewNotes::read(&review_file(&t.project.id, &task.id)).counts(),
+			None => NoteCounts::default(),
 		};
-		match counted {
-			Ok(counts) => (notes, blocking) = (Some(counts.notes), Some(counts.blocking)),
-			Err(error) => c.warn(Error::other(format!("{}'s review notes weren't counted: {error}", t.title))),
-		}
+		(notes, blocking) = (Some(counts.notes), Some(counts.blocking));
 		let stats = match &t.session_path {
 			Some(session) => Some(c.sessions.lock().await.read(session, false).clone()),
 			None => None,
@@ -661,7 +636,11 @@ impl ReviewFlow {
 			.filter(|reported| reported.at >= since)
 			.and_then(|reported| reported.command.clone());
 		let checks = Self::checks_run(run.as_ref(), stats.as_ref(), named, &done_when, since);
-		Ok(ReviewFound { notes, blocking, tests, proof, checks, done_when })
+		let check_ms = run
+			.as_ref()
+			.map(|run| run.results.iter().map(|result| (result.spec.command.clone(), result.ms)).collect())
+			.unwrap_or_default();
+		Ok(ReviewFound { notes, blocking, tests, proof, checks, done_when, check_ms })
 	}
 
 	/// The checks a review reports with their exits: the runner's results (the project's check first, then each
@@ -887,6 +866,8 @@ impl ReviewFlow {
 		});
 		let what = format!("{said} in a row; it is stopped until you answer");
 		c.events.thread(&thread, &what, ToastPriority::Urgent, None).await;
+		// A stuck thread's brief says which gate and its last lines (0678).
+		refresh_brief(&c, &thread, &BriefExtras { check_ms: Vec::new(), gate_tail: breaker.tail.clone() }).await;
 	}
 
 	/// The last lines of the gate a tripped thread keeps failing (0678's stuck brief, today's news box); none when it

@@ -14,7 +14,7 @@
 # herdr's omp hook `extensions/herdr-omp-agent-state.ts`
 # (from the fork's own asset) and `secrets.yml`, written only when missing: his own strings never enter this repo.
 
-# One shared theme with herdr and Jocasta's canvas (0401).
+# One shared theme with herdr and Jocasta's briefs (0401).
 theme:
   dark: dark-tokyo-night
 

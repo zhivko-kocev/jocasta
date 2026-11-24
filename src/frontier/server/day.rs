@@ -195,7 +195,7 @@ pub trait DayHooks: Send + Sync {
 	/// Reads the sessions that may hold `day`'s messages in steps, letting the event loop run, so
 	/// `sessions_by_project` for that day then only parses what was appended.
 	fn prepare_sessions(&self, day: &str) -> BoxFuture<'_, Result<()>>;
-	/// Whether whiteboard and herdr answer (0429), for the dashboard's services row.
+	/// Whether herdr answers (0429, 0679), for the dashboard's services row.
 	fn services(&self) -> BoxFuture<'_, Result<Vec<ServiceHealth>>>;
 	/// The watched project a folder (a main checkout or a thread's worktree) belongs to, by name; `None` outside.
 	fn project_name(&self, cwd: &Path) -> Option<String>;

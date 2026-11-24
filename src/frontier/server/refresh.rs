@@ -173,8 +173,7 @@ impl Refresher {
 	}
 
 	/// Threads herdr runs that the service doesn't know yet: a pane in a linked worktree of a watched project that
-	/// Jocasta started omp in or that runs omp (CR-01), never a hunk pane or a plain shell. The thread's other pane in
-	/// its workspace that runs hunk is its review pane (CR-02), so a later task reuses it.
+	/// Jocasta started omp in or that runs omp (CR-01), never a plain shell.
 	pub async fn discover(&self, snapshot: &HerdrSnapshot) -> Result<()> {
 		self.inner.discover(snapshot).await
 	}
@@ -426,16 +425,6 @@ impl Inner {
 			stats = Some(c.sessions.lock().await.read(path, false).clone());
 		}
 		let plan = stats.as_ref().and_then(|stats| stats.plan_awaiting.clone()).filter(|plan| !plan.is_empty());
-		let review_pane = snapshot
-			.panes
-			.iter()
-			.find(|p| {
-				p.workspace_id == pane.workspace_id
-					&& p.pane_id != pane.pane_id
-					&& (p.label.as_deref() == Some("review")
-						|| p.label.as_deref().is_some_and(|label| label.to_lowercase().contains("hunk")))
-			})
-			.map(|p| p.pane_id.clone());
 		let task = find_task(&project.id, &checkout.top);
 		let head = git_out(&checkout.top, &["rev-parse", "HEAD"]).await?;
 		// Found meanwhile (a start, the next tick): that one stays.
@@ -479,8 +468,8 @@ impl Inner {
 			sent_back: stats.as_ref().map(|stats| stats.plan_sent_back as usize),
 			..ThreadPlan::default()
 		});
-		if review_pane.is_some() || result.is_some() {
-			thread.review = Some(ThreadReview { pane: review_pane, running: None, result });
+		if result.is_some() {
+			thread.review = Some(ThreadReview { running: None, result });
 		}
 		thread.session_path = session_path;
 		thread.task = task;

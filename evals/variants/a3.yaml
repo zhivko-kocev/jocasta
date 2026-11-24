@@ -1,5 +1,5 @@
 # Arm A3 (0482): A2 plus the review step as follow-up turns (E2), run with `omp -c -p`: the task-end review of
-# `hunk.ts` `reviewPrompt` without hunk (tests, then omp's reviewer in a fresh context), findings listed in the reply
+# the review prompt of the service's `review_prompt.rs` without `review_note` (tests, then omp's reviewer in a fresh context), findings listed in the reply
 # with their priority so the runner counts them (`findings`), then one turn that fixes the blocking ones. The reviewer
 # runs on the arms' model, not his `slow` role, so his own settings can't change the run (0488).
 extends: [a2]

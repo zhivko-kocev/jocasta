@@ -7,10 +7,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
-use serde_json::{Value, json};
+use serde_json::json;
 
 use super::*;
-use crate::frontier::server::whiteboard::WhiteboardRuntime;
 use crate::setup::markers::markers_dir;
 use crate::setup::setup::{CalendarStore, HerdrCheck, RunOutput, SetupDeps, SetupPaths, run_setup, setup_undo};
 use crate::shared::testing::{TempDir, TempJocasta, temp_dir, temp_jocasta};
@@ -24,10 +23,6 @@ fn put(path: &Path, text: &str) {
 
 fn read(path: &Path) -> String {
 	fs::read_to_string(path).unwrap()
-}
-
-fn read_json(path: &Path) -> Value {
-	serde_json::from_str(&read(path)).unwrap()
 }
 
 fn names(dir: &Path) -> Vec<String> {
@@ -139,10 +134,6 @@ impl Machine {
 			system_folders: None,
 			mise_config_dir: root.join("mise"),
 			jocasta_command: vec![PathBuf::from("C:\\Jocasta\\jocasta.exe")],
-			whiteboard: Some(WhiteboardRuntime {
-				node: PathBuf::from("C:\\Jocasta\\node\\node.exe"),
-				cli: PathBuf::from("C:\\Jocasta\\whiteboard\\cli.js"),
-			}),
 		};
 		// A machine set up by `jocasta setup` over his own omp `mcp.json` and `keybindings.yml`, with the calendar's
 		// secret stored.
@@ -301,7 +292,6 @@ async fn y_removes_what_install_and_setup_added_and_keeps_his_own_the_data_folde
 	assert_eq!(read(&agent.join("keybindings.yml")), HIS_KEYS);
 	assert!(m.setup.mise_config_dir.join("config.toml").exists());
 	let gone = [
-		m.setup.data_dir.join("home").join(".omp").join("mcp.json"),
 		agent.join("skills").join("mise"),
 		m.setup.mise_config_dir.join("conf.d").join("jocasta.toml"),
 		// The snapshot's files that had nothing of his before them.
@@ -419,44 +409,9 @@ async fn without_setups_markers_nothing_outside_jocastas_own_folders_is_listed_o
 		agent.join("skills").join("mise").join("SKILL.md"),
 		m.setup.mise_config_dir.join("conf.d").join("jocasta.toml"),
 		m.root.join("Fragments").join("jocasta").join("jocasta.json"),
-		m.setup.data_dir.join("home").join(".omp").join("mcp.json"),
 	] {
 		assert!(kept.exists(), "{} should stay", kept.display());
 	}
-}
-
-#[tokio::test]
-async fn an_mcp_entry_that_isnt_what_setup_wrote_is_kept_and_said() {
-	let m = Machine::new().await;
-	let boss = m.setup.data_dir.join("home").join(".omp").join("mcp.json");
-	let mut config = read_json(&boss);
-	config["mcpServers"]["whiteboard"]["args"] = json!(["mcp", "--his"]);
-	put(&boss, &config.to_string());
-	let Out { code, text, .. } = m.run(&["y", "n"]).await;
-	assert_eq!(code, 0);
-	let shown = boss.display();
-	assert!(
-		text.contains(&format!("- MCP server \"whiteboard\" in {shown} (each while it is still what setup wrote)"))
-	);
-	assert!(text.contains(&format!(
-		"{shown} has none of Jocasta's MCP servers left; kept \"whiteboard\" (not what setup wrote)"
-	)));
-	assert_eq!(read_json(&boss), config);
-}
-
-#[tokio::test]
-async fn an_mcp_entry_still_as_its_marker_recorded_goes_after_jocasta_moved() {
-	let mut m = Machine::new().await;
-	// Whiteboard moved since setup ran: the boss's entry differs from today's but still is what setup wrote.
-	m.setup.whiteboard = Some(WhiteboardRuntime {
-		node: PathBuf::from("D:\\Moved\\node.exe"),
-		cli: PathBuf::from("D:\\Moved\\whiteboard\\cli.js"),
-	});
-	let boss = m.setup.data_dir.join("home").join(".omp").join("mcp.json");
-	let Out { code, text, .. } = m.run(&["y", "n"]).await;
-	assert_eq!(code, 0);
-	assert!(text.contains(&format!("removed {}", boss.display())));
-	assert!(!boss.exists());
 }
 
 #[tokio::test]

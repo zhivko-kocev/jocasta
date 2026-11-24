@@ -197,9 +197,6 @@ src/frontier/server/places.rs forwarding Places.project_at
 src/frontier/server/places.rs forwarding Places.project_pane_at
 src/frontier/server/places.rs forwarding Places.removed
 src/frontier/server/places.rs undocumented-export Places.new
-src/frontier/server/plugin.rs undocumented-export AskPopups.new
-src/frontier/server/plugin.rs undocumented-export AskPopups.show
-src/frontier/server/popup_routes.rs flag-parameter Reporter.report(is_error)
 src/frontier/server/popups.rs forwarding Popups.get
 src/frontier/server/popups.rs undocumented-export CANCEL
 src/frontier/server/popups.rs undocumented-export DENY
@@ -229,7 +226,6 @@ src/frontier/server/server.rs forwarding JocastaServer.stopped
 src/frontier/server/service.rs forwarding JocastaService.boss_state
 src/frontier/server/service.rs forwarding JocastaService.busy_threads
 src/frontier/server/service.rs forwarding JocastaService.cut_paused_turns
-src/frontier/server/service.rs forwarding JocastaService.end_hunk_daemon
 src/frontier/server/service.rs forwarding JocastaService.end_thread_leftovers
 src/frontier/server/service.rs forwarding JocastaService.key_finish
 src/frontier/server/service.rs forwarding JocastaService.key_finishable
@@ -282,14 +278,10 @@ src/frontier/server/watcher.rs forwarding Watcher.scan
 src/frontier/server/watcher.rs undocumented-export WatcherOptions
 src/frontier/server/weekly_review.rs forwarding WeeklyReviews.running
 src/frontier/server/weekly_review.rs undocumented-export WeeklyReviews.new
-src/frontier/server/whiteboard.rs undocumented-export WORKER_PATH
-src/frontier/server/whiteboard.rs undocumented-export WhiteboardOptions
 src/frontier/server/worklog.rs undocumented-export GitPlaces.new
 src/frontier/server/worklog.rs undocumented-export GitPlaces.of
 src/frontier/server/worklog.rs undocumented-export worklog_path
-src/frontier/today/main.rs flag-parameter TodayProgram.step(down)
 src/frontier/tui.rs forwarding Pane.end
-src/mcp/server.rs flag-parameter run_mcp_stdio(boss)
 src/setup/diagnose.rs undocumented-export DiagnoseDeps
 src/setup/diff.rs undocumented-export line_diff
 src/setup/markers.rs undocumented-export write_marker

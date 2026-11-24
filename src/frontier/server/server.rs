@@ -2,7 +2,7 @@
 //! a free port for this run when that one is busy; `<data>/jocasta-service.json` with `port`, `token` and `pid`. Every
 //! API call carries the token as a bearer (`jocasta mcp`, bare `jocasta`, the benchmark's clients); the browser's pages carry
 //! a separate page token as a per-port cookie, set from a one-time launch code (`/?t=<code>`, SEC-NET-4, SEC-LOC-11). It
-//! serves the MCP tools, the state feed, his questions and whiteboard's canvas page (0393), and runs the herdr-backed
+//! serves the bridge's pipe, the state feed, his questions and the briefs (0678), and runs the herdr-backed
 //! service. A start that fails stops what it had started, its bridge included (SRV-A-2).
 
 use std::fmt::Write as _;
@@ -16,9 +16,9 @@ use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use serde_json::Value;
 
-use crate::frontier::protocol::{
-	ClientMessage, PluginAction, PopupView, ServerMessage, ServiceHealth, ServiceName, ServiceState, TOKEN_QUERY,
-};
+use crate::frontier::brief::BriefLinks;
+use crate::frontier::brief::routes::{BriefActions, BriefRoutes, CONTENT_POLICY};
+use crate::frontier::protocol::{ClientMessage, PluginAction, PopupView, ServerMessage, TOKEN_QUERY};
 use crate::frontier::server::allow::{Answer, CONFIRM_WAIT_MS, Confirm, Confirmation};
 use crate::frontier::server::asker::{Ask, Show, asker};
 use crate::frontier::server::bridge::{Bridge, BridgeService, Secrets};
@@ -29,18 +29,15 @@ use crate::frontier::server::feed::{FeedService, Guard, Reply, feed_route, feed_
 use crate::frontier::server::health_route::health_route;
 use crate::frontier::server::herdr::{Herdr, HerdrOptions, Note, connect_herdr};
 use crate::frontier::server::native::{Native, NativeServer};
-use crate::frontier::server::page_routes::{LaunchCodes, PageParts, PageResponder, page_responder, whiteboard_reviews};
+use crate::frontier::server::page_routes::{LaunchCodes, PageParts, PageResponder, page_responder};
 use crate::frontier::server::phone::{Phone, PhoneOptions, Timing};
 use crate::frontier::server::popups::{ALLOW, AnswerTaken, Popup, Popups, allow_question};
 use crate::frontier::server::routes::{Route, Served, ServerHandle, listen};
-use crate::frontier::server::service::{Changed, FindReview, Heal, JocastaService, OpenReview, ServiceOptions};
+use crate::frontier::server::service::{Changed, Heal, JocastaService, ServiceOptions};
 use crate::frontier::server::stop_sequence::{
 	StopBounds, StopParts, StopRun, StopService, StopStep, StopWhen, Stopper, stop_steps, stopper, undo_start,
 };
 use crate::frontier::server::thread_keys::{ActionService, KeyParts, ThreadKeys};
-use crate::frontier::server::whiteboard::{
-	ServiceStatus, Whiteboard, WhiteboardOptions, is_stage_file, start_whiteboard,
-};
 use crate::shared::credentials::{calendar_secret, take_calendar_env};
 use crate::shared::errors::Result;
 use crate::shared::herdr_session::herdr_session;
@@ -77,10 +74,6 @@ pub type OnQuestion = Arc<dyn Fn(&Popup) + Send + Sync>;
 pub struct ServerOptions {
 	/// How omp starts: `["omp"]` by default.
 	pub omp: Option<Vec<String>>,
-	/// How hunk starts; `Some(None)` is none installed.
-	pub hunk: Option<Option<Vec<String>>>,
-	/// The loopback port of Jocasta's own hunk session daemon.
-	pub hunk_port: Option<u16>,
 	/// The boss pane's argv.
 	pub boss_command: Option<Vec<String>>,
 	/// A prompt file every project and thread pane appends; `Some(None)` appends nothing.
@@ -97,10 +90,6 @@ pub struct ServerOptions {
 	pub pane_check_wait_ms: Option<i64>,
 	/// How often panes, sidebar tokens and the HUD are refreshed.
 	pub refresh_ms: Option<i64>,
-	/// A whiteboard review by id; overrides whiteboard's own.
-	pub find_review: Option<FindReview>,
-	/// Opens a whiteboard review in his browser; overrides whiteboard's own.
-	pub open_review: Option<OpenReview>,
 	/// mise's argv; `Some(None)` runs none.
 	pub mise: Option<Option<Vec<String>>>,
 	/// How long the weekly big-picture review may run (0470).
@@ -135,9 +124,8 @@ pub struct ServerOptions {
 	pub day: Option<DayOptions>,
 	/// The port to try first (test seam): `service.port`, else 47400 (0358).
 	pub port: Option<u16>,
-	/// whiteboard's server (0393): started from the install or the built clone by default (`None`); `Some(None)` for
-	/// none (tests).
-	pub whiteboard: Option<Option<WhiteboardOptions>>,
+	/// How a brief reaches his browser (test seam): a page of this server opened with a fresh launch code by default.
+	pub briefs: Option<Arc<dyn BriefLinks>>,
 	/// Shows a question to him (test seam): it gets the question's one-time code, and the shell shows none.
 	pub on_question: Option<OnQuestion>,
 	/// herdr's client shells (fork plan phase 5): the dock beside the boss, the Agents view, his questions and his
@@ -147,7 +135,7 @@ pub struct ServerOptions {
 	/// threads are at work, so the close question has somewhere to show. A new Windows Terminal window running
 	/// `jocasta` by default (test seam).
 	pub reattach: Option<Reattach>,
-	/// Each stop step's bound in ms (test seam): service 30 s, herdr 15 s, whiteboard 5 s.
+	/// Each stop step's bound in ms (test seam): service 30 s, herdr 15 s.
 	pub stop_bounds_ms: StopBounds,
 }
 
@@ -155,8 +143,6 @@ impl ServerOptions {
 	/// The options that pass through to the service: all but the server's own.
 	fn pass_on(&mut self, service: &mut ServiceOptions) {
 		service.omp = self.omp.take();
-		service.hunk = self.hunk.take();
-		service.hunk_port = self.hunk_port;
 		service.boss_command = self.boss_command.take();
 		service.pane_prompt = self.pane_prompt.take();
 		service.gh = self.gh.take();
@@ -193,8 +179,6 @@ pub struct JocastaServer {
 	/// The bridge (0675): where the panes' omps and the CLI connect.
 	pub bridge: Bridge,
 	pub service: Arc<JocastaService>,
-	/// whiteboard's server, the service's child (0393); `None` when the server was started without it.
-	pub whiteboard: Option<Arc<Whiteboard>>,
 	inner: Arc<Inner>,
 }
 
@@ -209,10 +193,10 @@ struct Inner {
 }
 
 impl JocastaServer {
-	/// A browser page's URL, `http://127.0.0.1:<port>/?t=<code>`, with a fresh one-time launch code each time it is
-	/// read (SEC-LOC-11): used once within a minute, it becomes the page cookie.
-	pub fn url(&self) -> String {
-		page_url(self.port, &self.inner.codes, "")
+	/// A page of this server by its path, `http://127.0.0.1:<port><path>?t=<code>`, with a fresh one-time launch code
+	/// each time it is read (SEC-LOC-11): used once within a minute, it becomes the page cookie and shows the page.
+	pub fn page_url(&self, path: &str) -> String {
+		page_url(self.port, &self.inner.codes, path)
 	}
 
 	/// The service closes and `jocasta-service.json` goes away; herdr and every pane keep running (a failed start).
@@ -302,9 +286,9 @@ impl NativeServer for JocastaServer {
 	}
 }
 
-/// A page URL with a fresh launch code; `query` goes after it (`&review=…`).
-fn page_url(port: u16, codes: &LaunchCodes, query: &str) -> String {
-	format!("http://127.0.0.1:{port}/?{TOKEN_QUERY}={}{query}", codes.mint())
+/// A page URL with a fresh launch code (`http://127.0.0.1:<port><path>?t=<code>`).
+fn page_url(port: u16, codes: &LaunchCodes, path: &str) -> String {
+	format!("http://127.0.0.1:{port}{path}?{TOKEN_QUERY}={}", codes.mint())
 }
 
 /// 256 random bits as hex.
@@ -348,74 +332,19 @@ fn allow_box(question: Ask) -> Confirm {
 	})
 }
 
-/// The dashboard's services row (0429, 0444): whiteboard, up or why not.
-async fn services_row(whiteboard: Option<Arc<Whiteboard>>) -> Vec<ServiceHealth> {
-	let status = match whiteboard {
-		Some(whiteboard) => whiteboard.check().await,
-		None => ServiceStatus { state: ServiceState::Down, note: Some("off in this run".to_owned()) },
-	};
-	vec![ServiceHealth { name: ServiceName::Whiteboard, state: status.state, note: status.note }]
-}
-
-/// The canvas page's Content-Security-Policy (0368, 0552): scripts, styles, workers and fetches come only from this
-/// server, plus whiteboard's server on loopback (0393), which the canvas fetches from and shows images of.
-/// `wasm-unsafe-eval` lets the canvas's router (libavoid) compile its wasm, and `unsafe-eval` lets its embind glue build
-/// functions from strings, so whiteboard's software maps route (0493); inline scripts and other origins stay blocked.
-/// Inline styles stay allowed: the canvas and Monaco set `style` attributes, which take no nonce, and a style can't run
-/// code. Monaco's worker is this server's (0411).
-pub fn content_policy(port: u16, whiteboard: Option<&str>) -> String {
-	let other = whiteboard.map_or_else(String::new, |origin| format!(" {origin}"));
-	[
-		"default-src 'self'".to_owned(),
-		"script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'".to_owned(),
-		"style-src 'self' 'unsafe-inline'".to_owned(),
-		format!("img-src 'self' data: blob:{other}"),
-		"font-src 'self' data:".to_owned(),
-		"media-src 'self' data: blob:".to_owned(),
-		format!("connect-src 'self' ws://127.0.0.1:{port}{other}"),
-		"worker-src 'self'".to_owned(),
-		"object-src 'none'".to_owned(),
-		"base-uri 'none'".to_owned(),
-		"form-action 'none'".to_owned(),
-		"frame-ancestors 'none'".to_owned(),
-	]
-	.join("; ")
-}
-
 fn set_header(response: &mut Response, name: &'static str, value: &str) {
 	if let Ok(value) = HeaderValue::from_str(value) {
 		response.headers_mut().insert(HeaderName::from_static(name), value);
 	}
 }
 
-/// Every response carries the content policy, and the page runs cross-origin isolated (0354): COOP/COEP, and its own
-/// files say they may be embedded only by this origin.
-fn guarded(mut response: Response, port: u16, whiteboard: Option<&str>) -> Response {
-	set_header(&mut response, "content-security-policy", &content_policy(port, whiteboard));
-	set_header(&mut response, "cross-origin-opener-policy", "same-origin");
-	set_header(&mut response, "cross-origin-embedder-policy", "require-corp");
-	set_header(&mut response, "cross-origin-resource-policy", "same-origin");
+/// Every page response carries the briefs' content policy (0678): scripts and styles come only from this server and
+/// nothing is framed or posted elsewhere.
+pub fn guarded(mut response: Response) -> Response {
+	set_header(&mut response, "content-security-policy", CONTENT_POLICY);
+	set_header(&mut response, "x-content-type-options", "nosniff");
+	set_header(&mut response, "referrer-policy", "no-referrer");
 	response
-}
-
-/// The animation stage's own headers (0615). The canvas plays an animation in a sandboxed frame, an opaque origin that
-/// carries its own meta policy, so the page's policy must not apply to it (its inline boot script and `blob:` runtime
-/// would be blocked, and `frame-ancestors 'none'` forbids the frame itself); under the page's COEP its resource policy
-/// must be cross-origin for the frame to load it. Only the stage file gets this; everything else goes through `guarded`.
-fn guarded_stage(mut response: Response) -> Response {
-	set_header(&mut response, "cross-origin-opener-policy", "same-origin");
-	set_header(&mut response, "cross-origin-embedder-policy", "require-corp");
-	set_header(&mut response, "cross-origin-resource-policy", "cross-origin");
-	response
-}
-
-/// A page response with its headers (0615): the stage file `guarded_stage`'s, every other response `guarded`'s.
-pub fn page_guarded(served: Response, pathname: &str, port: u16, whiteboard: Option<&str>) -> Response {
-	if served.status().is_success() && is_stage_file(pathname) {
-		guarded_stage(served)
-	} else {
-		guarded(served, port, whiteboard)
-	}
 }
 
 /// What a failed start undoes, each registered as its resource starts, run newest first (SRV-A-2).
@@ -515,30 +444,19 @@ fn build_service(
 	options: &mut ServerOptions,
 	herdr: &Arc<dyn Herdr>,
 	broadcast: &Broadcast,
-	whiteboard: Option<&Arc<Whiteboard>>,
-	page_open: Arc<dyn Fn(&str) + Send + Sync>,
+	briefs: Arc<dyn BriefLinks>,
 ) -> Result<(Arc<JocastaService>, Questions)> {
 	let shell = options.shell.clone();
 	let asking = questions(options, shell.as_ref());
 	let mut service = ServiceOptions::new(Arc::clone(herdr), Arc::clone(broadcast));
-	let (find_review, open_review) = (options.find_review.take(), options.open_review.take());
+	let given = options.briefs.take();
 	let confirm = options.confirm.take();
 	options.pass_on(&mut service);
 	service.dock = shell.clone().map(|shell| heal_of(herdr, shell));
 	service.herdr_changed = shell.map(changes_of);
 	service.confirm = Some(confirm.unwrap_or_else(|| allow_box(Arc::clone(&asking.question))));
 	service.ask = Some(Arc::clone(&asking.question));
-	let row = whiteboard.cloned();
-	service.services =
-		Some(Arc::new(move || -> BoxFuture<'static, Vec<ServiceHealth>> { services_row(row.clone()).boxed() }));
-	// The boss's `show` on this server's canvas page (0552), unless the test's.
-	if let Some(whiteboard) = whiteboard {
-		let reviews = whiteboard_reviews(Arc::clone(whiteboard), page_open);
-		service.find_review = Some(reviews.find_review);
-		service.open_review = Some(reviews.open_review);
-	}
-	service.find_review = find_review.or(service.find_review);
-	service.open_review = open_review.or(service.open_review);
+	service.briefs = Some(given.unwrap_or(briefs));
 	let catalog: SharedCatalog = Arc::new(Mutex::new(open_catalog()?));
 	Ok((JocastaService::new(catalog, service)?, asking))
 }
@@ -550,7 +468,6 @@ struct Rig<'a> {
 	session: &'a str,
 	service: &'a Arc<JocastaService>,
 	asking: &'a Questions,
-	whiteboard: Option<&'a Arc<Whiteboard>>,
 	broadcast: &'a Broadcast,
 	phone: Option<&'a Arc<Phone>>,
 }
@@ -593,7 +510,7 @@ fn stopper_of(
 ) -> Arc<Stopper> {
 	let popups = Arc::clone(&rig.asking.popups);
 	let (herdr, session) = (Arc::clone(rig.herdr), rig.session.to_owned());
-	let (service, whiteboard) = (Arc::clone(rig.service), rig.whiteboard.cloned());
+	let service = Arc::clone(rig.service);
 	let (broadcast, listening) = (Arc::clone(rig.broadcast), Arc::clone(listening));
 	let phone = rig.phone.cloned();
 	Arc::new(stopper(move |mut extra_stops| {
@@ -618,7 +535,6 @@ fn stopper_of(
 			session: session.clone(),
 			service: Arc::clone(&service) as Arc<dyn StopService>,
 			extra_stops,
-			whiteboard: whiteboard.clone(),
 			bridge: Arc::clone(&bridge),
 			server,
 			bounds,
@@ -685,49 +601,32 @@ fn undo_herdr(herdr: &Arc<dyn Herdr>) -> StopStep {
 	})
 }
 
-/// whiteboard's server, the service's child (0393): it starts beside the service and stops with Jocasta.
-fn start_child_whiteboard(options: Option<Option<WhiteboardOptions>>, undo: &mut Undo) -> Option<Arc<Whiteboard>> {
-	let given = match options {
-		None => WhiteboardOptions::default(),
-		Some(None) => return None,
-		Some(Some(given)) => given,
-	};
-	let whiteboard = Arc::new(start_whiteboard(given));
-	let stopping = Arc::clone(&whiteboard);
-	undo.push(StopStep::new(
-		"whiteboard",
-		Arc::new(move || {
-			let whiteboard = Arc::clone(&stopping);
-			Box::pin(async move {
-				whiteboard.stop().await;
-				Ok(())
-			})
-		}),
-	));
-	Some(whiteboard)
+/// How a brief reaches his browser (0678): its page on this server, opened with a fresh launch code.
+struct ServerBriefs {
+	port: Arc<AtomicU16>,
+	codes: Arc<LaunchCodes>,
 }
 
-/// Opens a page of this server in his browser (the boss's `show`, 0552).
-fn page_opener(port: &Arc<AtomicU16>, codes: &Arc<LaunchCodes>) -> Arc<dyn Fn(&str) + Send + Sync> {
-	let (port, codes) = (Arc::clone(port), Arc::clone(codes));
-	Arc::new(move |query| {
-		if let Err(error) = open_in_browser(&page_url(port.load(Ordering::SeqCst), &codes, query)) {
-			log(LogLevel::Warn, "server", &format!("couldn't open the page: {error}"), None);
+impl BriefLinks for ServerBriefs {
+	fn url(&self, id: &str) -> String {
+		format!("http://127.0.0.1:{}/brief/{id}", self.port.load(Ordering::SeqCst))
+	}
+
+	fn open(&self, id: &str) {
+		let url = page_url(self.port.load(Ordering::SeqCst), &self.codes, &format!("/brief/{id}"));
+		if let Err(error) = open_in_browser(&url) {
+			log(LogLevel::Warn, "server", &format!("couldn't open the brief: {error}"), None);
 		}
-	})
+	}
 }
 
 /// What listens: the API's routes, then every page with the content policy on it.
-fn served(routes: Vec<Box<dyn Route>>, pages: PageResponder, whiteboard: Option<Arc<Whiteboard>>) -> Served {
+fn served(routes: Vec<Box<dyn Route>>, pages: PageResponder) -> Served {
 	Served {
 		routes,
-		page: Box::new(move |request, url, at| {
-			let (pages, whiteboard) = (Arc::clone(&pages), whiteboard.clone());
-			Box::pin(async move {
-				let pathname = url.path().to_owned();
-				let served = pages(request, url).await;
-				page_guarded(served, &pathname, at, whiteboard.map(|whiteboard| whiteboard.origin()).as_deref())
-			})
+		page: Box::new(move |request, url, _at| {
+			let pages = Arc::clone(&pages);
+			Box::pin(async move { guarded(pages(request, url).await) })
 		}),
 	}
 }
@@ -767,7 +666,7 @@ fn undo_server(handle: &ServerHandle) -> StopStep {
 fn pages_of(
 	tokens: &Tokens,
 	parts: (&Arc<LaunchCodes>, &Arc<AtomicU16>),
-	whiteboard: Option<Arc<Whiteboard>>,
+	briefs: BriefRoutes,
 	health: Box<dyn Fn() -> bool + Send + Sync>,
 ) -> PageResponder {
 	let (codes, port) = (Arc::clone(parts.0), Arc::clone(parts.1));
@@ -776,7 +675,7 @@ fn pages_of(
 		page_token: tokens.page.clone(),
 		codes,
 		port: Arc::new(move || port.load(Ordering::SeqCst)),
-		whiteboard,
+		briefs,
 		bearer_routes: vec![Box::new(health_route(&tokens.api, health))],
 	})
 }
@@ -805,12 +704,11 @@ async fn start_rest(
 		None => connect_session(&session, options.herdr_socket.take()).await?,
 	};
 	undo.push(undo_herdr(&herdr));
-	let whiteboard = start_child_whiteboard(options.whiteboard.take(), undo);
-	let port = Arc::new(AtomicU16::new(0));
-	let codes = Arc::new(LaunchCodes::default());
+	let briefs_of_server =
+		Arc::new(ServerBriefs { port: Arc::new(AtomicU16::new(0)), codes: Arc::new(LaunchCodes::default()) });
+	let (port, codes) = (Arc::clone(&briefs_of_server.port), Arc::clone(&briefs_of_server.codes));
 	let waiting_ms = options.confirm_wait_ms.unwrap_or(CONFIRM_WAIT_MS);
-	let opener = page_opener(&port, &codes);
-	let (service, asking) = build_service(options, &herdr, &broadcast, whiteboard.as_ref(), opener)?;
+	let (service, asking) = build_service(options, &herdr, &broadcast, briefs_of_server)?;
 	// Its stop closes what it opened (the catalog, the day's stores) and herdr's connection.
 	undo.push(undo_service(&service));
 	let phone = start_phone(&service, &asking.popups);
@@ -823,7 +721,6 @@ async fn start_rest(
 		session: &session,
 		service: &service,
 		asking: &asking,
-		whiteboard: whiteboard.as_ref(),
 		broadcast: &broadcast,
 		phone: phone.as_ref(),
 	};
@@ -831,11 +728,19 @@ async fn start_rest(
 	let close = close_of(&rig, &stops, options.reattach.take());
 	let mut routes = routes_of(&rig, &close);
 	let closing = Arc::clone(&stops);
-	let pages = pages_of(&tokens, (&codes, &port), whiteboard.clone(), Box::new(move || closing.stopping()));
-	let guard: Guard = Arc::new(|response, port| guarded(response, port, None));
+	let actions = Arc::clone(&service) as Arc<dyn BriefActions>;
+	let brief_routes = BriefRoutes::new(
+		Arc::new({
+			let port = Arc::clone(&port);
+			move || port.load(Ordering::SeqCst)
+		}),
+		actions,
+	);
+	let pages = pages_of(&tokens, (&codes, &port), brief_routes, Box::new(move || closing.stopping()));
+	let guard: Guard = Arc::new(|response, _port| guarded(response));
 	let feed = feed_socket(Arc::clone(&service) as Arc<dyn FeedService>);
 	routes.push(Box::new(feed_route(&tokens.api, guard, feed)));
-	let handle = listen(options.port.unwrap_or_else(configured_port), served(routes, pages, whiteboard.clone()))?;
+	let handle = listen(options.port.unwrap_or_else(configured_port), served(routes, pages))?;
 	*locked(&listening) = Some(handle.clone());
 	undo.push(undo_server(&handle));
 	port.store(handle.port(), Ordering::SeqCst);
@@ -861,7 +766,6 @@ async fn start_rest(
 		token: tokens.api,
 		bridge,
 		service,
-		whiteboard,
 		inner: Arc::new(Inner { codes, stops, close, question: asking.question, popups: asking.popups, keys, herdr }),
 	})
 }
@@ -877,7 +781,3 @@ mod shutdown_tests;
 #[cfg(test)]
 #[path = "server_popups_tests.rs"]
 mod server_popups_tests;
-
-#[cfg(test)]
-#[path = "server_whiteboard_tests.rs"]
-mod server_whiteboard_tests;

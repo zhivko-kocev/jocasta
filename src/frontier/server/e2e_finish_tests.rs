@@ -1,5 +1,5 @@
 //! The cases of `test/frontier/server/service-finish.test.ts`, run on the real server (wave 12): `thread_finish` by merge
-//! and by PR, a restart's reuse of the hunk pane, events raised together, a lost idle event, the worktree's removal
+//! and by PR, events raised together, a lost idle event, the worktree's removal
 //! once nothing holds it, a review that can't count notes, the feed's text, the server before its service, and
 //! yesterday's worklog.
 
@@ -16,9 +16,10 @@ use serde_json::{Value, json};
 
 use crate::frontier::protocol::ServerMessage;
 use crate::frontier::server::day::DayOptions;
+use crate::frontier::server::helpers::review_asked;
 use crate::frontier::server::helpers::{
 	Page, TestServer, ThreadOptions, boss_pane, call, commit_in, demo_project, push_state, review, sh,
-	start_test_server_with, start_thread, task_dir_of, until, use_hunk_daemon, with_server,
+	start_test_server_with, start_thread, task_dir_of, until, with_server,
 };
 use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
 use crate::frontier::server::herdr::{AgentState, Herdr, HerdrError, TabSpec};
@@ -152,16 +153,6 @@ fn make_runnable(path: &Path) {
 
 #[cfg(not(unix))]
 fn make_runnable(_path: &Path) {}
-
-/// A hunk that always fails (the TypeScript's `no-such-hunk.ts`): its notes can't be counted.
-fn broken_hunk(dir: &Path) -> Vec<String> {
-	let (name, text) =
-		if cfg!(windows) { ("hunk.cmd", "@echo off\r\nexit /b 1\r\n") } else { ("hunk", "#!/bin/sh\nexit 1\n") };
-	let path = dir.join(name);
-	fs::write(&path, text).unwrap();
-	make_runnable(&path);
-	vec![path_text(&path)]
-}
 
 // ---- processes holding a folder ----
 
@@ -432,15 +423,13 @@ async fn thread_finish_pr_gh_missing_or_logged_out_is_a_clear_refusal_else_the_t
 // ---- a restart, events together, a lost event ----
 
 #[tokio::test(flavor = "multi_thread")]
-async fn after_a_service_restart_the_next_task_reuses_the_threads_hunk_pane_a_hunk_pane_or_a_plain_shell_in_a_worktree_is_never_a_thread_cr_01_cr_02_f_13()
+async fn after_a_service_restart_the_next_task_reviews_again_a_plain_shell_in_a_worktree_is_never_a_thread_cr_01_cr_02_f_13()
  {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
 	let herdr = Arc::new(FakeHerdr::new());
 	let range = "main...feature/readme-line";
-	let hunk = use_hunk_daemon().await;
-	let mut first = wait_options();
-	hunk.apply(&mut first);
+	let first = wait_options();
 	let (pane, path) = {
 		let server = start_test_server_with(herdr.clone(), first).await;
 		let outcome = std::panic::AssertUnwindSafe(async {
@@ -448,7 +437,7 @@ async fn after_a_service_restart_the_next_task_reuses_the_threads_hunk_pane_a_hu
 			herdr.set_state(&started.pane_id, AgentState::Working, None, true);
 			commit_in(&started.path, "demo\nA line.\n", "Add a README line");
 			herdr.set_state(&started.pane_id, AgentState::Idle, None, true);
-			until(|| herdr.of("splitBeside").len() == 1).await;
+			until(|| review_asked(&herdr) == 1).await;
 			herdr.set_state(&started.pane_id, AgentState::Working, None, true);
 			herdr.set_state(&started.pane_id, AgentState::Idle, None, true);
 			until(|| herdr.of("prompt").iter().any(|args| args[1] == json!(HANDOFF_PROMPT))).await;
@@ -464,21 +453,19 @@ async fn after_a_service_restart_the_next_task_reuses_the_threads_hunk_pane_a_hu
 		herdr.state().pane_list.iter().find(|p| p.pane_id == pane).map(|p| p.workspace_id.clone()).unwrap();
 	let tab = TabSpec { title: "shell".to_owned(), cwd: path.clone(), command: vec!["pwsh".to_owned()], env: None };
 	let shell = herdr.create_tab(&workspace_id, &tab).await.unwrap();
-	let mut second = ServerOptions::default();
-	hunk.apply(&mut second);
+	let second = ServerOptions::default();
 	with_herdr(herdr.clone(), second, |server| {
 		let herdr = herdr.clone();
 		async move {
 			assert_eq!(status(&server).await.split('\n').count(), 1);
-			// The next task: the same hunk pane, no second one.
+			// The next task is reviewed again.
 			herdr.set_state(&pane, AgentState::Working, None, true);
 			commit_in(&path, "demo\nA line.\nAnother.\n", "Another line");
 			herdr.set_state(&pane, AgentState::Idle, None, true);
 			let asked = review(range, Some(crate::frontier::server::helpers::BRIEF));
 			until(|| herdr.of("prompt").iter().filter(|args| args[1] == json!(asked)).count() == 2).await;
-			assert_eq!(herdr.of("splitBeside").len(), 1);
 
-			// Its omp pane closes: the hunk pane and the shell left in the workspace aren't adopted as a thread.
+			// Its omp pane closes: the shell left in the workspace aren't adopted as a thread.
 			herdr.state().pane_list.retain(|p| p.pane_id != pane);
 			server.service.refresh().await;
 			server.service.refresh().await;
@@ -540,9 +527,7 @@ async fn a_task_end_whose_idle_event_herdr_lost_is_caught_on_the_refresh_tick_on
  {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
-	let hunk = use_hunk_daemon().await;
-	let mut options = wait_options();
-	hunk.apply(&mut options);
+	let options = wait_options();
 	with_server(options, |server| async move {
 		let started = start_thread(&server, ThreadOptions::default()).await;
 		server.herdr.set_state(&started.pane_id, AgentState::Working, None, true);
@@ -551,7 +536,7 @@ async fn a_task_end_whose_idle_event_herdr_lost_is_caught_on_the_refresh_tick_on
 		// herdr's idle event never arrives.
 		server.herdr.set_state(&started.pane_id, AgentState::Idle, None, false);
 		server.service.refresh().await;
-		until(|| server.herdr.of("splitBeside").len() == 1).await;
+		until(|| review_asked(&server.herdr) == 1).await;
 		let asked = review("main...feature/readme-line", Some(crate::frontier::server::helpers::BRIEF));
 		// The review's prompt follows its pane's split: once there, it is there once.
 		until(|| count_of(&server, &asked) >= 1).await;
@@ -636,33 +621,6 @@ async fn thread_finish_merge_removes_the_worktree_only_once_no_process_works_in_
 	.await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn a_review_whose_notes_hunk_cant_count_says_so_instead_of_hiding_it_f_03() {
-	let j = temp_jocasta();
-	demo_project(j.root(), "demo").await;
-	let broken_dir = temp_dir("e2e-finish-broken-hunk");
-	let hunk = use_hunk_daemon().await;
-	let options = ServerOptions {
-		hunk: Some(Some(broken_hunk(broken_dir.path()))),
-		hunk_port: Some(hunk.hunk_port),
-		..wait_options()
-	};
-	with_server(options, |server| async move {
-		let started = start_thread(&server, ThreadOptions::default()).await;
-		let boss = boss_pane(&server.herdr).unwrap();
-		server.herdr.set_state(&boss, AgentState::Idle, None, true);
-		server.herdr.set_state(&started.pane_id, AgentState::Working, None, true);
-		commit_in(&started.path, "demo\nA line.\n", "Add a README line");
-		server.herdr.set_state(&started.pane_id, AgentState::Idle, None, true);
-		until(|| server.herdr.of("splitBeside").len() == 1).await;
-		server.herdr.set_state(&started.pane_id, AgentState::Working, None, true);
-		server.herdr.set_state(&started.pane_id, AgentState::Idle, None, true);
-		let line = "[event] demo/Readme line — done and reviewed: 1 new commit «Add a README line», +1/−0 in 1 file, no test files changed, notes not counted, tests unverified, no report";
-		until(|| prompts_to(&server, &boss).iter().any(|text| text == line)).await;
-	})
-	.await;
-}
-
 // ---- the feed, the start, the worklog ----
 
 #[tokio::test(flavor = "multi_thread")]
@@ -707,7 +665,6 @@ async fn the_server_listens_and_answers_the_page_before_the_service_has_started_
 		day: Some(DayOptions { pollers: Some(false), ..DayOptions::default() }),
 		port: Some(0),
 		sessions_dir: Some(data_dir().join("omp-sessions")),
-		whiteboard: Some(None),
 		pane_prompt: Some(None),
 		refresh_ms: Some(60_000),
 		mise: Some(None),

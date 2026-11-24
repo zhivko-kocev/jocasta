@@ -8,7 +8,7 @@
 resume_agents_on_restore = false
 
 [theme]
-# One theme with omp's `dark-tokyo-night` and Jocasta's canvas (0401).
+# One theme with omp's `dark-tokyo-night` and Jocasta's briefs (0401).
 name = "tokyo-night"
 
 [keys]

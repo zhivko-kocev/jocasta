@@ -15,7 +15,7 @@ flowchart LR
   A[You ask the boss,<br/>or press Ctrl+B Alt+N] --> B[New branch and worktree,<br/>omp in plan mode]
   B --> C{You approve<br/>the plan}
   C --> D[The thread works,<br/>runs the project's checks]
-  D --> E[Review: hunk opens<br/>with the reviewer's notes]
+  D --> E[Review: a brief opens<br/>with the reviewer's notes]
   E --> F{Finish: merge<br/>or open a PR}
   F --> G[Worktree removed,<br/>the thread lands]
 ```
@@ -26,13 +26,13 @@ While threads work, you keep talking to the boss. It tells you when one needs yo
 
 - **One boss, many threads.** The boss starts, watches and steers threads; it never edits your code itself. Threads run in parallel, each isolated on its own branch.
 - **Plans before code.** Every thread starts in omp's plan mode and waits for your approval. A thread can carry `done_when` commands, and its review runs them.
-- **Reviews you can trust.** When a thread finishes, [hunk](https://github.com/modem-dev/hunk) opens its diff beside the reviewer's notes. A review fails if the change weakens the tests (a removed test, fewer assertions, an added skip). Design findings are judged against a shipped code-quality rubric.
+- **Reviews you can trust.** When a thread finishes, a brief opens in your browser with its diff, its checks and the reviewer's notes, each note machine-checked against the committed code. A review fails if the change weakens the tests (a removed test, fewer assertions, an added skip). Design findings are judged against a shipped code-quality rubric.
 - **`today`.** Beside the boss: what needs you, what's underway, what landed today, your calendar, your model quota and today's spend, your notes, and optional weather and news.
 - **Cost in view.** Each thread shows its spend, its peak context, its cache hits and its compactions. A thread warns you at $50, and the tab bar shows today's total.
 - **Checks once per tree.** A project's checks run once for each git tree state and the result is reused, so an unchanged tree is never tested twice.
 - **Guard rails.** A shipped rule list stops or asks about destructive commands (force pushes, `reset --hard`, recursive deletes, reading tokens). Merges, PRs and other irreversible steps need a code that you type into a question drawn over your terminal. A push to `main` asks you once per repo.
 - **Memory across sessions.** `history_search` lets every agent search past sessions of the same project.
-- **Diagrams.** The boss can draw diagrams and code walkthroughs with [whiteboard](https://github.com/devdotfast/whiteboard), which open in your browser.
+- **Briefs.** The boss's `show` draws animated diagrams, code maps and diffs as pages in your browser, from a spec. There is no free-hand drawing: you ask for a new picture.
 - **Your inbox in one place.** GitHub and Azure DevOps reviews and failed pipelines, plus an iCal calendar, appear in `today`.
 - **Nothing runs behind your back.** When you close Jocasta, everything it started stops. Threads continue where they left off the next time you open it.
 
@@ -42,10 +42,8 @@ While threads work, you keep talking to the boss. It tells you when one needs yo
 - **[omp](https://github.com/can1357/oh-my-pi)** on your PATH and signed in to a model provider: run `omp`, then `/login`. This release is checked against omp 19.1.1. Jocasta names no model: the boss and threads use your omp model roles, and a `--heavy` thread uses your `slow` role.
 - **herdr** needs no install: it is built into `jocasta`.
 - **git**, version 2.54 or newer for the push check.
-- **[mise](https://mise.jdx.dev)** (optional). With it, setup pins hunk and gh, and each project can have its own check and test tasks.
-- A browser, for whiteboard's diagrams.
-
-hunk, whiteboard and the Node.js runtime that whiteboard needs ship inside the release.
+- **[mise](https://mise.jdx.dev)** (optional). With it, setup pins gh, and each project can have its own check and test tasks.
+- A browser, for the briefs.
 
 ## Install
 
@@ -97,7 +95,7 @@ This opens Jocasta's session. The boss is on the left, and `today` is docked on 
 
 1. The thread opens in a new workspace and writes a plan. Read it and approve it in that pane.
 2. It works. `today` shows its state, time, cost and context use.
-3. When it's done, you get a notification, and hunk opens with the review.
+3. When it's done, you get a notification, and its brief opens with the review.
 4. Press **Ctrl+B, then Alt+F** to finish it. Choose Merge or PR, then type the three-letter code that the question shows.
 
 ## Keys
@@ -106,7 +104,7 @@ This opens Jocasta's session. The boss is on the left, and `today` is docked on 
 |---|---|
 | Ctrl+B, then Alt+N | Start a new thread (pick a project, write a brief) |
 | Ctrl+B, then Alt+F | Finish the focused thread: merge it or open a PR |
-| Ctrl+B, then Alt+R | Review the focused thread's commits in hunk |
+| Ctrl+B, then Alt+R | Ask for a review of the focused thread's commits |
 | Ctrl+B, then Alt+S | Stop the focused thread's current run |
 | Ctrl+B, then Alt+Q | Quit Jocasta (it asks first if threads are working) |
 | Alt+1 … Alt+9 | Switch workspaces (Alt+1 is the boss) |
@@ -160,10 +158,9 @@ The [manual](https://github.com/zhivko-kocev/jocasta/blob/main/docs/manual.md#wh
 
 ## Development
 
-You need [mise](https://mise.jdx.dev). It installs the pinned toolchain: Rust, Bun, Node and the cargo tools.
+You need [mise](https://mise.jdx.dev). It installs the pinned toolchain: Rust, Bun and the cargo tools.
 
 ```powershell
-git submodule update --init                 # whiteboard's source
 mise trust mise.toml
 mise install --locked
 mise exec -- bun install --frozen-lockfile
@@ -171,19 +168,14 @@ mise run check                              # lint, type checks and every test
 mise run build                              # release build into dist/
 ```
 
-Jocasta is written in Rust. The browser page around whiteboard's canvas is TypeScript on Bun. To install your own build, set `JOCASTA_INSTALL_FROM` to the `dist` folder and run `scripts/install.ps1`. Read [CONTRIBUTING.md](CONTRIBUTING.md) for how changes are made here, and the [manual's development section](https://github.com/zhivko-kocev/jocasta/blob/main/docs/manual.md#development) for the details.
+Jocasta is written in Rust. The brief pages' script is plain JavaScript, checked with Bun. To install your own build, set `JOCASTA_INSTALL_FROM` to the `dist` folder and run `scripts/install.ps1`. Read [CONTRIBUTING.md](CONTRIBUTING.md) for how changes are made here, and the [manual's development section](https://github.com/zhivko-kocev/jocasta/blob/main/docs/manual.md#development) for the details.
 
 ## Credits
 
 - [herdr](https://github.com/herdrdev/herdr) (Apache-2.0): the work surface. Its Tokyo Night theme is Jocasta's palette.
 - [oh-my-pi](https://github.com/can1357/oh-my-pi) (MIT): the agent in every pane, and dictation with its local Parakeet TDT 0.6B v3 model.
 - [ratatui](https://github.com/ratatui/ratatui) (MIT): `today` and the questions.
-- [whiteboard](https://github.com/devdotfast/whiteboard) (MIT): the canvas and its server, shipped with its LICENSE.
-- [hunk](https://github.com/modem-dev/hunk) (MIT): the review pane.
-- [Monaco Editor](https://github.com/microsoft/monaco-editor) (MIT): the canvas's code peeks and diffs.
-- [Node.js](https://nodejs.org) (MIT): shipped with its LICENSE to run whiteboard's server.
 - [Ponytail](https://github.com/DietrichGebert/ponytail) (MIT): in `config/ponytail.md`.
-- [Mona Sans](https://github.com/github/mona-sans) by GitHub and [Geist Mono](https://github.com/vercel/geist-font) by Vercel: both under the SIL Open Font License 1.1. The font files and their licences ship in `src/frontier/canvas/fonts/`.
 - News headlines come from [brutalist.report](https://brutalist.report), and weather from [Open-Meteo](https://open-meteo.com) (CC BY 4.0).
 
 ## License

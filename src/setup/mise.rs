@@ -20,7 +20,6 @@ paranoid = [\"config\"]
 upgrade.auto_prune = false
 
 [tools]
-hunk = \"0.23.0\"
 gh = \"2.92.0\"
 ";
 
@@ -43,7 +42,6 @@ mod tests {
 				"paranoid = [\"config\"]",
 				"upgrade.auto_prune = false",
 				"[tools]",
-				"hunk = \"0.23.0\"",
 				"gh = \"2.92.0\"",
 			]
 		);

@@ -8,6 +8,7 @@ use serde_json::{Map, Value, json};
 use crate::frontier::server::bridge::Role;
 use crate::frontier::server::history::HISTORY_SEARCH;
 use crate::frontier::server::report::{REPORT_DESCRIPTION, REPORT_RESULT, parse_report, report_schema};
+use crate::frontier::server::review_notes::REVIEW_NOTE;
 
 #[cfg(test)]
 #[path = "tool_specs_tests.rs"]
@@ -80,6 +81,37 @@ fn everyone() -> ToolSpec {
 		HISTORY_SEARCH,
 		HISTORY_SEARCH_DESCRIPTION,
 		schema(vec![("query", history_query()), ("limit", history_limit())], &["query"]),
+	)
+}
+
+/// What `show` says of itself (0679): a brief drawn from his spec, not a free-hand surface.
+const SHOW_DESCRIPTION: &str = "Draw a brief in his browser from a spec.\nA page of sections he reads top to bottom: text, facts, a flow (a diagram of nodes and edges, laid out and animated by Jocasta), a map of changed files, a diff, a list. A diagram is changed by asking for a new show. A spec that doesn't lay out (a duplicate node id, an edge to an unknown node, more than 200 nodes) is refused with the reason.";
+
+/// A thread's `review_note`, how the reviewer hands in a finding (0678).
+fn review_note() -> ToolSpec {
+	tool(
+		REVIEW_NOTE,
+		"Hand in one review finding with the code it is about.\nQuote the code exactly as the committed file has it, starting at `line`: a note whose quote the file doesn't hold at that line is refused with the lines that are there. P0 and P1 block the task; P2 is a suggestion.",
+		schema(
+			vec![
+				("file", string("The file's path in the repository")),
+				(
+					"line",
+					json!({ "type": "integer", "minimum": 1, "description": "The 1-based line where the quoted code starts" }),
+				),
+				("quote", string("The code at that line, as the file has it")),
+				(
+					"severity",
+					json!({ "type": "string", "enum": ["P0", "P1", "P2"], "description": "P0 or P1 block; P2 doesn't" }),
+				),
+				("text", string("The finding: what is wrong and what to do")),
+				(
+					"verdict",
+					json!({ "type": "string", "enum": ["post", "question", "skip"], "description": "post (default), question, or skip" }),
+				),
+			],
+			&["file", "line", "quote", "severity", "text"],
+		),
 	)
 }
 
@@ -183,8 +215,21 @@ fn boss_thread_tools() -> Vec<ToolSpec> {
 		),
 		tool(
 			"show",
-			"Open a whiteboard review in his browser.\nCreate it first with whiteboard's session_create and pass its sessionId; an unknown id is refused with the reason.",
-			schema(vec![("review", string("The review's sessionId from whiteboard's session_create"))], &["review"]),
+			SHOW_DESCRIPTION,
+			schema(
+				vec![
+					("title", string("The brief's title")),
+					(
+						"sections",
+						json!({
+							"type": "array",
+							"items": { "type": "object" },
+							"description": "The sections, top to bottom; each has a `type`: text {body}, facts {rows: [{label, value, url?}]}, flow {nodes: [{id, label, state: done|active|failed|pending, group?, detail?}], edges: [{from, to, label?}]}, map {groups: [{label, items: [{id, label, added, removed}]}], links: [{a, b}]}, diff {files: [{path, hunks: [{header, lines: [{kind: +|-|space, old?, new?, text}]}]}]}, list {rows: [{text, url?, note?}]}; every section may carry a heading"
+						}),
+					),
+				],
+				&["title", "sections"],
+			),
 		),
 	]
 }
@@ -292,8 +337,9 @@ fn role_tools(role: Role, layer: bool) -> Vec<ToolSpec> {
 			tools.extend(boss_inbox_tools());
 			tools
 		}
-		Role::Thread if layer => vec![everyone(), report(), check()],
-		Role::Thread | Role::Project => vec![everyone()],
+		Role::Thread if layer => vec![everyone(), report(), check(), review_note()],
+		Role::Thread => vec![everyone(), review_note()],
+		Role::Project => vec![everyone()],
 	}
 }
 
@@ -347,6 +393,10 @@ fn bad_argument(name: &str, key: &str, value: &Value, property: &Value) -> Optio
 	match property.get("type").and_then(Value::as_str) {
 		Some("string") if !value.as_str().is_some_and(|text| !js_blank(text)) => {
 			Some(format!("{name}: {key} must be a non-empty string"))
+		}
+		Some("array") if property.pointer("/items/type").and_then(Value::as_str) == Some("object") => {
+			(!value.as_array().is_some_and(|items| items.iter().all(Value::is_object)))
+				.then(|| format!("{name}: {key} must be a list of objects"))
 		}
 		Some("array")
 			if !value

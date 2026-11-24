@@ -4,16 +4,13 @@
 use super::*;
 use crate::frontier::server::context::{TestContext, test_context};
 use crate::frontier::server::herdr::Herdr;
-use crate::frontier::server::hunk::fake_hunk::fake_hunk;
 use crate::frontier::server::mise::tests::captured_shim;
 use crate::frontier::server::overlay::overlay_file;
 use crate::frontier::server::task_file::{NewTask, new_task, task_dir};
 use crate::frontier::server::thread::Thread;
 use crate::shared::bridge_wire::BRIDGE_EXTENSION;
 use crate::shared::env::overlay;
-use crate::shared::fsx::free_port;
 use crate::shared::log::logs_dir;
-use crate::shared::proctree::{kill_tree, pid_alive};
 use crate::shared::push_hook::PUSH_HOOK_ROLE;
 use crate::shared::testing::temp_dir;
 
@@ -306,19 +303,16 @@ fn mises_env_loses_herdrs_jocastas_and_omps_keys_in_any_case() {
 }
 
 #[tokio::test]
-async fn the_panes_omp_is_omp_resuming_with_the_guard_and_the_options_say_how_omp_hunk_and_the_boss_key_are() {
+async fn the_panes_omp_is_omp_resuming_with_the_guard_and_the_options_say_how_omp_and_the_boss_key_are() {
 	let t = world();
 	let panes = &t.ctx.panes;
 	assert_eq!(panes.omp(), ["omp"]);
 	assert_eq!(panes.pane_omp(), join(&[&strings(&["omp", "--continue"]), &guard()]));
-	assert_eq!(panes.hunk_port(), HUNK_PORT);
 	assert_eq!(panes.boss_key(), "boss-key-of-this-run");
 	let names: Vec<&str> = panes.pane_env().iter().map(|(name, _)| name.as_str()).collect();
 	assert_eq!(
 		names,
 		[
-			"HUNK_MCP_PORT",
-			"HUNK_DISABLE_UPDATE_NOTICE",
 			"GIT_CONFIG_COUNT",
 			"GIT_CONFIG_KEY_0",
 			"GIT_CONFIG_VALUE_0",
@@ -331,12 +325,9 @@ async fn the_panes_omp_is_omp_resuming_with_the_guard_and_the_options_say_how_om
 	drop(t);
 	let other = test_context(|options| {
 		options.omp = Some(strings(&["bun", "omp.ts"]));
-		options.hunk_port = Some(4242);
 		options.pane_prompt = Some(None);
 	});
 	assert_eq!(other.ctx.panes.omp(), ["bun", "omp.ts"]);
-	assert_eq!(other.ctx.panes.hunk_port(), 4242);
-	assert_eq!(env_of(other.ctx.panes.pane_env(), "HUNK_MCP_PORT").as_deref(), Some("4242"));
 	// Without a key in the options, a run's key is 32 random bytes in hex, the same every time it is asked.
 	let key = other.ctx.panes.boss_key().to_owned();
 	assert_eq!(key.len(), 64);
@@ -427,10 +418,8 @@ async fn a_pane_started_again_records_the_new_pane_with_its_folder_and_key_and_t
 	assert_eq!(given.env.iter().filter(|(name, _)| name == PANE_KEY_ENV).count(), 1);
 	assert_eq!(t.ctx.launched.cwd_of(&again), Some(cwd.display().to_string()));
 	assert_eq!(t.ctx.launched.key_of(&again), Some(key));
-	// Without an env of its own, the hunk variables and the hook are the pane's, and mise's none (`mise: null`).
+	// Without an env of its own, the hook is the pane's, and mise's none (`mise: null`).
 	let bare = t.ctx.panes.respawn(&again, plain(&cwd, None)).await.unwrap();
-	let given = last_respawn(&t);
-	assert_eq!(env_of(&given.env, "HUNK_MCP_PORT").as_deref(), Some(HUNK_PORT.to_string().as_str()));
 	assert!(t.ctx.launched.has(&bare));
 }
 
@@ -472,7 +461,7 @@ async fn a_task_with_a_brief_gives_its_thread_pane_the_launch_prompt_in_the_ship
 }
 
 #[tokio::test]
-async fn the_check_env_is_the_services_own_without_jocastas_herdrs_and_omps_keys_and_with_the_hunk_variables() {
+async fn the_check_env_is_the_services_own_without_jocastas_herdrs_and_omps_keys_() {
 	let t = world();
 	let _a = Var::set("JOCASTA_SOMETHING", Some("1"));
 	let _b = Var::set("herdr_pane_id", Some("2"));
@@ -486,17 +475,14 @@ async fn the_check_env_is_the_services_own_without_jocastas_herdrs_and_omps_keys
 	for gone in ["JOCASTA_SOMETHING", "herdr_pane_id", "PI_CONFIG_DIR", "JOCASTA_TEST_PLAIN", "JOCASTA_DATA_DIR"] {
 		assert!(!checks.contains_key(gone), "{gone}");
 	}
-	assert_eq!(checks.get("HUNK_MCP_PORT").map(String::as_str), Some(HUNK_PORT.to_string().as_str()));
-	assert_eq!(checks.get("HUNK_DISABLE_UPDATE_NOTICE").map(String::as_str), Some("1"));
 }
 
 #[tokio::test]
-async fn a_thread_panes_env_is_the_hunk_variables_the_threads_own_and_with_the_layer_off_the_layers_switch() {
+async fn a_thread_panes_env_is_the_threads_own_and_with_the_layer_off_the_layers_switch() {
 	let t = world();
 	let project = thread_of(None).with(|thread| thread.project.clone());
 	let path = t.ctx.options.sessions_dir.clone().unwrap().join("demo.wt").join("Readme Line");
 	let env = t.ctx.panes.thread_pane_env(&project, &path).await.unwrap();
-	assert_eq!(env_of(&env, "HUNK_MCP_PORT").as_deref(), Some(HUNK_PORT.to_string().as_str()));
 	assert_eq!(env_of(&env, "JOCASTA_THREAD").as_deref(), Some("Readme Line"));
 	assert_eq!(env_of(&env, "COMPOSE_PROJECT_NAME").as_deref(), Some("demo-readme-line"));
 	assert_eq!(env_of(&env, "JOCASTA_PORT_OFFSET").as_deref(), Some("10"));
@@ -540,37 +526,6 @@ async fn mises_env_is_merged_into_a_panes_without_herdrs_jocastas_or_omps_keys_a
 	for gone in ["JOCASTA_X", "HERDR_Y", "pi_z"] {
 		assert_eq!(env_of(&merged, gone), None, "{gone}");
 	}
-}
-
-#[tokio::test]
-async fn hunk_is_the_seams_argv_else_the_shipped_or_npm_binary() {
-	let t = test_context(|options| options.hunk = Some(Some(strings(&["hunk-fake", "--x"]))));
-	assert_eq!(t.ctx.panes.hunk(), Some(strings(&["hunk-fake", "--x"])));
-	drop(t);
-	let bare = world();
-	assert_eq!(bare.ctx.panes.hunk(), find_hunk().map(|found| vec![found.display().to_string()]));
-}
-
-#[tokio::test]
-async fn jocastas_hunk_daemon_is_started_when_down_remembered_by_pid_and_start_and_ended_once() {
-	let port = free_port().unwrap();
-	let t = test_context(move |options| options.hunk_port = Some(port));
-	let folder = temp_dir("pane-hunk");
-	let fake = fake_hunk(folder.path());
-	assert!(t.ctx.panes.state().hunk_daemon.is_none());
-	t.ctx.panes.ensure_hunk_daemon(&fake).await;
-	let daemon = t.ctx.panes.state().hunk_daemon.expect("the daemon was remembered");
-	assert!(pid_alive(daemon.pid));
-	// Up already: nothing starts, nothing changes.
-	t.ctx.panes.ensure_hunk_daemon(&fake).await;
-	assert_eq!(t.ctx.panes.state().hunk_daemon.map(|d| d.pid), Some(daemon.pid));
-	t.ctx.panes.end_hunk_daemon().await;
-	let ended = crate::shared::poll::wait_for(|| async { Ok(!pid_alive(daemon.pid)) }, 10_000, 50).await.unwrap();
-	assert!(ended, "the daemon is still running");
-	assert!(t.ctx.panes.state().hunk_daemon.is_none());
-	// Nothing to end the second time.
-	t.ctx.panes.end_hunk_daemon().await;
-	kill_tree(daemon.pid).await;
 }
 
 fn ended_pane(t: &TestContext, folder: &Path) -> PaneInfo {

@@ -14,8 +14,7 @@ use crate::frontier::server::helpers::{TestServer, start_test_server_with};
 use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
 use crate::frontier::server::herdr::{
 	AgentView, Env, Herdr, HerdrResult, HerdrSnapshot, Note, NotificationResult, OnChange, PaneIds, PaneInfo,
-	PaneMetadata, RespawnOptions, SplitOptions, StopWatch, TabPane, TabSpec, Tokens, WorkspaceInfo, WorktreeCreated,
-	WorktreeOptions,
+	PaneMetadata, RespawnOptions, StopWatch, TabPane, TabSpec, Tokens, WorkspaceInfo, WorktreeCreated, WorktreeOptions,
 };
 use crate::frontier::server::server::ServerOptions;
 use crate::shared::proctree::tests::settles;
@@ -108,9 +107,6 @@ impl Herdr for Hooked {
 			hook(pane_id);
 		}
 		self.inner.respawn(pane_id, opts)
-	}
-	fn split_beside<'a>(&'a self, pane_id: &'a str, opts: &'a SplitOptions) -> BoxFuture<'a, HerdrResult<String>> {
-		self.inner.split_beside(pane_id, opts)
 	}
 	fn send_keys<'a>(&'a self, pane_id: &'a str, keys: &'a [String]) -> BoxFuture<'a, HerdrResult<()>> {
 		self.inner.send_keys(pane_id, keys)

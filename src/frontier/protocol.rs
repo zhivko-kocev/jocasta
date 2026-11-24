@@ -504,7 +504,6 @@ pub struct Machine {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ServiceName {
-	Whiteboard,
 	Herdr,
 }
 
@@ -971,14 +970,11 @@ mod tests {
 				ram: Ram { used: 8_589_934_592, total: 17_179_869_184 },
 				disk: Disk { free: 100, total: 200 },
 			}),
-			services: vec![
-				ServiceHealth {
-					name: ServiceName::Whiteboard,
-					state: ServiceState::Down,
-					note: Some("not started".to_owned()),
-				},
-				ServiceHealth { name: ServiceName::Herdr, state: ServiceState::Up, note: None },
-			],
+			services: vec![ServiceHealth {
+				name: ServiceName::Herdr,
+				state: ServiceState::Down,
+				note: Some("not started".to_owned()),
+			}],
 			activity: Activity {
 				events: vec![ActivityEvent {
 					at: "2026-10-08T09:00:00.000Z".to_owned(),
@@ -1005,7 +1001,7 @@ mod tests {
 			"weather": {"place": "Example City, Example Country", "tempC": 12, "code": 2, "summary": "Partly cloudy", "highC": 15.5, "lowC": 7, "at": "2026-10-08T09:00:00.000Z"},
 			"weatherError": "timed out",
 			"machine": {"cpu": 0, "ram": {"used": 8589934592_u64, "total": 17179869184_u64}, "disk": {"free": 100, "total": 200}},
-			"services": [{"name": "whiteboard", "state": "down", "note": "not started"}, {"name": "herdr", "state": "up"}],
+			"services": [{"name": "herdr", "state": "down", "note": "not started"}],
 			"activity": {
 				"events": [{"at": "2026-10-08T09:00:00.000Z", "text": "pipeline red"}],
 				"worklog": ["acme-api · 1h 20m · 3 commits"],

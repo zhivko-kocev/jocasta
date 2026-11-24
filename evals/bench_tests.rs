@@ -79,10 +79,7 @@ fn _0587_0652_a_layered_arm_refuses_an_omp_folder_that_hides_its_own_server_and_
 	let layered = |names: &[&str]| names.iter().map(|name| (*name).to_owned()).collect::<Vec<_>>();
 	assert_eq!(mcp_problem(dir, &layered(&["a6"])), None);
 	// His servers, Jocasta's among them, reach every omp arm alike (0652): no arm without a layer refuses them.
-	write(
-		"mcp.json",
-		json!({ "mcpServers": { "jocasta": { "command": "jocasta" }, "whiteboard": { "command": "node" } } }),
-	);
+	write("mcp.json", json!({ "mcpServers": { "jocasta": { "command": "jocasta" }, "acme": { "command": "node" } } }));
 	write(".mcp.json", json!({ "mcpServers": { "acme": { "command": "acme" } } }));
 	assert_eq!(mcp_problem(dir, &[]), None);
 	// A "jocasta" entry, even turned off, hides the layer's own server from A6.

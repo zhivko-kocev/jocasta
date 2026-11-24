@@ -5,13 +5,13 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use super::Apply;
 use crate::setup::diff::line_diff;
 use crate::setup::markers::{Marker, Undo, fingerprint};
 use crate::shared::errors::{Error, Result};
-use crate::shared::fsx::{as_object, write_atomically};
+use crate::shared::fsx::write_atomically;
 
 /// One change setup proposes: its diff lines (`+ `, `- `, `  `) and how to make it.
 pub(super) struct SetupChange {
@@ -37,20 +37,6 @@ pub(super) struct Step {
 impl Step {
 	pub(super) fn new(path: &Path, fingerprint: impl Into<String>, undo: Vec<Undo>) -> Self {
 		Self { path: shown(path), fingerprint: fingerprint.into(), change: None, undo }
-	}
-}
-
-/// `text` of `path` as a JSON object; anything else is refused with how to go on.
-fn parse_json_object(path: &Path, text: &str) -> Result<Map<String, Value>> {
-	let value: Value = serde_json::from_str(text).map_err(|error| {
-		Error::user_with_code(format!("{} is not JSON ({error}); fix it and run setup again", path.display()), 1)
-	})?;
-	match value {
-		Value::Object(object) => Ok(object),
-		_ => Err(Error::user_with_code(
-			format!("{} is not a JSON object; fix it and run setup again", path.display()),
-			1,
-		)),
 	}
 }
 
@@ -132,60 +118,6 @@ pub(super) fn owned_file(title: &str, path: &Path, wanted: &str) -> Result<Optio
 		kept: Vec::new(),
 		apply: writes(path, Some(has), wanted.to_owned()),
 	}))
-}
-
-/// MCP servers merged into an omp `mcp.json`, his other servers and keys kept; one change per file, titled by the
-/// servers it adds or changes; `None` when they're all there.
-pub(super) fn mcp_entry(path: &Path, servers: &Map<String, Value>) -> Result<Option<SetupChange>> {
-	let before = read_text(path)?;
-	let mut config = match &before {
-		Some(text) => parse_json_object(path, text)?,
-		None => Map::new(),
-	};
-	let existing = config.get("mcpServers");
-	if existing.is_some_and(|value| as_object(value).is_none()) {
-		return Err(Error::user_with_code(
-			format!("{}: mcpServers is not an object; fix it and run setup again", path.display()),
-			1,
-		));
-	}
-	let mut current = existing.and_then(as_object).cloned().unwrap_or_default();
-	let changed: Vec<&String> = servers
-		.keys()
-		.filter(|name| current.get(*name).map(Value::to_string) != servers.get(*name).map(Value::to_string))
-		.collect();
-	if changed.is_empty() {
-		return Ok(None);
-	}
-	let title = format!(
-		"omp MCP server{} {}",
-		if changed.len() > 1 { "s" } else { "" },
-		changed.iter().map(|name| format!("\"{name}\"")).collect::<Vec<_>>().join(", ")
-	);
-	for (name, server) in servers {
-		current.insert(name.clone(), server.clone());
-	}
-	config.insert("mcpServers".to_owned(), Value::Object(current));
-	let after = json(&Value::Object(config));
-	let Some(before) = before else { return Ok(Some(new_file(&title, path, &after))) };
-	Ok(Some(SetupChange {
-		title,
-		path: shown(path),
-		diff: line_diff(&before, &after),
-		kept: Vec::new(),
-		apply: writes(path, Some(before), after),
-	}))
-}
-
-/// Jocasta's servers in an omp `mcp.json`; `owned` names every server uninstall removes there (0468).
-pub(super) fn mcp_step(path: &Path, servers: &Map<String, Value>, owned: Vec<String>) -> Result<Step> {
-	let mut step = Step::new(
-		path,
-		fingerprint(&Value::Object(servers.clone()).to_string()),
-		vec![Undo::Mcp { path: shown(path), servers: owned }],
-	);
-	step.change = mcp_entry(path, servers)?;
-	Ok(step)
 }
 
 /// A file Jocasta owns as a migration's step: `wanted` is its fingerprint and its text.

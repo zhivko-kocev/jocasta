@@ -12,7 +12,6 @@ use tokio::sync::watch;
 use crate::frontier::protocol::ServerMessage;
 use crate::frontier::server::herdr::Herdr;
 use crate::frontier::server::popups::Popups;
-use crate::frontier::server::whiteboard::Whiteboard;
 use crate::shared::errors::{Error, Result};
 use crate::shared::log::{LogLevel, log};
 use crate::shared::service_file::remove_service_file;
@@ -108,12 +107,11 @@ pub async fn undo_start(undo: &[StopStep]) {
 	.await;
 }
 
-/// Each stop step's bound in ms; `None` keeps the default: service 30 s, herdr 15 s, whiteboard 5 s.
+/// Each stop step's bound in ms; `None` keeps the default: service 30 s, herdr 15 s.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StopBounds {
 	pub service: Option<u64>,
 	pub herdr: Option<u64>,
-	pub whiteboard: Option<u64>,
 }
 
 type Step = BoxFuture<'static, Result<()>>;
@@ -124,7 +122,6 @@ pub trait StopService: Send + Sync {
 	fn stop(&self) -> BoxFuture<'_, Result<()>>;
 	fn cut_paused_turns(&self) -> BoxFuture<'_, Result<()>>;
 	fn end_thread_leftovers(&self) -> BoxFuture<'_, Result<()>>;
-	fn end_hunk_daemon(&self) -> BoxFuture<'_, Result<()>>;
 }
 
 /// What the stop sequence stops.
@@ -137,7 +134,6 @@ pub struct StopParts {
 	pub service: Arc<dyn StopService>,
 	/// What else Jocasta started that stops with it (0549), in the order registered; read when the stop runs.
 	pub extra_stops: Vec<StopStep>,
-	pub whiteboard: Option<Arc<Whiteboard>>,
 	/// Stops the bridge's listener (0675).
 	pub bridge: StopRun,
 	/// Stops the listening server (`server.stop(true)`); nothing when it never listened.
@@ -159,13 +155,11 @@ macro_rules! call {
 
 /// The stop sequence: a failed start stops the service only; Jocasta closing as one (`all`, 0434, 0549) stops
 /// everything, in this order. Each step that waits on herdr or another process is bounded (LC-5, LC-8, SRV-A-3): the
-/// threads noted and herdr's stop by `herdr`, the service, whiteboard and the extra stops by their own.
+/// threads noted and herdr's stop by `herdr`, the service and the extra stops by their own.
 pub fn stop_steps(parts: StopParts) -> Vec<StopStep> {
-	let StopParts { popups, broadcast, herdr, session, service, extra_stops, whiteboard, bridge, server, bounds } =
-		parts;
+	let StopParts { popups, broadcast, herdr, session, service, extra_stops, bridge, server, bounds } = parts;
 	let service_ms = bounds.service.unwrap_or(30_000);
 	let herdr_ms = bounds.herdr.unwrap_or(15_000);
-	let whiteboard_ms = bounds.whiteboard.unwrap_or(5_000);
 	let stop_server = Arc::clone(&herdr);
 	let mut steps = vec![
 		// His open questions go unanswered: Cancel, Deny (0519).
@@ -195,25 +189,8 @@ pub fn stop_steps(parts: StopParts) -> Vec<StopStep> {
 		.when(StopWhen::All),
 		// What the thread panes' omps left, an earlier herdr server's included, once herdr is gone (0486, 0490).
 		StopStep::new("the threads' leftovers", call!(&service, end_thread_leftovers)).when(StopWhen::All),
-		// Once herdr's hunk panes are gone, the hunk session daemon the service started (0434, 0486).
-		StopStep::new("hunk's daemon", call!(&service, end_hunk_daemon)).when(StopWhen::All),
 	];
 	steps.extend(extra_stops);
-	if let Some(whiteboard) = whiteboard {
-		steps.push(
-			StopStep::new(
-				"whiteboard",
-				Arc::new(move || -> Step {
-					let whiteboard = Arc::clone(&whiteboard);
-					Box::pin(async move {
-						whiteboard.stop().await;
-						Ok(())
-					})
-				}),
-			)
-			.bounded(whiteboard_ms),
-		);
-	}
 	// Also after a failed start: nothing else would close its port.
 	steps.push(StopStep::new("the bridge", bridge));
 	steps.push(StopStep::new("the server", server).when(StopWhen::Finally));

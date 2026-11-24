@@ -1,5 +1,4 @@
-# Installs or upgrades Jocasta for windows-x64 (0049): jocasta.exe, its config\, whiteboard's runtime with its Node and
-# its canvas, and hunk.
+# Installs or upgrades Jocasta for windows-x64 (0049): jocasta.exe, its config\ and, on Windows, herdr's ConPTY runtime.
 # Source: the latest GitHub release. Its zip must match the SHA-256 in the repository at the release's tag (0484): the
 # release workflow commits `checksums.sha256` on top of the release's tag and tags that commit `checksums-<tag>`, so a
 # replaced release asset is refused; the hash never comes from the release itself. With $env:JOCASTA_INSTALL_FROM set
@@ -9,16 +8,15 @@
 # Folder: $env:JOCASTA_INSTALL_DIR, else %LOCALAPPDATA%\Programs\jocasta\; added to the user's PATH. The folder is
 # Jocasta's alone (0579): a drive root, or a folder holding files when no install.json there names that same folder,
 # is refused.
-# Layout: <dir>\jocasta.exe, <dir>\config\, <dir>\node\, <dir>\whiteboard\, <dir>\whiteboard-canvas\,
-# <dir>\editor.worker.js, <dir>\hunk\, <dir>\conpty\ with <dir>\THIRD-PARTY-NOTICES\ (Microsoft's ConPTY, 0661), and
+# Layout: <dir>\jocasta.exe, <dir>\config\, <dir>\conpty\ with <dir>\THIRD-PARTY-NOTICES\ (Microsoft's ConPTY, 0661), and
 # <dir>\install.json naming <dir>, the release's top-level entries (what
 # `jocasta uninstall` removes, 0579) and what this install adds beyond the folder (0468): its user PATH entry.
 # Upgrade (CR-06): Jocasta's server (`jocasta.exe server`, herdr's server with the service in it, fork plan phase 4),
-# omp sessions' `jocasta.exe mcp`, whiteboard's node.exe and hunk panes' hunk.exe run from the install, so neither
+# omp sessions' `jocasta.exe mcp` and panes' OpenConsole.exe run from the install, so neither
 # those files nor the folder can be replaced (a running program's file can't be overwritten, and its folder can't be
 # renamed). A running program's file can be renamed, though: the release is staged complete beside the install, an
 # older install's companion (`app\`, gone with 0552) stops, the old install is copied aside, every file still in use
-# (.exe, .dll, .node) is renamed in place to `<name>.old-<stamp>`, and robocopy mirrors the staged release over the
+# (.exe, .dll) is renamed in place to `<name>.old-<stamp>`, and robocopy mirrors the staged release over the
 # install, leaving those `.old-*` files alone. Running programs keep their old files until they exit; `.old-*` files
 # no longer in use are removed now and by every later install. A running Jocasta keeps its panes and the old build
 # until he restarts it: Windows has no live handoff (fork plan finding 20). If the renames or the copy fail, the
@@ -47,7 +45,7 @@
 	$stage = "$dir.new-$stamp"
 	$aside = "$dir.previous-$stamp"
 
-	# Whether a program holds `$path` open (a running .exe, a loaded .dll or .node).
+	# Whether a program holds `$path` open (a running .exe, or a loaded .dll).
 	function Test-InUse([string]$path) {
 		try { [IO.File]::Open($path, 'Open', 'ReadWrite', 'None').Dispose(); return $false } catch { return $true }
 	}
@@ -151,7 +149,7 @@
 				# OpenConsole.exe runs for every open pane) moves to the install's top as conpty-<path>.old-<stamp>:
 				# herdr loads the bundle only with exactly its pinned files in it (0661).
 				$bundle = Join-Path $dir 'conpty'
-				Get-ChildItem -Path $dir -Recurse -File -Include '*.exe', '*.dll', '*.node' |
+				Get-ChildItem -Path $dir -Recurse -File -Include '*.exe', '*.dll' |
 					Where-Object { $_.Name -notlike '*.old-*' -and (Test-InUse $_.FullName) } |
 					ForEach-Object {
 						if ($_.FullName.StartsWith("$bundle\", [StringComparison]::OrdinalIgnoreCase)) {
@@ -202,7 +200,7 @@ public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint msg, UIntPtr wP
 		if ($running.Count -gt 0) {
 			Write-Host "jocasta install: Jocasta is running on the old build; close it and run jocasta again to use the new one (Windows can't hand its panes over live)."
 		} elseif (Get-ChildItem -Path $dir -Recurse -File -Filter '*.old-*' -ErrorAction SilentlyContinue) {
-			Write-Host "jocasta install: omp sessions and hunk panes started before the upgrade run the old build until they restart."
+			Write-Host "jocasta install: omp sessions started before the upgrade run the old build until they restart."
 		}
 		& (Join-Path $dir 'jocasta.exe') --version
 	} finally {

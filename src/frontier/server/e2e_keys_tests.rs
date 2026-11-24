@@ -14,10 +14,11 @@ use serde_json::{Value, json};
 use crate::frontier::protocol::{PluginAction, ServerMessage};
 use crate::frontier::server::allow::{Answer, Confirmation};
 use crate::frontier::server::bridge::{PaneAgent, PaneEvent};
+use crate::frontier::server::helpers::review_asked;
 use crate::frontier::server::helpers::{
 	BRIEF, Msg, Page, TestServer, boss_pane, bridge_flags, call, call_as, cli, commit_in, demo_project, guard,
-	pane_reports, proposed_plan_file, push_state, session_file, sh, states_settled, task_dir_of, thread_omp, until,
-	use_hunk_daemon, with_server,
+	hand_in_two_notes, pane_reports, proposed_plan_file, push_state, session_file, sh, states_settled, task_dir_of,
+	thread_omp, until, with_server,
 };
 use crate::frontier::server::herdr::AgentState;
 use crate::frontier::server::history::search_history;
@@ -419,9 +420,7 @@ async fn approve_and_execute_the_task_file_records_the_plan_once_omp_left_plan_m
  {
 	let j = temp_jocasta();
 	let project = demo_project(j.root(), "demo").await;
-	let hunk = use_hunk_daemon().await;
-	let mut options = ServerOptions { agent_wait_ms: Some(10_000), ..ServerOptions::default() };
-	hunk.apply(&mut options);
+	let options = ServerOptions { agent_wait_ms: Some(10_000), ..ServerOptions::default() };
 	with_server(options, |server| async move {
 		let (pane_id, path) = start_with_checks(&server, &[]).await;
 		let task = || read(&task_dir_of(&project.id, "Readme line").join("task.md"));
@@ -534,9 +533,7 @@ async fn a_task_end_without_report_result_gets_one_steer_the_next_end_goes_to_th
  {
 	let j = temp_jocasta();
 	let project = demo_project(j.root(), "demo").await;
-	let hunk = use_hunk_daemon().await;
-	let mut options = ServerOptions { agent_wait_ms: Some(10_000), ask_report: Some(true), ..ServerOptions::default() };
-	hunk.apply(&mut options);
+	let options = ServerOptions { agent_wait_ms: Some(10_000), ask_report: Some(true), ..ServerOptions::default() };
 	with_server(options, |server| async move {
 		let failing = "git rev-parse --verify no-such-ref";
 		let (pane_id, path) = start_with_checks(&server, &[failing]).await;
@@ -546,7 +543,7 @@ async fn a_task_end_without_report_result_gets_one_steer_the_next_end_goes_to_th
 		commit_in(&path, "demo\nA line.\n", "Add a README line");
 		state_of(&pane_id, &server, AgentState::Idle, None);
 		until(|| prompts(&server).iter().any(|(pane, text)| *pane == pane_id && text == REPORT_STEER)).await;
-		assert!(server.herdr.of("splitBeside").is_empty());
+		assert_eq!(review_asked(&server.herdr), 0);
 
 		// It ends again without the report: the runner checks the done-when on the task's tree, then the review goes
 		// on, once, with the brief and the failing gate.
@@ -575,6 +572,7 @@ async fn a_task_end_without_report_result_gets_one_steer_the_next_end_goes_to_th
 				Msg::new("Reviewed.\nTESTS: pass — `bun run check`", 0.1),
 			],
 		);
+		hand_in_two_notes(&task_dir_of(&project.id, "Readme line"));
 		state_of(&pane_id, &server, AgentState::Working, Some(&file));
 		state_of(&pane_id, &server, AgentState::Idle, None);
 		until(|| prompts(&server).iter().any(|(_, text)| text == HANDOFF_PROMPT)).await;
@@ -602,13 +600,11 @@ async fn the_check_tool_and_the_review_say_when_the_projects_mise_check_didnt_ru
 	fs::create_dir_all(&fakes).unwrap();
 	let shim =
 		crate::frontier::server::mise::tests::captured_shim(&fakes, "mise", "frontier::server::mise::tests::fake_mise");
-	let hunk = use_hunk_daemon().await;
-	let mut options = ServerOptions {
+	let options = ServerOptions {
 		agent_wait_ms: Some(10_000),
 		mise: Some(Some(vec![shim.display().to_string()])),
 		..ServerOptions::default()
 	};
-	hunk.apply(&mut options);
 	with_server(options, |server| async move {
 		let (pane_id, path) = start_with_checks(&server, &["git --version"]).await;
 		let boss = boss_pane(&server.herdr).expect("a boss pane");
@@ -622,6 +618,7 @@ async fn the_check_tool_and_the_review_say_when_the_projects_mise_check_didnt_ru
 		state_of(&pane_id, &server, AgentState::Idle, None);
 		until(|| typed_to(&server, &pane_id).iter().any(|text| text.starts_with("Check this task's work."))).await;
 		let file = session_file(&path, &[Msg::new("Reviewed.\nTESTS: pass — `bun test`", 0.1).bash("bun test", true)]);
+		hand_in_two_notes(&task_dir_of(&project.id, "Readme line"));
 		state_of(&pane_id, &server, AgentState::Working, Some(&file));
 		state_of(&pane_id, &server, AgentState::Idle, None);
 		until(|| prompts(&server).iter().any(|(_, text)| text == HANDOFF_PROMPT)).await;

@@ -48,31 +48,6 @@ pub(crate) fn captured_shim(dir: &Path, name: &str, test: &str) -> PathBuf {
 	}
 }
 
-/// A shim `name` in `dir` that runs the test function `test` with its stdout, stderr and exit code as the
-/// program's own (the harness's own lines come with them): for a stand-in that is read for the lines it chooses.
-pub(crate) fn passthrough_shim(dir: &Path, name: &str, test: &str) -> PathBuf {
-	let exe = std::env::current_exe().expect("the test executable");
-	let exe = exe.display();
-	if cfg!(windows) {
-		let shim = dir.join(format!("{name}.cmd"));
-		std::fs::write(
-			&shim,
-			format!("@echo off\r\nset \"FAKE_ARGS=%*\"\r\n\"{exe}\" --exact {test} -q --nocapture\r\n"),
-		)
-		.expect("writing the shim");
-		shim
-	} else {
-		let shim = dir.join(name);
-		std::fs::write(
-			&shim,
-			format!("#!/bin/sh\nFAKE_ARGS=\"$*\"\nexport FAKE_ARGS\nexec \"{exe}\" --exact {test} -q --nocapture\n"),
-		)
-		.expect("writing the shim");
-		make_runnable(&shim);
-		shim
-	}
-}
-
 /// The stand-in side of [`captured_shim`]: does nothing in a normal test run; when a shim started it, `answer` gets the
 /// shim's arguments joined by spaces (a batch file's quoting of a path with spaces removed) and returns what the program prints: stdout, stderr and its exit code.
 pub(crate) fn stand_in(answer: impl FnOnce(String) -> (String, String, i32)) {

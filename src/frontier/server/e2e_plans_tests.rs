@@ -1,27 +1,24 @@
 //! The cases of `test/frontier/server/service-plans.test.ts` on the real server: plans awaiting him, threads reopened
-//! after Stop everything, the hunk daemon's end and the review lines the boss hears.
+//! after Stop everything and the review lines the boss hears.
 
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::FutureExt;
 use serde_json::{Value, json};
 
 use crate::frontier::server::bridge::PaneAgent;
-use crate::frontier::server::close::CloseOutcome;
 use crate::frontier::server::helpers::{
-	BRIEF, HunkDaemon, TestServer, ThreadOptions, append_proposal, boss_idle, boss_lines, boss_pane, call, commit_in,
-	demo_project, handoff_entry, http, hunk, plan_mode_file, proposed_plan_file, review, sh, start_test_server,
-	start_test_server_with, start_thread, to_handoff, until, until_async, use_hunk_daemon, with_server,
+	BRIEF, TestServer, ThreadOptions, append_proposal, boss_idle, boss_lines, boss_pane, call, commit_in, demo_project,
+	handoff_entry, plan_mode_file, proposed_plan_file, review, sh, start_test_server_with, start_thread, to_handoff,
+	until, until_async, with_server,
 };
 use crate::frontier::server::herdr::AgentState;
 use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
-use crate::frontier::server::popups::{CANCEL, STOP};
 use crate::frontier::server::server::ServerOptions;
 use crate::frontier::server::status::Busy;
 use crate::frontier::server::tools::ToolReply;
@@ -55,15 +52,9 @@ fn path_text(file: &Path) -> &str {
 	file.to_str().expect("a UTF-8 path")
 }
 
-/// A server on `herdr` with the hunk daemon stand-in, `agent_wait_ms` and `plan_settle_ms` as given.
-async fn start(
-	herdr: &Arc<FakeHerdr>,
-	daemon: &HunkDaemon,
-	agent_wait_ms: Option<i64>,
-	plan_settle_ms: Option<i64>,
-) -> TestServer {
-	let mut options = ServerOptions { agent_wait_ms, plan_settle_ms, ..ServerOptions::default() };
-	daemon.apply(&mut options);
+/// A server on `herdr` with `agent_wait_ms` and `plan_settle_ms` as given.
+async fn start(herdr: &Arc<FakeHerdr>, agent_wait_ms: Option<i64>, plan_settle_ms: Option<i64>) -> TestServer {
+	let options = ServerOptions { agent_wait_ms, plan_settle_ms, ..ServerOptions::default() };
 	start_test_server_with(Arc::clone(herdr), options).await
 }
 
@@ -168,9 +159,8 @@ async fn b3_a_plan_awaiting_him_survives_stop_everything_and_reopen_the_resumed_
  {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
-	let daemon = use_hunk_daemon().await;
 	let herdr = Arc::new(FakeHerdr::new());
-	let server = start(&herdr, &daemon, Some(10_000), None).await;
+	let server = start(&herdr, Some(10_000), None).await;
 	let file = finally(&server, |server| async move {
 		let started = start_thread(&server, ThreadOptions::default()).await;
 		let file = proposed_plan_file(&started.path);
@@ -183,7 +173,7 @@ async fn b3_a_plan_awaiting_him_survives_stop_everything_and_reopen_the_resumed_
 	.await;
 	// herdr comes back with every pane a shell; the thread's omp resumes with `--continue`, back in plan mode.
 	herdr.restore();
-	let server = start(&herdr, &daemon, None, None).await;
+	let server = start(&herdr, None, None).await;
 	finally(&server, |server| async move {
 		let fresh = fresh_pane(&herdr);
 		append_entry(&file, &plan_mode_entry("m3"));
@@ -216,9 +206,8 @@ async fn a_done_and_reviewed_thread_survives_stop_everything_and_reopen_still_in
  {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
-	let daemon = use_hunk_daemon().await;
 	let herdr = Arc::new(FakeHerdr::new());
-	let server = start(&herdr, &daemon, Some(10_000), None).await;
+	let server = start(&herdr, Some(10_000), None).await;
 	let file = finally(&server, |server| async move {
 		let started = start_thread(&server, ThreadOptions::default()).await;
 		let file = to_handoff(&server, &started.pane_id, &started.path).await;
@@ -230,7 +219,7 @@ async fn a_done_and_reviewed_thread_survives_stop_everything_and_reopen_still_in
 	.await;
 	// herdr comes back with every pane a shell; the thread's omp starts again, idle.
 	herdr.restore();
-	let server = start(&herdr, &daemon, None, None).await;
+	let server = start(&herdr, None, None).await;
 	finally(&server, |server| async move {
 		let fresh = fresh_pane(&herdr);
 		herdr.set_state(&fresh, AgentState::Idle, Some(path_text(&file)), true);
@@ -254,10 +243,9 @@ struct Reopened {
 
 async fn reopened(root: &Path, session: fn(&Path) -> PathBuf, agent: PaneAgent) -> Reopened {
 	demo_project(root, "demo").await;
-	let daemon = use_hunk_daemon().await;
 	let herdr = Arc::new(FakeHerdr::new());
 	// A plan-mode turn's end reads the session again for 200 ms, not the product's 2 s (TST-5, TST-7).
-	let server = start(&herdr, &daemon, Some(10_000), Some(200)).await;
+	let server = start(&herdr, Some(10_000), Some(200)).await;
 	let file = finally(&server, |server| async move {
 		let started = start_thread(&server, ThreadOptions::default()).await;
 		let file = session(&started.path);
@@ -268,7 +256,7 @@ async fn reopened(root: &Path, session: fn(&Path) -> PathBuf, agent: PaneAgent) 
 	})
 	.await;
 	herdr.restore();
-	let server = start(&herdr, &daemon, None, Some(200)).await;
+	let server = start(&herdr, None, Some(200)).await;
 	let fresh = fresh_pane(&herdr);
 	// The resumed omp re-enters plan mode in its session.
 	append_entry(&file, &plan_mode_entry("m3"));
@@ -401,75 +389,11 @@ async fn a_reopened_thread_whose_plan_isnt_awaiting_him_gets_nothing_typed_0494(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn b4_the_hunk_session_daemon_the_service_started_ends_with_stop_everything_also_when_keep_came_first_0434_0486()
-{
-	let j = temp_jocasta();
-	demo_project(j.root(), "demo").await;
-	// A free loopback port for the daemon, never hunk's or Jocasta's real one.
-	let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-	let up = || async move {
-		match http().get(format!("http://127.0.0.1:{port}/health")).timeout(Duration::from_millis(500)).send().await {
-			Ok(response) => response.status().is_success(),
-			Err(_) => false,
-		}
-	};
-	let answers = Arc::new(Mutex::new(vec![false, true]));
-	let address: Arc<OnceLock<crate::frontier::server::server::JocastaServer>> = Arc::new(OnceLock::new());
-	let heard = Arc::clone(&address);
-	let asked = Arc::new(AtomicUsize::new(0));
-	let counted = Arc::clone(&asked);
-	let server = start_test_server(ServerOptions {
-		hunk: Some(Some(hunk())),
-		hunk_port: Some(port),
-		agent_wait_ms: Some(10_000),
-		on_question: Some(Arc::new(move |popup| {
-			counted.fetch_add(1, Ordering::SeqCst);
-			let answer = {
-				let mut answers = answers.lock().unwrap_or_else(PoisonError::into_inner);
-				if answers.is_empty() { false } else { answers.remove(0) }
-			};
-			let choice = if answer { STOP } else { CANCEL };
-			let typed = popup.view().code.clone();
-			let code = popup.code().to_owned();
-			let heard = Arc::clone(&heard);
-			tokio::spawn(async move {
-				let server = heard.get().expect("the server").clone();
-				server.answer(&code, &json!({ "choice": choice, "typed": typed }));
-			});
-		})),
-		..ServerOptions::default()
-	})
-	.await;
-	let _ = address.set(server.server.clone());
-	finally(&server, |server| async move {
-		let started = start_thread(&server, ThreadOptions::default()).await;
-		// A task ends: the review starts hunk's daemon before its pane opens.
-		server.herdr.set_state(&started.pane_id, AgentState::Working, None, true);
-		commit_in(&started.path, "demo\nA line.\n", "Add a README line");
-		server.herdr.set_state(&started.pane_id, AgentState::Idle, None, true);
-		until(|| server.herdr.of("splitBeside").len() == 1).await;
-		assert!(up().await);
-		// The review turn runs: he is asked, keeps it running, and the daemon stays.
-		server.herdr.set_state(&started.pane_id, AgentState::Working, None, true);
-		until(|| server.service.busy_threads().unwrap().working == 1).await;
-		assert_eq!(server.shutdown(true).await, CloseOutcome::Kept);
-		assert!(up().await);
-		// Later he stops everything: the daemon goes too.
-		assert_eq!(server.shutdown(true).await, CloseOutcome::Stopped);
-		server.stopped().await;
-		assert!(!up().await);
-	})
-	.await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn p6_b6_a_reviewed_thread_counts_in_the_close_question_as_on_the_hud_work_the_bosss_thread_send_started_isnt_said_as_his_rejection_work_he_started_is_0432_0438_0471()
  {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
-	let daemon = use_hunk_daemon().await;
-	let mut options = ServerOptions { agent_wait_ms: Some(10_000), ..ServerOptions::default() };
-	daemon.apply(&mut options);
+	let options = ServerOptions { agent_wait_ms: Some(10_000), ..ServerOptions::default() };
 	with_server(options, |server| async move {
 		server.herdr.set_state(&boss_pane(&server.herdr).unwrap(), AgentState::Idle, None, true);
 		let started = start_thread(&server, ThreadOptions::default()).await;
@@ -519,9 +443,7 @@ async fn p3_a_tasks_review_line_counts_the_threads_own_commits_not_mains_it_merg
 	let project = demo_project(j.root(), "demo").await;
 	sh(&project.main_path, &["config", "user.name", "Test"]);
 	sh(&project.main_path, &["config", "user.email", "test@example.com"]);
-	let daemon = use_hunk_daemon().await;
-	let mut options = ServerOptions { agent_wait_ms: Some(10_000), ..ServerOptions::default() };
-	daemon.apply(&mut options);
+	let options = ServerOptions { agent_wait_ms: Some(10_000), ..ServerOptions::default() };
 	with_server(options, |server| async move {
 		server.herdr.set_state(&boss_pane(&server.herdr).unwrap(), AgentState::Idle, None, true);
 		let started = start_thread(&server, ThreadOptions::default()).await;

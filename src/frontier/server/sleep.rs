@@ -249,9 +249,6 @@ impl PaneSleeps {
 				t.state = crate::frontier::server::herdr::AgentState::Unknown;
 				t.host = None;
 				t.omp = None;
-				if let Some(review) = &mut t.review {
-					review.pane = None;
-				}
 			});
 			c.threads.add(thread);
 		}

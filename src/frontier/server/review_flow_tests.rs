@@ -1,14 +1,12 @@
-//! Tests of `review_flow.rs`, on `context::test_context` with a real git repo and worktree, the fake hunk
-//! (`fake_hunk.rs`) and a stand-in mise (`stand_in_mise`, the Rust form of `fake-mise-verify.ts`, 0630).
+//! Tests of `review_flow.rs`, on `context::test_context` with a real git repo and worktree and a stand-in mise (`stand_in_mise`, the Rust form of `fake-mise-verify.ts`, 0630).
 //!
 //! Rewritten at part level (`ReviewFlow`'s methods, no HTTP server) from `service-plans.test.ts` (B4, P3),
 //! `service-regressions.test.ts` (SEC-NET-6's `check`), `service-tools.test.ts` (the restored panes' catch-up),
 //! `service-keys.test.ts` (the check tool, the check on idle, the review's done-when and mise skip lines),
-//! `pane-check.test.ts` and `hunk.test.ts` ("a review fails on each way a proof weakens the tests").
+//! `pane-check.test.ts` and `hunk.test.ts` (the proof's cases now in `review_proof_tests.rs`, 0679; "a review fails on each way a proof weakens the tests").
 //!
 //! Waits for the service (a later wave ports each verbatim on the real service):
-//! - `service-plans.test.ts`: "B4: the hunk session daemon the service started ends with Stop everything, also when
-//!   Keep came first" (the stop; the review's start of the daemon is the pane launcher's), "a done and reviewed thread
+//! - `service-plans.test.ts`: "a done and reviewed thread
 //!   survives Stop everything and reopen", "P6, B6: a reviewed thread counts in the close question as on the HUD".
 //! - `service-regressions.test.ts`: "SVC-6: an omp started again mid-review runs the review again, and mid-/handoff
 //!   runs /handoff again", "C6: with the layer off, a thread pane gets JOCASTA_LAYER=off, … no report steer"
@@ -24,11 +22,12 @@ use std::time::{Duration, Instant};
 use serde_json::json;
 
 use super::*;
+use crate::frontier::brief::model::{Card, Proof, Severity, Verdict};
 use crate::frontier::server::checks::{CheckRunner, CheckRunnerOptions};
 use crate::frontier::server::context::{BossRef, Shared, TestContext, test_context};
+use crate::frontier::server::helpers::review_asked;
 use crate::frontier::server::herdr::AgentState;
 use crate::frontier::server::herdr::PaneInfo;
-use crate::frontier::server::hunk::fake_hunk::{fake_hunk, health_daemon};
 use crate::frontier::server::mise::tests::{captured_shim, stand_in};
 use crate::frontier::server::service::ServiceOptions;
 use crate::frontier::server::task_file::TaskRecord;
@@ -120,7 +119,7 @@ impl Drop for EnvGuard {
 }
 
 /// What a test works with: the demo project in `<dir>/code/demo` with its thread `Readme line` in a worktree, a boss
-/// pane and a project pane, over a [`TestContext`] with the fake hunk and no mise (`stand_in_mise` when asked).
+/// pane and a project pane, over a [`TestContext`] with no mise (`stand_in_mise` when asked).
 struct World {
 	/// Declared first: dropped before the context releases the environment.
 	_layer: Option<EnvGuard>,
@@ -130,8 +129,6 @@ struct World {
 	wt: PathBuf,
 	thread: ThreadRef,
 	boss: BossRef,
-	hunk: Vec<String>,
-	port: u16,
 }
 
 /// How a [`World`] differs from the default.
@@ -164,14 +161,10 @@ impl World {
 		git(&main, &["commit", "-q", "-m", "init repo"]);
 		let wt = code.join("demo.wt").join("readme-line");
 		git(&main, &["worktree", "add", "-q", "-b", "feature/readme-line", &wt.to_string_lossy()]);
-		let hunk = fake_hunk(dir.path());
-		let port = health_daemon().await;
 		let mise_argv = vec![captured_shim(dir.path(), "mise", STAND_IN).to_string_lossy().into_owned()];
 		std::fs::create_dir_all(dir.path().join("ctl")).unwrap();
 		let mut layer = None;
 		let t = test_context(|options: &mut ServiceOptions| {
-			options.hunk = Some(Some(hunk.clone()));
-			options.hunk_port = Some(port);
 			options.mise = Some(setup.mise.then(|| mise_argv.clone()));
 			options.pane_check_wait_ms = setup.wait_ms;
 			options.checks = Some(Arc::new(CheckRunner::new(CheckRunnerOptions {
@@ -195,7 +188,12 @@ impl World {
 		let mut thread = Thread::new("t-1", "w-1", project, "Readme line", "feature/readme-line");
 		thread.path = wt.clone();
 		thread.state = AgentState::Idle;
-		thread.task = Some(TaskRecord { brief: BRIEF.to_owned(), done_when: setup.done_when, ..TaskRecord::default() });
+		thread.task = Some(TaskRecord {
+			id: "task-1".to_owned(),
+			brief: BRIEF.to_owned(),
+			done_when: setup.done_when,
+			..TaskRecord::default()
+		});
 		let thread = Shared::new(thread);
 		t.ctx.threads.add(thread.clone());
 		t.herdr.state().pane_list.push(PaneInfo {
@@ -210,7 +208,7 @@ impl World {
 		t.ctx.launched.add("p-main", &main.to_string_lossy(), Some("project-key")).unwrap();
 		t.ctx.launched.add("boss-1", &dir.path().to_string_lossy(), Some("boss-key")).unwrap();
 		let boss = t.with_boss(AgentState::Idle);
-		Self { _layer: layer, t, dir, main, wt, thread, boss, hunk, port }
+		Self { _layer: layer, t, dir, main, wt, thread, boss }
 	}
 
 	fn flow(&self) -> &ReviewFlow {
@@ -241,7 +239,20 @@ impl World {
 	/// The review turn as the thread is asked for it.
 	fn review_text(&self, brief: Option<&str>) -> String {
 		let context = ReviewContext { brief: brief.map(str::to_owned), report: Some(None), ..ReviewContext::default() };
-		review_prompt(&self.hunk, RANGE, &context)
+		review_prompt(RANGE, &context)
+	}
+
+	/// The reviewer hands in two P2 notes through `review_note`.
+	fn two_notes(&self) {
+		ReviewNotes { head: self.head(), notes: vec![card(Severity::P2, 1), card(Severity::P2, 2)] }
+			.write(&self.notes_file())
+			.unwrap();
+	}
+
+	/// The thread's `review.json`.
+	fn notes_file(&self) -> PathBuf {
+		let (project, task) = self.thread.with(|t| (t.project.id.clone(), t.task.as_ref().map(|task| task.id.clone())));
+		review_file(&project, &task.unwrap_or_else(|| "task-1".to_owned()))
 	}
 
 	/// The control folder of the stand-in mise.
@@ -332,7 +343,7 @@ async fn a_review_fails_on_each_way_a_proof_weakens_the_tests_0610() {
 			checks: Vec::new(),
 			at: None,
 		};
-		thread.review = Some(ThreadReview { pane: None, running: None, result: Some(result) });
+		thread.review = Some(ThreadReview { running: None, result: Some(result) });
 		t.ctx.review.failed(&thread)
 	};
 	assert_eq!(failed(Some(proof(|_| {}))), None);
@@ -367,7 +378,7 @@ async fn a_review_that_isnt_a_pass_says_why_in_order_and_one_without_a_result_sa
 	];
 	let result =
 		ReviewResult { notes: None, blocking: Some(2), tests: TestsResult::Fail, proof: None, checks, at: None };
-	thread.review = Some(ThreadReview { pane: None, running: None, result: Some(result.clone()) });
+	thread.review = Some(ThreadReview { running: None, result: Some(result.clone()) });
 	assert_eq!(
 		t.ctx.review.failed(&thread).as_deref(),
 		Some(
@@ -376,7 +387,7 @@ async fn a_review_that_isnt_a_pass_says_why_in_order_and_one_without_a_result_sa
 	);
 	let one =
 		ReviewResult { notes: Some(1), blocking: Some(1), tests: TestsResult::None, checks: Vec::new(), ..result };
-	thread.review = Some(ThreadReview { pane: None, running: None, result: Some(one) });
+	thread.review = Some(ThreadReview { running: None, result: Some(one) });
 	assert_eq!(t.ctx.review.failed(&thread).as_deref(), Some("1 blocking note"));
 }
 
@@ -410,35 +421,45 @@ async fn a_report_is_in_once_it_came_after_the_last_review_0539() {
 	assert!(t.ctx.review.report_in(&thread));
 }
 
+fn card(severity: Severity, line: usize) -> Card {
+	Card {
+		id: format!("c{line}"),
+		severity,
+		file: "README.md".to_owned(),
+		line,
+		quote: "A line.".to_owned(),
+		text: "Say more.".to_owned(),
+		verdict: Verdict::Post,
+		proof: Proof { sha: String::new(), ok: true },
+		edited: None,
+		published: None,
+	}
+}
+
 #[tokio::test]
-async fn b4_a_task_end_opens_hunk_beside_its_pane_once_and_a_later_review_reuses_the_pane() {
+async fn b4_a_task_end_asks_for_the_review_with_a_clean_notes_file_and_the_review_counts_the_notes_handed_in_0678() {
 	let w = World::new().await;
 	w.first_task().await;
-	let splits = w.t.herdr.of("splitBeside");
-	assert_eq!(splits.len(), 1);
-	let mut command = w.hunk.clone();
-	command.extend(["diff", "--theme", "tokyo-night", RANGE, "--watch"].map(str::to_owned));
-	assert_eq!(splits[0][0], json!("t-1"));
-	assert_eq!(splits[0][1]["command"], json!(command));
-	assert_eq!(splits[0][1]["cwd"], json!(w.wt.to_string_lossy()));
-	assert_eq!(splits[0][1]["label"], json!("review"));
-	assert_eq!(splits[0][1]["env"]["HUNK_MCP_PORT"], json!(w.port.to_string()));
 	// The thread is asked for the review, with its brief; the phase and what is running are kept.
 	assert_eq!(w.typed("t-1"), [w.review_text(Some(BRIEF))]);
 	let thread = w.thread();
 	assert_eq!(thread.phase, Phase::Review);
-	let review = thread.review.expect("a review step");
-	let running = review.running.expect("a review running");
+	let running = thread.review.expect("a review step").running.expect("a review running");
 	assert_eq!((running.range.as_str(), running.commits.as_str()), (RANGE, "1 new commit «Add a README line»"));
 	assert_eq!(running.head.as_deref(), Some(w.head().as_str()));
-	let pane = review.pane.expect("the hunk pane");
-	assert!(w.t.herdr.state().pane_list.iter().any(|p| p.pane_id == pane));
-	// Another task: the hunk pane is still open, so it is reused (`--watch` shows the new commits in it).
+	let file = w.notes_file();
+	assert_eq!(ReviewNotes::read(&file), ReviewNotes { head: w.head(), notes: Vec::new() });
+	// The reviewer hands in a P1 and a P2: the review finds both, one of them blocking.
+	let notes = ReviewNotes { head: w.head(), notes: vec![card(Severity::P1, 1), card(Severity::P2, 2)] };
+	notes.write(&file).unwrap();
+	let found = w.flow().found(&w.thread).await.unwrap();
+	assert_eq!((found.notes, found.blocking), (Some(2), Some(1)));
+	// Another task: its review starts clean.
 	w.thread.with(|t| set_phase(t, Phase::Handoff, "test"));
 	w.flow().task_ended(&w.thread, "1 new commit", None).await.unwrap();
-	assert_eq!(w.t.herdr.of("splitBeside").len(), 1);
 	assert_eq!(w.typed("t-1"), [w.review_text(Some(BRIEF)), w.review_text(Some(BRIEF))]);
-	assert_eq!(w.thread().review.and_then(|review| review.pane), Some(pane));
+	let found = w.flow().found(&w.thread).await.unwrap();
+	assert_eq!((found.notes, found.blocking), (Some(0), Some(0)));
 }
 
 #[tokio::test]
@@ -447,7 +468,7 @@ async fn a_task_end_without_a_branch_is_announced_done_counts_as_reviewed_and_go
 	commit_in(&w.wt, "demo\nA line.\n", "Add a README line");
 	w.thread.with(|t| t.branch = String::new());
 	w.flow().task_ended(&w.thread, "1 new commit", Some("Add a README line")).await.unwrap();
-	assert!(w.t.herdr.of("splitBeside").is_empty());
+	assert_eq!(review_asked(&w.t.herdr), 0);
 	assert_eq!(w.boss_lines(), ["[event] demo/Readme line — done: 1 new commit"]);
 	assert_eq!(w.t.ctx.reviewed.of(&w.wt), Some(w.head()));
 	assert_eq!(w.typed("t-1"), [HANDOFF_PROMPT]);
@@ -466,6 +487,7 @@ async fn a_task_end_without_a_branch_is_announced_done_counts_as_reviewed_and_go
 async fn a_review_line_names_the_commits_the_diff_the_notes_and_the_tests_and_is_said_once_with_its_toast() {
 	let w = World::new().await;
 	w.first_task().await;
+	w.two_notes();
 	w.session(&[], "Reviewed.\n\n**TESTS: pass — bun test**");
 	w.flow().ready(&w.thread).await.unwrap();
 	let line = "[event] demo/Readme line — done and reviewed: 1 new commit «Add a README line», +1/−0 in 1 file, no test files changed, 2 notes, tests unverified, no report";
@@ -509,6 +531,7 @@ async fn the_review_runs_the_done_when_first_gives_the_turn_its_failing_gate_and
 	assert!(asked.contains("his brief «Add a README line.», to check the diff against what he asked for"));
 	assert!(asked.contains("the fact that the thread handed in no report"));
 	// The review turn: its test command passes, the done-when's result is the runner's stored one.
+	w.two_notes();
 	w.session(&["bun run check"], "Reviewed.\nTESTS: pass — `bun run check`");
 	w.flow().ready(&w.thread).await.unwrap();
 	assert_eq!(
@@ -534,6 +557,7 @@ async fn the_review_runs_the_done_when_first_gives_the_turn_its_failing_gate_and
 async fn a_review_a_thread_finish_asked_for_after_main_moved_is_said_once_with_the_merges_outcome_0454() {
 	let w = World::new().await;
 	w.first_task().await;
+	w.two_notes();
 	w.thread.with(|t| t.merge_after_review = true);
 	w.flow().ready(&w.thread).await.unwrap();
 	// It didn't pass (tests unverified): one line with why the merge wasn't made, then the handoff.
@@ -554,6 +578,7 @@ async fn a_review_a_thread_finish_asked_for_after_main_moved_is_said_once_with_t
 	w.boss_idle();
 	let before = w.typed("t-1").len();
 	w.flow().task_ended(&w.thread, "1 new commit", None).await.unwrap();
+	w.two_notes();
 	w.session(&["bun test"], "Reviewed.\nTESTS: pass — bun test");
 	w.flow().ready(&w.thread).await.unwrap();
 	let lines = w.boss_lines();
@@ -696,6 +721,7 @@ async fn the_check_tool_and_the_review_say_when_the_projects_mise_check_didnt_ru
 	w.thread
 		.with(|t| t.task = Some(TaskRecord { done_when: vec!["git --version".to_owned()], ..TaskRecord::default() }));
 	w.first_task().await;
+	w.two_notes();
 	w.session(&["bun test"], "Reviewed.\nTESTS: pass — `bun test`");
 	w.flow().ready(&w.thread).await.unwrap();
 	let line = w.boss_lines().pop().expect("the review line");

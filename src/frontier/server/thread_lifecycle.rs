@@ -865,7 +865,7 @@ impl ThreadLifecycle {
 	}
 
 	/// A thread whose pane herdr restored as a shell, or whose omp ended in it while it stayed open (0521): omp again, in
-	/// the same tab (its hunk pane goes with the old one); one that was mid-turn when Jocasta stopped goes on with that
+	/// the same tab; one that was mid-turn when Jocasta stopped goes on with that
 	/// turn (`--restore`, 0549). What the old omp left, the old omp too while it still runs, ends first (0490), so the
 	/// new omp is the session's only writer. A review, `/handoff` or PR turn it was cut in is noted (`cut`, 0582): the
 	/// new omp, once idle, runs it again or goes back to its task.
@@ -917,9 +917,6 @@ impl ThreadLifecycle {
 			ctx.day.thread_blocked(&new_pane, &format!("{subject} — plan ready"), Some(&project.id))?;
 		}
 		thread.with(|t| {
-			if let Some(review) = &mut t.review {
-				review.pane = None;
-			}
 			t.omp = None;
 			plan_of(t).reopened = true;
 		});

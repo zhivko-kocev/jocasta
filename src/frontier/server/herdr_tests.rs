@@ -289,99 +289,6 @@ async fn create_worktree_passes_the_base_and_what_prepare_returns_joins_the_pane
 	assert_eq!(fake.last("layout.apply").unwrap().params["root"]["env"], json!({"A": "1", "B": "2"}));
 }
 
-fn split_handlers(fake: &FakeHerdrServer) {
-	fake.set_handler("pane.get", reply(json!({"type": "pane_info", "pane": pane("w4:p2", "w4", "idle", json!({}))})));
-	fake.set_handler("layout.apply", reply(layout("w4", "w4:t9", "w4:p7")));
-	fake.set_handler(
-		"pane.move",
-		reply(
-			json!({"type": "pane_move", "move_result": {"changed": true, "pane": pane("w4:p7", "w4", "unknown", json!({}))}}),
-		),
-	);
-}
-
-#[tokio::test]
-async fn split_beside_starts_the_command_in_a_temporary_tab_and_moves_its_pane_beside_the_target() {
-	let Setup { fake, herdr, .. } = &setup().await;
-	split_handlers(fake);
-	let command = strings(&["hunk", "diff", "main...fix-login", "--watch"]);
-	let id = herdr
-		.split_beside(
-			"w4:p2",
-			&SplitOptions {
-				command: command.clone(),
-				cwd: PathBuf::from("C:\\wt\\demo\\fix-login"),
-				ratio: Some(0.4),
-				..SplitOptions::default()
-			},
-		)
-		.await
-		.unwrap();
-	assert_eq!(id, "w4:p7");
-	assert_eq!(
-		fake.last("layout.apply").unwrap().params,
-		json!({
-			"workspace_id": "w4", "focus": false,
-			"root": {"type": "pane", "cwd": "C:\\wt\\demo\\fix-login", "command": command},
-		})
-	);
-	assert_eq!(
-		fake.last("pane.move").unwrap().params,
-		json!({
-			"pane_id": "w4:p7",
-			"destination": {"type": "tab", "tab_id": "w4:t1", "target_pane_id": "w4:p2", "split": "right", "ratio": 0.4},
-			"focus": false,
-		})
-	);
-
-	// A refused move (zoomed tab) closes the temporary tab and throws herdr's reason.
-	fake.set_handler(
-		"pane.move",
-		reply(json!({"type": "pane_move", "move_result": {"changed": false, "reason": "zoomed_tab", "pane": pane("w4:p7", "w4", "unknown", json!({}))}})),
-	);
-	fake.set_handler("tab.close", ok());
-	let refused = herdr
-		.split_beside(
-			"w4:p2",
-			&SplitOptions {
-				command: strings(&["hunk"]),
-				cwd: PathBuf::from("C:\\wt"),
-				direction: Some(Direction::Down),
-				..SplitOptions::default()
-			},
-		)
-		.await
-		.unwrap_err();
-	assert_eq!(refused.code, "zoomed_tab");
-	assert_eq!(fake.last("tab.close").unwrap().params, json!({"tab_id": "w4:t9"}));
-	assert_eq!(fake.last("pane.move").unwrap().params["destination"]["split"], "down");
-}
-
-#[tokio::test]
-async fn split_beside_runs_the_command_with_its_env_and_names_the_new_pane() {
-	let Setup { fake, herdr, .. } = &setup().await;
-	split_handlers(fake);
-	fake.set_handler("pane.rename", ok());
-	herdr
-		.split_beside(
-			"w4:p2",
-			&SplitOptions {
-				command: strings(&["hunk"]),
-				cwd: PathBuf::from("C:\\wt"),
-				env: Some(env(&[("HUNK_MCP_PORT", "1")])),
-				label: Some("review".into()),
-				..SplitOptions::default()
-			},
-		)
-		.await
-		.unwrap();
-	assert_eq!(
-		fake.last("layout.apply").unwrap().params["root"],
-		json!({"type": "pane", "cwd": "C:\\wt", "command": ["hunk"], "env": {"HUNK_MCP_PORT": "1"}})
-	);
-	assert_eq!(fake.last("pane.rename").unwrap().params, json!({"pane_id": "w4:p7", "label": "review"}));
-}
-
 #[test]
 fn pane_text_strips_esc_and_other_control_characters_so_outside_text_cant_end_the_paste() {
 	assert_eq!(
@@ -1011,20 +918,6 @@ async fn the_in_memory_fake_respawns_in_the_same_tab_closes_workspaces_with_thei
 		.unwrap();
 	assert_eq!(respawned.tab_id, old.tab_id);
 	assert_ne!(respawned.pane_id, old.pane_id);
-	let beside = fake
-		.split_beside(
-			&respawned.pane_id,
-			&SplitOptions {
-				command: strings(&["hunk"]),
-				cwd: cwd.to_path_buf(),
-				label: Some("review".into()),
-				..SplitOptions::default()
-			},
-		)
-		.await
-		.unwrap();
-	let split = fake.panes().await.unwrap().into_iter().find(|p| p.pane_id == beside).unwrap();
-	assert_eq!((split.tab_id, split.label.as_deref()), (old.tab_id, Some("review")));
 	fake.state().roots.insert(respawned.pane_id.clone(), 7);
 	assert_eq!(fake.pane_root(&respawned.pane_id, None).await.unwrap(), Some(7));
 	fake.close_workspace(&first).await.unwrap();

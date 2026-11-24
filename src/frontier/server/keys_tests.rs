@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use super::*;
 use crate::frontier::server::context::{TestContext, test_context};
 use crate::frontier::server::herdr::PaneInfo;
-use crate::frontier::server::hunk::fake_hunk::{fake_hunk, health_daemon};
 use crate::frontier::server::thread::Thread;
 use crate::frontier::server::wording::Overlap;
 use crate::shared::git::git;
@@ -93,11 +92,11 @@ async fn another_pane_of_the_threads_workspace_names_the_thread_and_any_other_pa
 	thread.with(|t| t.state = AgentState::Working);
 	t.herdr.state().pane_list.extend([
 		pane("1-1", "w-1", None),
-		pane("hunk-1", "w-1", Some("hunk")),
+		pane("side-1", "w-1", Some("shell")),
 		pane("other", "w-other", Some("shell")),
 	]);
 	let keys = keys(&t);
-	assert_eq!(keys.stop(Some("hunk-1")).await.unwrap(), "Stopped demo/Readme line's run.");
+	assert_eq!(keys.stop(Some("side-1")).await.unwrap(), "Stopped demo/Readme line's run.");
 	assert_eq!(stops(&t), [vec![serde_json::json!("1-1")]]);
 	let plain = "Stop: the focused pane isn't a thread's; focus a thread or pick one in today.";
 	assert_eq!(refusal(keys.stop(Some("other")).await), plain);
@@ -177,7 +176,7 @@ fn a_finish_text_with_a_but_is_half_done_an_error_and_any_other_is_not() {
 }
 
 /// A real repo `demo` on `main` and a thread `Readme line` in a worktree of it on `feature/x`, in `phase` and `state`
-/// of the test's choosing; hunk is installed (the seam).
+/// of the test's choosing.
 struct Review {
 	t: TestContext,
 	main: PathBuf,
@@ -188,11 +187,7 @@ struct Review {
 
 async fn review_world() -> Review {
 	let dir = temp_dir("keys");
-	let hunk = fake_hunk(dir.path());
-	let port = health_daemon().await;
 	let t = test_context(|options| {
-		options.hunk = Some(Some(hunk));
-		options.hunk_port = Some(port);
 		options.mise = Some(None);
 	});
 	let main = make_repo(&real_path(dir.path()).join("demo"), true);
@@ -250,13 +245,12 @@ async fn review_refuses_a_thread_with_no_branch_or_no_trunk_and_one_with_no_comm
 
 #[tokio::test]
 async fn review_of_a_thread_with_commits_ahead_starts_the_review_step_and_says_so() {
-	// Its review step runs for real: hunk opens beside the pane and the review turn is typed.
+	// Its review step runs for real: the review turn is typed.
 	let w = review_world().await;
 	fs::write(w.path.join("README.md"), "demo\nA line.\n").unwrap();
 	sh(&w.path, &["commit", "-qam", "Add a README line"]);
 	let said = keys(&w.t).review(Some("1-1")).await.unwrap();
-	assert_eq!(said, "Reviewing demo/Readme line: hunk beside it, the thread tests and reviews 1 new commit.");
-	assert_eq!(w.t.herdr.of("splitBeside").len(), 1);
+	assert_eq!(said, "Reviewing demo/Readme line: the thread tests and reviews 1 new commit.");
 	assert_eq!(w.thread.with(|t| t.phase), Phase::Review);
 	assert!(w.main.exists());
 	assert!(w.t.ctx.calls.is_empty());
@@ -306,9 +300,9 @@ async fn the_new_thread_form_picks_the_project_of_the_picked_thread_or_of_a_pane
 	// The thread picked in today wins.
 	t.with_thread("1-1", "Readme line");
 	assert_eq!(keys.new_thread_form(Some("1-1")).await.unwrap().project, "demo");
-	// Another pane of its workspace (its hunk pane).
-	t.herdr.state().pane_list.push(pane("hunk-1", "w-1", Some("hunk")));
-	assert_eq!(keys.new_thread_form(Some("hunk-1")).await.unwrap().project, "demo");
+	// Another pane of its workspace (a shell beside it).
+	t.herdr.state().pane_list.push(pane("side-1", "w-1", Some("shell")));
+	assert_eq!(keys.new_thread_form(Some("side-1")).await.unwrap().project, "demo");
 	// A pane in the other project's main checkout.
 	let mut in_client = pane("shell-1", "w-2", Some("shell"));
 	in_client.cwd = Some(client.clone());

@@ -110,7 +110,7 @@ async fn workspace_jocasta_is_made_first_made_first_again_after_he_closes_it_wit
 	assert!(launched.has(&pane.pane_id));
 	assert!(data_dir().join("panes.json").exists());
 	// The rare procedures are skills in the boss's folder; save-lesson carries the shipped TDD lesson (0461).
-	for name in ["save-lesson", "mise-setup", "whiteboard-review", "leftover-worktrees"] {
+	for name in ["save-lesson", "mise-setup", "leftover-worktrees"] {
 		same_text(
 			&omp.join("skills").join(name).join("SKILL.md"),
 			&shipped.join("boss-skills").join(name).join("SKILL.md"),

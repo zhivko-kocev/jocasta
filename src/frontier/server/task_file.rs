@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::frontier::server::hunk::ReviewProof;
 use crate::frontier::server::report::{ThreadReport, report_line};
+use crate::frontier::server::review_proof::ReviewProof;
 use crate::frontier::server::sessions::TestsResult;
 use crate::frontier::server::wording::WHEN_YOU_FINISH;
 use crate::shared::clock::now_ms;

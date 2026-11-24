@@ -22,6 +22,9 @@ use serde_json::{Map, Value};
 use tokio::sync::{OnceCell, watch};
 use tokio::task::JoinHandle;
 
+use crate::frontier::brief::BriefLinks;
+use crate::frontier::brief::model::Brief;
+use crate::frontier::brief::routes::BriefActions;
 use crate::frontier::protocol::{
 	ClientMessage, Dashboard, Hud, Leftover, PrFacts, ServerMessage, ServiceHealth, ServiceName, ServiceState,
 	ToastLevel, ToastReason, Today,
@@ -30,6 +33,7 @@ use crate::frontier::server::allow::Confirm;
 use crate::frontier::server::asker::{Ask, Notifier};
 use crate::frontier::server::boss::fresh_session;
 use crate::frontier::server::bridge::{Bridge, BridgeService, PaneAgent, PaneEvent, Resolved, Role};
+use crate::frontier::server::brief_actions::{self, brief_of_link};
 use crate::frontier::server::checks::CheckRunner;
 use crate::frontier::server::close::CloseService;
 use crate::frontier::server::context::{Link, ServiceContext};
@@ -71,38 +75,24 @@ pub type Heal = Arc<dyn Fn(HerdrSnapshot, Option<String>) -> BoxFuture<'static, 
 /// Resolves at herdr's next change the refresh reads (`ServerHost::herdr_changed`).
 pub type Changed = Arc<dyn Fn() -> BoxFuture<'static, ()> + Send + Sync>;
 
-/// A whiteboard review by id on whiteboard's server (`GET /reviews-api/<id>?full=true`): its title, or `None` when
-/// there is none; an error when the server doesn't answer.
-pub type FindReview = Arc<dyn Fn(String) -> BoxFuture<'static, Result<Option<String>>> + Send + Sync>;
-
-/// Opens a whiteboard review, by id, in his browser.
-pub type OpenReview = Arc<dyn Fn(&str) + Send + Sync>;
-
 /// What `JocastaService` is built with. Every field but `herdr` and `broadcast` is optional: `None` is the TypeScript's
 /// absent option, and the default each field names is the service's, not this struct's. The service takes `day` out
 /// (`Option::take`) to build the day, so the context's copy has none.
 pub struct ServiceOptions {
 	pub herdr: Arc<dyn Herdr>,
 	pub broadcast: Arc<dyn Fn(ServerMessage) + Send + Sync>,
-	/// Whether whiteboard answers (0429), for the dashboard; herdr's the service checks itself.
-	pub services: Option<Arc<dyn Fn() -> BoxFuture<'static, Vec<ServiceHealth>> + Send + Sync>>,
 	/// The dock's workspace and the Agents view (0553): healed on every refresh. Absent in tests that don't need it.
 	pub dock: Option<Heal>,
 	/// herdr's changes (fork plan finding 8): each refreshes herdr's facts, and the full refresh comes every minute.
 	/// Absent (a test's service, one beside a herdr of its own): everything every `refresh_ms`.
 	pub herdr_changed: Option<Changed>,
-	/// A whiteboard review by id (its `session_create` sessionId). Absent when whiteboard is off.
-	pub find_review: Option<FindReview>,
-	/// Opens a whiteboard review in his browser (the boss's `show`, 0552). Absent when whiteboard is off.
-	pub open_review: Option<OpenReview>,
+	/// How a brief reaches his browser (0678): the boss's `show` and the thread brief's toast. Absent in a test's service
+	/// that doesn't need it.
+	pub briefs: Option<Arc<dyn BriefLinks>>,
 	/// Phase 8's pollers and clock (test seam).
 	pub day: Option<DayOptions>,
 	/// How omp starts: `["omp"]` by default (test and smoke seam).
 	pub omp: Option<Vec<String>>,
-	/// How hunk starts: the shipped or npm binary (`findHunk`) by default; `Some(None)` is none installed (test seam).
-	pub hunk: Option<Option<Vec<String>>>,
-	/// The loopback port of Jocasta's own hunk session daemon; `HUNK_PORT` by default (test seam).
-	pub hunk_port: Option<u16>,
 	/// The boss pane's argv; `omp --continue --config <config>/boss.yml --config <config>/guard.yml` by default (0424,
 	/// 0450).
 	pub boss_command: Option<Vec<String>>,
@@ -173,15 +163,11 @@ impl ServiceOptions {
 		Self {
 			herdr,
 			broadcast,
-			services: None,
 			dock: None,
 			herdr_changed: None,
-			find_review: None,
-			open_review: None,
+			briefs: None,
 			day: None,
 			omp: None,
-			hunk: None,
-			hunk_port: None,
 			boss_command: None,
 			pane_prompt: None,
 			gh: None,
@@ -320,12 +306,7 @@ impl DayHooks for ServiceHooks {
 					note: Some("not answering".to_owned()),
 				},
 			};
-			let mut services = match &c.options.services {
-				Some(services) => services().await,
-				None => Vec::new(),
-			};
-			services.push(herdr);
-			Ok(services)
+			Ok(vec![herdr])
 		})
 	}
 
@@ -685,11 +666,6 @@ impl JocastaService {
 		self.ctx.omps.end_leftovers().await
 	}
 
-	/// Ends the hunk session daemon this service started (0434, 0486).
-	pub async fn end_hunk_daemon(&self) {
-		self.ctx.panes.end_hunk_daemon().await;
-	}
-
 	/// One big-picture review of a project (0470), one at a time per project (SVC-12).
 	pub async fn weekly_review(&self, project: &Project) -> Result<Option<String>> {
 		self.ctx.weekly.review(project).await
@@ -919,6 +895,11 @@ impl JocastaService {
 			ClientMessage::LeftoverRemove { .. } => {}
 			ClientMessage::PaneFocus { pane_id } => self.ctx.herdr.focus(&pane_id).await?,
 			ClientMessage::LinkOpen { url } => {
+				// A brief's link (the Done toast's) opens its page with a fresh launch code (0678).
+				if let (Some(id), Some(briefs)) = (brief_of_link(&self.ctx, &url), self.ctx.options.briefs.as_ref()) {
+					briefs.open(&id);
+					return Ok(());
+				}
 				// Only a link the service itself shows now, and only http(s): a client can't open anything else (C9).
 				let link =
 					web_link(Some(&url)).filter(|link| self.shown_links().is_ok_and(|shown| shown.contains(link)));
@@ -927,6 +908,13 @@ impl JocastaService {
 			}
 		}
 		Ok(())
+	}
+}
+
+impl BriefActions for JocastaService {
+	fn act(&self, id: String, action: Value) -> BoxFuture<'static, Result<Brief>> {
+		let (ctx, tools) = (Arc::clone(&self.ctx), self.tools.clone());
+		Box::pin(async move { brief_actions::act(&ctx, &tools, &id, &action).await })
 	}
 }
 
@@ -991,13 +979,6 @@ impl StopService for JocastaService {
 
 	fn end_thread_leftovers(&self) -> BoxFuture<'_, Result<()>> {
 		Box::pin(JocastaService::end_thread_leftovers(self))
-	}
-
-	fn end_hunk_daemon(&self) -> BoxFuture<'_, Result<()>> {
-		Box::pin(async move {
-			JocastaService::end_hunk_daemon(self).await;
-			Ok(())
-		})
 	}
 }
 

@@ -1,5 +1,5 @@
-//! The install layout (appendix I): `<install dir>/jocasta.exe`, `config/`, `node/`, `whiteboard/`,
-//! `whiteboard-canvas/`, `editor.worker.js`, `hunk/`, and `install.json` written by the installer. One resolver for
+//! The install layout (appendix I): `<install dir>/jocasta.exe`, `config/`, `conpty/` on Windows and
+//! `install.json` written by the installer. One resolver for
 //! every caller: bare `jocasta`, the service it starts, setup and a source run.
 
 use std::path::{Path, PathBuf};

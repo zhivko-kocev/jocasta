@@ -15,10 +15,9 @@ use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
 
 use super::{
-	AgentState, AgentView, Direction, Env, Herdr, HerdrError, HerdrResult, HerdrSnapshot, LineReader, Note,
-	NotificationResult, OnChange, PaneIds, PaneInfo, PaneMetadata, RespawnOptions, SplitOptions, StopWatch, TabPane,
-	TabSpec, Tokens, WatchEvent, WorkspaceInfo, WorktreeCreated, WorktreeOptions, env_json, locked, path_json,
-	tokens_json,
+	AgentState, AgentView, Env, Herdr, HerdrError, HerdrResult, HerdrSnapshot, LineReader, Note, NotificationResult,
+	OnChange, PaneIds, PaneInfo, PaneMetadata, RespawnOptions, StopWatch, TabPane, TabSpec, Tokens, WatchEvent,
+	WorkspaceInfo, WorktreeCreated, WorktreeOptions, env_json, locked, path_json, tokens_json,
 };
 use crate::shared::git::git;
 
@@ -679,40 +678,6 @@ impl Herdr for FakeHerdr {
 				opts.env.as_ref(),
 			);
 			Ok(TabPane { tab_id: pane.tab_id, pane_id: pane.pane_id })
-		})
-	}
-
-	fn split_beside<'a>(&'a self, pane_id: &'a str, opts: &'a SplitOptions) -> BoxFuture<'a, HerdrResult<String>> {
-		Box::pin(async move {
-			let mut recorded = json!({"command": opts.command, "cwd": path_json(&opts.cwd)});
-			if let Value::Object(map) = &mut recorded {
-				if let Some(label) = &opts.label {
-					map.insert("label".to_owned(), json!(label));
-				}
-				if let Some(env) = &opts.env {
-					map.insert("env".to_owned(), env_json(env));
-				}
-				if let Some(direction) = opts.direction {
-					map.insert(
-						"direction".to_owned(),
-						json!(if direction == Direction::Right { "right" } else { "down" }),
-					);
-				}
-				if let Some(ratio) = opts.ratio {
-					map.insert("ratio".to_owned(), json!(ratio));
-				}
-			}
-			self.record("splitBeside", vec![json!(pane_id), recorded]);
-			let target = self.state().pane_list.iter().find(|p| p.pane_id == pane_id).cloned();
-			let workspace = target.as_ref().map_or("", |t| t.workspace_id.as_str());
-			let tab = target.as_ref().map(|t| t.tab_id.as_str());
-			let pane = self.add_pane((workspace, &opts.cwd.display().to_string()), Some(&opts.command), tab, None);
-			if let Some(label) = opts.label.as_ref().filter(|label| !label.is_empty())
-				&& let Some(listed) = self.state().pane_list.iter_mut().find(|p| p.pane_id == pane.pane_id)
-			{
-				listed.label = Some(label.clone());
-			}
-			Ok(pane.pane_id)
 		})
 	}
 

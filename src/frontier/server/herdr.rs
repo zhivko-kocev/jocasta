@@ -234,33 +234,6 @@ pub struct RespawnOptions {
 	pub env: Option<Env>,
 }
 
-/// Which way a split opens.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Direction {
-	Right,
-	Down,
-}
-
-impl Direction {
-	fn as_str(self) -> &'static str {
-		match self {
-			Self::Right => "right",
-			Self::Down => "down",
-		}
-	}
-}
-
-/// A pane to start beside another.
-#[derive(Debug, Clone, Default)]
-pub struct SplitOptions {
-	pub command: Vec<String>,
-	pub cwd: PathBuf,
-	pub env: Option<Env>,
-	pub label: Option<String>,
-	pub ratio: Option<f64>,
-	pub direction: Option<Direction>,
-}
-
 /// herdr's notification sound.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sound {
@@ -329,8 +302,6 @@ pub trait Herdr: Send + Sync {
 	/// Replaces the pane's tab with one pane running `command` (the tab keeps its label): a pane herdr restored as a
 	/// shell runs omp again. Returns the new pane.
 	fn respawn<'a>(&'a self, pane_id: &'a str, opts: &'a RespawnOptions) -> BoxFuture<'a, HerdrResult<TabPane>>;
-	/// A new pane running `command` beside `pane_id` in its tab, named `label` when given; returns the new pane id.
-	fn split_beside<'a>(&'a self, pane_id: &'a str, opts: &'a SplitOptions) -> BoxFuture<'a, HerdrResult<String>>;
 	/// Keys by herdr's key names (`f9`) to the pane, as typed (`pane.send_keys`): the one input that still goes through the
 	/// terminal, push-to-talk (F9), which omp reads as a key, not as a message (0675).
 	fn send_keys<'a>(&'a self, pane_id: &'a str, keys: &'a [String]) -> BoxFuture<'a, HerdrResult<()>>;
@@ -932,18 +903,6 @@ struct LayoutApplied {
 }
 
 #[derive(Deserialize)]
-struct WireMove {
-	changed: bool,
-	reason: Option<String>,
-	pane: WirePane,
-}
-
-#[derive(Deserialize)]
-struct PaneMoved {
-	move_result: WireMove,
-}
-
-#[derive(Deserialize)]
 struct PaneRead {
 	read: WireRead,
 }
@@ -1188,54 +1147,6 @@ impl HerdrClient {
 		self.replace_tab(&target.pane.tab_id, layout).await
 	}
 
-	async fn split_beside(&self, pane_id: &str, opts: &SplitOptions) -> HerdrResult<String> {
-		// pane.split starts the default shell only and takes no argv. So: a temporary tab running `command`
-		// (layout.apply), then pane.move {pane_id, destination: {type: "tab", tab_id, target_pane_id, split, ratio}}
-		// into the target's tab; moving a tab's only pane closes that tab → `{type: "pane_move", move_result:
-		// {changed, reason, pane}}` (socket-api.mdx "pane.move").
-		let target: PaneGot = self.client.request("pane.get", &json!({"pane_id": pane_id}), None).await?;
-		let temp = self
-			.apply_layout(&json!({
-				"workspace_id": target.pane.workspace_id,
-				"focus": false,
-				"root": command_pane(&opts.cwd, &opts.command, opts.env.as_ref()),
-			}))
-			.await?;
-		let mut destination = json!({
-			"type": "tab",
-			"tab_id": target.pane.tab_id,
-			"target_pane_id": pane_id,
-			"split": opts.direction.unwrap_or(Direction::Right).as_str(),
-		});
-		if let (Some(ratio), Value::Object(map)) = (opts.ratio, &mut destination) {
-			map.insert("ratio".to_owned(), json!(ratio));
-		}
-		let params = json!({"pane_id": temp.pane_id, "destination": destination, "focus": false});
-		let moved: PaneMoved = match self.client.request("pane.move", &params, None).await {
-			Ok(moved) => moved,
-			Err(error) => {
-				self.close_tab(&temp.tab_id).await;
-				return Err(error);
-			}
-		};
-		if !moved.move_result.changed {
-			self.close_tab(&temp.tab_id).await;
-			let reason = moved.move_result.reason.unwrap_or_else(|| "unchanged".to_owned());
-			return Err(HerdrError::new(reason.clone(), format!("herdr didn't split {pane_id}: {reason}")));
-		}
-		let split = moved.move_result.pane.pane_id;
-		// pane.rename {pane_id, label} (schema `PaneRenameParams`).
-		if let Some(label) = opts.label.as_ref().filter(|label| !label.is_empty()) {
-			self.client.request_value("pane.rename", &json!({"pane_id": split, "label": label}), None).await?;
-		}
-		Ok(split)
-	}
-
-	/// Closes a temporary tab; a tab that can't be closed is left.
-	async fn close_tab(&self, tab_id: &str) {
-		let _ = self.client.request_value("tab.close", &json!({"tab_id": tab_id}), None).await;
-	}
-
 	async fn apply_layout(&self, params: &Value) -> HerdrResult<TabPane> {
 		let applied: LayoutApplied = self.client.request("layout.apply", params, None).await?;
 		let Some(pane_id) = first_pane_id(&applied.layout.root) else {
@@ -1379,10 +1290,6 @@ impl Herdr for HerdrClient {
 
 	fn respawn<'a>(&'a self, pane_id: &'a str, opts: &'a RespawnOptions) -> BoxFuture<'a, HerdrResult<TabPane>> {
 		Box::pin(HerdrClient::respawn(self, pane_id, opts))
-	}
-
-	fn split_beside<'a>(&'a self, pane_id: &'a str, opts: &'a SplitOptions) -> BoxFuture<'a, HerdrResult<String>> {
-		Box::pin(HerdrClient::split_beside(self, pane_id, opts))
 	}
 
 	fn send_keys<'a>(&'a self, pane_id: &'a str, keys: &'a [String]) -> BoxFuture<'a, HerdrResult<()>> {

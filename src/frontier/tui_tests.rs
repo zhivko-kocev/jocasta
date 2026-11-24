@@ -1,5 +1,5 @@
 //! `tui`'s tests: the column math and wrapping the TypeScript's `ask/view.test.ts` checked, the lines drawn into a
-//! ratatui buffer, and the palette against `palette.css`.
+//! ratatui buffer, and the palette against the brief page's colours.
 
 use super::*;
 
@@ -93,10 +93,10 @@ fn render_lines_draws_each_line_a_row_in_its_colours_and_clips_at_the_edge() {
 }
 
 #[test]
-fn the_palette_matches_palette_css() {
-	let css = include_str!("canvas/palette.css");
+fn the_palette_matches_the_brief_pages_colours() {
+	let css = include_str!("brief/page/brief.css");
 	let hex = |property: &str| {
-		let at = css.find(&format!("{property}:")).unwrap_or_else(|| panic!("palette.css has no {property}"));
+		let at = css.find(&format!("{property}:")).unwrap_or_else(|| panic!("brief.css has no {property}"));
 		let rest = css[at + property.len() + 1..].trim_start();
 		let digits = rest.strip_prefix('#').unwrap_or_else(|| panic!("{property} is not a hex colour"));
 		let n = u32::from_str_radix(&digits[..6], 16).unwrap_or(0);
@@ -104,23 +104,14 @@ fn the_palette_matches_palette_css() {
 	};
 	let p = TOKYO_NIGHT;
 	let table = [
-		("--bg-0", p.bg0),
-		("--bg-1", p.bg1),
-		("--bg-2", p.bg2),
-		("--bg-3", p.bg3),
+		("--bg", p.bg0),
+		("--panel", p.bg2),
 		("--fg", p.fg),
-		("--fg-2", p.fg2),
-		("--fg-3", p.fg3),
-		("--mark-3", p.mark3),
-		("--comment", p.comment),
-		("--bright-black", p.bright_black),
 		("--blue", p.blue),
-		("--cyan", p.cyan),
 		("--yellow", p.yellow),
 		("--red", p.red),
 		("--green", p.green),
 		("--purple", p.purple),
-		("--orange", p.orange),
 	];
 	for (property, colour) in table {
 		assert_eq!(hex(property), colour, "{property}");

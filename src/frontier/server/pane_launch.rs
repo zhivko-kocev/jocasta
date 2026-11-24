@@ -1,6 +1,6 @@
 //! How the service starts omp in a pane (0399, 0404, 0457, 0521, 0540, 0578): the boss pane with this run's boss key,
 //! a project or thread pane again with its overlay, env and pane key, each checked to host on loopback only (0561);
-//! the panes' env with mise's (0473, 0477) and hunk's (F-02, F-03); and Jocasta's hunk session daemon.
+//! the panes' env with mise's (0473, 0477).
 //!
 //! What the TypeScript sets in the constructor (`paneOmp`, `paneEnv`, the boss key) is built on first use, from the
 //! options the context holds: the context doesn't exist yet when the part is made. A pane's env is an ordered
@@ -15,7 +15,6 @@ use crate::frontier::server::boss::{EnsureBossOptions, PANE_KEY_ENV, boss_comman
 use crate::frontier::server::context::{Link, Shared};
 use crate::frontier::server::events::BossPane;
 use crate::frontier::server::herdr::{AgentState, Env, PaneInfo, RespawnOptions};
-use crate::frontier::server::hunk::{HUNK_PORT, ensure_hunk_daemon, find_hunk, hunk_env};
 use crate::frontier::server::mise::{Mise, mise_env, trust_copies};
 use crate::frontier::server::overlay::ensure_overlay;
 use crate::frontier::server::service::ServiceOptions;
@@ -36,7 +35,7 @@ use crate::shared::pathkey::{path_key, real_path};
 use crate::shared::paths::data_dir;
 #[cfg(windows)]
 use crate::shared::process::on_path;
-use crate::shared::proctree::{ProcessId, end_processes, process_start};
+
 use crate::shared::projects::Project;
 use crate::shared::prompt::without_leading_comment;
 use crate::shared::push_hook::push_hook_env;
@@ -183,7 +182,6 @@ struct Config {
 	pane_prompt: Option<PathBuf>,
 	pane_env: Env,
 	hook_env: Env,
-	hunk_port: u16,
 	boss_key: String,
 }
 
@@ -222,13 +220,12 @@ impl Config {
 		pane_omp.extend(["--config".to_owned(), shipped("guard.yml")]);
 		// The one extension every pane loads (0675); `-e` adds to the extensions his own settings list.
 		pane_omp.extend(["-e".to_owned(), shipped(BRIDGE_EXTENSION)]);
-		let hunk_port = options.hunk_port.unwrap_or(HUNK_PORT);
 		let hook_env = hook_env();
-		let mut pane_env = hunk_env(hunk_port);
+		let mut pane_env = Env::new();
 		for (name, value) in &hook_env {
 			set_env(&mut pane_env, name, value.clone());
 		}
-		Self { omp, pane_omp, pane_prompt, pane_env, hook_env, hunk_port, boss_key }
+		Self { omp, pane_omp, pane_prompt, pane_env, hook_env, boss_key }
 	}
 }
 
@@ -239,15 +236,13 @@ struct State {
 	boss_keyed: Option<String>,
 	/// The boss's omp started without its `jocasta` tools (beta day P9), said once as a warning notification.
 	boss_notice: Option<String>,
-	/// The hunk session daemon this service started (B4): Jocasta's close ends it.
-	hunk_daemon: Option<ProcessId>,
 }
 
 /// How a pane's omp is started again ([`PaneLauncher::respawn`]).
 pub struct Respawn<'a> {
 	pub cwd: &'a Path,
 	pub project_id: &'a str,
-	/// The pane's env as it is, without mise's; the hunk variables and mise's when absent.
+	/// The pane's env as it is, without mise's; mise's when absent.
 	pub env: Option<Env>,
 	/// A session file: omp goes on with the turn that session's last process left unfinished (0549).
 	pub restore: Option<&'a Path>,
@@ -285,15 +280,9 @@ impl PaneLauncher {
 		&self.config().pane_omp
 	}
 
-	/// What every project and thread pane starts with: Jocasta's hunk port and no update notice (F-02, F-03), and git's
-	/// pre-push hook through its configuration.
+	/// What every project and thread pane starts with: git's pre-push hook through its configuration.
 	pub fn pane_env(&self) -> &Env {
 		&self.config().pane_env
-	}
-
-	/// The loopback port of Jocasta's hunk session daemon.
-	pub fn hunk_port(&self) -> u16 {
-		self.config().hunk_port
 	}
 
 	/// The shipped bridge extension every pane loads (0675).
@@ -376,8 +365,8 @@ impl PaneLauncher {
 	}
 
 	/// A project or thread pane herdr restored as a shell, or whose omp ended in it (0521), runs omp again in its folder
-	/// with the project's overlay (0399, 0400), resuming its session, and its env: a thread's own variables (0457) or,
-	/// for a project pane, the hunk variables, both with mise's (0473, 0477); returns the new pane. With `restore` (a
+	/// with the project's overlay (0399, 0400), resuming its session, and its env: a thread's own variables (0457), with mise's
+	/// (0473, 0477); returns the new pane. With `restore` (a
 	/// session file), omp goes on with the turn that session's last process left unfinished (0549). A thread's omp
 	/// appends its task's brief and done-when again (0540), and a heavy thread's loads `heavy.yml` after the overlay
 	/// again (0590). Each start gets its own pane key (0578), kept with the pane.
@@ -488,15 +477,12 @@ impl PaneLauncher {
 	}
 
 	/// The env the task's checks run with (0542, 0559, SVC-16): the service's own without Jocasta's, herdr's and omp's
-	/// keys, and the hunk variables its panes get (not the push hook: a check pushes nothing).
+	/// keys (not the push hook: a check pushes nothing).
 	pub fn check_env(&self) -> HashMap<String, String> {
-		let mut checks: HashMap<String, String> =
-			process_env().into_iter().filter(|(name, _)| !is_jocasta_key(name)).collect();
-		checks.extend(hunk_env(self.hunk_port()));
-		checks
+		process_env().into_iter().filter(|(name, _)| !is_jocasta_key(name)).collect()
 	}
 
-	/// A thread pane's env (0457, 0473): the hunk variables, the thread's own, then mise's, once the worktree's unchanged
+	/// A thread pane's env (0457, 0473): the thread's own, then mise's, once the worktree's unchanged
 	/// copies of the main checkout's trusted mise configs are trusted (0596); with the layer off, the layer's switch too,
 	/// so its `jocasta mcp` lists no thread tools (0576).
 	pub async fn thread_pane_env(&self, project: &Project, path: &Path) -> Result<Env> {
@@ -516,35 +502,6 @@ impl PaneLauncher {
 			trust_copies(&project.id, &project.main_path, path, Some(&base), mise).await;
 		}
 		Ok(self.bridged(self.with_mise(&project.id, path, &env).await))
-	}
-
-	/// hunk's argv: the test seam's, else the shipped or npm binary; none when there is none.
-	pub fn hunk(&self) -> Option<Vec<String>> {
-		match &self.link.ctx().options.hunk {
-			Some(hunk) => hunk.clone(),
-			None => find_hunk().map(|found| vec![found.display().to_string()]),
-		}
-	}
-
-	/// Jocasta's hunk session daemon, started when it isn't up; one started here is remembered by pid and start.
-	pub async fn ensure_hunk_daemon(&self, hunk: &[String]) {
-		let remember = |pid: u32| {
-			if let Some(start) = process_start(pid) {
-				self.state().hunk_daemon = Some(ProcessId { pid, start });
-			}
-		};
-		if let Err(error) = ensure_hunk_daemon(hunk, self.hunk_port(), Some(&remember)).await {
-			self.link.ctx().warn(error);
-		}
-	}
-
-	/// Ends the hunk session daemon this service started, the same process by pid and start time (0434: Jocasta's
-	/// close stops everything it runs; 0486). Run once herdr's panes are gone, so no hunk pane starts another.
-	pub async fn end_hunk_daemon(&self) {
-		let daemon = self.state().hunk_daemon.take();
-		if let Some(daemon) = daemon.filter(|daemon| process_start(daemon.pid) == Some(daemon.start)) {
-			end_processes(&[daemon], &[]).await;
-		}
 	}
 }
 

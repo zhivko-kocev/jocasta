@@ -20,8 +20,7 @@ use crate::frontier::server::events::Toast;
 use crate::frontier::server::helpers::{
 	BRIEF, Msg, Page, TEST_BOSS_KEY, TestServer, ThreadOptions, boss_idle, boss_lines, boss_pane, call, commit_in,
 	demo_project, push_state, relaunch_idle, review, session_file, sh, start_test_server, start_test_server_with,
-	start_thread, states_settled, task_dir_of, thread_pane, until, until_async, use_hunk_daemon, with_server,
-	write_settings,
+	start_thread, states_settled, task_dir_of, thread_pane, until, until_async, with_server, write_settings,
 };
 use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
 use crate::frontier::server::herdr::{AgentState, Env, Herdr, HerdrError, NotificationResult, WorkspaceInfo};
@@ -209,9 +208,7 @@ async fn svc_5_thread_finish_looks_again_after_his_allow_a_thread_at_work_meanwh
 async fn svc_6_an_omp_started_again_mid_review_runs_the_review_again_and_mid_handoff_runs_handoff_again_0582() {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
-	let hunk = use_hunk_daemon().await;
-	let mut options = ServerOptions::default();
-	hunk.apply(&mut options);
+	let options = ServerOptions::default();
 	with_server(options, |server| async move {
 		let herdr = server.herdr.clone();
 		let started = start_thread(&server, ThreadOptions::default()).await;
@@ -742,10 +739,8 @@ async fn c6_with_the_layer_off_a_thread_pane_gets_jocasta_layer_off_its_prompt_n
 	let mut j = temp_jocasta();
 	let project = demo_project(j.root(), "demo").await;
 	j.set_var(LAYER_ENV, Some("off"));
-	let hunk = use_hunk_daemon().await;
 	// The server's own default for the report steer; the layer off must still send none.
-	let mut options = ServerOptions { ask_report: Some(true), ..ServerOptions::default() };
-	hunk.apply(&mut options);
+	let options = ServerOptions { ask_report: Some(true), ..ServerOptions::default() };
 	with_server(options, |server| async move {
 		server.herdr.state().omp_up_on_create = Some(AgentState::Idle);
 		call(

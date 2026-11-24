@@ -1,13 +1,10 @@
 // knip (0614): the files, exports and dependencies nothing uses. Run as `bunx knip`.
 {
 	"$schema": "https://unpkg.com/knip@6/schema.json",
-	// What starts at no import: the canvas page's script (index.html names it; knip does not read the page), the
-	// scripts, H1's oracle (the Rust bench starts it with Bun, 0636) and the omp extension project panes load with `-e`
+	// What starts at no import: the scripts, H1's oracle (the Rust bench starts it with Bun, 0636) and the omp extension project panes load with `-e`
 	// (0617). The tests are found from package.json's scripts and the Bun test plugin.
-	"entry": ["src/frontier/canvas/main.ts", "scripts/*.ts", "bench/h1-guard/*.ts", "config/bridge-extension.ts"],
-	"project": ["src/**", "scripts/**", "bench/**", "test/**"],
-	// A git submodule (.gitmodules) and the herdr fork's subtree: other projects' code and tests, not Jocasta's.
-	"ignore": ["forks/**", "crates/**"],
+	"entry": ["scripts/*.ts", "bench/h1-guard/*.ts", "config/bridge-extension.ts"],
+	"project": ["scripts/**", "bench/**", "test/**"],
 	// jscpd is a command, run by hand (0614), and is imported nowhere.
 	"ignoreDependencies": ["jscpd"]
 }

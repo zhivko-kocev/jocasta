@@ -11,6 +11,9 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
+use crate::frontier::brief::layout::lay_out;
+use crate::frontier::brief::model::{Brief, Section};
+use crate::frontier::brief::store;
 use crate::frontier::protocol::ToastPriority;
 use crate::frontier::server::allow::Confirmation;
 use crate::frontier::server::bridge::Deliver;
@@ -18,6 +21,7 @@ use crate::frontier::server::context::ServiceContext;
 use crate::frontier::server::history::{HISTORY_SEARCH, HistoryEntry, add_history, history_answer, search_history};
 use crate::frontier::server::lessons::ensure_lessons_skill;
 use crate::frontier::server::report::{REPORT_RESULT, ReportedDecision, ThreadReport, parse_report};
+use crate::frontier::server::review_notes::{REVIEW_NOTE, ReviewNotes, checked_card, head_of, review_file};
 use crate::frontier::server::task_file::{CloseFacts, CloseHow, NewTask, TaskReport, close_task, find_task, new_task};
 use crate::frontier::server::thread::{ThreadRef, subject};
 use crate::frontier::server::thread_lifecycle::Awaiting;
@@ -70,6 +74,7 @@ pub const TOOLS: &[Tool] = &[
 	Tool { name: "thread_finish", boss: true },
 	Tool { name: "thread_stop", boss: true },
 	Tool { name: REPORT_RESULT, boss: false },
+	Tool { name: REVIEW_NOTE, boss: false },
 	Tool { name: "check", boss: false },
 	Tool { name: "show", boss: true },
 	Tool { name: "today", boss: true },
@@ -128,6 +133,9 @@ fn js_string(value: Option<&Value>) -> String {
 		Some(Value::Object(_)) => "[object Object]".to_owned(),
 	}
 }
+
+/// The section types the boss's `show` draws (0679): what it can say, not what the service computes.
+const SHOW_SECTIONS: [&str; 6] = ["text", "facts", "flow", "map", "diff", "list"];
 
 /// One call's arguments, read with the refusals named by its door: the tool's name, or `jocasta <command>`.
 pub struct Args<'a> {
@@ -206,6 +214,7 @@ fn named(tool: &str, error: Error) -> Error {
 }
 
 /// The tools and commands, over the service's context.
+#[derive(Clone)]
 pub struct Tools {
 	pub c: Arc<ServiceContext>,
 }
@@ -279,6 +288,7 @@ impl Tools {
 			}
 			"thread_stop" => self.stop(&c.threads.find(&args.text("thread")?)?, Door::Boss).await,
 			REPORT_RESULT => self.report_result(call.pane_id.as_deref(), call.args.values, call.unkeyed).await,
+			REVIEW_NOTE => self.review_note(call.pane_id.as_deref(), args, call.unkeyed).await,
 			"check" => c.review.check_tool(call.pane_id.as_deref(), call.unkeyed).await,
 			"worktree_remove" => self.remove_leftover(&args.text("path")?, Door::Boss).await,
 			other => self.run_boss(other, args).await,
@@ -365,23 +375,70 @@ impl Tools {
 		Ok(started.text)
 	}
 
-	/// `show`: only a review that exists counts as shown (0393); it opens in his browser (0552).
+	/// `show` (0679): a brief drawn from his spec (`title` and `sections`), laid out and checked by code, stored as
+	/// `show-<n>` and opened in his browser.
 	async fn show(&self, args: &Args<'_>) -> Result<String> {
-		let review = js_trim(&args.text("review")?).to_owned();
-		let options = &self.c.options;
-		let (Some(find), Some(open)) = (&options.find_review, &options.open_review) else {
-			return Err(Error::user("show: whiteboard isn't running in this Jocasta; nothing can be shown."));
+		let title = js_trim(&args.text("title")?).to_owned();
+		let Some(Value::Array(given)) = args.values.get("sections") else {
+			return Err(Error::user("show: sections is required: an array of sections, each with a `type`."));
 		};
-		let found = find(review.clone())
-			.await
-			.map_err(|error| Error::user(format!("show: whiteboard didn't answer: {error}")))?;
-		let Some(title) = found else {
+		let mut sections = Vec::with_capacity(given.len());
+		for (index, section) in given.iter().enumerate() {
+			let kind = section.get("type").and_then(Value::as_str).unwrap_or("");
+			if !SHOW_SECTIONS.contains(&kind) {
+				return Err(Error::user(format!(
+					"show: section {} has type `{kind}`; the types are {}.",
+					index + 1,
+					SHOW_SECTIONS.join(", ")
+				)));
+			}
+			let parsed: Section = serde_json::from_value(section.clone()).map_err(|error| {
+				Error::user(format!("show: section {} ({kind}) isn't well formed: {error}", index + 1))
+			})?;
+			sections.push(parsed);
+		}
+		let Some(briefs) = self.c.options.briefs.clone() else {
+			return Err(Error::user("show: this Jocasta has no page server; nothing can be shown."));
+		};
+		let mut brief = Brief {
+			id: store::next_show_id(),
+			kind: "show".to_owned(),
+			title: title.clone(),
+			subtitle: String::new(),
+			generated_at_ms: now_ms(),
+			sections,
+		};
+		lay_out(&mut brief).map_err(|error| Error::user(format!("show: {error}")))?;
+		store::save(&brief)?;
+		briefs.open(&brief.id);
+		Ok(format!("Shown: {title}"))
+	}
+
+	/// `review_note` (0678): the reviewer hands in one finding with the code it is about. It is kept only when the
+	/// committed file reads that way at that line; else the tool's error says what the lines are.
+	async fn review_note(&self, pane_id: Option<&str>, args: &Args<'_>, unkeyed: &str) -> Result<String> {
+		let c = &self.c;
+		let Some(thread) = pane_id.and_then(|pane| c.threads.get(pane)) else {
 			return Err(Error::user(format!(
-				"show: no whiteboard review {review}; create one with whiteboard's session_create and pass its sessionId."
+				"{REVIEW_NOTE}: only a thread's pane hands in notes, and this pane isn't a thread's{unkeyed}."
 			)));
 		};
-		open(&review);
-		Ok(format!("Opened review \"{title}\" ({review}) in his browser."))
+		let (path, project_id, task_id) =
+			thread.with(|t| (t.path.clone(), t.project.id.clone(), t.task.as_ref().map(|task| task.id.clone())));
+		let Some(task_id) = task_id else {
+			return Err(Error::user(format!("{REVIEW_NOTE}: this thread has no task file to keep notes in.")));
+		};
+		let head = head_of(&path).await?;
+		let file = review_file(&project_id, &task_id);
+		let mut notes = ReviewNotes::read(&file);
+		if notes.head != head {
+			notes = ReviewNotes { head: head.clone(), notes: Vec::new() };
+		}
+		let card = checked_card(&path, &head, args, notes.notes.len() + 1).await?;
+		let said = format!("Note {} stored ({} at {}:{}).", card.id, card.severity.as_str(), card.file, card.line);
+		notes.notes.push(card);
+		notes.write(&file)?;
+		Ok(said)
 	}
 
 	fn note(&self, args: &Args<'_>) -> Result<String> {

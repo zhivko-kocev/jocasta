@@ -40,7 +40,6 @@ fn stand(change: impl FnOnce(&mut TempJocasta, &mut ServiceOptions)) -> Stand {
 	options.omp = Some(vec!["omp".to_owned()]);
 	options.pane_prompt = Some(None);
 	options.mise = Some(None);
-	options.hunk = Some(None);
 	options.weekly_reviews = Some(false);
 	options.boss_key = Some(BOSS_KEY.to_owned());
 	options.refresh_ms = Some(3_600_000);
@@ -361,7 +360,6 @@ async fn the_steps_of_stop_everything_run_on_a_started_service() {
 	s.service.pause_working().await.unwrap();
 	s.service.cut_paused_turns().await;
 	s.service.end_thread_leftovers().await.unwrap();
-	s.service.end_hunk_daemon().await;
 	assert!(!s.service.context().stopping());
 	assert!(std::ptr::eq(s.service.day(), &s.service.context().day));
 	within_a_second(s.service.stop()).await;

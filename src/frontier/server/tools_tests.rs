@@ -31,17 +31,20 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 
 use super::*;
+use crate::frontier::brief::model::Section;
+use crate::frontier::brief::store;
 use crate::frontier::server::allow::{Answer, Confirm};
 use crate::frontier::server::context::{TestContext, test_context};
 use crate::frontier::server::herdr::AgentState;
 use crate::frontier::server::popups::PopupEnd;
+use crate::frontier::server::review_notes::NoteCounts;
 use crate::frontier::server::service::ServiceOptions;
-use crate::frontier::server::task_file::task_dir;
+use crate::frontier::server::task_file::{TaskRecord, task_dir};
 use crate::frontier::server::thread::ThreadPlan;
+use crate::frontier::server::{brief_actions, thread_brief};
 use crate::shared::day::day_start;
 use crate::shared::paths::projects_file;
 use crate::shared::testing::{TempDir, temp_dir};
@@ -207,48 +210,68 @@ async fn history_search_today_note_and_speak_answer_as_the_boss_and_a_stranger_p
 	assert!(w.say("today", json!({})).await.unwrap().starts_with("TODAY · "));
 }
 
+/// Opens what it is told to and says so: a stand-in for the page server's links.
+struct OpenedBriefs(Arc<Mutex<Vec<String>>>);
+
+impl crate::frontier::brief::BriefLinks for OpenedBriefs {
+	fn url(&self, id: &str) -> String {
+		format!("http://127.0.0.1:1/brief/{id}")
+	}
+	fn open(&self, id: &str) {
+		self.0.lock().unwrap().push(id.to_owned());
+	}
+}
+
 #[tokio::test]
-async fn show_opens_only_a_review_whiteboard_has_otherwise_it_says_why() {
+async fn show_draws_a_brief_from_a_spec_lays_it_out_and_opens_it_0679() {
 	{
 		let none = World::new().await;
-		// Without whiteboard nothing is shown, and the boss is told so.
+		// Without a page server nothing is shown, and the boss is told so.
 		assert_eq!(
-			reply(&none.say("show", json!({ "review": "r-1" })).await),
+			reply(&none.say("show", json!({ "title": "Plan", "sections": [] })).await),
 			ToolReply {
-				text: "show: whiteboard isn't running in this Jocasta; nothing can be shown.".to_owned(),
+				text: "show: this Jocasta has no page server; nothing can be shown.".to_owned(),
 				is_error: Some(true)
 			}
 		);
 	}
 	let opened = Arc::new(Mutex::new(Vec::<String>::new()));
-	let log = opened.clone();
-	let w = World::with(|options| {
-		options.find_review = Some(Arc::new(|id: String| -> BoxFuture<'static, Result<Option<String>>> {
-			Box::pin(async move {
-				match id.as_str() {
-					"r-1" => Ok(Some("Readme line".to_owned())),
-					"r-boom" => Err(Error::other("connection refused")),
-					_ => Ok(None),
-				}
-			})
-		}));
-		options.open_review = Some(Arc::new(move |id: &str| log.lock().unwrap().push(id.to_owned())));
-	})
-	.await;
+	let links = Arc::clone(&opened);
+	let w = World::with(move |options| options.briefs = Some(Arc::new(OpenedBriefs(links)))).await;
+	let cycle = json!({
+		"title": "Loop",
+		"sections": [{
+			"type": "flow",
+			"nodes": [
+				{ "id": "a", "label": "A", "state": "done" },
+				{ "id": "b", "label": "B", "state": "active" },
+				{ "id": "c", "label": "C", "state": "pending" },
+			],
+			"edges": [{ "from": "a", "to": "b" }, { "from": "b", "to": "c" }, { "from": "c", "to": "a" }],
+		}],
+	});
+	assert_eq!(w.say("show", cycle).await.unwrap(), "Shown: Loop");
+	let brief = crate::frontier::brief::store::load("show-1").expect("the brief is stored");
+	assert_eq!(brief.kind, "show");
+	let crate::frontier::brief::model::Section::Flow { nodes, .. } = &brief.sections[0] else { panic!("a flow") };
+	assert_eq!(nodes.iter().map(|node| node.layer).collect::<Vec<_>>(), [0, 1, 2]);
+	assert_eq!(*opened.lock().unwrap(), ["show-1"]);
+	// A second brief is the next number.
 	assert_eq!(
-		w.say("show", json!({ "review": "demo/readme-line" })).await.unwrap_err(),
-		"show: no whiteboard review demo/readme-line; create one with whiteboard's session_create and pass its sessionId."
+		w.say("show", json!({ "title": "Two", "sections": [{ "type": "text", "body": "Hi." }] })).await.unwrap(),
+		"Shown: Two"
 	);
-	assert_eq!(
-		w.say("show", json!({ "review": " r-1 " })).await.unwrap(),
-		"Opened review \"Readme line\" (r-1) in his browser."
-	);
-	assert_eq!(*opened.lock().unwrap(), ["r-1"]);
-	assert_eq!(
-		w.say("show", json!({ "review": "r-boom" })).await.unwrap_err(),
-		"show: whiteboard didn't answer: connection refused"
-	);
-	assert_eq!(w.say("show", json!({})).await.unwrap_err(), "show: review is required.");
+	assert_eq!(*opened.lock().unwrap(), ["show-1", "show-2"]);
+	// A layout error is the tool's error; the section types are the boss's six, never the service's own.
+	let dangling = json!({
+		"title": "Bad",
+		"sections": [{ "type": "flow", "nodes": [{ "id": "a", "label": "A", "state": "done" }], "edges": [{ "from": "a", "to": "z" }] }],
+	});
+	assert!(w.say("show", dangling).await.unwrap_err().starts_with("show: "));
+	let cards = json!({ "title": "Cards", "sections": [{ "type": "cards", "cards": [] }] });
+	assert!(w.say("show", cards).await.unwrap_err().contains("the types are text, facts, flow, map, diff, list"));
+	assert_eq!(w.say("show", json!({})).await.unwrap_err(), "show: title is required.");
+	assert_eq!(*opened.lock().unwrap(), ["show-1", "show-2"]);
 }
 
 #[tokio::test]
@@ -989,4 +1012,133 @@ async fn commands_and_tools_unknown_to_the_registry_are_refused_by_name() {
 	);
 	let caller: Caller = serde_json::from_value(json!({ "paneKey": "k", "bossKey": "b" })).unwrap();
 	assert_eq!(caller, Caller { pane_key: Some("k".to_owned()), boss_key: Some("b".to_owned()) });
+}
+
+/// A thread pane `t-1` on the demo repo's main checkout with a task record `task-1`, and a README of known lines.
+fn review_world_thread(w: &World) -> ThreadRef {
+	std::fs::write(w.main.join("README.md"), "demo\nfirst line\n\tsecond   line\n").unwrap();
+	git(&w.main, &["commit", "-qam", "Three lines"]);
+	let thread = w.t.with_thread("t-1", "Readme line");
+	w.t.ctx.launched.add("t-1", &w.main.to_string_lossy(), Some("pane-key-1")).unwrap();
+	let main = w.main.clone();
+	thread.with(|t| {
+		t.path = main;
+		t.task = Some(TaskRecord { id: "task-1".to_owned(), ..TaskRecord::default() });
+	});
+	thread
+}
+
+fn note_args(line: usize, quote: &str) -> Value {
+	json!({"file": "README.md", "line": line, "quote": quote, "severity": "P1", "text": "Say more."})
+}
+
+#[tokio::test]
+async fn review_note_keeps_a_quote_that_reads_at_its_line_and_counts_it() {
+	let w = World::new().await;
+	let thread = review_world_thread(&w);
+	let said = w.ask_from_pane("review_note", note_args(3, "second line"), Some("pane-key-1")).await.unwrap();
+	assert_eq!(said, "Note c1 stored (P1 at README.md:3).");
+	let file = review_file("p-demo", "task-1");
+	let stored = ReviewNotes::read(&file);
+	assert_eq!(stored.head, git(&w.main, &["rev-parse", "HEAD"]));
+	assert_eq!(stored.notes.len(), 1);
+	assert!(stored.notes[0].proof.ok);
+	assert_eq!(stored.notes[0].proof.sha, stored.head);
+	let second = w.ask_from_pane("review_note", note_args(2, "first line"), Some("pane-key-1")).await.unwrap();
+	assert_eq!(second, "Note c2 stored (P1 at README.md:2).");
+	assert_eq!(ReviewNotes::read(&file).counts(), NoteCounts { notes: 2, blocking: 2 });
+	drop(thread);
+}
+
+#[tokio::test]
+async fn review_note_refuses_a_wrong_quote_with_the_real_lines_and_appends_nothing() {
+	let w = World::new().await;
+	review_world_thread(&w);
+	let sha7 = git(&w.main, &["rev-parse", "--short=7", "HEAD"]);
+	let error = w.ask_from_pane("review_note", note_args(2, "no such text"), Some("pane-key-1")).await.unwrap_err();
+	assert_eq!(
+		error,
+		format!(
+			"review_note: README.md:2 at {sha7} doesn't read that. Lines 1–3 are:\n1: demo\n2: first line\n3: \tsecond   line"
+		)
+	);
+	assert!(ReviewNotes::read(&review_file("p-demo", "task-1")).notes.is_empty());
+}
+
+#[tokio::test]
+async fn review_note_answers_only_a_threads_pane() {
+	let w = World::new().await;
+	review_world_thread(&w);
+	let refused = w.ask_from_pane("review_note", note_args(2, "first line"), Some("not-a-key")).await.unwrap_err();
+	assert!(
+		refused.starts_with("review_note: only a thread's pane hands in notes, and this pane isn't a thread's"),
+		"{refused}"
+	);
+	assert!(!review_file("p-demo", "task-1").exists());
+}
+
+#[tokio::test]
+async fn refreshing_a_thread_brief_stores_thread_task_id_with_its_facts_flow_and_notes() {
+	let w = World::new().await;
+	let thread = review_world_thread(&w);
+	w.ask_from_pane("review_note", note_args(2, "first line"), Some("pane-key-1")).await.unwrap();
+	let id = thread_brief::refresh(&w.t.ctx, &thread, &thread_brief::BriefExtras::default()).await;
+	assert_eq!(id.as_deref(), Some("thread-task-1"));
+	let brief = store::load("thread-task-1").expect("the stored brief");
+	assert_eq!((brief.kind.as_str(), brief.title.as_str()), ("thread", "Readme line"));
+	let types: Vec<&str> = brief.sections.iter().map(Section::type_name).collect();
+	assert!(types.starts_with(&["facts", "flow"]), "{types:?}");
+	assert!(types.contains(&"cards"), "{types:?}");
+	// A thread with no task record has no brief.
+	let bare = w.t.with_thread("t-2", "Bare");
+	assert_eq!(thread_brief::refresh(&w.t.ctx, &bare, &thread_brief::BriefExtras::default()).await, None);
+}
+
+#[tokio::test]
+async fn a_briefs_send_goes_through_thread_send_and_returns_the_updated_brief() {
+	let (confirm, log) = confirming(vec![true]);
+	let w = World::with(|options| options.confirm = Some(confirm)).await;
+	let thread = review_world_thread(&w);
+	thread_brief::refresh(&w.t.ctx, &thread, &thread_brief::BriefExtras::default()).await.unwrap();
+	let action = json!({"op": "send", "text": "  Go on.  "});
+	let brief = brief_actions::act(&w.t.ctx, &w.tools, "thread-task-1", &action).await.unwrap();
+	assert_eq!(brief.id, "thread-task-1");
+	assert_eq!(w.prompts_to("t-1"), ["Go on."]);
+	// His click on the brief is his own word: the Allow gate asks only the boss and the commands.
+	assert!(asked(&log).is_empty());
+	let empty = json!({"op": "send", "text": "  "});
+	let error = brief_actions::act(&w.t.ctx, &w.tools, "thread-task-1", &empty).await.unwrap_err();
+	assert_eq!(error.to_string(), "send: there is nothing to send.");
+}
+
+#[tokio::test]
+async fn a_briefs_finish_refuses_a_bad_mode_and_otherwise_runs_the_finisher_the_boss_uses() {
+	let w = World::new().await;
+	let thread = review_world_thread(&w);
+	thread_brief::refresh(&w.t.ctx, &thread, &thread_brief::BriefExtras::default()).await.unwrap();
+	let bad = brief_actions::act(&w.t.ctx, &w.tools, "thread-task-1", &json!({"op": "finish", "mode": "squash"})).await;
+	assert_eq!(bad.unwrap_err().to_string(), "finish: the mode is merge or pr.");
+	// A valid mode reaches `Finisher::finish`: here it refuses first, because the demo project has no trunk branch
+	// to land on; its own words come back as the action's error, and nothing is finished.
+	let merge =
+		brief_actions::act(&w.t.ctx, &w.tools, "thread-task-1", &json!({"op": "finish", "mode": "merge"})).await;
+	assert_eq!(merge.unwrap_err().to_string(), "demo/Readme line: the project has no trunk branch.");
+	assert!(w.t.ctx.threads.get("t-1").is_some());
+}
+
+#[tokio::test]
+async fn a_brief_refuses_an_unknown_op_a_brief_with_no_actions_and_a_closed_thread() {
+	let w = World::new().await;
+	let thread = review_world_thread(&w);
+	thread_brief::refresh(&w.t.ctx, &thread, &thread_brief::BriefExtras::default()).await.unwrap();
+	let unknown = brief_actions::act(&w.t.ctx, &w.tools, "thread-task-1", &json!({"op": "explode"})).await;
+	assert_eq!(unknown.unwrap_err().to_string(), "The brief has no action `explode`.");
+	let show = brief_actions::act(&w.t.ctx, &w.tools, "show-1", &json!({"op": "send", "text": "x"})).await;
+	assert_eq!(show.unwrap_err().to_string(), "That brief has no actions.");
+	w.t.ctx.threads.drop_pane("t-1");
+	let closed = brief_actions::act(&w.t.ctx, &w.tools, "thread-task-1", &json!({"op": "send", "text": "x"})).await;
+	assert_eq!(
+		closed.unwrap_err().to_string(),
+		"That thread isn't open any more; its brief is a record, not a control."
+	);
 }

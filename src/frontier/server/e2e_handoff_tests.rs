@@ -11,13 +11,12 @@ use serde_json::{Value, json};
 use crate::frontier::protocol::ServerMessage;
 use crate::frontier::server::bridge::{PaneAgent, PaneEvent};
 use crate::frontier::server::helpers::{
-	BRIEF, HunkDaemon, Msg, Page, README_THREAD_ENV, TEST_BOSS_KEY, TestServer, ThreadOptions, boss_pane, bridge_flags,
-	call, commit_in, demo_project, guard, handoff_entry, keyed, pane_reports, project_keyed, review, session_file, sh,
-	start_test_server_with, start_thread, thread_omp, thread_pane, to_handoff, until, until_async, use_hunk_daemon,
+	BRIEF, Msg, Page, README_THREAD_ENV, TEST_BOSS_KEY, TestServer, ThreadOptions, boss_pane, bridge_flags, call,
+	commit_in, demo_project, guard, handoff_entry, keyed, pane_reports, project_keyed, review, session_file, sh,
+	start_test_server_with, start_thread, thread_omp, thread_pane, to_handoff, until, until_async,
 };
 use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
 use crate::frontier::server::herdr::{AgentState, Env};
-use crate::frontier::server::hunk::hunk_env;
 use crate::frontier::server::overlay::overlay_file;
 use crate::frontier::server::server::ServerOptions;
 use crate::frontier::server::status::Busy;
@@ -48,11 +47,9 @@ where
 	}
 }
 
-/// The options most cases give: omp up within 10 s and the fake hunk daemon.
-fn options_with(hunk: &HunkDaemon) -> ServerOptions {
-	let mut options = ServerOptions { agent_wait_ms: Some(10_000), ..ServerOptions::default() };
-	hunk.apply(&mut options);
-	options
+/// The options most cases give: omp up within 10 s.
+fn options_with() -> ServerOptions {
+	ServerOptions { agent_wait_ms: Some(10_000), ..ServerOptions::default() }
 }
 
 fn prompts_to(server: &TestServer, pane: &str) -> Vec<String> {
@@ -121,10 +118,6 @@ fn same_path(left: &str, right: &Path) -> bool {
 	path_key(Path::new(left)) == path_key(right)
 }
 
-fn pairs<'a>(hunk: &'a [(String, String)], extra: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
-	hunk.iter().map(|(name, value)| (name.as_str(), value.as_str())).chain(extra.iter().copied()).collect()
-}
-
 fn overlay_command(project: &Project) -> Vec<String> {
 	let mut command = vec!["omp".to_owned(), "--continue".to_owned()];
 	command.extend(guard());
@@ -134,13 +127,12 @@ fn overlay_command(project: &Project) -> Vec<String> {
 }
 
 /// The boss's respawn (with boss.yml) and then the thread's and the project pane's, as the service starts them again.
-fn assert_respawned(respawned: &[Respawn], project: &Project, path: &Path, hunk: &HunkDaemon) {
+fn assert_respawned(respawned: &[Respawn], project: &Project, path: &Path) {
 	let boss = &respawned[0];
 	assert_eq!(boss.command[..3], ["omp", "--continue", "--config"]);
 	assert!(boss.command[3].ends_with("boss.yml"), "{}", boss.command[3]);
-	let hunk_vars = hunk_env(hunk.hunk_port);
-	let thread_vars = pairs(&hunk_vars, &README_THREAD_ENV);
-	let project_vars = pairs(&hunk_vars, &[]);
+	let thread_vars = README_THREAD_ENV.to_vec();
+	let project_vars: Vec<(&str, &str)> = Vec::new();
 	let [_, thread, own] = respawned else { panic!("{} respawns", respawned.len()) };
 	assert!(same_path(&thread.cwd, path), "{}", thread.cwd);
 	assert_eq!(thread.command, thread_omp(&project.id, "Readme line"));
@@ -156,8 +148,7 @@ async fn thread_finish_merge_waits_for_a_handoff_that_hasn_t_written_its_entry_t
 	let project = demo_project(j.root(), "demo").await;
 	sh(&project.main_path, &["config", "user.name", "Test"]);
 	sh(&project.main_path, &["config", "user.email", "test@example.com"]);
-	let hunk = use_hunk_daemon().await;
-	crate::frontier::server::helpers::with_server(options_with(&hunk), |server| async move {
+	crate::frontier::server::helpers::with_server(options_with(), |server| async move {
 		let started = start_thread(&server, ThreadOptions::default()).await;
 		let (pane_id, path) = (started.pane_id, started.path);
 		let file = to_handoff(&server, &pane_id, &path).await;
@@ -191,8 +182,7 @@ async fn thread_states_stay_true_a_dismissed_question_ends_the_turn_a_handoff_wi
  {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
-	let hunk = use_hunk_daemon().await;
-	crate::frontier::server::helpers::with_server(options_with(&hunk), |server| async move {
+	crate::frontier::server::helpers::with_server(options_with(), |server| async move {
 		let page = Page::open(&server, "").await;
 		page.wait_for(|message| matches!(message, ServerMessage::Snapshot { .. })).await;
 		let started = start_thread(&server, ThreadOptions::default()).await;
@@ -229,8 +219,7 @@ async fn a_thread_whose_omp_bridge_reports_idle_leaves_the_handoff_step_once_its
  {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
-	let hunk = use_hunk_daemon().await;
-	let options = options_with(&hunk);
+	let options = options_with();
 	crate::frontier::server::helpers::with_server(options, |server| async move {
 		let started = start_thread(&server, ThreadOptions::default()).await;
 		let (pane_id, path) = (started.pane_id, started.path);
@@ -318,8 +307,7 @@ async fn panes_herdr_restored_as_shells_while_the_service_runs_get_omp_again_wit
  {
 	let j = temp_jocasta();
 	let project = demo_project(j.root(), "demo").await;
-	let hunk = use_hunk_daemon().await;
-	crate::frontier::server::helpers::with_server(options_with(&hunk), |server| async move {
+	crate::frontier::server::helpers::with_server(options_with(), |server| async move {
 		let herdr = server.herdr.clone();
 		let started = start_thread(&server, ThreadOptions::default()).await;
 		let path = started.path;
@@ -335,7 +323,7 @@ async fn panes_herdr_restored_as_shells_while_the_service_runs_get_omp_again_wit
 		let respawned = respawned_since(&herdr, before);
 		assert_eq!(respawned.len(), 3);
 		assert!(same_path(&respawned[0].cwd, &data_dir().join("home")) || respawned[0].cwd.ends_with("home"));
-		assert_respawned(&respawned, &project, &path, &hunk);
+		assert_respawned(&respawned, &project, &path);
 		// The thread is known by its new pane.
 		let fresh = thread_pane(&herdr, &path);
 		assert!(call(&server, "thread_status", &json!({})).await.text.contains("demo/Readme line"));
@@ -349,8 +337,7 @@ async fn an_omp_that_ends_in_a_jocasta_pane_left_open_starts_again_there_resumin
  {
 	let j = temp_jocasta();
 	let project = demo_project(j.root(), "demo").await;
-	let hunk = use_hunk_daemon().await;
-	crate::frontier::server::helpers::with_server(options_with(&hunk), |server| async move {
+	crate::frontier::server::helpers::with_server(options_with(), |server| async move {
 		let herdr = server.herdr.clone();
 		let started = start_thread(&server, ThreadOptions::default()).await;
 		let (pane_id, path) = (started.pane_id, started.path);
@@ -373,7 +360,7 @@ async fn an_omp_that_ends_in_a_jocasta_pane_left_open_starts_again_there_resumin
 		let ids: Vec<&str> = respawned.iter().map(|r| r.pane.as_str()).collect();
 		assert_eq!(ids, [boss.as_str(), pane_id.as_str(), own.as_str()]);
 		assert_eq!(keyed(&[("JOCASTA_BOSS_KEY", TEST_BOSS_KEY)]), respawned[0].env.clone().expect("the boss's env"));
-		assert_respawned(&respawned, &project, &path, &hunk);
+		assert_respawned(&respawned, &project, &path);
 		// The new omps are still starting: one ending started each once.
 		server.service.refresh().await;
 		server.service.refresh().await;
@@ -389,8 +376,7 @@ async fn a_jocasta_pane_whose_omp_hasn_t_been_seen_running_is_left_alone_the_pro
 {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
-	let hunk = use_hunk_daemon().await;
-	crate::frontier::server::helpers::with_server(options_with(&hunk), |server| async move {
+	crate::frontier::server::helpers::with_server(options_with(), |server| async move {
 		let herdr = server.herdr.clone();
 		start_thread(&server, ThreadOptions::default()).await;
 		let before = herdr.state().calls.len();
@@ -441,16 +427,15 @@ async fn a_thread_being_finished_its_omp_ending_as_its_workspace_closes_isn_t_st
 async fn an_omp_that_ends_once_the_service_stopped_isn_t_started_again_by_it_or_by_the_next_start_0521() {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
-	let hunk = use_hunk_daemon().await;
 	let herdr = Arc::new(FakeHerdr::new());
-	let first = start_test_server_with(herdr.clone(), options_with(&hunk)).await;
+	let first = start_test_server_with(herdr.clone(), options_with()).await;
 	let thread = start_thread(&first, ThreadOptions::default()).await.pane_id;
 	first.service.refresh().await;
 	first.stop().await;
 	herdr.set_state(&thread, AgentState::Unknown, None, false);
 	first.service.refresh().await;
 	assert!(herdr.of("respawn").is_empty());
-	with_herdr(&herdr.clone(), options_with(&hunk), |server| async move {
+	with_herdr(&herdr.clone(), options_with(), |server| async move {
 		server.service.refresh().await;
 		server.service.refresh().await;
 		let again = herdr.of("respawn").iter().filter(|args| args[0].as_str() == Some(thread.as_str())).count();
@@ -512,8 +497,7 @@ async fn r3_a_working_thread_whose_pane_herdr_restored_as_a_shell_is_relaunched_
  {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
-	let hunk = use_hunk_daemon().await;
-	crate::frontier::server::helpers::with_server(options_with(&hunk), |server| async move {
+	crate::frontier::server::helpers::with_server(options_with(), |server| async move {
 		let herdr = server.herdr.clone();
 		let started = start_thread(&server, ThreadOptions::default()).await;
 		let (pane_id, path) = (started.pane_id, started.path);

@@ -311,11 +311,6 @@ impl Finisher {
 		if git_out(&t.project.main_path, &["merge-base", "--is-ancestor", trunk, &t.branch]).await?.is_some() {
 			return self.squash(thread, trunk).await;
 		}
-		if c.panes.hunk().is_none() {
-			return Err(Error::user(format!(
-				"{trunk} moved since {name}'s review and no new review can run (hunk isn't installed); nothing was merged."
-			)));
-		}
 		let merged =
 			git_async(&t.path, &["merge", "--no-edit", trunk], MERGE_TIMEOUT_MS, GitOptions::default()).await?;
 		if merged.code != Some(0) {

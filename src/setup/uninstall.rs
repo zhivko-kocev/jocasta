@@ -228,13 +228,15 @@ fn remove_recorded_folder(path: &Path, marker: &str, holds: impl Fn(&Path) -> bo
 }
 
 /// Whether `dir` is the install `install.json` names: the marker there names this same folder.
-fn holds_install_marker(dir: &Path) -> bool {
+pub fn holds_install_marker(dir: &Path) -> bool {
 	read_json_object(&dir.join(INSTALL_MARKER))
 		.and_then(|marker| marker.get("dir").and_then(Value::as_str).map(|named| same_path(Path::new(named), dir)))
 		.unwrap_or(false)
 }
 
-/// The top-level names a release has shipped (appendix I), the companion's `app` (0552) included.
+/// The top-level names a release has shipped (appendix I), the companion's `app` (0552) included. `node`, `whiteboard`,
+/// `whiteboard-canvas`, `editor.worker.js` and `hunk` stay listed although no release ships them since 0679: an older
+/// install holds them, and uninstall must still take them out.
 const RELEASE_NAMES: [&str; 11] = [
 	"jocasta.exe",
 	"jocasta",

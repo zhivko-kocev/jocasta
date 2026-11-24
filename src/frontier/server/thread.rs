@@ -11,7 +11,7 @@ use crate::frontier::protocol::ThreadState;
 use crate::frontier::server::checks::CheckSpec;
 use crate::frontier::server::context::Shared;
 use crate::frontier::server::herdr::AgentState;
-use crate::frontier::server::hunk::ReviewProof;
+use crate::frontier::server::review_proof::ReviewProof;
 use crate::frontier::server::sessions::TestsResult;
 use crate::frontier::server::task_file::{CheckExit, TaskRecord};
 use crate::shared::errors::{Error, Result};
@@ -56,7 +56,7 @@ impl Phase {
 /// The last review's outcome (0425, 0453).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReviewResult {
-	/// How many notes it left in hunk; `None` when hunk couldn't count them.
+	/// How many notes it left (`review.json`, 0678); `None` when the file couldn't be counted.
 	pub notes: Option<usize>,
 	/// How many of them the reviewer marked P0 or P1 (0453).
 	pub blocking: Option<usize>,
@@ -82,11 +82,9 @@ pub struct ReviewRunning {
 	pub skipped: Option<String>,
 }
 
-/// A thread's review step (0406): the hunk pane beside it, the review running now and the last one's outcome.
+/// A thread's review step (0406): the review running now and the last one's outcome.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ThreadReview {
-	/// The hunk pane beside it (0406), once a task ended.
-	pub pane: Option<String>,
 	pub running: Option<ReviewRunning>,
 	/// The last review's outcome, once it is ready; none while a new one runs.
 	pub result: Option<ReviewResult>,

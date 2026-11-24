@@ -1,7 +1,7 @@
 //! What the service's test files share: the Rust port of `test/frontier/server/helpers.ts` (test only; later waves'
 //! `service-*`, `day`, `pane-check` and `push-gate` tests build on it). A test world is a temp Jocasta
 //! ([`crate::shared::testing::temp_jocasta`], which the test holds for its whole length), a [`FakeHerdr`] and a
-//! [`TestServer`] over them; nothing here starts his real herdr, omp or hunk.
+//! [`TestServer`] over them; nothing here starts his real herdr or omp.
 //!
 //! Where the TypeScript's function has default parameters that depend on others, Rust has the plain call and a
 //! `_as`/`_with`/`_within` variant; closures that borrowed the server take it by value (a [`TestServer`] is cheap to
@@ -13,7 +13,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, LazyLock, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use futures_util::{FutureExt, SinkExt, StreamExt};
@@ -29,13 +29,12 @@ use crate::frontier::server::bridge::{PaneAgent, PaneEvent};
 use crate::frontier::server::day::DayOptions;
 use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
 use crate::frontier::server::herdr::{AgentState, Env};
-use crate::frontier::server::hunk::fake_hunk::{fake_hunk, health_daemon};
-use crate::frontier::server::hunk::{ReviewContext, review_prompt};
 use crate::frontier::server::overlay::overlay_file;
 use crate::frontier::server::popups::PopupEnd;
+use crate::frontier::server::review_prompt::{ReviewContext, review_prompt};
 use crate::frontier::server::server::{JocastaServer, ServerOptions, start_server};
 use crate::frontier::server::tools::{Caller, ToolReply};
-use crate::frontier::server::wording::HANDOFF_PROMPT;
+use crate::frontier::server::wording::{HANDOFF_PROMPT, REVIEW_LEAD};
 use crate::shared::bridge_wire::{BRIDGE_ENV, BRIDGE_EXTENSION};
 use crate::shared::install::{self_command, shipped_config_dir};
 use crate::shared::pathkey::{path_key, real_path};
@@ -276,7 +275,6 @@ pub(crate) fn with_test_defaults(mut options: ServerOptions, herdr: &Arc<FakeHer
 	options.sessions_dir.get_or_insert_with(|| data.join("omp-sessions"));
 	options.agent_wait_ms.get_or_insert(0);
 	options.refresh_ms.get_or_insert(60_000);
-	options.whiteboard.get_or_insert(None);
 	options.pane_prompt.get_or_insert(None);
 	// Never his mise: a test pane's env is its own.
 	options.mise.get_or_insert(None);
@@ -299,7 +297,7 @@ pub(crate) async fn start_test_server(options: ServerOptions) -> TestServer {
 }
 
 /// Starts a server for tests: `herdr` (so a test can restart the service on the same panes), pollers off (never the
-/// real gh or az), a free port (never `service.port`), an empty sessions dir, no hunk or mise of his, the boss key
+/// real gh or az), a free port (never `service.port`), an empty sessions dir, no mise of his, the boss key
 /// [`TEST_BOSS_KEY`], no terminal opened for the close question, every confirmation answered Allow (tests of Deny and of
 /// the wait pass their own `confirm`), no steer for a missing report (its test passes `ask_report: Some(true)`), and the
 /// boss's `jocasta` MCP entry as setup writes it, so no start warns that the boss has no tools (TST-14). Waits for the
@@ -374,37 +372,7 @@ where
 	assert!(held, "timed out waiting for the test's condition");
 }
 
-// ---- hunk, omp and the threads ----
-
-/// hunk as the service starts it in these tests: the fake binary (a shim of this test executable), made once.
-pub(crate) fn hunk() -> Vec<String> {
-	static HUNK: LazyLock<Vec<String>> = LazyLock::new(|| {
-		let dir = sandbox().join("fake-hunk");
-		fs::create_dir_all(&dir).unwrap();
-		fake_hunk(&dir)
-	});
-	HUNK.clone()
-}
-
-/// Jocasta's hunk session daemon as the service finds it: a /health that answers, on a free port, so no daemon is ever
-/// started (never hunk's or Jocasta's real port); it answers for as long as the test process lives. The service's hunk
-/// options with it.
-pub(crate) struct HunkDaemon {
-	pub hunk: Vec<String>,
-	pub hunk_port: u16,
-}
-
-impl HunkDaemon {
-	/// Sets the service's hunk options.
-	pub(crate) fn apply(&self, options: &mut ServerOptions) {
-		options.hunk = Some(Some(self.hunk.clone()));
-		options.hunk_port = Some(self.hunk_port);
-	}
-}
-
-pub(crate) async fn use_hunk_daemon() -> HunkDaemon {
-	HunkDaemon { hunk: hunk(), hunk_port: health_daemon().await }
-}
+// ---- omp and the threads ----
 
 /// The guard every pane loads before its own settings (0450).
 pub(crate) fn guard() -> Vec<String> {
@@ -444,7 +412,7 @@ pub(crate) fn thread_omp(project_id: &str, title: &str) -> Vec<String> {
 /// The review prompt of a thread with its recorded brief (`None`: one found in herdr without one) and no report.
 pub(crate) fn review(range: &str, brief: Option<&str>) -> String {
 	let context = ReviewContext { brief: brief.map(str::to_owned), report: Some(None), ..ReviewContext::default() };
-	review_prompt(&hunk(), range, &context)
+	review_prompt(range, &context)
 }
 
 /// The boss pane: workspace Jocasta's pane.
@@ -454,7 +422,7 @@ pub(crate) fn boss_pane(herdr: &FakeHerdr) -> Option<String> {
 	state.pane_list.iter().find(|pane| pane.workspace_id == jocasta).map(|pane| pane.pane_id.clone())
 }
 
-/// The thread pane in worktree `path` (not its hunk pane beside it).
+/// The thread pane in worktree `path` .
 pub(crate) fn thread_pane(herdr: &FakeHerdr, path: &Path) -> String {
 	let key = path_key(path);
 	let state = herdr.state();
@@ -725,6 +693,17 @@ pub(crate) fn handoff_entry(file: &Path) {
 	);
 }
 
+/// The two P2 notes a reviewer hands in through `review_note` (0678), as they sit in the thread's
+/// `review.json`.
+pub(crate) fn hand_in_two_notes(task_dir: &Path) {
+	let card = |severity: &str, line: usize| {
+		json!({"id": format!("c{line}"), "severity": severity, "file": "README.md", "line": line, "quote": "A line.",
+			"text": "Say more.", "verdict": "post", "proof": {"sha": "", "ok": true}})
+	};
+	let notes = json!({"head": "", "notes": [card("P2", 1), card("P2", 2)]});
+	fs::write(task_dir.join("review.json"), notes.to_string()).unwrap();
+}
+
 // ---- the boss and the threads' turns ----
 
 fn prompts(server: &TestServer) -> Vec<(String, String)> {
@@ -778,4 +757,13 @@ pub(crate) fn boss_idle(server: &TestServer) {
 	let boss = boss_pane(&server.herdr).expect("a boss pane");
 	server.herdr.set_state(&boss, AgentState::Working, None, true);
 	server.herdr.set_state(&boss, AgentState::Idle, None, true);
+}
+
+/// How many review prompts (0394) the fake has recorded: a review's start, now that no pane opens beside the thread.
+pub(crate) fn review_asked(herdr: &FakeHerdr) -> usize {
+	herdr
+		.of("prompt")
+		.iter()
+		.filter(|args| args.get(1).and_then(Value::as_str).is_some_and(|text| text.starts_with(REVIEW_LEAD)))
+		.count()
 }

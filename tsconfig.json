@@ -3,7 +3,7 @@
 		"target": "ESNext",
 		"module": "Preserve",
 		"moduleResolution": "bundler",
-		"lib": ["ESNext", "DOM", "DOM.Iterable"],
+		"lib": ["ESNext"],
 		"types": ["bun"],
 		"strict": true,
 		"noUncheckedIndexedAccess": true,
@@ -16,5 +16,5 @@
 		"noEmit": true,
 		"skipLibCheck": true
 	},
-	"include": ["src", "scripts", "test", "bench"]
+	"include": ["scripts", "test", "bench"]
 }

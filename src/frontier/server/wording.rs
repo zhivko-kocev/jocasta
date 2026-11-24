@@ -38,7 +38,7 @@ pub const WHEN_YOU_FINISH: [&str; 4] = [
 	"- Then call `report_result` once: it runs the full check first and stores nothing while that fails; the files and tests come from git and that run.",
 ];
 
-/// How the review prompt (`hunk.ts` `reviewPrompt`) begins.
+/// How the review prompt (`review_prompt.rs`) begins.
 pub const REVIEW_LEAD: &str = "Check this task's work.";
 
 /// What shows omp's Plan Review again in a reopened thread (0494).
@@ -234,7 +234,7 @@ pub fn tests_said(result: TestsResult) -> &'static str {
 	}
 }
 
-/// A review's outcome: `2 notes (1 blocking), tests pass`; a count hunk couldn't give reads `notes not counted`.
+/// A review's outcome: `2 notes (1 blocking), tests pass`; a count the notes file couldn't give reads `notes not counted`.
 pub fn review_said(notes: Option<usize>, tests: TestsResult, blocking: Option<usize>) -> String {
 	let counted = match notes {
 		None => "notes not counted".to_owned(),

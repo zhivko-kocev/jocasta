@@ -66,7 +66,6 @@ async fn world() -> World {
 async fn world_with(more: impl FnOnce(&mut ServiceOptions)) -> World {
 	let t = test_context(|options| {
 		options.mise = Some(None);
-		options.hunk = Some(None);
 		more(options);
 	});
 	let dir = temp_dir("refresh");
@@ -383,17 +382,9 @@ async fn a_thread_whose_workspace_is_being_finished_is_dropped_but_never_said_cl
 // ── discover ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn discover_finds_a_pane_in_a_linked_worktree_that_runs_omp_with_its_review_pane() {
+async fn discover_finds_a_pane_in_a_linked_worktree_that_runs_omp() {
 	let w = world().await;
 	w.up();
-	{
-		let mut herdr = w.t.herdr.state();
-		let mut hunk = herdr.pane_list.iter().find(|p| p.pane_id == "p-thread").unwrap().clone();
-		hunk.pane_id = "p-hunk".to_owned();
-		hunk.label = Some("Hunk review".to_owned());
-		hunk.agent = None;
-		herdr.pane_list.push(hunk);
-	}
 	w.r.discover(&w.snapshot().await).await.unwrap();
 	assert_eq!(w.thread_count(), 1);
 	let t = w.t.ctx.threads.get("p-thread").unwrap().get();
@@ -405,9 +396,8 @@ async fn discover_finds_a_pane_in_a_linked_worktree_that_runs_omp_with_its_revie
 	assert!(same_dir(&t.path, &w.wt));
 	assert_eq!(t.head.as_deref(), Some(sh(&w.wt, &["rev-parse", "HEAD"]).as_str()));
 	assert_eq!(t.plan, Some(ThreadPlan { reopened: true, ..ThreadPlan::default() }));
-	assert_eq!(t.review.and_then(|review| review.pane), Some("p-hunk".to_owned()));
-	// Not the boss, not the project's own pane, not the hunk pane.
-	assert!(w.t.ctx.threads.get("p-demo").is_none() && w.t.ctx.threads.get("p-hunk").is_none());
+	// Not the boss, not the project's own pane.
+	assert!(w.t.ctx.threads.get("p-demo").is_none());
 }
 
 #[tokio::test]

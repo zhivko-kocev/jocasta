@@ -1,12 +1,10 @@
-# Development entry for the Jocasta repo (0476): the pinned Bun, Node and Rust, and the checks as tasks. Under
+# Development entry for the Jocasta repo (0476): the pinned Bun and Rust, and the checks as tasks. Under
 # Jocasta's paranoid mise trust it needs `mise trust` once, and again after each change (0596); `mise.lock` pins each
 # tool's URL and checksum (`mise install --locked`).
-# Bun matches package.json's packageManager; a bump changes both and is re-checked per 0383. What ships keeps
-# scripts/build.ts's own hash-checked Node and pnpm. Rust is the port's toolchain (0627) and cargo-deny its crates'
-# audit (0639); `.cargo/config.toml` holds crates to the 7-day rule.
+# Bun matches package.json's packageManager; a bump changes both and is re-checked per 0383. Rust is the port's toolchain (0627) and
+# cargo-deny its crates' audit (0639); `.cargo/config.toml` holds crates to the 7-day rule.
 [tools]
 bun = "1.4.3"
-node = "24.21.0"
 rust = { version = "1.100.0", profile = "minimal", components = "clippy,rustfmt" }
 cargo-deny = "0.20.2"
 # Unused dependencies of Cargo.toml (0645).
@@ -21,7 +19,7 @@ zig = "0.16.0"
 CARGO_BUILD_JOBS = "4"
 
 # `verify` is the name Jocasta's idle check looks for (else `test`, 0453); `check` is the same checks under the repo's
-# own name, so the commands are written once. The TypeScript that remains (the canvas page, the docs and config
+# own name, so the commands are written once. The TypeScript that remains (the docs and config
 # checks, the install-script tests, the scorecard) is checked by typecheck, lint, knip and the Bun tests; the Rust
 # product by rustfmt, clippy, nextest (with the `syn` tree test, 0645), cargo-deny and cargo-machete.
 [tasks.verify]

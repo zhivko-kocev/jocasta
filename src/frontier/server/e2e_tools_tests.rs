@@ -3,7 +3,7 @@
 //! default workspace (0495), and the tool registry against the tool specs.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use regex::Regex;
 use serde_json::{Value, json};
@@ -11,14 +11,13 @@ use serde_json::{Value, json};
 use crate::frontier::protocol::{ClientMessage, ServerMessage};
 use crate::frontier::server::bridge::{BridgeService, Role};
 use crate::frontier::server::helpers::{
-	HunkDaemon, Page, README_THREAD_ENV, TEST_BOSS_KEY, TestServer, ThreadOptions, boss_pane, call, call_as, commit_in,
+	Page, README_THREAD_ENV, TEST_BOSS_KEY, TestServer, ThreadOptions, boss_pane, call, call_as, commit_in,
 	demo_project, keyed, push_state, review, sh, start_test_server_with, start_thread, thread_omp, thread_pane, until,
-	use_hunk_daemon, with_server,
+	with_server,
 };
 use crate::frontier::server::helpers_procs::{ShimTree, with_server_on};
 use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
-use crate::frontier::server::herdr::{AgentState, Env, Herdr, SplitOptions};
-use crate::frontier::server::hunk::hunk_env;
+use crate::frontier::server::herdr::{AgentState, Env, Herdr, TabSpec};
 use crate::frontier::server::server::ServerOptions;
 use crate::frontier::server::tools::{TOOLS, ToolReply};
 use crate::frontier::server::wording::HANDOFF_PROMPT;
@@ -84,39 +83,9 @@ async fn history_search_today_note_and_the_clients_pane_focus_and_link_open_go_w
 			page.wait_for(|m| matches!(m, ServerMessage::Error { .. })).await,
 			ServerMessage::Error { message: "That link isn't one today shows.".to_owned() }
 		);
-		// Without whiteboard nothing is shown, and the boss is told so.
-		assert_eq!(
-			call(&server, "show", &json!({"review": "r-1"})).await,
-			error_reply("show: whiteboard isn't running in this Jocasta; nothing can be shown.")
-		);
-	})
-	.await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn show_review_opens_only_a_review_whiteboard_has_in_his_browser_otherwise_it_says_why_0393_0552() {
-	let _j = temp_jocasta();
-	let opened: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-	let heard = Arc::clone(&opened);
-	let options = ServerOptions {
-		find_review: Some(Arc::new(|id: String| {
-			Box::pin(async move { Ok((id == "r-1").then(|| "Readme line".to_owned())) })
-		})),
-		open_review: Some(Arc::new(move |id: &str| heard.lock().unwrap().push(id.to_owned()))),
-		..ServerOptions::default()
-	};
-	with_server(options, |server| async move {
-		assert_eq!(
-			call(&server, "show", &json!({"review": "demo/readme-line"})).await,
-			error_reply(
-				"show: no whiteboard review demo/readme-line; create one with whiteboard's session_create and pass its sessionId."
-			)
-		);
-		assert_eq!(
-			call(&server, "show", &json!({"review": "r-1"})).await.text,
-			"Opened review \"Readme line\" (r-1) in his browser."
-		);
-		assert_eq!(*opened.lock().unwrap(), vec!["r-1".to_owned()]);
+		// `show` draws a brief from a spec: the server has a page server, so it opens one (0679).
+		let shown = call(&server, "show", &json!({"title": "Plan", "sections": [{"type": "text", "body": "Hi."}]})).await;
+		assert_eq!(shown.text, "Shown: Plan");
 	})
 	.await;
 }
@@ -222,15 +191,6 @@ fn respawns_since(herdr: &FakeHerdr, before: usize) -> Vec<Respawned> {
 		.collect()
 }
 
-fn with_vars(first: Vec<(String, String)>, then: &[(&str, &str)]) -> Vec<(String, String)> {
-	first.into_iter().chain(then.iter().map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))).collect()
-}
-
-fn keyed_of(vars: &[(String, String)]) -> crate::frontier::server::helpers::Keyed {
-	let pairs: Vec<(&str, &str)> = vars.iter().map(|(name, value)| (name.as_str(), value.as_str())).collect();
-	keyed(&pairs)
-}
-
 fn same(a: &str, b: &Path) -> bool {
 	Path::new(a) == b
 }
@@ -241,12 +201,10 @@ async fn herdr_restored_its_panes_as_shells_jocasta_goes_first_the_boss_project_
 	let j = temp_jocasta();
 	let project = demo_project(j.root(), "demo").await;
 	let herdr = Arc::new(FakeHerdr::new());
-	let hunk: HunkDaemon = use_hunk_daemon().await;
-	let options = |boss_key: Option<&str>, wait: Option<i64>| {
-		let mut options =
-			ServerOptions { agent_wait_ms: wait, boss_key: boss_key.map(str::to_owned), ..ServerOptions::default() };
-		hunk.apply(&mut options);
-		options
+	let options = |boss_key: Option<&str>, wait: Option<i64>| ServerOptions {
+		agent_wait_ms: wait,
+		boss_key: boss_key.map(str::to_owned),
+		..ServerOptions::default()
 	};
 	let range = "main...feature/readme-line";
 	let root = j.root().to_path_buf();
@@ -266,7 +224,6 @@ async fn herdr_restored_its_panes_as_shells_jocasta_goes_first_the_boss_project_
 	let before = herdr.state().calls.len();
 	let project_id = project.id.clone();
 	let main_path = project.main_path.clone();
-	let port = hunk.hunk_port;
 	let keep = (herdr.clone(), path.clone());
 	with_server_on(herdr.clone(), options(None, None), |server| async move {
 		let (herdr, path) = keep;
@@ -286,7 +243,7 @@ async fn herdr_restored_its_panes_as_shells_jocasta_goes_first_the_boss_project_
 		assert!(same(&respawned[1].cwd, &path), "{}", respawned[1].cwd);
 		assert_eq!(respawned[1].command, thread);
 		let thread_env = respawned[1].env.clone().expect("the thread pane's env");
-		let expected = keyed_of(&with_vars(hunk_env(port), &README_THREAD_ENV));
+		let expected = keyed(&README_THREAD_ENV);
 		assert!(expected == thread_env, "{thread_env:?}");
 		assert!(same(&respawned[2].cwd, &main_path), "{}", respawned[2].cwd);
 		// A project pane that was asleep is the sleeper again (0676), with only its own pane key.
@@ -330,7 +287,7 @@ async fn herdr_restored_its_panes_as_shells_jocasta_goes_first_the_boss_project_
 			let state = server.herdr.state();
 			state.calls[again..]
 				.iter()
-				.filter(|call| ["respawn", "prompt", "splitBeside"].contains(&call.method.as_str()))
+				.filter(|call| ["respawn", "prompt"].contains(&call.method.as_str()))
 				.map(|call| (call.method.clone(), call.args.clone()))
 				.collect()
 		};
@@ -353,16 +310,13 @@ async fn a_boss_pane_an_earlier_run_started_is_told_it_lacks_the_key_only_when_i
  {
 	let _j = temp_jocasta();
 	let herdr = Arc::new(FakeHerdr::new());
-	let hunk = use_hunk_daemon().await;
-	let mut first = ServerOptions::default();
-	hunk.apply(&mut first);
+	let first = ServerOptions::default();
 	let server = start_test_server_with(herdr.clone(), first).await;
 	server.stop().await;
 	// The earlier run's boss is still at work, so this run doesn't start it again with its key yet.
 	let boss = boss_pane(&herdr).expect("the boss pane");
 	herdr.set_state(&boss, AgentState::Working, None, true);
-	let mut next = ServerOptions { boss_key: Some("next-run-key".to_owned()), ..ServerOptions::default() };
-	hunk.apply(&mut next);
+	let next = ServerOptions { boss_key: Some("next-run-key".to_owned()), ..ServerOptions::default() };
 	with_server_on(herdr.clone(), next, |server: TestServer| async move {
 		server.service.refresh().await;
 		assert_eq!(server.herdr.of("respawn"), Vec::<Vec<Value>>::new());
@@ -416,15 +370,10 @@ async fn touch_default(herdr: &FakeHerdr, pane_id: &str, touch: Touch, root: &Pa
 	match touch {
 		Touch::Nothing => {}
 		Touch::SecondPane => {
-			let split = SplitOptions {
-				command: vec!["pwsh".to_owned()],
-				cwd: home(),
-				env: None,
-				label: None,
-				ratio: None,
-				direction: None,
-			};
-			herdr.split_beside(pane_id, &split).await.unwrap();
+			let workspace =
+				herdr.state().pane_list.iter().find(|p| p.pane_id == pane_id).map(|p| p.workspace_id.clone());
+			let tab = TabSpec { title: "shell".to_owned(), cwd: home(), command: vec!["pwsh".to_owned()], env: None };
+			herdr.create_tab(&workspace.expect("the pane's workspace"), &tab).await.unwrap();
 		}
 		Touch::Agent => herdr.set_state(pane_id, AgentState::Idle, None, false),
 		Touch::AnotherFolder => {
@@ -477,9 +426,7 @@ async fn default_workspace_after_start(
 	};
 	herdr.state().screens.insert(pane_id.clone(), format!("{PROMPT}\n\n"));
 	touch_default(&herdr, &pane_id, touch, root).await;
-	let hunk = use_hunk_daemon().await;
-	let mut options = ServerOptions::default();
-	hunk.apply(&mut options);
+	let options = ServerOptions::default();
 	let server = start_test_server_with(herdr.clone(), options).await;
 	server.service.refresh().await;
 	server.stop().await;
@@ -497,9 +444,7 @@ async fn a_session_jocasta_created_loses_herdrs_untouched_default_workspace_once
 
 	// An empty new session (Jocasta started its server, no client attached yet) has nothing to close.
 	let empty = Arc::new(FakeHerdr::new());
-	let hunk = use_hunk_daemon().await;
-	let mut options = ServerOptions::default();
-	hunk.apply(&mut options);
+	let options = ServerOptions::default();
 	let server = start_test_server_with(empty.clone(), options).await;
 	server.service.refresh().await;
 	server.stop().await;

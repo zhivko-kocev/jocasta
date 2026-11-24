@@ -381,7 +381,7 @@ impl StatusViews {
 		let brief = look.as_ref().map(|look| &look.brief);
 		let model = brief.and_then(|b| b.model.as_deref()).filter(|m| !m.is_empty()).map(short_model);
 		let cost = look.as_ref().and_then(|look| look.spend).map(money);
-		// "review ready" once hunk's notes are counted (0394); an idle pane with its plan in review waits on him.
+		// "review ready" once the review's notes are counted (0394); an idle pane with its plan in review waits on him.
 		let blocked = brief.and_then(|b| b.question.clone()).unwrap_or_else(|| "awaiting you".to_owned());
 		let mut labels = vec![(AgentState::Blocked, blocked)];
 		if row.plan_awaiting {

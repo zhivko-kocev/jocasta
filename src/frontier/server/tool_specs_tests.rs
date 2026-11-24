@@ -36,9 +36,9 @@ fn each_role_gets_the_tools_and_schemas_the_mcp_server_listed() {
 }
 
 #[test]
-fn a_thread_without_the_layer_gets_history_search_only() {
+fn a_thread_without_the_layer_gets_history_search_and_review_note() {
 	let names: Vec<&str> = tools_for(Role::Thread, false).iter().map(|spec| spec.name).collect();
-	assert_eq!(names, ["history_search"]);
+	assert_eq!(names, ["history_search", "review_note"]);
 }
 
 #[test]

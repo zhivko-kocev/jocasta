@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use chrono::TimeZone;
 use futures_util::future::BoxFuture;
 use regex::Regex;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use super::*;
 use crate::setup::markers::{fingerprint, markers_dir};
@@ -130,10 +130,6 @@ impl Harness {
 			system_folders: None,
 			mise_config_dir: base.join("mise"),
 			jocasta_command: vec![PathBuf::from("C:\\Jocasta\\jocasta.exe")],
-			whiteboard: Some(WhiteboardRuntime {
-				node: PathBuf::from("C:\\Jocasta\\node\\node.exe"),
-				cli: PathBuf::from("C:\\Jocasta\\whiteboard\\cli.js"),
-			}),
 		};
 		// herdr's own check isn't run against a stand-in `herdr.exe`.
 		Self { root, paths, mise: None, check: Some(ok_check()), reload: None, git_version: None }
@@ -254,19 +250,6 @@ impl Harness {
 	fn undo(&self, calendar_stored: bool) -> Vec<SetupUndo> {
 		setup_undo(&self.paths, calendar_stored)
 	}
-
-	fn whiteboard_server(&self) -> Value {
-		json!({
-			"type": "stdio",
-			"command": "C:\\Jocasta\\node\\node.exe",
-			"args": ["C:\\Jocasta\\whiteboard\\cli.js", "mcp"],
-			"env": {
-				"DEV_REVIEW_HOME": self.paths.data_dir.join("whiteboard").display().to_string(),
-				"DO_NOT_TRACK": "1",
-				"DEV_FAST_REVIEW_TELEMETRY_DISABLED": "1",
-			},
-		})
-	}
 }
 
 fn copy_dir(from: &Path, to: &Path) {
@@ -331,7 +314,6 @@ async fn a_fresh_machine_the_diff_names_every_file_and_n_writes_nothing() {
 	let Out { code, text, asked } = h.setup(Some("n")).await;
 	assert_eq!(code, 0);
 	assert_eq!(asked, ["Write these changes? [y/N] "]);
-	assert!(text.contains(&format!("omp MCP server \"whiteboard\": {}", s(&h.boss_mcp()))));
 	assert!(text.contains(&format!("herdr config for session `jocasta`: {}", s(&h.herdr_toml()))));
 	assert!(text.contains(&format!("Windows Terminal scheme Tokyo Night: {}", s(&h.fragment()))));
 	assert!(text.contains(&format!(
@@ -360,9 +342,9 @@ async fn y_writes_every_file_marks_each_migration_and_a_second_run_has_nothing_t
 	let Out { code, text, .. } = h.setup(Some("y")).await;
 	assert_eq!(code, 0);
 	assert!(text.contains(&format!("wrote {}", s(&h.paths.omp_agent_dir))));
-	// The snapshot has no `mcp.json` any more (0675), and the boss's holds whiteboard's entry only.
+	// No `mcp.json` anywhere any more (0675, 0679).
 	assert!(!h.global_mcp().exists());
-	assert_eq!(read_json(&h.boss_mcp()), json!({"mcpServers": {"whiteboard": h.whiteboard_server()}}));
+	assert!(!h.boss_mcp().exists());
 	// The snapshot as shipped: `config/omp/` file for file, and herdr's hook from the fork's own asset.
 	assert_eq!(read(&h.omp_config()), asset_text("omp/config.yml"));
 	assert_eq!(read(&h.keybindings()), asset_text("omp/keybindings.yml"));
@@ -384,7 +366,6 @@ async fn y_writes_every_file_marks_each_migration_and_a_second_run_has_nothing_t
 	assert_eq!(
 		markers,
 		[
-			"0002-boss-mcp.json",
 			"0005-herdr-config.json",
 			"0007-terminal-scheme.json",
 			"0018-herdr-plugin-gone.json",
@@ -407,50 +388,12 @@ async fn with_mise_installed_setup_writes_jocastas_mise_file_exact_pins_and_the_
 		"use_versions_host_track = false",
 		"auto_install = false",
 		"paranoid = [\"config\"]",
-		"hunk = \"0.23.0\"",
 		"gh = \"2.92.0\"",
 	] {
 		assert!(MISE_FRAGMENT.lines().any(|l| l == line), "{line}");
 	}
 	// His own config.toml in the same folder is never touched.
 	assert!(!h.paths.mise_config_dir.join("config.toml").exists());
-}
-
-#[tokio::test]
-async fn the_bosss_mcp_json_keeps_his_other_servers_and_keys_setup_adds_whiteboard_and_drops_the_old_jocasta_entry() {
-	let h = Harness::new();
-	let his = json!({
-		"mcpServers": {
-			"github": {"type": "stdio", "command": "gh-mcp", "args": []},
-			"jocasta": {"type": "stdio", "command": "old\\jocasta.exe", "args": ["mcp", "--boss"]},
-		},
-		"disabledServers": ["github"],
-	});
-	put(&h.boss_mcp(), &pretty(&his));
-	let Out { text, .. } = h.setup(Some("y")).await;
-	assert!(text.contains("        \"command\": \"gh-mcp\","));
-	assert!(text.contains("mcpServers.jocasta in "), "{text}");
-	assert_eq!(
-		read_json(&h.boss_mcp()),
-		json!({
-			"mcpServers": {
-				"github": {"type": "stdio", "command": "gh-mcp", "args": []},
-				"whiteboard": h.whiteboard_server(),
-			},
-			"disabledServers": ["github"],
-		})
-	);
-}
-
-#[tokio::test]
-async fn without_whiteboards_build_setup_says_so_and_writes_no_mcp_json() {
-	let mut h = Harness::new();
-	h.paths.whiteboard = None;
-	let Out { text, .. } = h.setup(Some("y")).await;
-	assert!(text.starts_with("whiteboard isn't built: run `mise run build`"));
-	assert!(!text.contains("omp MCP server"), "{text}");
-	assert!(!h.boss_mcp().exists());
-	assert!(!h.global_mcp().exists());
 }
 
 #[tokio::test]
@@ -461,9 +404,10 @@ async fn migration_20_takes_only_the_jocasta_entry_out_of_each_mcp_json_and_no_e
 	assert!(h.marker("0020-jocasta-mcp-gone").is_none());
 	// An earlier build's entries in both files: only `jocasta` goes, his other entries and keys stay.
 	let jocasta = json!({"type": "stdio", "command": "old\\jocasta.exe", "args": ["mcp"]});
-	let mut boss = read_json(&h.boss_mcp());
-	boss["mcpServers"]["jocasta"] = jocasta.clone();
-	boss["mcpServers"]["other"] = json!({"type": "stdio", "command": "other-mcp", "args": []});
+	let boss = json!({"mcpServers": {
+		"jocasta": jocasta.clone(),
+		"other": {"type": "stdio", "command": "other-mcp", "args": []},
+	}});
 	put(&h.boss_mcp(), &pretty(&boss));
 	put(&h.global_mcp(), &pretty(&json!({"mcpServers": {"jocasta": jocasta}, "disabledServers": ["x"]})));
 	let Out { text, .. } = h.setup(Some("y")).await;
@@ -473,13 +417,49 @@ async fn migration_20_takes_only_the_jocasta_entry_out_of_each_mcp_json_and_no_e
 	assert_eq!(
 		read_json(&h.boss_mcp()),
 		json!({"mcpServers": {
-			"whiteboard": h.whiteboard_server(),
 			"other": {"type": "stdio", "command": "other-mcp", "args": []},
 		}})
 	);
 	assert_eq!(read_json(&h.global_mcp()), json!({"mcpServers": {}, "disabledServers": ["x"]}));
 	assert!(h.marker("0020-jocasta-mcp-gone").is_some());
 	// Done: a second run has nothing to do.
+	assert_eq!(h.setup(Some("y")).await.text, IN_PLACE);
+}
+
+#[tokio::test]
+async fn migration_21_takes_the_installed_whiteboard_and_hunk_and_the_boss_whiteboard_server_out_only_from_an_install()
+{
+	// No install marker and no entry: no step, no marker.
+	let mut h = Harness::new();
+	let dir = h.own_assets();
+	h.setup(Some("y")).await;
+	assert!(h.marker("0021-whiteboard-hunk-gone").is_none());
+	// A source run's folder (no marker) is never cleaned, but the boss's entry still goes.
+	let install = dir.parent().unwrap().to_path_buf();
+	for name in ["whiteboard", "hunk", "node"] {
+		put(&install.join(name).join("x.txt"), "x");
+	}
+	put(&h.boss_mcp(), &pretty(&json!({"mcpServers": {"whiteboard": {"command": "node"}, "other": {"command": "o"}}})));
+	let Out { text, .. } = h.setup(Some("y")).await;
+	assert!(text.contains("mcpServers.whiteboard in "), "{text}");
+	assert!(install.join("whiteboard").exists());
+	assert_eq!(read_json(&h.boss_mcp()), json!({"mcpServers": {"other": {"command": "o"}}}));
+	assert!(h.marker("0021-whiteboard-hunk-gone").is_some());
+	// An install: the folders go, his other files stay.
+	let mut h = Harness::new();
+	let dir = h.own_assets();
+	let install = dir.parent().unwrap().to_path_buf();
+	put(&install.join("install.json"), &json!({"dir": install.display().to_string()}).to_string());
+	for name in ["whiteboard", "whiteboard-canvas", "hunk", "node"] {
+		put(&install.join(name).join("x.txt"), "x");
+	}
+	put(&install.join("keep").join("y.txt"), "y");
+	let Out { text, .. } = h.setup(Some("y")).await;
+	assert!(text.contains("Whiteboard and hunk are gone"), "{text}");
+	for name in ["whiteboard", "whiteboard-canvas", "hunk", "node"] {
+		assert!(!install.join(name).exists(), "{name}");
+	}
+	assert!(install.join("keep").join("y.txt").exists());
 	assert_eq!(h.setup(Some("y")).await.text, IN_PLACE);
 }
 
@@ -689,20 +669,9 @@ async fn a_failed_migration_stops_the_rest_and_says_why_the_ones_before_it_are_m
 		"{text}"
 	);
 	assert_eq!(read(&h.herdr_toml()), "# his\n");
-	assert!(h.boss_mcp().exists());
-	assert!(h.marker("0002-boss-mcp").is_some());
 	assert!(h.marker("0005-herdr-config").is_none());
 	assert!(!h.global_mcp().exists());
 	assert!(h.marker("0019-omp-snapshot").is_none());
-}
-
-#[tokio::test]
-async fn a_broken_mcp_json_is_refused_before_anything_is_written() {
-	let h = Harness::new();
-	put(&h.boss_mcp(), "{ not json");
-	let error = h.setup_with(Some("y")).await.err().expect("a broken mcp.json is refused");
-	assert!(error.to_string().contains(&format!("{} is not JSON", s(&h.boss_mcp()))));
-	assert!(!h.global_mcp().exists());
 }
 
 #[tokio::test]
@@ -733,7 +702,7 @@ async fn refresh_herdr_toml_shows_the_diff_keeps_a_dated_backup_writes_the_shipp
 }
 
 #[tokio::test]
-async fn refresh_says_to_restart_herdr_when_it_cant_reload_resets_whiteboards_mcp_entry_and_refuses_other_files() {
+async fn refresh_says_to_restart_herdr_when_it_cant_reload_and_refuses_other_files() {
 	let mut h = Harness::new();
 	h.setup(Some("y")).await;
 	put(&h.herdr_toml(), "# his\n");
@@ -741,20 +710,6 @@ async fn refresh_says_to_restart_herdr_when_it_cant_reload_resets_whiteboards_mc
 	assert!(h.refresh("herdr.toml", Some("y")).await.unwrap().text.ends_with(
 		"herdr didn't reload its config (error: no running server for session jocasta): restart herdr to use it (close Jocasta, then run `jocasta`)."
 	));
-
-	let mut mcp = read_json(&h.boss_mcp());
-	mcp["mcpServers"]["whiteboard"]["args"] = json!(["his"]);
-	mcp["mcpServers"]["github"] = json!({"type": "stdio", "command": "gh-mcp"});
-	put(&h.boss_mcp(), &mcp.to_string());
-	let reset = h.refresh("mcp.json", Some("y")).await.unwrap();
-	assert!(reset.text.contains(&format!("kept {}.bak.20261023-090507", s(&h.boss_mcp()))));
-	assert_eq!(
-		read_json(&h.boss_mcp())["mcpServers"],
-		json!({
-			"whiteboard": h.whiteboard_server(),
-			"github": {"type": "stdio", "command": "gh-mcp"},
-		})
-	);
 
 	let refused = h.refresh("config.yml", Some("y")).await.err().unwrap();
 	assert!(refused.is_user());
@@ -791,10 +746,10 @@ async fn setup_and_refresh_write_on_y_or_yes_in_any_case_and_spacing_any_other_a
 		let Out { code, text, .. } = h.setup(answer).await;
 		assert_eq!(code, 0);
 		assert!(text.ends_with("Nothing written."));
-		assert!(!h.boss_mcp().exists());
+		assert!(!h.herdr_toml().exists());
 	}
 	h.setup(Some(" YES ")).await;
-	assert!(h.boss_mcp().exists());
+	assert!(h.herdr_toml().exists());
 	put(&h.herdr_toml(), "# his\n");
 	assert!(
 		h.refresh("herdr.toml", Some("Y"))
@@ -817,14 +772,6 @@ async fn setup_undo_names_what_setup_added_from_its_markers_only_a_step_without_
 	h.mise = Some(PathBuf::from("mise.exe"));
 	h.setup(Some("y")).await;
 	let undo = h.undo(false);
-	let mut writes = Map::new();
-	writes.insert("whiteboard".to_owned(), h.whiteboard_server());
-	assert!(undo.contains(&SetupUndo::Mcp(McpUndo {
-		path: s(&h.boss_mcp()),
-		servers: strings(&["whiteboard"]),
-		writes,
-		wrote: h.marker("0002-boss-mcp").unwrap().fingerprint,
-	})));
 	assert!(undo.contains(&other(Undo::File { path: s(&h.herdr_toml()) })));
 	assert!(undo.contains(&other(Undo::Dir {
 		path: s(h.fragment().parent().unwrap()),
@@ -949,18 +896,6 @@ async fn a_snapshot_file_changed_after_the_diff_is_refused_and_no_file_of_the_sn
 	assert!(!h.keybindings().exists() && !h.global_mcp().exists() && !h.hook().exists());
 	assert_eq!(h.backups(), None);
 	assert!(h.marker("0019-omp-snapshot").is_none());
-}
-
-#[tokio::test]
-async fn refresh_herdr_toml_works_beside_a_malformed_mcp_json_it_doesnt_reset() {
-	let h = Harness::new();
-	h.setup(Some("y")).await;
-	put(&h.herdr_toml(), "# his\n");
-	put(&h.boss_mcp(), "{ broken");
-	let Out { code, text, .. } = h.refresh("herdr.toml", Some("y")).await.unwrap();
-	assert_eq!(code, 0);
-	assert!(text.contains(&format!("kept {}.bak.20261023-090507", s(&h.herdr_toml()))));
-	assert_ne!(read(&h.herdr_toml()), "# his\n");
 }
 
 #[tokio::test]

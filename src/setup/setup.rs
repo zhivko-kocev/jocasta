@@ -24,7 +24,6 @@ use futures_util::future::BoxFuture;
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
-use crate::frontier::server::whiteboard::{WhiteboardRuntime, whiteboard_runtime};
 use crate::frontier::tui::TOKYO_NIGHT;
 use crate::setup::markers::{Marker, Undo, read_marker, recorded_undo, write_marker};
 use crate::shared::credentials::{CALENDAR_CREDENTIAL, CALENDAR_ENV, read_credential, write_credential};
@@ -66,8 +65,6 @@ pub struct SetupPaths {
 	pub mise_config_dir: PathBuf,
 	/// How omp starts this Jocasta: `[jocasta.exe]`; in a source run the running executable.
 	pub jocasta_command: Vec<PathBuf>,
-	/// whiteboard's CLI for `whiteboard mcp` (0393): beside `jocasta.exe`, or the built clone; `None` when absent.
-	pub whiteboard: Option<WhiteboardRuntime>,
 }
 
 /// What a program run left: its exit code and combined output.
@@ -183,8 +180,6 @@ struct SetupPlan {
 	changes: Vec<PlannedChange>,
 	/// Migrations already in place without a current marker: marked when setup runs.
 	settled: Vec<PlannedChange>,
-	/// Things setup can't do now, said before the diff.
-	notes: Vec<String>,
 }
 
 /// Credential Manager as the calendar's store, with the env value taken at start.
@@ -242,7 +237,6 @@ pub fn default_setup_paths(assets_dir: &Path, jocasta_command: Vec<PathBuf>) -> 
 		}),
 		mise_config_dir: mise_config_dir(),
 		jocasta_command,
-		whiteboard: whiteboard_runtime(),
 	}
 }
 
@@ -401,7 +395,6 @@ fn print_change(io: &dyn SetupIo, change: &SetupChange) {
 fn plan_migrations(
 	paths: &SetupPaths,
 	deps: &SetupDeps,
-	notes: &mut Vec<String>,
 	force: bool,
 	migrations: &[&Migration],
 ) -> Result<Vec<PlannedChange>> {
@@ -410,7 +403,7 @@ fn plan_migrations(
 		let name = marker_name(migration);
 		let marker = read_marker(&paths.jocasta_config_dir, &name);
 		let current = marker.as_ref().map(|m| m.fingerprint.clone());
-		let mut context = migrations::PlanContext { paths, deps, notes, marker };
+		let mut context = migrations::PlanContext { paths, deps, marker };
 		let Some(step) = (migration.plan)(&mut context)? else { continue };
 		if !force && current.as_deref() == Some(step.fingerprint.as_str()) {
 			continue;
@@ -437,9 +430,8 @@ fn calendar_marker() -> Marker {
 
 /// Every change setup would make now, and what it can't do. Reads only.
 fn plan_setup(paths: &SetupPaths, deps: &SetupDeps) -> Result<SetupPlan> {
-	let mut notes = Vec::new();
 	let all: Vec<&Migration> = MIGRATIONS.iter().collect();
-	let planned = plan_migrations(paths, deps, &mut notes, false, &all)?;
+	let planned = plan_migrations(paths, deps, false, &all)?;
 	let (mut changes, settled): (Vec<_>, Vec<_>) = planned.into_iter().partition(|p| p.change.is_some());
 	if let Some(calendar) =
 		deps.calendar.as_ref().filter(|c| c.env_secret().is_some_and(|s| !s.is_empty()) && !c.stored())
@@ -461,13 +453,7 @@ fn plan_setup(paths: &SetupPaths, deps: &SetupDeps) -> Result<SetupPlan> {
 			marker: calendar_marker(),
 		});
 	}
-	let mut unique = Vec::new();
-	for note in notes {
-		if !unique.contains(&note) {
-			unique.push(note);
-		}
-	}
-	Ok(SetupPlan { changes, settled, notes: unique })
+	Ok(SetupPlan { changes, settled })
 }
 
 /// Applies `changes` in order, each marked once written; the first failure stops the rest and says why. Resolves
@@ -532,10 +518,7 @@ fn git_version_note(output: Option<&str>) -> Option<String> {
 /// Shows the plan, asks once, and writes everything only after `y`; then asks for a missing calendar address. herdr
 /// reloads a herdr.toml setup wrote; with herdr missing, setup ends by saying so rather than "Done" (0584).
 pub async fn run_setup(paths: &SetupPaths, deps: &SetupDeps, io: &dyn SetupIo) -> Result<i32> {
-	let SetupPlan { changes, settled, notes } = plan_setup(paths, deps)?;
-	for note in &notes {
-		io.print(note);
-	}
+	let SetupPlan { changes, settled } = plan_setup(paths, deps)?;
 	if let Some(git) = &deps.git_version
 		&& let Some(note) = git_version_note(git().await.as_deref())
 	{
@@ -620,7 +603,7 @@ pub async fn refresh_setup(
 	// Only the files it resets are read: another of his files that doesn't parse can't stop it (SET-13).
 	let refreshable: Vec<&Migration> =
 		MIGRATIONS.iter().filter(|m| m.refresh.is_some_and(|refresh| by_path || refresh == name)).collect();
-	let chosen: Vec<PlannedChange> = plan_migrations(paths, deps, &mut Vec::new(), true, &refreshable)?
+	let chosen: Vec<PlannedChange> = plan_migrations(paths, deps, true, &refreshable)?
 		.into_iter()
 		.filter(|p| !by_path || same_path(Path::new(&p.path), Path::new(file)))
 		.collect();

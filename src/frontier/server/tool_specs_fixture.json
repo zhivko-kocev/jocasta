@@ -175,6 +175,44 @@
 							"properties": {},
 							"additionalProperties": false
 						}
+					},
+					{
+						"name": "review_note",
+						"description": "Hand in one review finding with the code it is about.\nQuote the code exactly as the committed file has it, starting at `line`: a note whose quote the file doesn't hold at that line is refused with the lines that are there. P0 and P1 block the task; P2 is a suggestion.",
+						"inputSchema": {
+							"type": "object",
+							"properties": {
+								"file": {
+									"type": "string",
+									"description": "The file's path in the repository"
+								},
+								"line": {
+									"type": "integer",
+									"minimum": 1,
+									"description": "The 1-based line where the quoted code starts"
+								},
+								"quote": {
+									"type": "string",
+									"description": "The code at that line, as the file has it"
+								},
+								"severity": {
+									"type": "string",
+									"enum": ["P0", "P1", "P2"],
+									"description": "P0 or P1 block; P2 doesn't"
+								},
+								"text": {
+									"type": "string",
+									"description": "The finding: what is wrong and what to do"
+								},
+								"verdict": {
+									"type": "string",
+									"enum": ["post", "question", "skip"],
+									"description": "post (default), question, or skip"
+								}
+							},
+							"required": ["file", "line", "quote", "severity", "text"],
+							"additionalProperties": false
+						}
 					}
 				]
 			}
@@ -345,16 +383,23 @@
 					},
 					{
 						"name": "show",
-						"description": "Open a whiteboard review in his browser.\nCreate it first with whiteboard's session_create and pass its sessionId; an unknown id is refused with the reason.",
+						"description": "Draw a brief in his browser from a spec.\nA page of sections he reads top to bottom: text, facts, a flow (a diagram of nodes and edges, laid out and animated by Jocasta), a map of changed files, a diff, a list. A diagram is changed by asking for a new show. A spec that doesn't lay out (a duplicate node id, an edge to an unknown node, more than 200 nodes) is refused with the reason.",
 						"inputSchema": {
 							"type": "object",
 							"properties": {
-								"review": {
+								"title": {
 									"type": "string",
-									"description": "The review's sessionId from whiteboard's session_create"
+									"description": "The brief's title"
+								},
+								"sections": {
+									"type": "array",
+									"items": {
+										"type": "object"
+									},
+									"description": "The sections, top to bottom; each has a `type`: text {body}, facts {rows: [{label, value, url?}]}, flow {nodes: [{id, label, state: done|active|failed|pending, group?, detail?}], edges: [{from, to, label?}]}, map {groups: [{label, items: [{id, label, added, removed}]}], links: [{a, b}]}, diff {files: [{path, hunks: [{header, lines: [{kind: +|-|space, old?, new?, text}]}]}]}, list {rows: [{text, url?, note?}]}; every section may carry a heading"
 								}
 							},
-							"required": ["review"],
+							"required": ["title", "sections"],
 							"additionalProperties": false
 						}
 					},
