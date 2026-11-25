@@ -137,6 +137,24 @@ pub fn run_embedded() -> Result<()> {
 	let surface = OwnSurface::new(Arc::clone(&hub));
 	let closed = Arc::new(Notify::new());
 	let service = runtime.spawn(serve(Arc::clone(&native), surface, bridge, tx.clone(), Arc::clone(&closed)));
+	// A closed window hangs up its terminal on Linux and macOS, and the default for that signal ends the process on
+	// the spot, the service file and every pane left behind; it and a plain terminate are the word to leave, as the
+	// console's close event is on Windows.
+	#[cfg(unix)]
+	{
+		use tokio::signal::unix::{SignalKind, signal};
+		let _entered = runtime.enter();
+		if let (Ok(mut hangup), Ok(mut terminate)) = (signal(SignalKind::hangup()), signal(SignalKind::terminate())) {
+			let quit = tx.clone();
+			runtime.spawn(async move {
+				tokio::select! {
+					_ = hangup.recv() => {}
+					_ = terminate.recv() => {}
+				}
+				let _ = quit.send(Ui::Quit);
+			});
+		}
+	}
 	let parts = Parts { hub, shell: JocastaShell::new(now_ms), native, tx, rx };
 	crate::shared::log::set_stderr(false);
 	let ran = run(parts);

@@ -368,11 +368,18 @@ impl Terminal {
 	}
 
 	/// His window closes: the pseudo console goes, as a terminal's does, and Jocasta ends on its own, the service and
-	/// every pane's process (`roots`) with it. A kill would leave it no chance to clean up.
+	/// every pane's process (`roots`) with it. A kill would leave it no chance to clean up. On Linux and macOS the screen
+	/// reader's copy of the terminal stays open while its read blocks, so the hang-up the kernel sends when a window's
+	/// terminal closes is sent here.
 	fn close(self, sandbox: &Sandbox, roots: &[u32]) {
 		let Self { mut client, keys, _master, .. } = self;
 		drop(keys);
 		drop(_master);
+		#[cfg(unix)]
+		if let Some(pid) = client.process_id() {
+			let hung_up = std::process::Command::new("kill").args(["-HUP", &pid.to_string()]).status();
+			assert!(hung_up.is_ok_and(|status| status.success()), "the hang-up wasn't sent");
+		}
 		let service_file = sandbox.path().join("data").join("jocasta-service.json");
 		wait_until(90, "Jocasta never closed", || !service_file.exists());
 		wait_until(30, "Jocasta's process outlived its window", || matches!(client.try_wait(), Ok(Some(_))));
