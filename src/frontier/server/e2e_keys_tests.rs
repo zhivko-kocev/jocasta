@@ -20,12 +20,12 @@ use crate::frontier::server::helpers::{
 	hand_in_two_notes, pane_reports, proposed_plan_file, push_state, session_file, sh, states_settled, task_dir_of,
 	thread_omp, until, with_server,
 };
-use crate::frontier::server::herdr::AgentState;
 use crate::frontier::server::history::search_history;
 use crate::frontier::server::native::NativeServer;
 use crate::frontier::server::overlay::overlay_file;
 use crate::frontier::server::popups::{AnswerTaken, Popup, PopupEnd};
 use crate::frontier::server::server::ServerOptions;
+use crate::frontier::server::surface::AgentState;
 use crate::frontier::server::tools::ToolReply;
 use crate::frontier::server::wording::{HANDOFF_PROMPT, REPORT_STEER, WHEN_YOU_FINISH};
 use crate::shared::pathkey::same_dir;

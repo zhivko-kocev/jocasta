@@ -10,8 +10,8 @@ use futures_util::future::BoxFuture;
 use tokio::sync::watch;
 
 use crate::frontier::protocol::ServerMessage;
-use crate::frontier::server::herdr::Herdr;
 use crate::frontier::server::popups::Popups;
+use crate::frontier::server::surface::Surface;
 use crate::shared::errors::{Error, Result};
 use crate::shared::log::{LogLevel, log};
 use crate::shared::service_file::remove_service_file;
@@ -128,9 +128,7 @@ pub trait StopService: Send + Sync {
 pub struct StopParts {
 	pub popups: Arc<Popups>,
 	pub broadcast: Arc<dyn Fn(ServerMessage) + Send + Sync>,
-	pub herdr: Arc<dyn Herdr>,
-	/// herdr's session, for the log.
-	pub session: String,
+	pub herdr: Arc<dyn Surface>,
 	pub service: Arc<dyn StopService>,
 	/// What else Jocasta started that stops with it (0549), in the order registered; read when the stop runs.
 	pub extra_stops: Vec<StopStep>,
@@ -157,7 +155,7 @@ macro_rules! call {
 /// everything, in this order. Each step that waits on herdr or another process is bounded (LC-5, LC-8, SRV-A-3): the
 /// threads noted and herdr's stop by `herdr`, the service and the extra stops by their own.
 pub fn stop_steps(parts: StopParts) -> Vec<StopStep> {
-	let StopParts { popups, broadcast, herdr, session, service, extra_stops, bridge, server, bounds } = parts;
+	let StopParts { popups, broadcast, herdr, service, extra_stops, bridge, server, bounds } = parts;
 	let service_ms = bounds.service.unwrap_or(30_000);
 	let herdr_ms = bounds.herdr.unwrap_or(15_000);
 	let stop_server = Arc::clone(&herdr);
@@ -179,7 +177,7 @@ pub fn stop_steps(parts: StopParts) -> Vec<StopStep> {
 		// Their omps end before herdr closes their panes, so their turns stay open for `--restore` (0549).
 		StopStep::new("the turns at work", call!(&service, cut_paused_turns)).when(StopWhen::All),
 		StopStep::new(
-			format!("herdr session {session}"),
+			"the shell's panes",
 			Arc::new(move || -> Step {
 				let herdr = Arc::clone(&stop_server);
 				Box::pin(async move { herdr.stop_server().await.map_err(Error::from) })

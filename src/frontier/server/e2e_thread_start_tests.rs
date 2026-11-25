@@ -18,10 +18,10 @@ use crate::frontier::server::helpers::{
 	demo_project, guard, keyed, project_keyed, proposed_plan_file, push_state, review, session_file, sh,
 	start_test_server_with, start_thread, task_dir_of, thread_omp, until, until_async, with_server,
 };
-use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
-use crate::frontier::server::herdr::{AgentState, Env};
 use crate::frontier::server::overlay::{overlay_file, overlay_text};
 use crate::frontier::server::server::ServerOptions;
+use crate::frontier::server::surface::fake_surface::FakeSurface;
+use crate::frontier::server::surface::{AgentState, Env};
 use crate::frontier::server::tools::ToolReply;
 use crate::frontier::server::wording::{HANDOFF_PROMPT, WHEN_YOU_FINISH, short_model};
 use crate::frontier::server::worktrees::reviewed_file;
@@ -99,7 +99,7 @@ fn options_with_wait() -> ServerOptions {
 }
 
 /// Runs `run` on a server started on `herdr` and always stops it, like `with_server` but over the test's own herdr.
-async fn with_herdr<F, Fut>(herdr: Arc<FakeHerdr>, options: ServerOptions, run: F)
+async fn with_herdr<F, Fut>(herdr: Arc<FakeSurface>, options: ServerOptions, run: F)
 where
 	F: FnOnce(TestServer) -> Fut,
 	Fut: Future<Output = ()>,
@@ -666,7 +666,7 @@ async fn task_end_with_no_trunk_to_diff_against_no_review_handoff_at_once_0400()
 }
 
 /// One reported pane metadata is exactly `tokens`, `stateLabels` and a numeric `ttlMs`.
-fn reported(herdr: &FakeHerdr, pane: &str, tokens: &Value, labels: &Value) -> bool {
+fn reported(herdr: &FakeSurface, pane: &str, tokens: &Value, labels: &Value) -> bool {
 	herdr.of("reportPaneMetadata").iter().any(|c| {
 		c[0] == json!(pane)
 			&& c[1].as_object().is_some_and(|meta| {
@@ -683,7 +683,7 @@ async fn sidebar_tokens_per_thread_pane_and_project_workspace_the_hud_and_the_to
  {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
-	let herdr = Arc::new(FakeHerdr::new());
+	let herdr = Arc::new(FakeSurface::new());
 	let pane_id = Arc::new(std::sync::Mutex::new(String::new()));
 	// Every omp session of the day counts (the HUD matches omp's own stats), not only the threads'. The sessions folder
 	// is listed every 30 s (PERF-3): this one is there from the start.

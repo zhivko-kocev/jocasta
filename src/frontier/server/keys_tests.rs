@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 use crate::frontier::server::context::{TestContext, test_context};
-use crate::frontier::server::herdr::PaneInfo;
+use crate::frontier::server::surface::PaneInfo;
 use crate::frontier::server::thread::Thread;
 use crate::frontier::server::wording::Overlap;
 use crate::shared::git::git;

@@ -13,9 +13,9 @@ use crate::frontier::protocol::{ServerMessage, token_cookie};
 use crate::frontier::server::helpers::{
 	Page, boss_pane, http, start_test_server, until, with_server, with_test_defaults,
 };
-use crate::frontier::server::herdr::AgentState;
-use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
 use crate::frontier::server::launch::{ServiceState, service_state};
+use crate::frontier::server::surface::AgentState;
+use crate::frontier::server::surface::fake_surface::FakeSurface;
 use crate::shared::fsx::free_port;
 use crate::shared::service_file::{read_service_file, service_file_path};
 use crate::shared::testing::temp_jocasta;
@@ -134,7 +134,7 @@ async fn a_start_that_fails_after_the_server_listens_stops_it_the_port_is_free_a
 	// jocasta-service.json can't be written: a folder holds its name.
 	fs::create_dir_all(service_file_path(None)).unwrap();
 	fs::create_dir_all(crate::shared::paths::data_dir().join("omp-sessions")).unwrap();
-	let herdr = Arc::new(FakeHerdr::new());
+	let herdr = Arc::new(FakeSurface::new());
 	let options = ServerOptions { port: Some(port), ..ServerOptions::default() };
 	assert!(start_server(with_test_defaults(options, &herdr)).await.is_err());
 	drop(bound(port));

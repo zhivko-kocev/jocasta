@@ -38,7 +38,6 @@ fn bench(args: &[&str], config: &Path) -> Output {
 	Command::new(env!("CARGO_BIN_EXE_jocasta-bench"))
 		.args(args)
 		.env_remove("JOCASTA_DATA_DIR")
-		.env_remove("JOCASTA_HERDR_SESSION")
 		.env_remove("JOCASTA_EVALS_REAL")
 		.env("JOCASTA_CODING_AGENT_DIR", config)
 		.output()

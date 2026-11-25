@@ -9,9 +9,9 @@ use serde_json::{Value, json};
 use crate::frontier::server::helpers::{
 	TestServer, ThreadOptions, boss_pane, call, commit_in, demo_project, sh, start_thread, until, with_server,
 };
-use crate::frontier::server::herdr::AgentState;
 use crate::frontier::server::pending::{After, Pending, PendingArgs};
 use crate::frontier::server::server::ServerOptions;
+use crate::frontier::server::surface::AgentState;
 use crate::shared::paths::{data_dir, project_dir};
 use crate::shared::projects::Project;
 use crate::shared::testing::temp_jocasta;

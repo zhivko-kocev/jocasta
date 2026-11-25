@@ -52,7 +52,7 @@ pub fn parse_feed(text: &str) -> Vec<FeedEntry> {
 		.collect()
 }
 
-/// The toasts in a feed; `urgent_only` keeps those the service also raises as a herdr notification (`blocked`, urgent).
+/// The toasts in a feed; `urgent_only` keeps those the service also raises as a Windows notification (`blocked`, urgent).
 pub fn toasts_of(entries: &[FeedEntry], urgent_only: bool) -> Vec<&FeedEntry> {
 	entries
 		.iter()

@@ -1,4 +1,4 @@
-//! `diagnose.ts`'s tests (`test/setup/diagnose.test.ts`), on the in-process fake herdr.
+//! `diagnose.ts`'s tests (`test/setup/diagnose.test.ts`), with omp's run recorded.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -6,23 +6,26 @@ use std::sync::{Arc, Mutex};
 use serde_json::{Value, json};
 
 use super::*;
-use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
+use crate::shared::errors::Error;
 use crate::shared::install::REPO;
-use crate::shared::testing::{TempDir, temp_dir};
+use crate::shared::testing::{TempDir, temp_dir, temp_jocasta};
 use crate::shared::yaml::parse_value;
 
 fn assets() -> PathBuf {
 	Path::new(REPO).join("config")
 }
 
+/// What omp was asked to run: its argv and folder.
+type Runs = Arc<Mutex<Vec<(Vec<String>, PathBuf)>>>;
+
 struct Fixture {
 	root: TempDir,
-	herdr: Arc<FakeHerdr>,
+	runs: Runs,
 }
 
 impl Fixture {
 	fn new() -> Self {
-		Self { root: temp_dir("diagnose"), herdr: Arc::new(FakeHerdr::new()) }
+		Self { root: temp_dir("diagnose"), runs: Runs::default() }
 	}
 
 	fn data(&self) -> PathBuf {
@@ -44,26 +47,16 @@ impl Fixture {
 	}
 
 	fn deps(&self) -> DiagnoseDeps {
-		let herdr = self.herdr.clone();
-		let data = self.data();
+		let runs = self.runs.clone();
 		DiagnoseDeps {
-			data_dir: data.clone(),
+			data_dir: self.data(),
 			assets_dir: assets(),
 			omp: vec!["omp".to_owned()],
-			versions: "jocasta 0.1.0 (omp 18.12.6, herdr 0.9.5, bun 1.4.3)".to_owned(),
-			session: "jocasta-test".to_owned(),
+			versions: "jocasta 0.1.0 (omp 18.12.6, bun 1.4.3)".to_owned(),
 			service: Box::new(|| Box::pin(async { Ok(ServiceInfo { state: ServiceState::Down, file: None }) })),
-			connect: Box::new(move || {
-				let herdr: Arc<dyn Herdr> = herdr.clone();
-				Box::pin(async move { Ok(herdr) })
-			}),
-			ensure_boss: Box::new(move |herdr| {
-				let home = data.join("home");
-				Box::pin(async move {
-					let command = ["omp".to_owned(), "--continue".to_owned()];
-					let id = herdr.ensure_workspace("Jocasta", &home, Some(&command), None).await?;
-					Ok(herdr.panes().await?.into_iter().find(|pane| pane.workspace_id == id).unwrap())
-				})
+			run_omp: Box::new(move |argv, dir| {
+				runs.lock().unwrap().push((argv, dir));
+				Box::pin(async { Ok(0) })
 			}),
 			setup_check: Box::new(|| {
 				Box::pin(async {
@@ -105,13 +98,11 @@ fn recent_log_keeps_the_newest_lines_across_days_oldest_first_and_names_the_file
 }
 
 #[test]
-fn jocasta_diagnose_opens_a_read_only_omp_pane_in_workspace_jocasta_with_the_state_and_the_log_attached_saying_they_go_to_the_model_provider()
+fn jocasta_diagnose_writes_the_state_and_the_log_and_runs_a_read_only_omp_in_the_diagnose_folder_saying_they_go_to_the_model_provider()
  {
+	let _j = temp_jocasta();
 	let fixture = Fixture::new();
 	fixture.logs(&[("2026-10-23", 3)]);
-	let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-	rt.block_on(fixture.herdr.ensure_workspace("Jocasta", fixture.root.path(), Some(&["omp".to_owned()]), None))
-		.unwrap();
 	let mut deps = fixture.deps();
 	deps.service = Box::new(|| {
 		Box::pin(async {
@@ -124,40 +115,32 @@ fn jocasta_diagnose_opens_a_read_only_omp_pane_in_workspace_jocasta_with_the_sta
 	let (code, out) = run(&deps);
 	assert_eq!(code.unwrap(), 0);
 	let dir = fixture.data().join("diagnose");
-	let create = &fixture.herdr.of("createTab")[0];
-	assert_eq!(create[0], json!(fixture.herdr.state().workspace_list[0].id));
-	assert_eq!(create[1]["title"], "diagnose");
-	assert_eq!(create[1]["cwd"], json!(dir.display().to_string()));
+	let runs = fixture.runs.lock().unwrap().clone();
+	assert_eq!(runs.len(), 1);
+	assert_eq!(runs[0].1, dir);
 	assert_eq!(
-		create[1]["command"],
-		json!([
-			"omp",
-			"--config",
+		runs[0].0,
+		[
+			"omp".to_owned(),
+			"--config".to_owned(),
 			dir.join("omp.yml").display().to_string(),
-			"--tools",
-			"read,grep,glob",
+			"--tools".to_owned(),
+			"read,grep,glob".to_owned(),
 			format!("@{}", dir.join("state.md").display()),
 			format!("@{}", dir.join("recent.log").display()),
-			"Jocasta's state and recent log, attached, go to the model provider with this message. Diagnose Jocasta with the diagnose skill from them. Change nothing.",
-		])
-	);
-	assert_eq!(fixture.herdr.of("focus").len(), 1);
-	assert_eq!(
-		out,
-		[
-			"Opened a read-only diagnose pane in workspace Jocasta (herdr session `jocasta-test`): run `jocasta` to see it."
+			"Jocasta's state and recent log, attached, go to the model provider with this message. Diagnose Jocasta with the diagnose skill from them. Change nothing.".to_owned(),
 		]
 	);
+	// No phone configured: nothing printed.
+	assert!(out.is_empty(), "{out:?}");
 
 	let state = fixture.state();
 	assert!(state.contains("(2026-10-23T10:30:00.000Z)"));
-	assert!(state.contains("- Versions: jocasta 0.1.0 (omp 18.12.6, herdr 0.9.5, bun 1.4.3)"));
+	assert!(state.contains("- Versions: jocasta 0.1.0 (omp 18.12.6, bun 1.4.3)"));
 	assert!(state.contains("- Service: busy (jocasta-service.json names pid 42, port 47615)"));
-	assert!(state.contains("- herdr session `jocasta-test`: herdr 0.9.4 answers; 1 workspaces, 1 panes"));
 	assert!(state.contains("- Setup: jocasta setup has 2 changes waiting"));
 	assert!(state.contains("(from jocasta-2026-10-23.log)"));
-	assert!(regex::Regex::new(r"(?m)^- Jocasta \(w_\d+\)").unwrap().is_match(&state));
-	// The service's token never reaches the pane.
+	// The service's token never reaches the model.
 	assert!(!state.contains("secret"));
 	assert!(fs::read_to_string(dir.join("recent.log")).unwrap().contains("2026-10-23 line 2"));
 	let overlay = parse_value(&fs::read_to_string(dir.join("omp.yml")).unwrap()).unwrap();
@@ -171,25 +154,13 @@ fn jocasta_diagnose_opens_a_read_only_omp_pane_in_workspace_jocasta_with_the_sta
 }
 
 #[test]
-fn without_workspace_jocasta_diagnose_makes_it_first_a_herdr_that_cant_start_is_a_plain_error() {
+fn diagnose_resolves_omps_exit_code_and_a_failed_run_is_its_error() {
 	let fixture = Fixture::new();
-	let (code, _) = run(&fixture.deps());
-	code.unwrap();
-	assert_eq!(fixture.herdr.of("ensureWorkspace").len(), 1);
-	let labels: Vec<String> = fixture.herdr.state().workspace_list.iter().map(|w| w.label.clone()).collect();
-	assert_eq!(labels, ["Jocasta"]);
-	assert_eq!(fixture.herdr.of("createTab").len(), 1);
-
-	let mut failing = fixture.deps();
-	failing.connect = Box::new(|| Box::pin(async { Err(Error::other("the server exited at once")) }));
-	let (code, _) = run(&failing);
-	let error = code.unwrap_err();
-	assert!(error.is_user());
-	assert!(
-		error
-			.to_string()
-			.starts_with("herdr session `jocasta-test` doesn't answer and couldn't start (the server exited at once)")
-	);
+	let mut deps = fixture.deps();
+	deps.run_omp = Box::new(|_, _| Box::pin(async { Ok(3) }));
+	assert_eq!(run(&deps).0.unwrap(), 3);
+	deps.run_omp = Box::new(|_, _| Box::pin(async { Err(Error::other("omp isn't installed")) }));
+	assert_eq!(run(&deps).0.unwrap_err().to_string(), "omp isn't installed");
 }
 
 #[test]

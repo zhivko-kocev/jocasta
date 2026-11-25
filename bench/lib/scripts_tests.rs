@@ -4,17 +4,15 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use jocasta::frontier::server::surface::AgentState;
 use jocasta::shared::errors::{Error, Result};
 use jocasta::shared::testing::temp_dir;
 
 use super::args::{ArgSpec, REPO_ROOT, flag, parse_bench_args};
-use super::jocasta::herdr_server_of;
+use super::jocasta::parse_panes;
 use super::launch::{BenchTool, ready_patterns, require_trusted_cwd, tool_command_with};
 use super::output::claim_rows;
-use super::proctree::{
-	JocastaRoots, Memory, ProcessInfo, jocasta_processes, parse_ps_processes, parse_windows_processes, tree_memory,
-	tree_of,
-};
+use super::proctree::{Memory, ProcessInfo, parse_ps_processes, parse_windows_processes, tree_memory, tree_of};
 use super::sandbox::{Sandbox, require_sandbox_in, require_vm};
 
 /// The message of a refusal (exit code 2).
@@ -59,14 +57,13 @@ fn out_must_be_outside_the_repo_and_is_required_unless_dry_running_runs_is_a_who
 }
 
 #[test]
-fn live_benchmarks_refuse_his_own_data_folder_herdr_session_and_config_folder_0576() {
+fn live_benchmarks_refuse_his_own_data_folder_and_config_folder_0576() {
 	let home = std::env::home_dir().unwrap_or_default();
 	let his = home.join("his-data");
-	let sandbox: HashMap<String, String> =
-		[("JOCASTA_DATA_DIR", "/sandbox"), ("JOCASTA_HERDR_SESSION", "bench"), ("JOCASTA_CODING_AGENT_DIR", "/sb-cfg")]
-			.iter()
-			.map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
-			.collect();
+	let sandbox: HashMap<String, String> = [("JOCASTA_DATA_DIR", "/sandbox"), ("JOCASTA_CODING_AGENT_DIR", "/sb-cfg")]
+		.iter()
+		.map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+		.collect();
 	let with = |name: &str, value: Option<&str>| {
 		let mut env = sandbox.clone();
 		match value {
@@ -79,11 +76,7 @@ fn live_benchmarks_refuse_his_own_data_folder_herdr_session_and_config_folder_05
 	assert!(
 		refusal(require_sandbox_in(&with("JOCASTA_DATA_DIR", Some(&text(&his))), false, &his)).contains("not his own")
 	);
-	assert!(
-		refusal(require_sandbox_in(&with("JOCASTA_HERDR_SESSION", Some("jocasta")), false, &his))
-			.contains("not jocasta or jarvis")
-	);
-	let refused = "set JOCASTA_CODING_AGENT_DIR to the sandbox's config folder; with ~/.jocasta/agent the sandbox uses his projects and herdr config";
+	let refused = "set JOCASTA_CODING_AGENT_DIR to the sandbox's config folder; with ~/.jocasta/agent the sandbox uses his projects";
 	assert!(refusal(require_sandbox_in(&with("JOCASTA_CODING_AGENT_DIR", None), false, &his)).contains(refused));
 	assert!(
 		refusal(require_sandbox_in(&with("JOCASTA_CODING_AGENT_DIR", Some("~/.jocasta/agent")), false, &his))
@@ -96,11 +89,7 @@ fn live_benchmarks_refuse_his_own_data_folder_herdr_session_and_config_folder_05
 	);
 	assert_eq!(
 		require_sandbox_in(&sandbox, false, &his).unwrap(),
-		Sandbox {
-			data_dir: "/sandbox".to_owned(),
-			herdr_session: "bench".to_owned(),
-			config_dir: "/sb-cfg".to_owned(),
-		}
+		Sandbox { data_dir: "/sandbox".to_owned(), config_dir: "/sb-cfg".to_owned() }
 	);
 }
 
@@ -168,7 +157,7 @@ fn listed() -> Vec<ProcessInfo> {
 			{"ProcessId":10,"ParentProcessId":1,"Name":"omp.exe","WorkingSetSize":1000,"PrivatePageCount":800},
 			{"ProcessId":11,"ParentProcessId":10,"Name":"bun.exe","WorkingSetSize":500,"PrivatePageCount":400},
 			{"ProcessId":12,"ParentProcessId":11,"Name":"omp.exe","WorkingSetSize":200,"PrivatePageCount":100},
-			{"ProcessId":20,"ParentProcessId":1,"Name":"herdr.exe","WorkingSetSize":300,"PrivatePageCount":null}
+			{"ProcessId":20,"ParentProcessId":1,"Name":"jocasta.exe","WorkingSetSize":300,"PrivatePageCount":null}
 		]"#,
 	)
 	.unwrap()
@@ -188,41 +177,25 @@ fn a_tree_its_memory_and_roots_by_name() {
 }
 
 #[test]
-fn jocastas_processes_the_service_herdrs_server_and_the_attached_surfaces_each_once_and_apart_0552() {
-	let proc = |pid: u32, ppid: u32, working_set: u64| ProcessInfo {
-		pid,
-		ppid,
-		name: "p".to_owned(),
-		command_line: "p".to_owned(),
-		working_set,
-		private_bytes: Some(working_set),
-		created: None,
-	};
-	// The surface (30) started the service (31, with a child 32) and its herdr client (33); herdr's server (40) runs
-	// the panes (41).
-	let list =
-		[proc(30, 1, 10), proc(31, 30, 100), proc(32, 31, 5), proc(33, 30, 20), proc(40, 1, 50), proc(41, 40, 7)];
-	let roots = JocastaRoots { service: Some(31), herdr_server: Some(40), surfaces: vec![30, 99] };
-	let found = jocasta_processes(&roots, &list);
-	let mut pids: Vec<u32> = found.all.iter().map(|p| p.pid).collect();
-	pids.sort_unstable();
-	assert_eq!(pids, [30, 31, 32, 33, 40, 41]);
-	assert_eq!(
-		[found.parts.service.working_set, found.parts.herdr.working_set, found.parts.surfaces.working_set],
-		[105, 57, 30]
-	);
-}
-
-#[test]
-fn herdrs_server_is_the_parent_of_the_first_pane_process_that_is_running_ben_18() {
-	let list = parse_windows_processes(
-		r#"[{"ProcessId":40,"ParentProcessId":1,"Name":"herdr.exe"},{"ProcessId":41,"ParentProcessId":40,"Name":"omp.exe"}]"#,
+fn the_panes_command_lists_each_pane_with_its_workspace_state_and_process_0683() {
+	let listed = parse_panes(
+		r#"[{"pane_id":"p1","workspace_id":"w1","workspace":"Jocasta","tab_id":"t1","agent_state":"idle","agent":"omp","label":"boss","cwd":"/acme","session_path":"/s/1.jsonl","root":4242},
+		{"pane_id":"p2","workspace_id":"w2","workspace":null,"tab_id":"t2","agent_state":"nonsense","label":null,"root":null}]"#,
 	)
 	.unwrap();
-	// Pane 77's process is gone; pane 41's names the server.
-	assert_eq!(herdr_server_of([77, 41], &list), Some(40));
-	assert_eq!(herdr_server_of([77], &list), None);
-	assert_eq!(herdr_server_of([], &list), None);
+	assert_eq!(listed.len(), 2);
+	assert_eq!(
+		(listed[0].info.pane_id.as_str(), listed[0].workspace.as_deref(), listed[0].root),
+		("p1", Some("Jocasta"), Some(4242))
+	);
+	assert_eq!(listed[0].info.agent_state, AgentState::Idle);
+	assert_eq!(listed[0].info.cwd, Some(PathBuf::from("/acme")));
+	assert_eq!(listed[0].info.session_path, Some(PathBuf::from("/s/1.jsonl")));
+	assert_eq!(
+		(listed[1].info.agent_state, listed[1].workspace.clone(), listed[1].root),
+		(AgentState::Unknown, None, None)
+	);
+	assert!(parse_panes("{}").is_err());
 }
 
 #[test]

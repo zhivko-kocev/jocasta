@@ -15,11 +15,11 @@ use crate::frontier::server::helpers::{
 	commit_in, demo_project, guard, handoff_entry, keyed, pane_reports, project_keyed, review, session_file, sh,
 	start_test_server_with, start_thread, thread_omp, thread_pane, to_handoff, until, until_async,
 };
-use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
-use crate::frontier::server::herdr::{AgentState, Env};
 use crate::frontier::server::overlay::overlay_file;
 use crate::frontier::server::server::ServerOptions;
 use crate::frontier::server::status::Busy;
+use crate::frontier::server::surface::fake_surface::FakeSurface;
+use crate::frontier::server::surface::{AgentState, Env};
 use crate::frontier::server::tools::ToolReply;
 use crate::frontier::server::wording::HANDOFF_PROMPT;
 use crate::shared::clock::testing::stand_still_at;
@@ -34,7 +34,7 @@ fn reply(text: &str, is_error: bool) -> ToolReply {
 }
 
 /// `with_server` on a herdr the test made (so a test can restart the service on the same panes); always stops it.
-async fn with_herdr<F, Fut>(herdr: &Arc<FakeHerdr>, options: ServerOptions, run: F)
+async fn with_herdr<F, Fut>(herdr: &Arc<FakeSurface>, options: ServerOptions, run: F)
 where
 	F: FnOnce(TestServer) -> Fut,
 	Fut: Future<Output = ()>,
@@ -78,7 +78,7 @@ struct Respawn {
 }
 
 /// The respawn calls from call number `before` on.
-fn respawned_since(herdr: &FakeHerdr, before: usize) -> Vec<Respawn> {
+fn respawned_since(herdr: &FakeSurface, before: usize) -> Vec<Respawn> {
 	let state = herdr.state();
 	state.calls[before..]
 		.iter()
@@ -103,7 +103,7 @@ fn respawned_since(herdr: &FakeHerdr, before: usize) -> Vec<Respawn> {
 }
 
 /// The project workspace's pane: the project's own omp in its main checkout.
-fn project_pane(herdr: &FakeHerdr) -> String {
+fn project_pane(herdr: &FakeSurface) -> String {
 	let state = herdr.state();
 	let workspace = state.workspace_list.iter().find(|w| w.label == "demo").map(|w| w.id.clone());
 	state
@@ -427,7 +427,7 @@ async fn a_thread_being_finished_its_omp_ending_as_its_workspace_closes_isn_t_st
 async fn an_omp_that_ends_once_the_service_stopped_isn_t_started_again_by_it_or_by_the_next_start_0521() {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
-	let herdr = Arc::new(FakeHerdr::new());
+	let herdr = Arc::new(FakeSurface::new());
 	let first = start_test_server_with(herdr.clone(), options_with()).await;
 	let thread = start_thread(&first, ThreadOptions::default()).await.pane_id;
 	first.service.refresh().await;

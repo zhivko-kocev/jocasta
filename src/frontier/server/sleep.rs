@@ -1,6 +1,6 @@
 //! Panes that sleep (0676): a project's omp that has idled for `service.paneIdleMinutes`, or a thread's omp that has
-//! reported and awaits his review, ends; its pane shows the sleeper (`jocasta pane-sleep`) and a key, a `thread_send`, a
-//! review fix or a finish brings the same session back with `--restore`.
+//! reported and awaits his review, ends; its pane becomes a sleeping pane the shell draws, running nothing (0689), and
+//! a key, a `thread_send`, a review fix or a finish brings the same session back with `--restore`.
 //!
 //! The pane id changes with every respawn, so the sleeper's and the wake's registry updates run under one claim of the
 //! pane (`busy`), which keeps the refresh tick from reading the gap as a crash (`omp_ended`) or a closed thread.
@@ -13,9 +13,9 @@ use std::time::Duration;
 use futures_util::future::join_all;
 
 use crate::frontier::server::context::{Link, ServiceContext};
-use crate::frontier::server::herdr::{HerdrSnapshot, PaneInfo};
 use crate::frontier::server::journal::About;
 use crate::frontier::server::pane_launch::Respawn;
+use crate::frontier::server::surface::{PaneInfo, SurfaceSnapshot};
 use crate::frontier::server::thread::{Phase, ThreadRef, subject};
 use crate::shared::clock::now_ms;
 use crate::shared::errors::{Error, Result};
@@ -100,7 +100,7 @@ impl PaneSleeps {
 	/// idle pane, the longest idle, sleeps per tick. The boss never sleeps, an omp at work is never ended, and neither is
 	/// the pane he has focused (he may be reading it, or typing a prompt omp hasn't been sent): a thread that reported
 	/// sleeps once he looks elsewhere.
-	pub async fn tick(&self, snapshot: &HerdrSnapshot) -> Result<()> {
+	pub async fn tick(&self, snapshot: &SurfaceSnapshot) -> Result<()> {
 		let c = self.link.ctx();
 		if c.stopping() {
 			return Ok(());
@@ -246,7 +246,7 @@ impl PaneSleeps {
 			c.threads.drop_pane(pane_id);
 			thread.with(|t| {
 				t.pane_id = new_pane.clone();
-				t.state = crate::frontier::server::herdr::AgentState::Unknown;
+				t.state = crate::frontier::server::surface::AgentState::Unknown;
 				t.host = None;
 				t.omp = None;
 			});

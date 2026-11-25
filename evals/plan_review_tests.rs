@@ -1,26 +1,18 @@
 //! Ported from `test/evals/plan-review.test.ts`. The generated extension is JavaScript omp loads, so these cases run it
-//! on Bun (a subprocess) with a stand-in for omp's extension API, as the TypeScript test imported it. The fake herdr of
-//! "a dropped herdr read never ends the turn" is a `TrialPanes` that starts the stand-in `sleep`; the fake omp of "a
+//! on Bun (a subprocess) with a stand-in for omp's extension API, as the TypeScript test imported it. The fake omp of "a
 //! plan-review trial" is the stand-in omp of `evals/stand_in.rs`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use futures_util::future::BoxFuture;
-use jocasta::frontier::server::herdr::{TabPane, TabSpec};
-use jocasta::shared::errors::{Error, Result};
 use jocasta::shared::process::{RunOptions, on_path, run_program_sync};
 use serde_json::{Value, json};
 
 use super::plan_review::{PlanReviewChoice, PlanReviewSummary, plan_review_extension, read_plan_review_log};
 use super::runner::{EvalCase, TrialOptions, plan_review_overlay, run_trial};
 use super::stand_in::{exe, launcher};
-use super::terminal::{
-	TRIAL_WORKSPACE, TerminalDeps, TerminalEnd, TerminalRunner, TerminalTurn, TrialPanes, env_delta, herdr_terminal,
-};
+use super::terminal::{TerminalEnd, TerminalRunner, TerminalTurn, env_changes, pty_terminal};
 use super::variants::load_variants;
 use jocasta::shared::testing::temp_dir;
 
@@ -201,114 +193,36 @@ fn a_role_is_passed_through_as_resolve_plan_reviews_role_and_logged_0608() {
 }
 
 #[test]
-fn a_panes_environment_carries_what_the_trial_changed_and_empties_what_it_dropped() {
+fn a_ptys_environment_carries_what_the_trial_changed_and_drops_what_it_dropped() {
 	let pairs = |entries: &[(&str, &str)]| -> HashMap<String, String> {
 		entries.iter().map(|(name, value)| ((*name).to_owned(), (*value).to_owned())).collect()
 	};
 	assert_eq!(
-		env_delta(&pairs(&[("A", "1"), ("B", "changed"), ("D", "new")]), &pairs(&[("A", "1"), ("B", "2"), ("C", "3")])),
-		[("B".to_owned(), "changed".to_owned()), ("C".to_owned(), String::new()), ("D".to_owned(), "new".to_owned())]
+		env_changes(
+			&pairs(&[("A", "1"), ("B", "changed"), ("D", "new")]),
+			&pairs(&[("A", "1"), ("B", "2"), ("C", "3")])
+		),
+		(vec![("B".to_owned(), "changed".to_owned()), ("D".to_owned(), "new".to_owned())], vec!["C".to_owned()])
 	);
 }
 
 /// What the fake terminal was started with: the arguments and the overlay they name.
 type Launched = (Vec<String>, Value);
 
-/// What the fake herdr saw, shared with the test.
-#[derive(Default)]
-struct Seen2 {
-	calls: Mutex<Vec<String>>,
-	reads: AtomicUsize,
-	pid: Mutex<Option<u32>>,
-}
-
-struct FakePanes {
-	seen: Arc<Seen2>,
-}
-
-impl TrialPanes for FakePanes {
-	fn ensure_workspace<'a>(&'a self, label: &'a str, cwd: &'a Path) -> BoxFuture<'a, Result<String>> {
-		self.seen.calls.lock().unwrap().push(format!("workspace {label} in {}", cwd.display()));
-		Box::pin(async { Ok("w1".to_owned()) })
-	}
-
-	fn create_tab<'a>(&'a self, _workspace_id: &'a str, tab: &'a TabSpec) -> BoxFuture<'a, Result<TabPane>> {
-		let child = std::process::Command::new(&tab.command[0])
-			.args(&tab.command[1..])
-			.current_dir(&tab.cwd)
-			.stdin(Stdio::null())
-			.stdout(Stdio::null())
-			.stderr(Stdio::null())
-			.spawn()
-			.unwrap();
-		*self.seen.pid.lock().unwrap() = Some(child.id());
-		// The pane's process is reaped as herdr would: a zombie would look alive.
-		std::thread::spawn(move || {
-			let mut child = child;
-			let _ = child.wait();
-		});
-		Box::pin(async { Ok(TabPane { tab_id: "t1".to_owned(), pane_id: "p1".to_owned() }) })
-	}
-
-	fn pane_root<'a>(&'a self, _pane_id: &'a str) -> BoxFuture<'a, Result<Option<u32>>> {
-		let reads = self.seen.reads.fetch_add(1, Ordering::SeqCst) + 1;
-		let pid = *self.seen.pid.lock().unwrap();
-		Box::pin(async move {
-			// herdr 0.9.5 sometimes closes the connection without answering (0517).
-			if reads == 1 {
-				return Err(Error::other("herdr closed the connection before answering pane.process_info"));
-			}
-			Ok(pid)
-		})
-	}
-
-	fn close(&self) {
-		self.seen.calls.lock().unwrap().push("close".to_owned());
-	}
-}
-
 #[tokio::test]
-async fn a_dropped_herdr_read_never_ends_the_turn_the_panes_process_is_watched_locally_until_it_exits_evl_6_evl_17() {
+async fn a_turn_in_the_terminal_lasts_until_its_process_exits() {
 	let work = temp_dir("jocasta-review-");
-	let seen = Arc::new(Seen2::default());
-	let connect_seen = seen.clone();
-	let close_seen = seen.clone();
-	let deps = TerminalDeps {
-		workspace_cwd: Some(work.path().to_path_buf()),
-		connect: Some(Arc::new(move |_session| {
-			let panes = Arc::new(FakePanes { seen: connect_seen.clone() }) as Arc<dyn TrialPanes>;
-			Box::pin(async move { Ok(panes) })
-		})),
-		close_tab: Some(Arc::new(move |_session, tab_id| {
-			close_seen.calls.lock().unwrap().push(format!("tab.close {tab_id}"));
-			Box::pin(async {})
-		})),
-	};
-	let terminal = herdr_terminal("bench-pty-test", deps).unwrap();
-	let ended = terminal(TerminalTurn {
+	let ended = pty_terminal()(TerminalTurn {
 		command: exe(),
 		args: vec!["stand-in".to_owned(), "sleep".to_owned(), "1500".to_owned()],
 		cwd: work.path().to_path_buf(),
-		env: HashMap::new(),
+		env: super::runner::process_env(),
 		timeout_ms: Some(60_000),
 	})
 	.await
 	.unwrap();
 	assert!(!ended.timed_out);
-	// The turn lasted until the process exited, past the dropped read.
 	assert!(ended.wall_ms >= 1_400, "{}", ended.wall_ms);
-	assert_eq!(seen.reads.load(Ordering::SeqCst), 2);
-	assert_eq!(
-		*seen.calls.lock().unwrap(),
-		[
-			format!("workspace {TRIAL_WORKSPACE} in {}", work.path().display()),
-			"tab.close t1".to_owned(),
-			"close".to_owned()
-		]
-	);
-	let Err(refused) = herdr_terminal("jocasta", TerminalDeps::default()) else { panic!("jocasta is refused") };
-	let refused = refused.to_string();
-	assert!(refused.contains("the trials' terminal session can't be jocasta"), "{refused}");
 }
 
 #[tokio::test]

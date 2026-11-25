@@ -45,9 +45,9 @@ runs, how often and what is measured is fixed there, as amended for the harness-
 | `tokscale-parity` | none | his PC, with tokscale 4.21.0 from `D:/thesis/tools/tokscale` on the session's PATH (0657) |
 
 The scripts that act on a running Jocasta (H2–H6, H8) refuse to start without a sandbox (0502, 0576): its own data
-folder in `JOCASTA_DATA_DIR` (not the OS default), a herdr session in `JOCASTA_HERDR_SESSION` that isn't `jocasta` (or
-`jarvis`), and its own config folder in `JOCASTA_CODING_AGENT_DIR` (not `~/.jocasta/agent`: the config folder picks the
-projects and herdr's config, so a sandbox on his would act on his). Start the sandbox's `jocasta` with the same three. H2, H4 (its `h4 plant` thread), H6 and H8
+folder in `JOCASTA_DATA_DIR` (not the OS default) and its own config folder in `JOCASTA_CODING_AGENT_DIR`
+(not `~/.jocasta/agent`: the config folder picks the
+projects and omp's config, so a sandbox on his would act on his). Start the sandbox's `jocasta` with the same two. H2, H4 (its `h4 plant` thread), H6 and H8
 start their threads as `jocasta thread new` does (a `cli` message on the bridge: no Allow, no boss key, 0544) and read them as
 `jocasta thread list` does;
 threads still open in plan mode and wait for the operator's approval of their plan in their pane. The bench never
@@ -145,43 +145,43 @@ fixed before the long runs. The task benchmark refuses only an omp folder that w
     terminal (0585)`, that the outcomes agree with the in-process verdicts, and that no `h1-live-canary.txt` is left.
     The 18.13.1 run (24/24) used omp's bash interceptor as the recorder, which 18.15.0 moved into the bash tool's
     approval.
-- **H2, `jocasta-bench h2-toast --out <dir> [--runs 30] [--condition host|herdr] [--start <project>]`.** Jocasta raises
-  its notifications through herdr's `notification.show`, which herdr hands to Windows' notification service through
-  the foreground client and answers `shown` (or `disabled`, `rate_limited`, `no_foreground_client`, `busy`). H2
-  records herdr's `pane.agent_status_changed` pushes (t1, kept as a reference figure) and reads the service's
-  notification log, `<data>/notifications.jsonl` (one line per call, written when herdr's reply comes back: `at`,
+- **H2, `jocasta-bench h2-toast --out <dir> [--runs 30] [--condition host|tick] [--start <project>]`.** Jocasta raises
+  its notifications through the shell's own notification (0683), which hands them to Windows' notification service and
+  answers `shown` (or `disabled`, `rate_limited`, `no_foreground_client`, `busy`). H2 looks at every pane's agent state
+  every 200 ms through the service's `panes` command and records each change (t1, kept as a reference figure) and reads the service's
+  notification log, `<data>/notifications.jsonl` (one line per call, written when the shell's reply comes back: `at`,
   `paneId`, `reason`, `title`, `body`, `result`). t0 is the pane's omp session file's `ask` call or plan proposal; an
   ask counts when omp completed its message (`completedAt`, else the entry's time), not when it started the request,
   so the model's generation is no longer inside t1−t0 and t3−t0 (the 0517/0520 rows include it; their session files
-  weren't kept, so they can't be recomputed). **t3 is the moment herdr answered `shown` for the pane's `blocked`
+  weren't kept, so they can't be recomputed). **t3 is the moment the shell answered `shown` for the pane's `blocked`
   notification**: the notification reached Windows; how long Windows then takes to draw the banner isn't measured.
-  Each row also names herdr's answer to the pane's first `blocked` notification (`notificationResult`), so a trial
+  Each row also names the shell's answer to the pane's first `blocked` notification (`notificationResult`), so a trial
   without t3 says why. **Conditions (0576):** `host` (the default): the service takes each thread's state as its omp
-  pushes it over the bridge (0675); `herdr`: the sandbox service started with `JOCASTA_HOSTS=off`, so it ignores those
-  pushes and falls back to herdr's events and its tick. H2 reads the switch from `/health` and refuses a
+  pushes it over the bridge (0675); `tick`: the sandbox service started with `JOCASTA_HOSTS=off`, so it ignores those
+  pushes and takes the state from its own refresh tick. H2 reads the switch from `/health` and refuses a
   mismatch. Without `--start`, trials come from threads started by hand (the boss's and the today pane left out).
   `--start` starts each trial as `jocasta thread new` does and counts only those threads' panes; the next starts once
   the last one's notification came, or after 5 minutes without one, which `h2-toast.json`'s `missed` lists. Writes
-  `h2-toast.jsonl`, `h2-toast.json` (t1−t0, t3−t0 and the count of each herdr answer) and the run's lines of the log
+  `h2-toast.jsonl`, `h2-toast.json` (t1−t0, t3−t0 and the count of each notification result) and the run's lines of the log
   in `h2-notifications.jsonl`.
-- **H3, `jocasta-bench h3-recovery --out <dir> [--runs 20] [--faults herdr,service,pane] [--restart jocasta]`.**
-  Kills herdr's server, the service, or one omp pane and times recovery from the moment the kill returned (the
-  lookups before it; the herdr and pane faults' kill, the product's `killTree`, returns once the process tree is gone,
+- **H3, `jocasta-bench h3-recovery --out <dir> [--runs 20] [--faults service,pane] [--restart jocasta]`.**
+  Kills the service (Jocasta is one process since 0683: the service and the shell are the `jocasta` that
+  `<data>/jocasta-service.json` names, and the panes run under it) or one omp pane and times recovery from the moment
+  the kill returned (the lookups before it; the kill, the product's `killTree`, returns once the process tree is gone,
   about 50 ms after the bench's own kill did before 0573's fixes). Every fault counts as recovered when every
   workspace that had an omp pane before has an omp
   pane again, whatever its pane id (0522: the service relaunches panes under new ids); the service fault also needs a
-  new service answering (0528: it relaunches the boss pane under a new id with its new key). Before 0576 the service
-  fault was named `companion`; `h3-recovery.json`'s `"renamed": {"service": "companion"}` says so. For the herdr
-  fault each row also gives `oldPaneIdsMs`, the time until herdr first listed exactly the old pane ids (null when no
-  250 ms poll saw them), summarized beside `recoveryMs`. The pane fault ends the process tree herdr started for the
+  new service answering (0528: it relaunches the boss pane under a new id with its new key) and runs `--restart` in a
+  pty of its own, which is the new window. Before 0576 the service
+  fault was named `companion`; `h3-recovery.json`'s `"renamed": {"service": "companion"}` says so. The herdr fault of
+  runs before 0683 (killing the surface's server) is gone with the server. The pane fault ends the process tree of the
   omp pane in the folder it killed longest ago, one at work first among equals, and counts it back when omp runs again
   in that workspace under another pane id; it waits, when it must, until 10.5 minutes have passed since that folder's
   last run ended (0528): 0521 restarts an omp that keeps ending in one folder after a wait that doubles from 10 s, so
-  closer kills would time that wait, not recovery. After each service run the restart's client ends, root first and
-  never the new service's tree, so one hidden client is attached at a time. A run after which Jocasta has closed
-  itself (no service answers, one still closing waited for up to a minute, and herdr lists no panes) counts not
-  recovered with `stoppedItself` (0530): `--restart` starts Jocasta again, its client left attached in place of the
-  terminal's, and the next run waits until a service answers and omp is back everywhere (`restartMs`; past 5 minutes
+  closer kills would time that wait, not recovery. After each service run the previous window ends, so one window is
+  open at a time. A run after which Jocasta has closed
+  itself (no service answers, and one still closing waited for up to a minute) counts not
+  recovered with `stoppedItself` (0530): `--restart` starts Jocasta again in a new window, and the next run waits until a service answers and omp is back everywhere (`restartMs`; past 5 minutes
   H3 ends). Lost work: each pane folder's git status and diff hash, and each session file still parses: every
   non-empty line is JSON and a `session` entry is in it, wherever it is (0523; omp 18.13.1 wrote a `title` entry
   first). The plugin's `today` pane (0553) is left out of every pane check: it is no thread, and the service opens it
@@ -204,29 +204,28 @@ fixed before the long runs. The task benchmark refuses only an omp folder that w
 - **H5, `jocasta-bench h5-startup --out <dir> [--runs 20] [--tools jocasta,omp,claude,opencode] [--cwd <repo>]
   [--ready tool=<regex>]`.** Cold (after 30 s with the tool's processes gone; an OS-cold start needs a reboot per
   run) and warm starts. Jocasta ends at the same point as omp alone (0576): `readyMs` is the boss pane's screen
-  matching omp's ready pattern; each row also has `bossIdleMs` (herdr reporting the boss's omp idle) and `serviceMs`
+  matching omp's ready pattern; each row also has `bossIdleMs` (the shell reporting the boss's omp idle) and `serviceMs`
   (the new service answering `/health`; rows before 0576 call it `companionMs`, and the summary reads either).
-  Between runs H5 closes Jocasta as he does (Stop everything through `/api/shutdown`) and waits until
+  Between runs H5 closes Jocasta as he does (by closing its window, 0683) and waits until
   `jocasta-service.json` is gone and the `jocasta` it started has exited; after 60 s it ends what is left. The others start
-  in a tab of a separate bench herdr session (`--pty-session bench-pty`; Bun's PTY is POSIX-only; never his session
+  in a pty of the bench's own (Bun's PTY is POSIX-only; never his session
   nor the sandbox's) and are timed to their ready pattern. Each starts as a command line runs its name
-  (`toolCommand`: `Bun.which`, with npm's `.cmd` shim for an `.exe` replaced by that `.exe`), because herdr 0.9.5
-  picks npm's extensionless shim for Git Bash, which Windows can't start. The default patterns (`lib/launch.rs`) were
+  (`toolCommand`: `Bun.which`, with npm's `.cmd` shim for an `.exe` replaced by that `.exe`), because a bare
+  npm extensionless shim is one Windows cannot start. The default patterns (`lib/launch.rs`) were
   each seen in the VM on 2026-10-28: omp's prompt after 3.6 s, unsigned opencode's after 9.8 s cold while the VM was
   busy, and Claude Code's after 3.7 s (its footer reads "shift+tab to cycle" in its default auto mode, "? for
   shortcuts" in the others). Claude Code asks to trust each new folder, which a bench pane can't answer, so with it in
   the tools H5 and H6 need `--cwd` at a folder trusted once (in the VM it was `C:\jc\bench-cwd`); a real run without one
   stops before any work. Writes `h5-startup.jsonl` and `h5-startup.json`.
 - **H6, `jocasta-bench h6-memory --out <dir> [--threads 0,1,4,8] [--project <name>] [--tools omp,claude,opencode]
-  [--idle 120] [--turn]`.** Working set and private bytes of Jocasta's processes with 0–8 threads: the service's tree,
-  herdr's server tree (the panes with their omp and MCP processes) and each attached surface's tree (bare `jocasta`
-  and its herdr client, `<data>/surfaces/`), summed and each part apart (`parts`), and each thread pane alone; each
+  [--idle 120] [--turn]`.** Working set and private bytes of Jocasta's processes with 0–8 threads:
+  the one Jocasta process tree (service, shell and the panes with their omp and MCP processes), and each thread pane alone; each
   competitor in a bench pane after idle, and with `--turn` after one prompt. opencode runs unsigned (0506: its
   Anthropic sign-in takes only an API key), so it gets no prompt and `skipped` says why. Writes `h6-memory.jsonl` and
   `h6-memory.json`.
 - **H7, `jocasta-bench h7-longpath --out <dir> [--lengths 100,…,240] [--root <dir>] [--home <dir>]
   [--location name=<template>]`.** Fixture repos whose deepest file has a relative path of L characters, checked out
-  with `git worktree add` at Jocasta's `<parent>/<name>.wt/<slug>`, herdr's `<home>/.herdr/worktrees/<name>/<slug>`
+  with `git worktree add` at Jocasta's `<parent>/<name>.wt/<slug>` and herdr's `<home>/.herdr/worktrees/<name>/<slug>` (a competitor's, kept as a label)
   and Claude Code's `<repo>/.claude/worktrees/<slug>` (confirm on the machine that runs it), with Git's default settings. vibe-kanban's
   folder is added with `--location` once confirmed. Writes `h7-longpath.jsonl` and `h7-longpath.json` (the largest
   passing L per location).
@@ -243,8 +242,8 @@ fixed before the long runs. The task benchmark refuses only an omp folder that w
   `JOCASTA_LAYER=off` for `--layer off` (0576); H8 reads the layer's state from `/health` and refuses a mismatch. Each
   run adds the cost per finished thread (every omp session of each thread since the run started, its planning session
   before "Approve and execute" included, with its subagents' transcripts, a moved session's copies counted once,
-  priced by the ledger), the peak working set and private bytes of Jocasta's processes (the service's, herdr's
-  server's with the threads, and the attached surfaces' trees; sampled every 10 s) and, layer on, the run's shared
+  priced by the ledger), the peak working set and private bytes of Jocasta's processes (its one
+  process tree; sampled every 10 s) and, layer on, the run's shared
   check hits from the service's log (`readLayerCounters`). Writes `h8-parallel.jsonl` and
   `h8-parallel.json`.
 - **tokscale parity (0538), `jocasta-bench tokscale-parity --out <task-benchmark runDir>`.** The ledger's parser check,
@@ -262,7 +261,7 @@ fixed before the long runs. The task benchmark refuses only an omp folder that w
   Snapshots files (the default roots include `%USERPROFILE%\.config`, where setup writes its mise files, 0468) and the
   registry before install, after install, after `--between` (0481's setup, first run and a thread, when given) and
   after uninstall; reports what install added, what setup and use added, and what uninstall left (all, and what names
-  jocasta, herdr, omp or mise as a word). Prerequisites and minutes to the first task go in the run's notes by hand.
+  jocasta, herdr (a competitor's name), omp or mise as a word). Prerequisites and minutes to the first task go in the run's notes by hand.
   Writes `h9-footprint.json`, `h9-install-added.jsonl`, `h9-use-added.jsonl` and `h9-uninstall-left.jsonl`;
   `h9-footprint.json`'s conditions carry the installed `jocasta.exe`'s `--version` line and `jocastaSha256`, read after
   the first install (from the install folder when this process's PATH predates the install's PATH entry, 0576).
@@ -273,7 +272,7 @@ fixed before the long runs. The task benchmark refuses only an omp folder that w
 
 **`jocasta-bench evals bench --tasks <tasks.jsonl> --cache <dir> --out <runDir> [--study main|followup]
 [--arms a0,a1,a2,a3,a4,a6,a7] [--reps 3] [--set main] [--only id,id] [--pilot] [--workers 2] [--seed 482]
-[--timeout 90] [--profile <omp profile>] [--work <dir>] [--pty-session bench-pty] [--validate] [--dry-run]`** runs the 40 curated tasks of
+[--timeout 90] [--profile <omp profile>] [--work <dir>] [--validate] [--dry-run]`** runs the 40 curated tasks of
 `D:/thesis/data/bench/tasks/tasks.jsonl` through the eval runner's `runTrial` (same transcripts, usage and cost, line
 counts, findings and clean-clone hidden grading as `jocasta-bench evals`). The main run (0543) is 30 tasks × 3 reps × 7 arms
 = 630 trials: A0 omp alone, A1 + the pane config, A2 + plan first, A3 + the review, A4 Claude Code, **A6** = A3 + the
@@ -317,8 +316,8 @@ stopped its trials. The fixed choices:
   only `--plan-yolo` and ACP's approval, both keeping the planning context. The interactive review emits
   `plan_review_requested` to extensions, and `ctx.resolvePlanReview(reviewId, "execute" | "keep")` answers it as if he
   had picked it. So a `plan_review` arm's first turn runs `omp <flags> --session-dir <root>/sessions --config <overlay>
-  -e <root>/plan-review.js <prompt>` interactive (it needs a TTY) in a tab of the bench herdr session `--pty-session`
-  (workspace `bench-trials`), its overlay adding `plan.defaultOnStartup: true`; the per-trial extension answers the
+  -e <root>/plan-review.js <prompt>` interactive (it needs a TTY) in a pty of the bench's own
+  its overlay adding `plan.defaultOnStartup: true`; the per-trial extension answers the
   review, logs to `<root>/plan-review.jsonl`, and shuts omp down at the end of the approved plan's execution (or when a
   planning turn ends without a proposal). The turn counts as exited well when the extension shut omp down; the row's
   `planReview` says whether the review opened, was answered and how it closed. The review turns then run in print mode

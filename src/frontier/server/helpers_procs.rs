@@ -11,18 +11,18 @@ use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 
 use crate::frontier::server::helpers::{TestServer, start_test_server_with};
-use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
-use crate::frontier::server::herdr::{
-	AgentView, Env, Herdr, HerdrResult, HerdrSnapshot, Note, NotificationResult, OnChange, PaneIds, PaneInfo,
-	PaneMetadata, RespawnOptions, StopWatch, TabPane, TabSpec, Tokens, WorkspaceInfo, WorktreeCreated, WorktreeOptions,
-};
 use crate::frontier::server::server::ServerOptions;
+use crate::frontier::server::surface::fake_surface::FakeSurface;
+use crate::frontier::server::surface::{
+	Env, Note, NotificationResult, OnChange, PaneIds, PaneInfo, PaneMetadata, RespawnOptions, StopWatch, Surface,
+	SurfaceResult, SurfaceSnapshot, TabPane, TabSpec, Tokens, WorkspaceInfo, WorktreeCreated, WorktreeOptions,
+};
 use crate::shared::proctree::tests::settles;
 use crate::shared::proctree::{kill_tree, pid_alive};
 
 /// `with_server` on the herdr the test made, so a test can restart the service on the same panes and watch what the
 /// service's herdr is asked. The server is always stopped, and a panic of `run` raised again once it stopped.
-pub(crate) async fn with_server_on<T, F, Fut>(herdr: Arc<FakeHerdr>, options: ServerOptions, run: F) -> T
+pub(crate) async fn with_server_on<T, F, Fut>(herdr: Arc<FakeSurface>, options: ServerOptions, run: F) -> T
 where
 	F: FnOnce(TestServer) -> Fut,
 	Fut: Future<Output = T>,
@@ -42,13 +42,13 @@ type StopHook = Arc<dyn Fn() + Send + Sync>;
 /// A [`FakeHerdr`] whose `respawn` and `stop_server` first run a hook a test sets, as the TypeScript did by replacing
 /// those methods. Hand it to the service as `ServerOptions::herdr`, and the `FakeHerdr` to `start_test_server_with`.
 pub(crate) struct Hooked {
-	inner: Arc<FakeHerdr>,
+	inner: Arc<FakeSurface>,
 	on_respawn: Mutex<Option<RespawnHook>>,
 	on_stop_server: Mutex<Option<StopHook>>,
 }
 
 impl Hooked {
-	pub(crate) fn new(inner: &Arc<FakeHerdr>) -> Arc<Self> {
+	pub(crate) fn new(inner: &Arc<FakeSurface>) -> Arc<Self> {
 		Arc::new(Self { inner: Arc::clone(inner), on_respawn: Mutex::new(None), on_stop_server: Mutex::new(None) })
 	}
 
@@ -63,11 +63,11 @@ impl Hooked {
 	}
 }
 
-impl Herdr for Hooked {
+impl Surface for Hooked {
 	fn started_server(&self) -> bool {
 		self.inner.started_server()
 	}
-	fn ping(&self) -> BoxFuture<'_, HerdrResult<Option<String>>> {
+	fn ping(&self) -> BoxFuture<'_, SurfaceResult<Option<String>>> {
 		self.inner.ping()
 	}
 	fn ensure_workspace<'a>(
@@ -76,54 +76,55 @@ impl Herdr for Hooked {
 		cwd: &'a Path,
 		command: Option<&'a [String]>,
 		env: Option<&'a Env>,
-	) -> BoxFuture<'a, HerdrResult<String>> {
+	) -> BoxFuture<'a, SurfaceResult<String>> {
 		self.inner.ensure_workspace(label, cwd, command, env)
 	}
-	fn workspaces(&self) -> BoxFuture<'_, HerdrResult<Vec<WorkspaceInfo>>> {
+	fn workspaces(&self) -> BoxFuture<'_, SurfaceResult<Vec<WorkspaceInfo>>> {
 		self.inner.workspaces()
 	}
-	fn snapshot(&self) -> BoxFuture<'_, HerdrResult<HerdrSnapshot>> {
+	fn snapshot(&self) -> BoxFuture<'_, SurfaceResult<SurfaceSnapshot>> {
 		self.inner.snapshot()
 	}
-	fn close_workspace<'a>(&'a self, workspace_id: &'a str) -> BoxFuture<'a, HerdrResult<()>> {
+	fn close_workspace<'a>(&'a self, workspace_id: &'a str) -> BoxFuture<'a, SurfaceResult<()>> {
 		self.inner.close_workspace(workspace_id)
 	}
-	fn create_tab<'a>(&'a self, workspace_id: &'a str, tab: &'a TabSpec) -> BoxFuture<'a, HerdrResult<TabPane>> {
+	fn create_tab<'a>(&'a self, workspace_id: &'a str, tab: &'a TabSpec) -> BoxFuture<'a, SurfaceResult<TabPane>> {
 		self.inner.create_tab(workspace_id, tab)
 	}
 	fn create_worktree<'a>(
 		&'a self,
 		workspace_id: &'a str,
 		opts: WorktreeOptions,
-	) -> BoxFuture<'a, HerdrResult<WorktreeCreated>> {
+	) -> BoxFuture<'a, SurfaceResult<WorktreeCreated>> {
 		self.inner.create_worktree(workspace_id, opts)
 	}
-	fn move_workspace<'a>(&'a self, workspace_id: &'a str, index: usize) -> BoxFuture<'a, HerdrResult<()>> {
+	fn move_workspace<'a>(&'a self, workspace_id: &'a str, index: usize) -> BoxFuture<'a, SurfaceResult<()>> {
 		self.inner.move_workspace(workspace_id, index)
 	}
-	fn respawn<'a>(&'a self, pane_id: &'a str, opts: &'a RespawnOptions) -> BoxFuture<'a, HerdrResult<TabPane>> {
+	fn respawn<'a>(&'a self, pane_id: &'a str, opts: &'a RespawnOptions) -> BoxFuture<'a, SurfaceResult<TabPane>> {
 		let hook = self.on_respawn.lock().unwrap_or_else(PoisonError::into_inner).clone();
 		if let Some(hook) = hook {
 			hook(pane_id);
 		}
 		self.inner.respawn(pane_id, opts)
 	}
-	fn send_keys<'a>(&'a self, pane_id: &'a str, keys: &'a [String]) -> BoxFuture<'a, HerdrResult<()>> {
+	fn send_keys<'a>(&'a self, pane_id: &'a str, keys: &'a [String]) -> BoxFuture<'a, SurfaceResult<()>> {
 		self.inner.send_keys(pane_id, keys)
 	}
-	fn notify<'a>(&'a self, note: &'a Note) -> BoxFuture<'a, HerdrResult<NotificationResult>> {
+	fn notify<'a>(&'a self, note: &'a Note) -> BoxFuture<'a, SurfaceResult<NotificationResult>> {
 		self.inner.notify(note)
 	}
-	fn focus<'a>(&'a self, pane_id: &'a str) -> BoxFuture<'a, HerdrResult<()>> {
+	fn focus<'a>(&'a self, pane_id: &'a str) -> BoxFuture<'a, SurfaceResult<()>> {
 		self.inner.focus(pane_id)
 	}
-	fn set_agent_view<'a>(&'a self, view: &'a AgentView) -> BoxFuture<'a, HerdrResult<()>> {
-		self.inner.set_agent_view(view)
-	}
-	fn screen<'a>(&'a self, pane_id: &'a str) -> BoxFuture<'a, HerdrResult<String>> {
+	fn screen<'a>(&'a self, pane_id: &'a str) -> BoxFuture<'a, SurfaceResult<String>> {
 		self.inner.screen(pane_id)
 	}
-	fn report_pane_metadata<'a>(&'a self, pane_id: &'a str, meta: &'a PaneMetadata) -> BoxFuture<'a, HerdrResult<()>> {
+	fn report_pane_metadata<'a>(
+		&'a self,
+		pane_id: &'a str,
+		meta: &'a PaneMetadata,
+	) -> BoxFuture<'a, SurfaceResult<()>> {
 		self.inner.report_pane_metadata(pane_id, meta)
 	}
 	fn report_workspace_metadata<'a>(
@@ -131,19 +132,19 @@ impl Herdr for Hooked {
 		workspace_id: &'a str,
 		tokens: &'a Tokens,
 		ttl_ms: Option<i64>,
-	) -> BoxFuture<'a, HerdrResult<()>> {
+	) -> BoxFuture<'a, SurfaceResult<()>> {
 		self.inner.report_workspace_metadata(workspace_id, tokens, ttl_ms)
 	}
-	fn panes(&self) -> BoxFuture<'_, HerdrResult<Vec<PaneInfo>>> {
+	fn panes(&self) -> BoxFuture<'_, SurfaceResult<Vec<PaneInfo>>> {
 		self.inner.panes()
 	}
-	fn pane_root<'a>(&'a self, pane_id: &'a str, timeout_ms: Option<i64>) -> BoxFuture<'a, HerdrResult<Option<u32>>> {
+	fn pane_root<'a>(&'a self, pane_id: &'a str, timeout_ms: Option<i64>) -> BoxFuture<'a, SurfaceResult<Option<u32>>> {
 		self.inner.pane_root(pane_id, timeout_ms)
 	}
 	fn watch(&self, pane_ids: PaneIds, on_change: OnChange) -> StopWatch {
 		self.inner.watch(pane_ids, on_change)
 	}
-	fn stop_server(&self) -> BoxFuture<'_, HerdrResult<()>> {
+	fn stop_server(&self) -> BoxFuture<'_, SurfaceResult<()>> {
 		let hook = self.on_stop_server.lock().unwrap_or_else(PoisonError::into_inner).clone();
 		if let Some(hook) = hook {
 			hook();

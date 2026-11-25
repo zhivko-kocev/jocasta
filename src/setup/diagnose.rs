@@ -1,4 +1,4 @@
-//! `jocasta diagnose` (0472): a read-only omp pane in workspace "Jocasta" that explains what went wrong from Jocasta's own
+//! `jocasta diagnose` (0472, 0683): a read-only omp session, in this terminal, that explains what went wrong from Jocasta's own
 //! evidence and changes nothing. Its folder `<data>/diagnose/` holds `state.md` (the service's state now), `recent.log`
 //! (the newest lines of Jocasta's log, 0431) and `omp.yml`, the pane's settings: plan mode from the start and the
 //! shipped `config/skills/` (the diagnose skill). omp runs with read, grep and glob only, the two files attached to
@@ -7,21 +7,16 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
 
-use crate::frontier::server::herdr::{Herdr, HerdrSnapshot, PaneInfo, TabSpec};
 use crate::frontier::server::launch::ServiceState;
 use crate::frontier::server::phone::{PhoneMode, mode_of, read_topics};
 use crate::setup::setup::SetupCheck;
-use crate::shared::errors::{Error, Result};
+use crate::shared::errors::Result;
 use crate::shared::log::{LOG_DAYS, LOG_FILE};
 use crate::shared::service_file::ServiceFile;
 use crate::shared::settings::{NtfySettings, read_ntfy};
-
-/// The boss's workspace (0392, 0404), where the diagnose pane opens.
-const WORKSPACE: &str = "Jocasta";
 
 /// Lines of Jocasta's log `recent.log` holds.
 pub const RECENT_LOG_LINES: usize = 400;
@@ -37,11 +32,8 @@ pub struct ServiceInfo {
 	pub file: Option<ServiceFile>,
 }
 
-/// Starts (or reaches) Jocasta's herdr session.
-pub type Connect = Box<dyn Fn() -> BoxFuture<'static, Result<Arc<dyn Herdr>>> + Send + Sync>;
-
-/// Makes the boss's workspace and pane when they are missing.
-pub type EnsureBoss = Box<dyn Fn(Arc<dyn Herdr>) -> BoxFuture<'static, Result<PaneInfo>> + Send + Sync>;
+/// Runs omp (argv, folder) to the end in this terminal; resolves its exit code.
+pub type RunOmp = Box<dyn Fn(Vec<String>, PathBuf) -> BoxFuture<'static, Result<i32>> + Send + Sync>;
 
 pub struct DiagnoseDeps {
 	pub data_dir: PathBuf,
@@ -51,12 +43,9 @@ pub struct DiagnoseDeps {
 	pub omp: Vec<String>,
 	/// `jocasta --version`'s line.
 	pub versions: String,
-	pub session: String,
 	pub service: Box<dyn Fn() -> BoxFuture<'static, Result<ServiceInfo>> + Send + Sync>,
-	/// Jocasta's herdr session, started when it isn't running.
-	pub connect: Connect,
-	/// Makes workspace "Jocasta" with its boss pane when it is missing.
-	pub ensure_boss: EnsureBoss,
+	/// Runs the diagnose session.
+	pub run_omp: RunOmp,
 	/// Setup's start check (`setup_check`): what waits, or why it couldn't check.
 	pub setup_check: Box<dyn Fn() -> BoxFuture<'static, SetupCheck> + Send + Sync>,
 	/// The time written into `state.md` (epoch ms); now when absent.
@@ -151,56 +140,13 @@ pub fn phone_line(ntfy: &NtfySettings, data_dir: &Path) -> Option<String> {
 	Some(format!("phone: {server}, {mode}, {topic} (a secret: don't paste this output)"))
 }
 
-fn panes_section(snapshot: &HerdrSnapshot) -> Vec<String> {
-	let mut lines = Vec::new();
-	for workspace in &snapshot.workspaces {
-		let cwd = workspace.cwd.as_ref().map_or(String::new(), |cwd| format!(" in {}", cwd.display()));
-		lines.push(format!("- {} ({}){cwd}", workspace.label, workspace.id));
-		for pane in snapshot.panes.iter().filter(|pane| pane.workspace_id == workspace.id) {
-			let agent = match pane.agent.as_deref().filter(|agent| !agent.is_empty()) {
-				Some(agent) => format!("{agent} {}", pane.agent_state.as_str()),
-				None => format!("no agent ({})", pane.agent_state.as_str()),
-			};
-			let cwd = pane.cwd.as_ref().map_or(String::new(), |cwd| format!(", {}", cwd.display()));
-			let label =
-				pane.label.as_deref().filter(|label| !label.is_empty()).map_or(String::new(), |l| format!(", \"{l}\""));
-			lines.push(format!("  - pane {}: {agent}{cwd}{label}", pane.pane_id));
-		}
-	}
-	if lines.is_empty() { vec!["- none".to_owned()] } else { lines }
-}
-
-/// Writes the pane's folder and opens the pane; resolves the exit code.
+/// Writes the diagnose folder and runs omp in it, here in this terminal; resolves omp's exit code (0472, 0683).
 pub async fn run_diagnose(deps: &DiagnoseDeps, print: &(dyn Fn(&str) + Send + Sync)) -> Result<i32> {
-	let logs_dir = deps.data_dir.join("logs");
 	let service = (deps.service)().await?;
-	let herdr = (deps.connect)().await.map_err(|error| {
-		Error::user_with_code(
-			format!(
-				"herdr session `{}` doesn't answer and couldn't start ({error}); Jocasta's log is in {}",
-				deps.session,
-				logs_dir.display()
-			),
-			1,
-		)
-	})?;
-	let result = open_pane(deps, &service, &herdr, print).await;
-	herdr.close();
-	result
-}
-
-async fn open_pane(
-	deps: &DiagnoseDeps,
-	service: &ServiceInfo,
-	herdr: &Arc<dyn Herdr>,
-	print: &(dyn Fn(&str) + Send + Sync),
-) -> Result<i32> {
 	let now = deps.now.unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
 	let at = chrono::DateTime::from_timestamp_millis(now).unwrap_or_default();
 	let dir = deps.data_dir.join("diagnose");
 	let logs_dir = deps.data_dir.join("logs");
-	let version = herdr.ping().await?;
-	let snapshot = herdr.snapshot().await?;
 	// Setup's check runs before the log is read, and a failed one is said as such (SET-14).
 	let setup = (deps.setup_check)().await;
 	let recent = recent_log(&logs_dir, None)?;
@@ -219,41 +165,24 @@ async fn open_pane(
 		format!(" (from {})", recent.files.join(", "))
 	};
 	let state = [
-		vec![
-			format!(
-				"# Jocasta's state for `jocasta diagnose` ({})",
-				at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-			),
-			String::new(),
-			format!("- Versions: {}", deps.versions),
-			format!("- Service: {}", service_line(service)),
-			format!(
-				"- herdr session `{}`: herdr {} answers; {} workspaces, {} panes",
-				deps.session,
-				version.as_deref().unwrap_or("?"),
-				snapshot.workspaces.len(),
-				snapshot.panes.len()
-			),
-			format!("- Setup: {setup_line}"),
-			format!(
-				"- Logs: {}, one file per day, {LOG_DAYS} days kept; recent.log has the newest {RECENT_LOG_LINES} lines{from}",
-				logs_dir.display()
-			),
-			String::new(),
-			"## herdr's workspaces and panes".to_owned(),
-		],
-		panes_section(&snapshot),
-		vec![String::new()],
+		format!(
+			"# Jocasta's state for `jocasta diagnose` ({})",
+			at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+		),
+		String::new(),
+		format!("- Versions: {}", deps.versions),
+		format!("- Service: {}", service_line(&service)),
+		format!("- Setup: {setup_line}"),
+		format!(
+			"- Logs: {}, one file per day, {LOG_DAYS} days kept; recent.log has the newest {RECENT_LOG_LINES} lines{from}",
+			logs_dir.display()
+		),
+		String::new(),
 	]
-	.concat()
 	.join("\n");
 	fs::write(&state_path, state)?;
 	fs::write(&log_path, &recent.text)?;
 	fs::write(&overlay, diagnose_overlay(&deps.assets_dir.join("skills")))?;
-	let workspace = match snapshot.workspaces.iter().find(|workspace| workspace.label == WORKSPACE) {
-		Some(workspace) => workspace.id.clone(),
-		None => (deps.ensure_boss)(herdr.clone()).await?.workspace_id,
-	};
 	let mut command = deps.omp.clone();
 	command.extend([
 		"--config".to_owned(),
@@ -264,17 +193,10 @@ async fn open_pane(
 		format!("@{}", log_path.display()),
 		"Jocasta's state and recent log, attached, go to the model provider with this message. Diagnose Jocasta with the diagnose skill from them. Change nothing.".to_owned(),
 	]);
-	let tab =
-		herdr.create_tab(&workspace, &TabSpec { title: "diagnose".to_owned(), cwd: dir, command, env: None }).await?;
-	herdr.focus(&tab.pane_id).await?;
 	if let Some(line) = phone_line(&read_ntfy(), &deps.data_dir) {
 		print(&line);
 	}
-	print(&format!(
-		"Opened a read-only diagnose pane in workspace {WORKSPACE} (herdr session `{}`): run `jocasta` to see it.",
-		deps.session
-	));
-	Ok(0)
+	(deps.run_omp)(command, dir).await
 }
 
 #[cfg(test)]

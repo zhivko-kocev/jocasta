@@ -78,6 +78,14 @@ fn append(line: &str, now: i64) -> std::io::Result<()> {
 	Ok(())
 }
 
+/// Set while the shell owns the terminal: a line on stderr would be drawn over its screen (0683); the file still gets it.
+static STDERR_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Stops (or resumes) the copy of each log line on stderr.
+pub fn set_stderr(on: bool) {
+	STDERR_OFF.store(!on, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Appends one line to today's log file and stderr. `now` (epoch ms) defaults to the current time.
 pub fn log(level: LogLevel, scope: &str, message: &str, now: Option<i64>) {
 	let now = now.unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
@@ -85,7 +93,9 @@ pub fn log(level: LogLevel, scope: &str, message: &str, now: Option<i64>) {
 	let message = NEWLINE.replace_all(message, "\n    ");
 	let line =
 		format!("{} {} [{scope}] {message}\n", at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true), level.upper());
-	let _ = std::io::stderr().write_all(line.as_bytes());
+	if !STDERR_OFF.load(std::sync::atomic::Ordering::Relaxed) {
+		let _ = std::io::stderr().write_all(line.as_bytes());
+	}
 	// The log is best effort; stderr has the line.
 	let _ = append(&line, now);
 }

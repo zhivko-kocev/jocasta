@@ -32,7 +32,7 @@ fn rows(entries: &[NotificationEntry]) -> Vec<Value> {
 }
 
 #[test]
-fn pairs_each_ask_with_herdrs_change_and_the_panes_blocked_notification_that_herdr_answered_shown_t3_0552() {
+fn pairs_each_ask_with_the_state_change_and_the_panes_blocked_notification_the_shell_answered_shown_t3_0552() {
 	let t0 = t0();
 	let session = [
 		json!({ "type": "session", "timestamp": iso(t0 - 60_000.0) }).to_string(),
@@ -48,8 +48,8 @@ fn pairs_each_ask_with_herdrs_change_and_the_panes_blocked_notification_that_her
 	let trials = correlate(
 		&sessions,
 		&[
-			HerdrEvent { at: t0 + 100.0, pane_id: "p1".to_owned(), state: AgentState::Working },
-			HerdrEvent { at: t0 + 250.0, pane_id: "p1".to_owned(), state: AgentState::Blocked },
+			StateEvent { at: t0 + 100.0, pane_id: "p1".to_owned(), state: AgentState::Working },
+			StateEvent { at: t0 + 250.0, pane_id: "p1".to_owned(), state: AgentState::Blocked },
 		],
 		&[
 			note(t0 + 300.0, "p2", "blocked", "shown"),
@@ -64,19 +64,19 @@ fn pairs_each_ask_with_herdrs_change_and_the_panes_blocked_notification_that_her
 			pane_id: "p1".to_owned(),
 			kind: "ask",
 			t0,
-			herdr_ms: Some(250.0),
+			state_ms: Some(250.0),
 			notification_ms: Some(900.0),
 			notification_result: Some("busy".to_owned()),
 		}]
 	);
-	// No foreground client: herdr didn't show it, so there is no t3, and the row says why.
+	// No foreground client: the shell didn't show it, so there is no t3, and the row says why.
 	assert_eq!(
 		correlate(&sessions, &[], &[note(t0 + 400.0, "p1", "blocked", "no_foreground_client")]),
 		vec![H2Trial {
 			pane_id: "p1".to_owned(),
 			kind: "ask",
 			t0,
-			herdr_ms: None,
+			state_ms: None,
 			notification_ms: None,
 			notification_result: Some("no_foreground_client".to_owned()),
 		}]
@@ -105,7 +105,7 @@ fn an_asks_t0_is_when_omp_completed_the_message_not_when_it_started_the_request_
 
 #[test]
 fn a_started_threads_pane_is_the_one_in_its_worktree_project_wt_slug_ben_23() {
-	// herdr reports a pane's folder in the host's own form.
+	// the panes list reports a pane's folder in the host's own form.
 	let src = std::env::temp_dir().join("src");
 	let with_separator = format!("{}{MAIN_SEPARATOR}", src.join("acme.wt").join("h2-trial-1").display());
 	let panes = [
@@ -147,7 +147,7 @@ fn the_services_notification_log_parses_partial_and_malformed_lines_dont() {
 
 #[test]
 fn a_started_thread_gets_its_worktrees_pane_only_once_the_list_shows_its_branch_and_keeps_it() {
-	// herdr reports a pane's folder in the host's own form.
+	// the panes list reports a pane's folder in the host's own form.
 	let wt = std::env::temp_dir().join("src").join("acme.wt");
 	let panes = vec![
 		pane("boss", std::env::temp_dir().join("data").join("home")),

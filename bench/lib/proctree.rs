@@ -4,7 +4,6 @@
 //! a tree is the product's `kill_tree` (`shared::proctree`), and liveness its `pid_alive` (EVL-14).
 
 use std::collections::{HashMap, HashSet};
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -187,62 +186,4 @@ pub fn tree_memory(tree: &[ProcessInfo]) -> Memory {
 		private_bytes = private_bytes.zip(info.private_bytes).map(|(sum, bytes)| sum + bytes);
 	}
 	Memory { processes: tree.len(), working_set: tree.iter().map(|info| info.working_set).sum(), private_bytes }
-}
-
-/// The pids of the bare `jocasta` surfaces attached to the sandbox: `<data>/surfaces/<pid>` (`attachedSurface`).
-pub fn surface_pids(data_dir: &Path) -> Vec<u32> {
-	let Ok(names) = fs::read_dir(data_dir.join("surfaces")) else { return Vec::new() };
-	names
-		.flatten()
-		.filter_map(|entry| {
-			let pid = number(Some(&Value::String(entry.file_name().to_string_lossy().into_owned())));
-			(pid.fract() == 0.0 && pid > 0.0 && pid <= f64::from(u32::MAX)).then_some(pid as u32)
-		})
-		.collect()
-}
-
-/// The roots of Jocasta's process trees (0552): the service, herdr's server, and each attached surface.
-#[derive(Debug, Clone, Default)]
-pub struct JocastaRoots {
-	pub service: Option<u32>,
-	pub herdr_server: Option<u32>,
-	pub surfaces: Vec<u32>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct Parts {
-	pub service: Memory,
-	pub herdr: Memory,
-	pub surfaces: Memory,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct JocastaProcesses {
-	pub all: Vec<ProcessInfo>,
-	pub parts: Parts,
-}
-
-/// Jocasta's processes for H6 and K11 (0552's shape): the service's tree, herdr's server tree (every pane with its omp
-/// and MCP processes), and each attached surface's tree (bare `jocasta` and its herdr client; the surface started the
-/// service, so its tree's part leaves the service's out). Each process counts once in `all`; `parts` are disjoint.
-pub fn jocasta_processes(roots: &JocastaRoots, processes: &[ProcessInfo]) -> JocastaProcesses {
-	let service = roots.service.map_or_else(Vec::new, |root| tree_of(root, processes));
-	let mut taken: HashSet<u32> = service.iter().map(|info| info.pid).collect();
-	let herdr: Vec<ProcessInfo> = roots
-		.herdr_server
-		.map_or_else(Vec::new, |root| tree_of(root, processes))
-		.into_iter()
-		.filter(|info| !taken.contains(&info.pid))
-		.collect();
-	taken.extend(herdr.iter().map(|info| info.pid));
-	let mut surfaces: Vec<ProcessInfo> = Vec::new();
-	for root in &roots.surfaces {
-		for info in tree_of(*root, processes) {
-			if taken.insert(info.pid) {
-				surfaces.push(info);
-			}
-		}
-	}
-	let parts = Parts { service: tree_memory(&service), herdr: tree_memory(&herdr), surfaces: tree_memory(&surfaces) };
-	JocastaProcesses { all: [service, herdr, surfaces].concat(), parts }
 }

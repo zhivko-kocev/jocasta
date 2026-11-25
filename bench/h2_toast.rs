@@ -1,28 +1,29 @@
 //! H2 (0482, 0552, 0576): the time from "needs you" to his notification, in a sandbox Jocasta.
 //!
-//!   jocasta-bench h2-toast --out <dir> [--runs 30] [--minutes 120] [--condition host|herdr] [--start <project>]
+//!   jocasta-bench h2-toast --out <dir> [--runs 30] [--minutes 120] [--condition host|tick] [--start <project>]
 //!                          [--dry-run]
 //!
-//! Jocasta raises its notifications through herdr's `notification.show`, which herdr hands to Windows' notification
-//! service through the foreground client and answers `shown` (or `disabled`, `rate_limited`, `no_foreground_client`,
-//! `busy`). While it runs, H2 records herdr's `pane.agent_status_changed` pushes for every pane (t1, `Herdr::watch`; a
-//! reference figure, since the service's own path is the condition's) and reads the service's notification log,
-//! `<data>/notifications.jsonl`, one line per `notification.show` call written when herdr's reply comes back (`at`,
-//! `paneId`, `reason`, `title`, `body`, `result`). Each pane's omp session file (herdr reports its path) gives t0: an
-//! `ask` tool call's message once complete (`completedAt`, not the request's start, so the model's generation isn't in
-//! the figures) or a plan proposal. t3 is the moment herdr answered `shown` for the pane's `blocked` notification: the
+//! Jocasta raises its notifications through the shell's own notification (0683), which hands them to Windows'
+//! notification service and answers `shown` (or `disabled`, `rate_limited`, `no_foreground_client`, `busy`). While it
+//! runs, H2 looks at every pane's agent state every 200 ms through the service's `panes` command and records each change
+//! (t1, a reference figure, since the service's own path is the condition's) and reads the service's notification log,
+//! `<data>/notifications.jsonl`, one line per notification written when the shell's reply comes back (`at`, `paneId`,
+//! `reason`, `title`, `body`, `result`). Each pane's omp session file (the panes list its path) gives t0: an `ask` tool
+//! call's message once complete (`completedAt`, not the request's start, so the model's generation isn't in the
+//! figures) or a plan proposal. t3 is the moment the shell answered `shown` for the pane's `blocked` notification: the
 //! notification reached Windows; how long Windows then takes to draw the banner isn't measured.
 //! Conditions (0576): `host` (the default), the service taking each thread's state as its omp pushes it over the
-//! bridge (0675); `herdr`, the sandbox service started with `JOCASTA_HOSTS=off`, so it ignores those pushes and falls
-//! back to herdr's events and its tick. H2 reads the service's switch from `/health` and refuses a mismatch.
+//! bridge (0675); `tick`, the sandbox service started with `JOCASTA_HOSTS=off`, so it ignores those pushes and takes
+//! the state from its own refresh tick. H2 reads the service's switch from `/health` and refuses a mismatch.
 //! Trials come from threads he starts (the boss's left out), or with `--start <project>` from
 //! threads H2 starts as `jocasta thread new` does and reads as `jocasta thread list` does (no Allow, 0544, 0576; each
 //! brief makes omp ask one question, so a model runs: VM only): then only those threads' panes are trials (a listed
 //! thread's pane is the one in its branch's worktree), and the next thread starts once the last one's notification
 //! came, or after 5 minutes without one, which the summary counts as a miss.
 //! Writes h2-toast.jsonl (one row per trial), h2-notifications.jsonl (the log's lines of this run) and h2-toast.json
-//! (median, p95 and CIs of t1−t0 and t3−t0, and the count of each herdr result).
+//! (median, p95 and CIs of t1−t0 and t3−t0, and the count of each notification result).
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -41,25 +42,25 @@ use crate::lib::stats::{BootstrapOptions, summarize};
 use crate::lib::threads::{ThreadLine, list_threads, start_thread};
 use jocasta::frontier::protocol::js_number_text;
 use jocasta::frontier::server::boss::BOSS_WORKSPACE;
-use jocasta::frontier::server::herdr::{AgentState, Herdr, PaneInfo};
 use jocasta::frontier::server::launch::OnOff;
+use jocasta::frontier::server::surface::{AgentState, PaneInfo};
 use jocasta::shared::clock::now_ms;
 use jocasta::shared::errors::Result;
 use jocasta::shared::jsonl::json_lines;
 
-use crate::lib::jocasta::open_sandbox;
+use crate::lib::jocasta::{SandboxJocasta, open_sandbox};
 
-pub const CONDITIONS: [&str; 2] = ["host", "herdr"];
+pub const CONDITIONS: [&str; 2] = ["host", "tick"];
 
-/// One of herdr's `pane.agent_status_changed` pushes with the time this recorder saw it.
+/// One change of a pane's agent state, with the time this recorder saw it (it polls the panes' state, 200 ms apart).
 #[derive(Debug, Clone, PartialEq)]
-pub struct HerdrEvent {
+pub struct StateEvent {
 	pub at: f64,
 	pub pane_id: String,
 	pub state: AgentState,
 }
 
-/// One line of the service's `<data>/notifications.jsonl`: a `notification.show` call and herdr's reply. The line is
+/// One line of the service's `<data>/notifications.jsonl`: a notification and the shell's reply. The line is
 /// kept whole, so the rows H2 copies are the service's own, whatever else a line carries.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -68,7 +69,7 @@ pub struct NotificationEntry {
 }
 
 impl NotificationEntry {
-	/// Epoch ms when herdr's reply came back.
+	/// Epoch ms when the shell's reply came back.
 	pub fn at(&self) -> f64 {
 		self.row.get("at").and_then(Value::as_f64).unwrap_or(f64::NAN)
 	}
@@ -83,7 +84,7 @@ impl NotificationEntry {
 		self.row.get("reason").and_then(Value::as_str).unwrap_or_default()
 	}
 
-	/// herdr's reason (`shown`, `disabled`, `rate_limited`, `no_foreground_client`, `busy`) or `error`.
+	/// the shell's reason (`shown`, `disabled`, `rate_limited`, `no_foreground_client`, `busy`) or `error`.
 	pub fn result(&self) -> &str {
 		self.row.get("result").and_then(Value::as_str).unwrap_or_default()
 	}
@@ -115,19 +116,19 @@ pub struct H2Trial {
 	pub kind: &'static str,
 	pub t0: f64,
 	/// ms after t0; `None` when not seen.
-	pub herdr_ms: Option<f64>,
-	/// t3 − t0: herdr answered `shown` for the pane's `blocked` notification; `None` when it didn't.
+	pub state_ms: Option<f64>,
+	/// t3 − t0: the shell answered `shown` for the pane's `blocked` notification; `None` when it didn't.
 	pub notification_ms: Option<f64>,
-	/// herdr's answer to the pane's first `blocked` notification after t0; `None` when the service raised none.
+	/// the shell's answer to the pane's first `blocked` notification after t0; `None` when the service raised none.
 	pub notification_result: Option<String>,
 }
 
-/// Pairs each "needs you" moment (t0) in a pane's session with the first herdr state change to blocked/idle/done and
-/// the pane's `blocked` notifications, each at or after t0 and before the pane's next t0: t3 is the first one herdr
+/// Pairs each "needs you" moment (t0) in a pane's session with the first agent state change to blocked/idle/done and
+/// the pane's `blocked` notifications, each at or after t0 and before the pane's next t0: t3 is the first one the shell
 /// answered `shown`. `sessions` is each pane's session text in the order the panes were first seen.
 pub fn correlate(
 	sessions: &[(String, String)],
-	events: &[HerdrEvent],
+	events: &[StateEvent],
 	notifications: &[NotificationEntry],
 ) -> Vec<H2Trial> {
 	let blocked: Vec<&NotificationEntry> = notifications.iter().filter(|entry| entry.reason() == "blocked").collect();
@@ -143,7 +144,7 @@ pub fn correlate(
 		for (i, (t0, kind)) in moments.iter().enumerate() {
 			let next = moments.get(i + 1).map_or(f64::INFINITY, |moment| moment.0);
 			let within = |at: f64| at >= *t0 && at < next;
-			let herdr = events.iter().find(|event| {
+			let seen = events.iter().find(|event| {
 				event.pane_id == *pane_id
 					&& within(event.at)
 					&& event.state != AgentState::Working
@@ -158,7 +159,7 @@ pub fn correlate(
 				pane_id: pane_id.clone(),
 				kind,
 				t0: *t0,
-				herdr_ms: herdr.map(|event| event.at - t0),
+				state_ms: seen.map(|event| event.at - t0),
 				notification_ms: shown.map(|entry| entry.at() - t0),
 				notification_result: ours.first().map(|entry| entry.result().to_owned()),
 			});
@@ -234,12 +235,13 @@ pub async fn main(argv: Vec<String>) -> ExitCode {
 	run_script(run(argv)).await
 }
 
-/// What a run records while it waits: herdr's state changes, the panes' session files and the service's log.
+/// What a run records while it waits: the panes' state changes, the panes' session files and the service's log.
 struct Recorder<'a> {
-	herdr: Arc<dyn Herdr>,
+	jocasta: &'a SandboxJocasta,
 	/// `--start`: the project the bench starts its own threads in.
 	project: Option<&'a str>,
-	events: Arc<Mutex<Vec<HerdrEvent>>>,
+	events: Vec<StateEvent>,
+	last_states: HashMap<String, AgentState>,
 	session_paths: Arc<Mutex<Vec<(String, String)>>>,
 	/// With `--start`, the bench's own threads by branch, their pane once `jocasta thread list` shows them, and when
 	/// each started.
@@ -270,30 +272,48 @@ impl Recorder<'_> {
 			.collect()
 	}
 
-	fn seen_events(&self) -> Vec<HerdrEvent> {
-		self.events.lock().expect("the events lock").clone()
+	fn seen_events(&self) -> Vec<StateEvent> {
+		self.events.clone()
 	}
 
 	async fn refresh_panes(&mut self) -> Result<()> {
-		let snapshot = self.herdr.snapshot().await?;
-		let boss = snapshot.workspaces.iter().find(|w| w.label == BOSS_WORKSPACE).map(|w| w.id.as_str());
+		let listed = self.jocasta.bench_panes().await?;
+		let boss = listed
+			.iter()
+			.find(|pane| pane.workspace.as_deref() == Some(BOSS_WORKSPACE))
+			.map(|pane| pane.info.workspace_id.clone());
+		let panes: Vec<PaneInfo> = listed.into_iter().map(|pane| pane.info).collect();
 		if let Some(project) = self.project
 			&& self.ours.iter().any(|thread| thread.pane_id.is_none())
 		{
-			find_listed_panes(&mut self.ours, &list_threads(Some(project)).await?, &snapshot.panes);
+			find_listed_panes(&mut self.ours, &list_threads(Some(project)).await?, &panes);
 		}
 		let mut paths = self.session_paths.lock().expect("the paths lock");
-		for pane in &snapshot.panes {
+		for pane in &panes {
 			let trial = if self.project.is_some() {
 				self.ours.iter().any(|thread| thread.pane_id.as_deref() == Some(pane.pane_id.as_str()))
 			} else {
-				Some(pane.workspace_id.as_str()) != boss
+				Some(&pane.workspace_id) != boss.as_ref()
 			};
 			if let (true, Some(path)) = (trial, &pane.session_path) {
 				upsert(&mut paths, &pane.pane_id, path.to_string_lossy().into_owned());
 			}
 		}
 		Ok(())
+	}
+
+	/// Records the state of each watched pane that is new or changed since the last look, starting with each pane's
+	/// current state.
+	async fn watch_states(&mut self) {
+		let Ok(listed) = self.jocasta.panes().await else { return };
+		let watched: Vec<String> =
+			self.session_paths.lock().expect("the paths lock").iter().map(|(pane, _)| pane.clone()).collect();
+		for pane in listed.into_iter().filter(|pane| watched.contains(&pane.pane_id)) {
+			if self.last_states.get(&pane.pane_id) != Some(&pane.agent_state) {
+				self.last_states.insert(pane.pane_id.clone(), pane.agent_state);
+				self.events.push(StateEvent { at: now_ms() as f64, pane_id: pane.pane_id, state: pane.agent_state });
+			}
+		}
 	}
 
 	/// Starts the next thread once the last one's notification came, or after `TRIAL_LIMIT_MS` without one.
@@ -314,12 +334,16 @@ impl Recorder<'_> {
 		Ok(())
 	}
 
-	/// Waits for `runs` answered trials or the deadline, refreshing the panes every 2 s.
+	/// Waits for `runs` answered trials or the deadline, looking at the panes' state every 200 ms and refreshing the
+	/// panes every 2 s.
 	async fn collect(&mut self, runs: u64, deadline: f64) -> Result<()> {
 		let mut trials: Vec<H2Trial> = Vec::new();
 		while (now_ms() as f64) < deadline {
 			self.start_next(runs, &trials).await?;
-			tokio::time::sleep(Duration::from_millis(2_000)).await;
+			for _ in 0..10 {
+				tokio::time::sleep(Duration::from_millis(200)).await;
+				self.watch_states().await;
+			}
 			self.refresh_panes().await?;
 			trials = correlate(&self.read_sessions(), &self.seen_events(), &self.read_log());
 			if trials.iter().filter(|trial| trial.notification_result.is_some()).count() as u64 >= runs {
@@ -335,7 +359,7 @@ fn print_h2_plan(args: &BenchArgs, condition: &str, minutes: f64, project: Optio
 	let how = if condition == "host" {
 		"host (omp's state pushed over the bridge)"
 	} else {
-		"herdr (service started with JOCASTA_HOSTS=off: herdr's events and tick)"
+		"tick (service started with JOCASTA_HOSTS=off: its own refresh tick, not omp's pushes)"
 	};
 	let trials = match project {
 		Some(project) => format!(
@@ -349,13 +373,13 @@ fn print_h2_plan(args: &BenchArgs, condition: &str, minutes: f64, project: Optio
 		&[
 			format!("condition {how}; collect {} trials or stop after {} min", args.runs, js_number_text(minutes)),
 			"refuse a run whose condition doesn't match the sandbox service's /health".to_owned(),
-			"record herdr pane.agent_status_changed pushes (t1, a reference figure)".to_owned(),
+			"poll the panes' agent state every 200 ms (t1, a reference figure)".to_owned(),
 			format!(
-				"read the service's <data>/{NOTIFICATIONS_FILE}: t3 = herdr answered `shown` to the pane's blocked notification.show"
+				"read the service's <data>/{NOTIFICATIONS_FILE}: t3 = the shell answered `shown` to the pane's blocked notification"
 			),
 			"t0 from each pane's omp session file: an ask tool call's completed message or a plan proposal".to_owned(),
 			trials,
-			"report median, p95 and bootstrap 95% CIs of t1−t0 and t3−t0, and how often herdr answered each result"
+			"report median, p95 and bootstrap 95% CIs of t1−t0 and t3−t0, and how often the shell answered each result"
 				.to_owned(),
 		],
 		args.out.as_deref(),
@@ -384,11 +408,11 @@ fn h2_summary(
 	summary.insert("condition".to_owned(), json!(condition));
 	summary.insert(
 		"endPoint".to_owned(),
-		json!("t3 = herdr answered `shown` to the service's notification.show for the pane's blocked toast (0552)"),
+		json!("t3 = the shell answered `shown` to the service's notification for the pane's blocked toast (0552)"),
 	);
 	summary.insert("conditions".to_owned(), serde_json::to_value(started.finished())?);
 	summary.insert("trials".to_owned(), json!(trials.len()));
-	summary.insert("herdrMs".to_owned(), serde_json::to_value(seen_of(|trial| trial.herdr_ms))?);
+	summary.insert("stateMs".to_owned(), serde_json::to_value(seen_of(|trial| trial.state_ms))?);
 	summary.insert("notificationMs".to_owned(), serde_json::to_value(seen_of(|trial| trial.notification_ms))?);
 	summary.insert("notificationResults".to_owned(), Value::Object(results));
 	if let Some(ours) = started_threads {
@@ -409,7 +433,7 @@ async fn run(argv: Vec<String>) -> Result<()> {
 	let minutes = number_of(flag_or(&args, "minutes", "120"));
 	let condition = flag_or(&args, "condition", "host");
 	if !CONDITIONS.contains(&condition) {
-		return Err(BenchUsageError::err("--condition is host or herdr"));
+		return Err(BenchUsageError::err("--condition is host or tick"));
 	}
 	if !minutes.is_finite() || minutes <= 0.0 {
 		return Err(BenchUsageError::err("--minutes needs a number above 0"));
@@ -420,41 +444,23 @@ async fn run(argv: Vec<String>) -> Result<()> {
 		return Ok(());
 	}
 	let out = args.out.clone().expect("a real run has --out");
-	let sandbox = open_sandbox(None)?;
+	let sandbox = open_sandbox()?;
 	claim_rows(&out, &["h2-toast", "h2-notifications"])?;
-	require_service_switch(Switch::Hosts, if condition == "herdr" { OnOff::Off } else { OnOff::On }).await?;
-	let started = conditions(&["omp", "herdr", "jocasta"]);
-	let herdr = sandbox.herdr().await?;
+	require_service_switch(Switch::Hosts, if condition == "tick" { OnOff::Off } else { OnOff::On }).await?;
+	let started = conditions(&["omp", "jocasta"]);
 	let mut recorder = Recorder {
-		herdr: herdr.clone(),
+		jocasta: &sandbox,
 		project,
-		events: Arc::default(),
+		events: Vec::new(),
+		last_states: HashMap::new(),
 		session_paths: Arc::default(),
 		ours: Vec::new(),
 		log_file: Path::new(&sandbox.sandbox.data_dir).join(NOTIFICATIONS_FILE),
 		started_at: now_ms() as f64,
 	};
 	recorder.refresh_panes().await?;
-	let stop_watch = herdr.watch(
-		{
-			let paths = recorder.session_paths.clone();
-			Box::new(move || paths.lock().expect("the paths lock").iter().map(|(pane, _)| pane.clone()).collect())
-		},
-		{
-			let events = recorder.events.clone();
-			Box::new(move |event| {
-				events.lock().expect("the events lock").push(HerdrEvent {
-					at: now_ms() as f64,
-					pane_id: event.pane_id,
-					state: event.state,
-				});
-			})
-		},
-	);
 	let deadline = now_ms() as f64 + minutes * 60_000.0;
 	let collected = recorder.collect(args.runs, deadline).await;
-	stop_watch();
-	herdr.close();
 	collected?;
 	let notifications = recorder.read_log();
 	for entry in &notifications {

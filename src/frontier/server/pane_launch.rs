@@ -14,10 +14,10 @@ use crate::frontier::protocol::js_number_text;
 use crate::frontier::server::boss::{EnsureBossOptions, PANE_KEY_ENV, boss_command, ensure_boss_pane, new_pane_key};
 use crate::frontier::server::context::{Link, Shared};
 use crate::frontier::server::events::BossPane;
-use crate::frontier::server::herdr::{AgentState, Env, PaneInfo, RespawnOptions};
 use crate::frontier::server::mise::{Mise, mise_env, trust_copies};
 use crate::frontier::server::overlay::ensure_overlay;
 use crate::frontier::server::service::ServiceOptions;
+use crate::frontier::server::surface::{ASLEEP, AgentState, Env, PaneInfo, RespawnOptions};
 use crate::frontier::server::task_file::{TaskRecord, launch_prompt};
 use crate::frontier::server::thread::ThreadRef;
 use crate::frontier::server::worktrees::thread_env;
@@ -30,7 +30,6 @@ use crate::shared::fsx::write_atomically;
 use crate::shared::install::{self_command, shipped_config_dir};
 use crate::shared::layer::LAYER_ENV;
 use crate::shared::log::{LogLevel, log};
-use crate::shared::pane_sleep::PANE_SLEEP_ROLE;
 use crate::shared::pathkey::{path_key, real_path};
 use crate::shared::paths::data_dir;
 #[cfg(windows)]
@@ -413,11 +412,9 @@ impl PaneLauncher {
 		Ok(respawned.pane_id)
 	}
 
-	/// A sleeping pane's argv (0676): this Jocasta's `pane-sleep` role showing `text`.
+	/// A sleeping pane's argv (0676, 0689): the shell draws it, showing `text`.
 	pub fn sleeper_command(&self, text: &str) -> Vec<String> {
-		let mut command: Vec<String> = self_command(None).iter().map(|word| word.display().to_string()).collect();
-		command.extend([PANE_SLEEP_ROLE.to_owned(), text.to_owned()]);
-		command
+		vec![ASLEEP.to_owned(), text.to_owned()]
 	}
 
 	/// The pane `pane_id` (its tab replaced, as every respawn does) now runs the sleeper showing `text`, in `cwd`;

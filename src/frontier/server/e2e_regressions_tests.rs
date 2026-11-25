@@ -22,11 +22,11 @@ use crate::frontier::server::helpers::{
 	demo_project, push_state, relaunch_idle, review, session_file, sh, start_test_server, start_test_server_with,
 	start_thread, states_settled, task_dir_of, thread_pane, until, until_async, with_server, write_settings,
 };
-use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
-use crate::frontier::server::herdr::{AgentState, Env, Herdr, HerdrError, NotificationResult, WorkspaceInfo};
 use crate::frontier::server::keys::FinishHow;
 use crate::frontier::server::popups::PopupEnd;
 use crate::frontier::server::server::ServerOptions;
+use crate::frontier::server::surface::fake_surface::FakeSurface;
+use crate::frontier::server::surface::{AgentState, Env, NotificationResult, Surface, SurfaceError, WorkspaceInfo};
 use crate::frontier::server::tools::{Caller, ToolReply};
 use crate::frontier::server::wording::{
 	COMMIT_LINE, HANDOFF_PROMPT, LESSONS_LINE, REPORT_STEER, WHEN_YOU_FINISH, fallback_slug,
@@ -56,7 +56,7 @@ async fn call_with_key(server: &TestServer, tool: &str, args: &Value, pane_key: 
 }
 
 /// `with_server` on a herdr the test made, so the test can reach it (and a wrapper of it).
-async fn with_herdr<F, Fut>(herdr: &Arc<FakeHerdr>, options: ServerOptions, run: F)
+async fn with_herdr<F, Fut>(herdr: &Arc<FakeSurface>, options: ServerOptions, run: F)
 where
 	F: FnOnce(TestServer) -> Fut,
 	Fut: Future<Output = ()>,
@@ -69,11 +69,11 @@ where
 	}
 }
 
-fn workspace_of(herdr: &FakeHerdr, pane_id: &str) -> String {
+fn workspace_of(herdr: &FakeSurface, pane_id: &str) -> String {
 	herdr.state().pane_list.iter().find(|p| p.pane_id == pane_id).expect("the pane").workspace_id.clone()
 }
 
-fn typed_into(herdr: &FakeHerdr, pane: &str, text: &str) -> usize {
+fn typed_into(herdr: &FakeSurface, pane: &str, text: &str) -> usize {
 	herdr.of("prompt").iter().filter(|args| args[0] == pane && args[1] == text).count()
 }
 
@@ -84,7 +84,7 @@ struct Gate {
 }
 
 /// A recording bridge whose prompts into the boss pane wait for `gate`; everything else is recorded as the fake does.
-fn gated_bridge(fake: &Arc<FakeHerdr>, gate: &Arc<Gate>) -> Bridge {
+fn gated_bridge(fake: &Arc<FakeSurface>, gate: &Arc<Gate>) -> Bridge {
 	let bridge = fake.recording_bridge();
 	let (fake, gate) = (Arc::clone(fake), Arc::clone(gate));
 	bridge.record(|recording| {
@@ -109,7 +109,7 @@ fn gated_bridge(fake: &Arc<FakeHerdr>, gate: &Arc<Gate>) -> Bridge {
 async fn svc_2_a_thread_started_while_the_tick_tells_the_boss_of_a_closed_one_is_kept_and_never_said_closed() {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
-	let fake = Arc::new(FakeHerdr::new());
+	let fake = Arc::new(FakeSurface::new());
 	let gated = Arc::new(Gate { gate: Mutex::new(None), waiting: AtomicBool::new(false) });
 	let options = ServerOptions { bridge: Some(gated_bridge(&fake, &gated)), ..ServerOptions::default() };
 	let fake_in = fake.clone();
@@ -145,7 +145,7 @@ async fn svc_2_a_thread_started_while_the_tick_tells_the_boss_of_a_closed_one_is
 async fn svc_3_a_thread_pane_runs_omp_again_after_a_restart_and_the_sidebar_is_reported() {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
-	let fake = Arc::new(FakeHerdr::new());
+	let fake = Arc::new(FakeSurface::new());
 	let server = start_test_server_with(fake.clone(), ServerOptions::default()).await;
 	let path = start_thread(&server, ThreadOptions::default()).await.path;
 	server.service.refresh().await;
@@ -297,7 +297,7 @@ async fn svc_7_a_start_that_fails_once_herdr_made_its_worktree_takes_back_the_wo
 	let project = demo_project(j.root(), "demo").await;
 	let root = j.root().to_path_buf();
 	with_server(ServerOptions::default(), |server| async move {
-		server.herdr.state().create_worktree_fails = Some(HerdrError::new("error", "herdr's layout failed"));
+		server.herdr.state().create_worktree_fails = Some(SurfaceError::new("error", "herdr's layout failed"));
 		let failed =
 			call(&server, "thread_start", &json!({ "project": "demo", "title": "Readme line", "brief": BRIEF })).await;
 		assert_eq!(failed.is_error, Some(true));
@@ -437,7 +437,7 @@ async fn svc_14_a_projects_running_count_goes_to_its_own_workspace_not_a_later_o
 		server.herdr.set_state(&started.pane_id, AgentState::Working, None, true);
 		until(|| server.service.busy_threads().unwrap().working == 1).await;
 		// A tick already running when the thread went to work may be the one `refresh` joins: tick until it is reported.
-		let reports = |herdr: &FakeHerdr| -> Vec<Value> {
+		let reports = |herdr: &FakeSurface| -> Vec<Value> {
 			herdr.of("reportWorkspaceMetadata").into_iter().map(|args| args[0].clone()).collect()
 		};
 		until_async(|| {
@@ -663,7 +663,7 @@ async fn c11_his_finish_keys_merge_that_landed_but_left_its_workspace_is_half_do
 	with_server(ServerOptions::default(), |server| async move {
 		let started = start_thread(&server, ThreadOptions::default()).await;
 		commit_in(&started.path, "demo\nA line.\n", "Add a README line");
-		server.herdr.state().close_workspace_fails = Some(HerdrError::new("error", "herdr is gone"));
+		server.herdr.state().close_workspace_fails = Some(SurfaceError::new("error", "herdr is gone"));
 		let outcome = server.service.key_finish(&started.pane_id, FinishHow::Merge).await.unwrap();
 		assert!(outcome.is_error);
 		assert!(
@@ -800,7 +800,7 @@ async fn c6b_with_omps_host_registry_off_a_thread_whose_omp_reports_over_its_bri
 	.await;
 }
 
-fn settings_notes(herdr: &FakeHerdr) -> Vec<String> {
+fn settings_notes(herdr: &FakeSurface) -> Vec<String> {
 	herdr
 		.of("notify")
 		.iter()
@@ -841,7 +841,7 @@ async fn a_start_notification_herdr_couldnt_show_for_want_of_a_client_is_sent_ag
  {
 	let _j = temp_jocasta();
 	write_settings(&config_dir(), &json!({ "service": { "colour": "red" } }));
-	let herdr = Arc::new(FakeHerdr::new());
+	let herdr = Arc::new(FakeSurface::new());
 	// Bare `jocasta` starts the service before his terminal attaches.
 	herdr.state().notify_result = NotificationResult::NoForegroundClient;
 	with_herdr(&herdr, ServerOptions::default(), |server| async move {
@@ -890,7 +890,7 @@ async fn a_start_notification_herdr_couldnt_show_for_want_of_a_client_is_sent_ag
 #[tokio::test(flavor = "multi_thread")]
 async fn the_starts_notifications_wait_10_minutes_for_a_client_then_theyre_dropped_and_later_ones_arent_kept_0584() {
 	let _j = temp_jocasta();
-	let herdr = Arc::new(FakeHerdr::new());
+	let herdr = Arc::new(FakeSurface::new());
 	herdr.state().notify_result = NotificationResult::NoForegroundClient;
 	with_herdr(&herdr, ServerOptions::default(), |server| async move {
 		let toast = |text: &str| Toast::new(ToastReason::Event, ToastLevel::Warning, text);

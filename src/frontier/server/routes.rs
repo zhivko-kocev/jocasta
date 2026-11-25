@@ -17,7 +17,7 @@ use axum::extract::Request;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::Response;
 use futures_util::FutureExt;
-use serde_json::{Map, Value, json};
+use serde_json::Value;
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
 use url::Url;
@@ -28,9 +28,6 @@ use crate::shared::log::{LogLevel, log};
 
 /// A boxed future, what a route's answer is.
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
-
-/// The most a request body may hold: Bun's default `maxRequestBodySize` (128 MiB).
-const MAX_BODY: usize = 128 * 1024 * 1024;
 
 /// How long a stopping server waits for its connections to end before it drops them.
 const STOP_WAIT: Duration = Duration::from_secs(5);
@@ -87,40 +84,6 @@ pub fn json_response(status: StatusCode, value: &Value) -> Response {
 		.headers_mut()
 		.insert(header::CONTENT_TYPE, header::HeaderValue::from_static("application/json;charset=utf-8"));
 	response
-}
-
-/// The prelude of the API's POST routes: 401 without the API token as the bearer, 405 for another method, each as the
-/// tools' `{text, isError}` with `json`, else as plain text; `None` when the request goes on.
-pub fn refused_post<B>(request: &axum::http::Request<B>, token: &str, json: bool) -> Option<Response> {
-	let refuse = |text: &str, status: StatusCode| {
-		if json {
-			json_response(status, &json!({ "text": text, "isError": true }))
-		} else {
-			text_response(status, text)
-		}
-	};
-	if !has_bearer(request, token) {
-		return Some(refuse("invalid token", StatusCode::UNAUTHORIZED));
-	}
-	if request.method() != axum::http::Method::POST {
-		return Some(refuse("POST only", StatusCode::METHOD_NOT_ALLOWED));
-	}
-	None
-}
-
-/// `value` when it is a plain object (a tool's or command's `args`), else none.
-pub fn object_args(value: &Value) -> Map<String, Value> {
-	value.as_object().cloned().unwrap_or_default()
-}
-
-/// The request's JSON body when it is an object (or an array, as `typeof` says), else `{}` (no body, not JSON, or not
-/// an object).
-pub async fn body_object(request: Request) -> Value {
-	let Ok(bytes) = axum::body::to_bytes(request.into_body(), MAX_BODY).await else { return json!({}) };
-	match serde_json::from_slice::<Value>(&bytes) {
-		Ok(parsed @ (Value::Object(_) | Value::Array(_))) => parsed,
-		_ => json!({}),
-	}
 }
 
 /// What the server answers: the API's routes in order, then the pages.

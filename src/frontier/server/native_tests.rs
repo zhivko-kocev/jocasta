@@ -1,16 +1,21 @@
 //! `native.rs`'s tests: the questions' one reader, the shells' boss and feed, the Agents view, his keybinds.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
-
-use herdr::embed::Outbound;
 
 use super::*;
 use crate::frontier::protocol::{PopupAnswer, PopupView};
-use crate::frontier::server::herdr::AgentState;
-use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
 use crate::frontier::server::popups::{Popups, allow_question};
+use crate::frontier::server::surface::fake_surface::FakeSurface;
+use crate::frontier::server::surface::{AgentState, Surface};
 use crate::shared::testing::temp_jocasta;
+
+/// One message the shell host was asked to send.
+struct Outbound {
+	kind: String,
+	target: Target,
+	data: String,
+}
 
 /// The server a shell reaches: real questions, and a record of the rest.
 #[derive(Default)]
@@ -55,10 +60,9 @@ struct Rig {
 fn rig() -> Rig {
 	let sent = Arc::new(Mutex::new(Vec::new()));
 	let record = Arc::clone(&sent);
-	let host = ServerHost::new(
-		PathBuf::from("api.sock"),
-		Arc::new(|| {}),
-		Arc::new(move |outbound| locked(&record).push(outbound)),
+	let host = ShellHost::new(
+		Arc::new(move |target, kind, data| locked(&record).push(Outbound { kind: kind.to_owned(), target, data })),
+		Arc::new(tokio::sync::Notify::new()),
 	);
 	let native = Native::new(host, Handle::current());
 	let fake = Arc::new(Fake::default());
@@ -234,53 +238,29 @@ async fn a_shells_feed_messages_reach_the_service_and_the_reply_goes_back_to_tha
 }
 
 #[tokio::test]
-async fn heal_tells_every_shell_the_boss_workspace_once_and_sets_the_agents_view_once() {
+async fn heal_tells_every_shell_the_boss_workspace_once() {
 	let _j = temp_jocasta();
 	let r = rig();
-	let herdr = FakeHerdr::new();
+	let herdr = FakeSurface::new();
 	let workspace =
 		herdr.ensure_workspace("Jocasta", Path::new("/home"), Some(&["omp".to_owned()]), None).await.unwrap();
 	let boss = herdr.state().pane_list[0].pane_id.clone();
 	herdr.set_state(&boss, AgentState::Idle, None, true);
 	let snapshot = herdr.snapshot().await.unwrap();
-	r.native.heal(&herdr, &snapshot, None).await;
-	r.native.heal(&herdr, &snapshot, Some("nope")).await;
+	r.native.heal(&snapshot, None).await;
+	r.native.heal(&snapshot, Some("nope")).await;
 	assert!(r.sent(SHELL_BOSS).is_empty());
-	r.native.heal(&herdr, &snapshot, Some(&boss)).await;
-	r.native.heal(&herdr, &snapshot, Some(&boss)).await;
+	r.native.heal(&snapshot, Some(&boss)).await;
+	r.native.heal(&snapshot, Some(&boss)).await;
 	assert_eq!(r.sent(SHELL_BOSS), [(Target::Shells, json!(workspace))]);
-	assert_eq!(herdr.of("setAgentView").len(), 1);
-	// A relaunched boss pane (a new pane id) gets the view set again (0667).
+	// A relaunched boss pane (a new pane id) is a new boss; the shells are told again only when its workspace differs.
 	let mut relaunched = snapshot.clone();
 	relaunched.panes.iter_mut().find(|pane| pane.pane_id == boss).unwrap().pane_id = "w9:p9".to_owned();
-	r.native.heal(&herdr, &relaunched, Some("w9:p9")).await;
-	r.native.heal(&herdr, &relaunched, Some("w9:p9")).await;
-	let views = herdr.of("setAgentView");
-	assert_eq!(views.len(), 2);
-	assert_eq!(views[1][0]["filter"]["filters"][1], json!({"op": "eq", "field": "pane_id", "value": "w9:p9"}));
+	r.native.heal(&relaunched, Some("w9:p9")).await;
+	assert_eq!(r.sent(SHELL_BOSS).len(), 1);
 	// A shell that attaches later is told too.
 	r.native.joined(9, None);
 	assert_eq!(r.sent(SHELL_BOSS).last().cloned(), Some((Target::Client(9), json!(workspace))));
-}
-
-#[test]
-fn the_agents_view_pins_the_boss_row_first_sorts_attention_then_status_and_leaves_the_rest_of_its_workspace_out() {
-	let view = agent_view("w1", "w1:p1");
-	assert_eq!(view.source, "jocasta");
-	assert_eq!(view.label.as_deref(), Some("threads"));
-	assert_eq!(
-		view.filter,
-		Some(json!({"op": "any", "filters": [
-			{"op": "not", "filter": {"op": "eq", "field": "workspace_id", "value": "w1"}},
-			{"op": "eq", "field": "pane_id", "value": "w1:p1"},
-		]}))
-	);
-	let sort = view.sort.unwrap();
-	assert_eq!(sort[0], json!({"field": {"token": "pin"}, "order": "asc"}));
-	assert_eq!(
-		sort[1..].iter().map(|s| s["field"].as_str().unwrap()).collect::<Vec<_>>(),
-		["attention", "status", "state_change_seq"]
-	);
 }
 
 #[test]

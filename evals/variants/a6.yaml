@@ -4,7 +4,7 @@
 # search tool (0604). The ledger reads every arm's saved sessions itself (0538).
 extends: [a3]
 # Plan first as Jocasta's threads do it (0567): not A3's `--plan-yolo`, but omp's interactive plan review answered
-# "Approve and execute" (`evals/plan_review.rs`): the first turn runs omp interactive in a bench herdr pane, starting in
+# "Approve and execute" (`evals/plan_review.rs`): the first turn runs omp interactive in a bench terminal tab, starting in
 # plan mode; the review turns then run as A3's.
 plan_first: false
 plan_review: execute

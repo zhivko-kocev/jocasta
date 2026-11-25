@@ -13,9 +13,10 @@ use crate::lib::sandbox::cli_request;
 use jocasta::shared::errors::{Error, Result};
 
 static STARTED_BRANCH: LazyLock<Regex> =
-	LazyLock::new(|| Regex::new(r"(?m) on branch (\S+?)(?:[.,]|\r?$)").expect("a fixed pattern"));
+	LazyLock::new(|| Regex::new(r"(?m) on (?:branch )?(\S+?)(?:[.,:]|\r?$)").expect("a fixed pattern"));
 
-/// The branch a start's reply names (`Started <title> in <project> on branch <branch>…`), or `None`.
+/// The branch a start's reply names (`Started <title> on branch <branch>…` for the boss, `Started <project>/<title> on
+/// <branch>: …` for the command line), or `None`.
 pub fn started_branch(reply: &str) -> Option<String> {
 	STARTED_BRANCH.captures(reply).map(|found| found[1].to_owned())
 }

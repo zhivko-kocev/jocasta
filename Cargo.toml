@@ -3,7 +3,7 @@ name = "jocasta"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.100"
-description = "An orchestration environment around omp threads in herdr panes"
+description = "An orchestration environment around omp threads in a shell of its own"
 license = "MIT"
 repository = "https://github.com/zhivko-kocev/jocasta"
 publish = false
@@ -11,16 +11,15 @@ autobins = false
 autotests = true
 autobenches = false
 
-# The workspace (the fork, 2026-11-18): Jocasta and the trimmed herdr fork at crates/herdr with its terminal binding.
-# A bare cargo command builds and tests Jocasta alone; `-p herdr` or `--workspace` takes the fork too.
+# The workspace is Jocasta alone; the vendored portable-pty beside it is only the patch below.
 [workspace]
-members = [".", "crates/herdr", "crates/herdr/crates/ghostty-vt"]
-default-members = ["."]
+members = ["."]
+exclude = ["crates/portable-pty"]
 
-# herdr's patched portable-pty (its Windows ConPTY patches, crates/herdr/vendor/portable-pty.patches.md); a patch is
-# read from the workspace root only.
+# portable-pty with its Windows ConPTY patches (crates/portable-pty/portable-pty.patches.md), kept from the herdr fork
+# by 0683: the shell's terminals are made with it. A patch is read from the workspace root only.
 [patch.crates-io]
-portable-pty = { path = "crates/herdr/vendor/portable-pty" }
+portable-pty = { path = "crates/portable-pty" }
 
 # The product (0629): one package, its modules in src/ beside the TypeScript files they replace until the cutover
 # (0628). The library is what both binaries build on; `jocasta-bench` is bench/ and evals/ (0636).
@@ -44,6 +43,8 @@ test-support = []
 # The crates of 0631–0640. Versions are the newest at the first lock (0640); .cargo/config.toml holds every later
 # addition and bump to the 7-day rule (0627).
 [dependencies]
+# The shell's terminal grid (0683, its install approval); its terminals come from portable-pty below, not its own tty.
+alacritty_terminal = "=0.26.0"
 async-imap = { version = "0.12.0", default-features = false, features = ["runtime-tokio"] }
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio", "ws"] }
 chrono = "0.4.45"
@@ -51,9 +52,9 @@ clap = { version = "4.6.7", default-features = false, features = ["std", "help",
 futures-util = "0.3.34"
 getrandom = "0.3.4"
 globset = "0.4.18"
-# The herdr fork (crates/herdr): its words run inside `jocasta`.
-herdr = { path = "crates/herdr" }
 icalendar = { version = "0.17.17", features = ["recurrence"] }
+# The pty under every pane of the shell (0683): the patched copy at crates/portable-pty.
+portable-pty = "=0.9.0"
 process-wrap = { version = "10.0.1", features = ["std", "tokio1", "job-object", "process-group"] }
 ratatui = "0.30.2"
 regex = "1.13.1"
@@ -70,6 +71,7 @@ sha2 = "0.11.1"
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "sync", "time", "process", "fs", "signal"] }
 tokio-rustls = "0.26.6"
+# The bench's feed client (`bench/lib/service_feed.rs`) and the feed's tests.
 tokio-tungstenite = "0.29.0"
 url = "2.5.8"
 uuid = { version = "1.29.2", features = ["v4"] }
@@ -92,14 +94,12 @@ windows-sys = { version = "0.61.2", features = [
 
 [dev-dependencies]
 jocasta = { path = ".", features = ["test-support"] }
-# Bare `jocasta` in a terminal of its own for tests/entry.rs (fork plan phase 4): herdr's patched copy, already built.
-portable-pty = "=0.9.0"
 # Reads the Rust sources for tests/tree_checks.rs (0645); the lock's own version, parsing only.
 syn = { version = "3.0.10", default-features = false, features = ["full", "parsing", "visit"] }
 tokio = { version = "1.54.1", features = ["test-util"] }
 
-# Line tables only for the workspace's own crates and none for dependencies: with herdr in the workspace, full debug
-# info made the links and the PDBs the heaviest part of a build on his PC. Panics and backtraces still name lines.
+# Line tables only for the workspace's own crate and none for dependencies: full debug info made the links and the
+# PDBs the heaviest part of a build on his PC. Panics and backtraces still name lines.
 [profile.dev]
 debug = "line-tables-only"
 

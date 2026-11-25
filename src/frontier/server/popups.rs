@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use serde_json::Value;
 use tokio::sync::{broadcast, watch};
 
-use super::herdr::clean_text;
+use super::surface::clean_text;
 use crate::frontier::protocol::{PopupForm, PopupView};
 
 /// The close question's buttons (0434, 0549); Cancel is the default, Escape's and the answer of no answer.

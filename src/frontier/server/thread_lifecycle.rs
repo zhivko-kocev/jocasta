@@ -14,9 +14,9 @@ use crate::frontier::protocol::{ServerMessage, ThreadState, ToastLevel, ToastPri
 use crate::frontier::server::bridge::Deliver;
 use crate::frontier::server::context::{Link, ServiceContext};
 use crate::frontier::server::events::Holds;
-use crate::frontier::server::herdr::{AgentState, PaneInfo};
 use crate::frontier::server::pane_launch::Respawn;
 use crate::frontier::server::sessions::SessionStats;
+use crate::frontier::server::surface::{AgentState, PaneInfo};
 use crate::frontier::server::thread::{
 	Phase, PlanProposed, ThreadRef, is_idle, plan_of, set_phase, settled, show, subject,
 };
@@ -37,7 +37,7 @@ const BOSS_PROMPT_GRACE_MS: i64 = 10_000;
 /// never overrides them), or a read of herdr's pane list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StateSource {
-	Herdr,
+	Surface,
 	Host,
 	Reconcile,
 }
@@ -211,7 +211,7 @@ impl ThreadLifecycle {
 				return;
 			}
 		}
-		self.state_changed(pane_id, state, StateSource::Herdr);
+		self.state_changed(pane_id, state, StateSource::Surface);
 	}
 
 	/// herdr's pane list read at `read_at` against what its events said (CR-09): a pane whose state differs, with no

@@ -7,7 +7,6 @@ use futures_util::FutureExt;
 use serde_json::json;
 
 use super::*;
-use crate::frontier::server::asker::asker;
 use crate::frontier::server::popups::{CANCEL, Popups};
 
 struct Busy(Mutex<Counts>);
@@ -26,7 +25,6 @@ struct World {
 	popups: Arc<Popups>,
 	asked: Arc<Mutex<Vec<(String, bool)>>>,
 	stops: Arc<AtomicUsize>,
-	reattached: Arc<AtomicUsize>,
 	stopping: Arc<AtomicBool>,
 	flow: CloseFlow,
 }
@@ -35,8 +33,7 @@ struct World {
 fn world(counts: Counts, choice: Option<&'static str>) -> World {
 	let popups = Arc::new(Popups::new());
 	let asked = Arc::new(Mutex::new(Vec::new()));
-	let (stops, reattached, stopping) =
-		(Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)), Arc::new(AtomicBool::new(false)));
+	let (stops, stopping) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicBool::new(false)));
 	let opens = popups.clone();
 	let record = asked.clone();
 	let question: Ask = Arc::new(move |view, _signal, from_key| {
@@ -47,7 +44,7 @@ fn world(counts: Counts, choice: Option<&'static str>) -> World {
 		}
 		popup
 	});
-	let (stop_count, reattach_count, under_way) = (stops.clone(), reattached.clone(), stopping.clone());
+	let (stop_count, under_way) = (stops.clone(), stopping.clone());
 	let flow = close_flow(CloseParts {
 		service: Arc::new(Busy(Mutex::new(counts))),
 		question,
@@ -56,30 +53,15 @@ fn world(counts: Counts, choice: Option<&'static str>) -> World {
 			stop_count.fetch_add(1, Ordering::SeqCst);
 			async {}.boxed()
 		}),
-		reattach: Some(Arc::new(move || {
-			reattach_count.fetch_add(1, Ordering::SeqCst);
-			Ok(())
-		})),
 	});
-	World { popups, asked, stops, reattached, stopping, flow }
+	World { popups, asked, stops, stopping, flow }
 }
 
 const IDLE: Counts = Counts { working: 0, awaiting: 0 };
 const ASKED: &str = "Stop 1 working thread? They pick up where they left off next time.";
 
 fn asking() -> CloseHow {
-	CloseHow { ask: true, reattach: false }
-}
-
-#[test]
-fn the_close_questions_terminal_windows_terminal_when_installed_else_the_command_itself_in_a_console_of_its_own() {
-	let command = [PathBuf::from("C:\\Program Files\\Jocasta\\jocasta.exe")];
-	let wt = Some(Path::new("C:\\wt.exe"));
-	assert_eq!(
-		terminal_argv(&command, wt),
-		["C:\\wt.exe", "-w", "new", "--title", "Jocasta", "C:\\Program Files\\Jocasta\\jocasta.exe"].map(PathBuf::from)
-	);
-	assert_eq!(terminal_argv(&command, None), command);
+	CloseHow { ask: true }
 }
 
 #[tokio::test]
@@ -93,7 +75,7 @@ async fn with_no_thread_at_work_closing_asks_nothing_and_stops_everything() {
 #[tokio::test]
 async fn closing_without_asking_stops_everything_whatever_is_at_work() {
 	let w = world(Counts { working: 2, awaiting: 1 }, None);
-	assert_eq!(w.flow.close(CloseHow { ask: false, reattach: false }).await, CloseOutcome::Stopped);
+	assert_eq!(w.flow.close(CloseHow { ask: false }).await, CloseOutcome::Stopped);
 	assert!(locked(&w.asked).is_empty());
 	assert_eq!(w.stops.load(Ordering::SeqCst), 1);
 }
@@ -102,9 +84,9 @@ async fn closing_without_asking_stops_everything_whatever_is_at_work() {
 async fn a_working_or_awaiting_thread_asks_first_and_cancel_leaves_everything_running() {
 	let w = world(Counts { working: 1, awaiting: 0 }, Some(CANCEL));
 	assert_eq!(w.flow.close(asking()).await, CloseOutcome::Kept);
-	// The quit action asks where he is: no new terminal, and no notification (`from_key`).
+	// The quit action asks where he is, with no notification (`from_key`).
 	assert_eq!(*locked(&w.asked), [(ASKED.to_owned(), true)]);
-	assert_eq!(w.reattached.load(Ordering::SeqCst), 0);
+	assert_eq!(w.stops.load(Ordering::SeqCst), 0);
 	assert_eq!(w.stops.load(Ordering::SeqCst), 0);
 	// Kept: a later close asks again.
 	assert_eq!(w.flow.close(asking()).await, CloseOutcome::Kept);
@@ -112,14 +94,13 @@ async fn a_working_or_awaiting_thread_asks_first_and_cancel_leaves_everything_ru
 }
 
 #[tokio::test]
-async fn stop_everything_stops_and_a_closed_terminal_opens_one_for_the_question_with_a_notification() {
+async fn stop_everything_stops_after_the_question() {
 	let w = world(Counts { working: 0, awaiting: 2 }, Some(STOP));
-	assert_eq!(w.flow.close(CloseHow { ask: true, reattach: true }).await, CloseOutcome::Stopped);
+	assert_eq!(w.flow.close(asking()).await, CloseOutcome::Stopped);
 	assert_eq!(
 		*locked(&w.asked),
-		[("Stop 2 threads awaiting you? They pick up where they left off next time.".to_owned(), false)]
+		[("Stop 2 threads awaiting you? They pick up where they left off next time.".to_owned(), true)]
 	);
-	assert_eq!(w.reattached.load(Ordering::SeqCst), 1);
 	assert_eq!(w.stops.load(Ordering::SeqCst), 1);
 }
 
@@ -153,25 +134,4 @@ async fn a_stop_under_way_is_waited_for_and_asks_nothing() {
 	assert_eq!(w.flow.close(asking()).await, CloseOutcome::Stopped);
 	assert!(locked(&w.asked).is_empty());
 	assert_eq!(w.stops.load(Ordering::SeqCst), 0);
-}
-
-#[tokio::test]
-async fn a_terminal_that_wont_open_is_logged_and_the_question_still_asks() {
-	let _j = crate::shared::testing::temp_jocasta();
-	let popups = Arc::new(Popups::new());
-	let flow = close_flow(CloseParts {
-		service: Arc::new(Busy(Mutex::new(Counts { working: 1, awaiting: 0 }))),
-		question: asker(popups.clone(), None),
-		stopping: Arc::new(|| None),
-		stop_all: Arc::new(|| async {}.boxed()),
-		reattach: Some(Arc::new(|| Err(Error::other("no wt")))),
-	});
-	let closing = tokio::spawn(async move { flow.close(CloseHow { ask: true, reattach: true }).await });
-	while popups.list().is_empty() {
-		tokio::task::yield_now().await;
-	}
-	let popup = popups.list().remove(0);
-	assert_eq!(popup.view().message, ASKED);
-	popups.answer(popup.code(), &json!({ "choice": CANCEL }));
-	assert_eq!(closing.await.unwrap(), CloseOutcome::Kept);
 }

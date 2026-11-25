@@ -1,5 +1,5 @@
 //! `test/entry.test.ts` and the command's part of `test/shared/cli.test.ts`, as black-box tests of the built
-//! `jocasta` binary: each one starts it with roots of its own, never his real folders, and no omp, herdr or git on its
+//! `jocasta` binary: each one starts it with roots of its own, never his real folders, and no omp or git on its
 //! PATH (0637 gives the usage-error texts clap's format); the PTY test alone adds git's own folder.
 
 use std::io::{Read, Write};
@@ -9,13 +9,13 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// The message the thread and worktree commands give when no service runs (`NOT_RUNNING`).
 const NOT_RUNNING: &str = "Jocasta isn't running; start it with jocasta.";
 
-/// A folder of the test's own, removed when it ends. Under `/tmp` on Linux and macOS, with a short name: herdr's
-/// session sockets live in it, and a socket's path must stay under 104 bytes (macOS's temp dir alone is about 50).
+/// A folder of the test's own, removed when it ends. Under `/tmp` on Linux and macOS, with a short name: the bridge's
+/// socket lives under the data folder, and a socket's path must stay under 104 bytes (macOS's temp dir alone is about 50).
 struct Sandbox(PathBuf);
 
 impl Sandbox {
@@ -31,7 +31,7 @@ impl Sandbox {
 		&self.0
 	}
 
-	/// `jocasta` with every root in the sandbox, and a PATH holding nothing: omp, herdr, mise and git are never found, as
+	/// `jocasta` with every root in the sandbox, and a PATH holding nothing: omp, mise and git are never found, as
 	/// on a CI runner.
 	fn jocasta(&self, args: &[&str]) -> Command {
 		self.command(Path::new(env!("CARGO_BIN_EXE_jocasta")), args)
@@ -67,20 +67,8 @@ impl Sandbox {
 	}
 }
 
-/// What the sandbox's `jocasta` never inherits: a live check's session, a pane's key, the calendar's secret, and,
-/// inside one of herdr's panes, what would point the fork at that herdr.
-const UNSET: [&str; 10] = [
-	"JOCASTA_HERDR_SESSION",
-	"JOCASTA_PANE_KEY",
-	"JOCASTA_CALENDAR_ICAL_SECRET",
-	"JOCASTA_SERVICE",
-	"HERDR_SOCKET_PATH",
-	"HERDR_CLIENT_SOCKET_PATH",
-	"HERDR_SESSION",
-	"HERDR_ENV",
-	"HERDR_CONFIG_PATH",
-	"HERDR_PANE_ID",
-];
+/// What the sandbox's `jocasta` never inherits: a pane's key and the calendar's secret.
+const UNSET: [&str; 2] = ["JOCASTA_PANE_KEY", "JOCASTA_CALENDAR_ICAL_SECRET"];
 
 impl Drop for Sandbox {
 	fn drop(&mut self) {
@@ -141,15 +129,11 @@ fn run(sandbox: &Sandbox, args: &[&str]) -> Out {
 }
 
 #[test]
-fn version_names_jocasta_omp_and_herdr() {
+fn version_names_jocasta_omp() {
 	let sandbox = Sandbox::new();
 	let out = run(&sandbox, &["--version"]);
 	assert_eq!(out.code, Some(0), "{}", out.stderr);
-	// herdr is built in: its version is the fork's, whatever is installed.
-	assert_eq!(
-		out.stdout.trim(),
-		format!("jocasta {} (omp not found, herdr {})", env!("CARGO_PKG_VERSION"), herdr::embed::version())
-	);
+	assert_eq!(out.stdout.trim(), format!("jocasta {} (omp not found)", env!("CARGO_PKG_VERSION")));
 }
 
 #[test]
@@ -178,11 +162,9 @@ fn help_goes_to_stdout_and_exits_0_without_the_internal_words() {
 	for word in ["setup", "uninstall", "diagnose", "project", "thread", "worktree", "--version"] {
 		assert!(out.stdout.contains(word), "{word} missing from {}", out.stdout);
 	}
-	for hidden in ["push-hook", "pane-sleep", "\n  plugin "] {
+	for hidden in ["push-hook", "\n  plugin "] {
 		assert!(!out.stdout.contains(hidden), "{hidden} in {}", out.stdout);
 	}
-	// herdr's commands, built in, are named after Jocasta's own.
-	assert!(out.stdout.contains("herdr's commands, built in"), "{}", out.stdout);
 }
 
 #[test]
@@ -250,131 +232,6 @@ fn jocasta_setup_ends_after_its_last_answer_while_its_console_stays_open_as_a_te
 	assert!(stdout.join().expect("stdout").contains("Nothing written."));
 }
 
-/// [`Sandbox::jocasta`] in herdr session `t` with the machine's PATH: a server's panes and plugins start shells.
-fn herdr_t(sandbox: &Sandbox, args: &[&str]) -> Command {
-	let mut command = sandbox.jocasta(&[&["--session", "t"][..], args].concat());
-	if let Some(path) = std::env::var_os("PATH") {
-		command.env("PATH", &path).env("Path", path);
-	}
-	command
-}
-
-/// A herdr server in session `t`, stopped (and waited for) when dropped.
-struct HerdrServer<'a> {
-	sandbox: &'a Sandbox,
-	child: Option<Child>,
-}
-
-impl<'a> HerdrServer<'a> {
-	/// Starts `jocasta --session t server` and waits until `pane list` answers.
-	fn start(sandbox: &'a Sandbox) -> Self {
-		let child = herdr_t(sandbox, &["server"])
-			.stdout(Stdio::null())
-			.stderr(Stdio::null())
-			.spawn()
-			.expect("starting jocasta server");
-		let server = Self { sandbox, child: Some(child) };
-		let deadline = Instant::now() + Duration::from_secs(30);
-		while finish(herdr_t(sandbox, &["pane", "list"]).spawn().expect("jocasta pane list"), 30).code != Some(0) {
-			assert!(Instant::now() < deadline, "the server never answered");
-			thread::sleep(Duration::from_millis(100));
-		}
-		server
-	}
-}
-
-impl Drop for HerdrServer<'_> {
-	/// Stops the server and waits up to 30 s for it, killing it after; never panics (it may run while a test unwinds).
-	fn drop(&mut self) {
-		if let Ok(stop) = herdr_t(self.sandbox, &["server", "stop"]).spawn() {
-			let _ = finish(stop, 30);
-		}
-		if let Some(mut child) = self.child.take() {
-			let deadline = Instant::now() + Duration::from_secs(30);
-			while matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {
-				thread::sleep(Duration::from_millis(50));
-			}
-			let _ = child.kill();
-			let _ = child.wait();
-		}
-	}
-}
-
-#[test]
-fn a_herdr_word_without_its_server_prints_herdrs_server_not_running_and_exits_1() {
-	let sandbox = Sandbox::new();
-	let out = run(&sandbox, &["pane", "list"]);
-	assert_eq!(out.code, Some(1), "{}{}", out.stdout, out.stderr);
-	assert!(format!("{}{}", out.stdout, out.stderr).contains("server_not_running"), "{}{}", out.stdout, out.stderr);
-	// herdr's files live in Jocasta's data dir, not herdr's own.
-	assert!(!sandbox.path().join(".config").join("herdr").exists());
-}
-
-#[test]
-fn herdrs_help_is_herdrs_and_its_version_flag_names_herdrs_version() {
-	let sandbox = Sandbox::new();
-	let help = run(&sandbox, &["workspace", "--help"]);
-	assert_eq!(help.code, Some(0), "{}", help.stderr);
-	assert!(help.stdout.contains("workspace"), "{}", help.stdout);
-	assert!(!help.stdout.contains("Usage: jocasta [COMMAND]"), "{}", help.stdout);
-	let version = run(&sandbox, &["-V"]);
-	assert_eq!(version.code, Some(0), "{}", version.stderr);
-	assert!(version.stdout.contains(&herdr::embed::version()), "{}", version.stdout);
-}
-
-#[test]
-fn a_herdr_server_in_a_named_session_answers_jocastas_pane_list_and_its_plugins_reach_it_through_herdr_bin_path() {
-	let sandbox = Sandbox::new();
-	let server = HerdrServer::start(&sandbox);
-	let panes = finish(herdr_t(&sandbox, &["pane", "list"]).spawn().expect("jocasta pane list"), 30);
-	let answer: Value = serde_json::from_str(&panes.stdout).expect("pane list's JSON");
-	assert!(answer.get("error").is_none(), "{answer}");
-
-	// A plugin whose action runs `$HERDR_BIN_PATH pane list`: herdr gives it the running `jocasta`.
-	let plugin = sandbox.path().join("plugin");
-	std::fs::create_dir_all(&plugin).expect("making the plugin");
-	let command: Vec<String> = if cfg!(windows) {
-		let shell = std::env::var("COMSPEC").unwrap_or_else(|_| "C:\\Windows\\System32\\cmd.exe".into());
-		vec![shell, "/d".into(), "/c".into(), "%HERDR_BIN_PATH% pane list > out.json".into()]
-	} else {
-		vec!["/bin/sh".into(), "-c".into(), "\"$HERDR_BIN_PATH\" pane list > out.json".into()]
-	};
-	let manifest = format!(
-		"id = \"example.entry\"\nname = \"Entry\"\nversion = \"0.1.0\"\nmin_herdr_version = \"0.6.10\"\n\
-		 platforms = [\"linux\", \"macos\", \"windows\"]\n\n[[actions]]\nid = \"panes\"\ntitle = \"Panes\"\ncommand = {}\n",
-		serde_json::to_string(&command).expect("the command as TOML")
-	);
-	std::fs::write(plugin.join("herdr-plugin.toml"), manifest).expect("writing the manifest");
-	let plugin_arg = plugin.to_string_lossy().into_owned();
-	let link = finish(herdr_t(&sandbox, &["plugin", "link", &plugin_arg]).spawn().expect("plugin link"), 30);
-	assert_eq!(link.code, Some(0), "{}{}", link.stdout, link.stderr);
-	let invoke = finish(
-		herdr_t(&sandbox, &["plugin", "action", "invoke", "panes", "--plugin", "example.entry"])
-			.spawn()
-			.expect("plugin action invoke"),
-		30,
-	);
-	assert_eq!(invoke.code, Some(0), "{}{}", invoke.stdout, invoke.stderr);
-	let deadline = Instant::now() + Duration::from_secs(30);
-	let seen = loop {
-		let text = std::fs::read_to_string(plugin.join("out.json")).unwrap_or_default();
-		if let Ok(seen) = serde_json::from_str::<Value>(&text) {
-			break seen;
-		}
-		assert!(Instant::now() < deadline, "the action never wrote pane list's answer: {text:?}");
-		thread::sleep(Duration::from_millis(100));
-	};
-	assert_eq!(seen, answer);
-	drop(server);
-}
-
-/// [`Sandbox::jocasta`] in herdr session `name`, as bare `jocasta` would run it (`JOCASTA_HERDR_SESSION`).
-fn in_session(sandbox: &Sandbox, name: &str, args: &[&str]) -> Command {
-	let mut command = sandbox.jocasta(&[&["--session", name][..], args].concat());
-	command.env("JOCASTA_HERDR_SESSION", name);
-	command
-}
-
 /// Waits up to `seconds` for `done`; whether it came.
 fn waited(seconds: u64, mut done: impl FnMut() -> bool) -> bool {
 	let deadline = Instant::now() + Duration::from_secs(seconds);
@@ -390,12 +247,6 @@ fn waited(seconds: u64, mut done: impl FnMut() -> bool) -> bool {
 /// Waits up to `seconds` for `done`, failing with `what`.
 fn wait_until(seconds: u64, what: &str, done: impl FnMut() -> bool) {
 	assert!(waited(seconds, done), "{what}");
-}
-
-/// Whether session `name`'s herdr lists a workspace labelled "Jocasta".
-fn has_jocastas_workspace(sandbox: &Sandbox, name: &str) -> bool {
-	let out = finish(in_session(sandbox, name, &["workspace", "list"]).spawn().expect("workspace list"), 30);
-	out.stdout.contains("\"Jocasta\"")
 }
 
 /// A stand-in omp on the sandbox's PATH, built with the toolchain's own rustc (Windows runs a bare `omp` only as an
@@ -460,7 +311,7 @@ fn leftover_worktree(sandbox: &Sandbox) -> PathBuf {
 	left
 }
 
-/// Bare `jocasta` in a terminal of its own (120×40), as he runs it; its output is kept, so herdr's client never
+/// Bare `jocasta` in a terminal of its own (120×40), as he runs it; its output is kept, so the shell never
 /// blocks on it, and its tail names a failure.
 struct Terminal {
 	client: Box<dyn portable_pty::Child + Send + Sync>,
@@ -470,8 +321,8 @@ struct Terminal {
 }
 
 impl Terminal {
-	/// Bare `jocasta` in session `session`; `also_on_path` joins the sandbox's PATH after its own `bin`.
-	fn bare(sandbox: &Sandbox, session: &str, also_on_path: Option<&Path>) -> Self {
+	/// Bare `jocasta`; `also_on_path` joins the sandbox's PATH after its own `bin`.
+	fn bare(sandbox: &Sandbox, also_on_path: Option<&Path>) -> Self {
 		use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 		let pair = native_pty_system()
@@ -490,14 +341,7 @@ impl Terminal {
 		for name in UNSET {
 			bare.env_remove(name);
 		}
-		bare.env("JOCASTA_HERDR_SESSION", session);
 		bare.env("TERM", "xterm-256color");
-		// herdr's default workspace closes only while its shell shows one prompt line (0495): a plain `sh`, not a bash
-		// that greets with a sudo hint (Ubuntu) or a zsh notice (macOS).
-		if cfg!(unix) {
-			bare.env("SHELL", "/bin/sh");
-			bare.env("BASH_SILENCE_DEPRECATION_WARNING", "1");
-		}
 		let client = pair.slave.spawn_command(bare).expect("starting bare jocasta");
 		drop(pair.slave);
 		let mut screen = pair.master.try_clone_reader().expect("the terminal's output");
@@ -523,12 +367,28 @@ impl Terminal {
 		terminal
 	}
 
+	/// His window closes: the pseudo console goes, as a terminal's does, and Jocasta ends on its own, the service and
+	/// every pane's process (`roots`) with it. A kill would leave it no chance to clean up.
+	fn close(self, sandbox: &Sandbox, roots: &[u32]) {
+		let Self { mut client, keys, _master, .. } = self;
+		drop(keys);
+		drop(_master);
+		let service_file = sandbox.path().join("data").join("jocasta-service.json");
+		wait_until(90, "Jocasta never closed", || !service_file.exists());
+		wait_until(30, "Jocasta's process outlived its window", || matches!(client.try_wait(), Ok(Some(_))));
+		for root in roots {
+			wait_until(30, &format!("pane process {root} outlived Jocasta"), || {
+				!jocasta::shared::proctree::pid_alive(*root)
+			});
+		}
+	}
+
 	fn has(&self, bytes: &[u8]) -> bool {
 		self.shown.lock().expect("the screen").windows(bytes.len()).any(|window| window == bytes)
 	}
 
 	/// The terminal's 40 rows of 120 cells as drawn so far: text written at the cursor, which `CSI row;col H`, `CSI n C`
-	/// and CR/LF move (herdr's client skips unchanged cells with `CSI n C`); other sequences are skipped.
+	/// and CR/LF move (the shell's redraw skips unchanged cells with `CSI n C`); other sequences are skipped.
 	fn screen(&self) -> Vec<String> {
 		let shown = self.shown.lock().expect("the screen");
 		let text = String::from_utf8_lossy(&shown);
@@ -593,7 +453,7 @@ impl Terminal {
 	}
 
 	/// What a failure shows: the terminal's tail, whether the client still runs, and the sandbox's logs.
-	fn report(&mut self, sandbox: &Sandbox, session: &str) -> String {
+	fn report(&mut self, sandbox: &Sandbox) -> String {
 		let screen = {
 			let shown = self.shown.lock().expect("the screen");
 			String::from_utf8_lossy(&shown[shown.len().saturating_sub(2_000)..]).into_owned()
@@ -602,17 +462,18 @@ impl Terminal {
 		format!(
 			"client {:?}; the screen:\n{drawn}\nthe terminal: {screen:?}\n{}",
 			self.client.try_wait(),
-			logs(sandbox, session)
+			logs(sandbox)
 		)
 	}
 }
 
-/// The sandbox's Jocasta logs and herdr session `session`'s, for a failure's message.
-fn logs(sandbox: &Sandbox, session: &str) -> String {
-	let data = sandbox.path().join("data");
-	let logs: Vec<String> = [data.join("logs"), data.join("herdr").join("sessions").join(session)]
-		.iter()
-		.flat_map(|dir| std::fs::read_dir(dir).into_iter().flatten().flatten())
+/// The sandbox's Jocasta logs, for a failure's message.
+fn logs(sandbox: &Sandbox) -> String {
+	let dir = sandbox.path().join("data").join("logs");
+	let logs: Vec<String> = std::fs::read_dir(dir)
+		.into_iter()
+		.flatten()
+		.flatten()
 		.filter(|entry| entry.path().extension().is_some_and(|ext| ext == "log"))
 		.map(|entry| {
 			format!("{}:\n{}", entry.path().display(), std::fs::read_to_string(entry.path()).unwrap_or_default())
@@ -621,30 +482,27 @@ fn logs(sandbox: &Sandbox, session: &str) -> String {
 	logs.join("\n")
 }
 
-/// One test: the failed start and the working one share a sandbox and its herdr sessions.
+/// One test: the failed start and the working one share a sandbox. Bare `jocasta` is one process, the service and the
+/// shell together (0683): a start that can't finish ends it saying why, and closing the window ends the service.
 #[test]
-fn bare_jocasta_runs_the_service_in_herdrs_server_one_that_cant_start_ends_it_saying_why_closing_his_terminal_closes_jocasta_a_plain_server_runs_none_0549_0582()
- {
+fn bare_jocasta_is_one_process_one_that_cant_start_ends_saying_why_closing_his_terminal_closes_jocasta_0549_0582_0683()
+{
 	let sandbox = Sandbox::new();
 	let service_file = sandbox.path().join("data").join("jocasta-service.json");
 
-	// No omp on PATH: the service can't start, so herdr's server stops, and bare `jocasta` says why and exits 1.
-	// The boss's home can't be written (a file holds the name of its `.omp` folder), so the boss, and with it the service,
-	// can't start.
+	// The boss's home can't be written (a file holds the name of its `.omp` folder), so the boss, and with it the
+	// service, can't start: bare `jocasta` says why and exits 1.
 	let boss_home = sandbox.path().join("data").join("home");
 	std::fs::create_dir_all(&boss_home).expect("the boss's home");
 	std::fs::write(boss_home.join(".omp"), "").expect("the blocker");
-	let mut first = Terminal::bare(&sandbox, "f", None);
+	let mut first = Terminal::bare(&sandbox, None);
 	let ended = waited(90, || matches!(first.client.try_wait(), Ok(Some(_))));
-	assert!(ended, "herdr's client outlived a service that didn't start; {}", first.report(&sandbox, "f"));
+	assert!(ended, "jocasta outlived a service that didn't start; {}", first.report(&sandbox));
 	let code = first.client.wait().expect("the client's exit").exit_code();
-	assert_eq!(code, 1, "{}", first.report(&sandbox, "f"));
+	assert_eq!(code, 1, "{}", first.report(&sandbox));
 	let said = waited(10, || first.has(b"Jocasta stopped while starting"));
-	assert!(said, "{}", first.report(&sandbox, "f"));
+	assert!(said, "{}", first.report(&sandbox));
 	assert!(!service_file.exists(), "a service file outlived a failed start");
-	wait_until(30, "herdr's server outlived the failed start", || {
-		finish(in_session(&sandbox, "f", &["pane", "list"]).spawn().expect("pane list"), 30).code == Some(1)
-	});
 	drop(first);
 	std::fs::remove_file(boss_home.join(".omp")).expect("the blocker goes");
 
@@ -661,211 +519,142 @@ fn bare_jocasta_runs_the_service_in_herdrs_server_one_that_cant_start_ends_it_sa
 		30,
 	);
 	assert_eq!(added.code, Some(0), "{}{}", added.stdout, added.stderr);
-	let mut terminal = Terminal::bare(&sandbox, "p", Some(&git_dir));
-	assert!(waited(90, || service_file.exists()), "the service never listened; {}", terminal.report(&sandbox, "p"));
-	wait_until(90, "the service never made workspace Jocasta", || has_jocastas_workspace(&sandbox, "p"));
-	assert!(matches!(terminal.client.try_wait(), Ok(None)), "herdr's client ended");
-	// herdr's client draws the dock in the boss's workspace.
+	let mut terminal = Terminal::bare(&sandbox, Some(&git_dir));
+	assert!(waited(90, || service_file.exists()), "the service never listened; {}", terminal.report(&sandbox));
+	assert!(matches!(terminal.client.try_wait(), Ok(None)), "jocasta ended");
+	// The shell draws the dock in the boss's workspace.
 	let docked = waited(60, || terminal.screen().iter().any(|line| line.contains("NEEDS YOU")));
-	assert!(docked, "the dock never showed; {}", terminal.report(&sandbox, "p"));
+	assert!(docked, "the dock never showed; {}", terminal.report(&sandbox));
 	// `jocasta worktree remove` waits for his Allow; the question is drawn in his terminal, its code read off it.
 	let mut remove =
 		sandbox.jocasta(&["worktree", "remove", &leftover.display().to_string()]).spawn().expect("worktree remove");
 	let asked = waited(60, || terminal.code().is_some() || matches!(remove.try_wait(), Ok(Some(_))));
 	if matches!(remove.try_wait(), Ok(Some(_))) {
 		let out = finish(remove, 5);
-		panic!("worktree remove ended unasked: {}{}; {}", out.stdout, out.stderr, terminal.report(&sandbox, "p"));
+		panic!("worktree remove ended unasked: {}{}; {}", out.stdout, out.stderr, terminal.report(&sandbox));
 	}
-	assert!(asked, "no question with a code showed; {}", terminal.report(&sandbox, "p"));
+	assert!(asked, "no question with a code showed; {}", terminal.report(&sandbox));
 	let code = terminal.code().expect("the code");
 	// The question ignores keys for its first 750 ms (0578).
 	thread::sleep(Duration::from_millis(1_500));
 	terminal.type_text(&code.to_lowercase());
 	let answered = waited(60, || matches!(remove.try_wait(), Ok(Some(_))));
-	assert!(answered, "worktree remove still waits after the code {code}; {}", terminal.report(&sandbox, "p"));
+	assert!(answered, "worktree remove still waits after the code {code}; {}", terminal.report(&sandbox));
 	let removed = finish(remove, 5);
-	assert_eq!(removed.code, Some(0), "{}{}; {}", removed.stdout, removed.stderr, terminal.report(&sandbox, "p"));
+	assert_eq!(removed.code, Some(0), "{}{}; {}", removed.stdout, removed.stderr, terminal.report(&sandbox));
 	assert!(!leftover.exists(), "the leftover worktree stayed after his Allow");
-	// A plain server of another session runs no service: it answers, and the service file still names the first.
-	let named = std::fs::read_to_string(&service_file)
-		.unwrap_or_else(|error| panic!("the service file: {error}; {}", terminal.report(&sandbox, "p")));
-	let plain = HerdrServer::start(&sandbox);
-	assert!(!has_jocastas_workspace(&sandbox, "t"));
-	drop(plain);
-	assert_eq!(std::fs::read_to_string(&service_file).expect("the service file"), named);
 
-	// His terminal closes: herdr's server sees its last client go, and with nothing at work Jocasta stops as one.
-	terminal.client.kill().expect("closing the terminal");
-	drop(terminal);
-	wait_until(90, "Jocasta never closed", || !service_file.exists());
-	wait_until(30, "herdr's server outlived Jocasta", || {
-		finish(in_session(&sandbox, "p", &["pane", "list"]).spawn().expect("pane list"), 30).code == Some(1)
-	});
-
-	// A server started headless with `JOCASTA_SERVICE=1` runs it too, and `server stop` ends both.
-	let mut server = in_session(&sandbox, "s", &["server"])
-		.env("JOCASTA_SERVICE", "1")
-		.stdout(Stdio::null())
-		.stderr(Stdio::null())
-		.spawn()
-		.expect("starting jocasta server");
-	wait_until(90, "the service never listened", || service_file.exists());
-	wait_until(90, "the service never made workspace Jocasta", || has_jocastas_workspace(&sandbox, "s"));
-	let stop = finish(in_session(&sandbox, "s", &["server", "stop"]).spawn().expect("server stop"), 30);
-	assert_eq!(stop.code, Some(0), "{}{}", stop.stdout, stop.stderr);
-	wait_until(90, "the server process never ended", || matches!(server.try_wait(), Ok(Some(_))));
-	assert!(!service_file.exists(), "the service's file outlived it");
+	// His terminal window closes: Jocasta ends on its own and takes every pane's process with it.
+	let roots = pane_roots(&sandbox);
+	assert!(!roots.is_empty(), "the boss's pane has no process; {}", terminal.report(&sandbox));
+	terminal.close(&sandbox, &roots);
 }
 
-/// The value at `pointer` in herdr's answer, with or without its `result` envelope.
-fn answered<'a>(answer: &'a Value, pointer: &str) -> Option<&'a str> {
-	answer.pointer(&format!("/result{pointer}")).or_else(|| answer.pointer(pointer)).and_then(Value::as_str)
+/// Runs a `jocasta` word that may ask for his Allow in the terminal: a new code on screen is typed back (after the
+/// question's 750 ms of ignored keys, 0578), until the word ends. `last` is the code typed before, which stays drawn.
+fn allowed(sandbox: &Sandbox, terminal: &mut Terminal, last: &mut Option<String>, args: &[&str]) -> Out {
+	let mut child = sandbox.jocasta(args).spawn().expect("a jocasta word");
+	let deadline = Instant::now() + Duration::from_secs(90);
+	while Instant::now() < deadline && matches!(child.try_wait(), Ok(None)) {
+		if let Some(code) = terminal.code().filter(|code| last.as_ref() != Some(code)) {
+			thread::sleep(Duration::from_millis(1_500));
+			terminal.type_text(&code.to_lowercase());
+			*last = Some(code);
+		}
+		thread::sleep(Duration::from_millis(200));
+	}
+	finish(child, 10)
 }
 
-/// A served session with a project whose worktree runs a stand-in omp, found as a thread: the server, the omp's pane
-/// and its workspace. The relay's fixed port allows one service at a time, so `mise run smoke` runs one test at once.
-struct Smoke<'a> {
-	sandbox: &'a Sandbox,
-	session: &'static str,
-	server: Ends,
-	pane: String,
-	workspace: String,
+/// The pid of every pane's process, as the service's `panes` command lists them.
+fn pane_roots(sandbox: &Sandbox) -> Vec<u32> {
+	panes(sandbox).iter().filter_map(|pane| pane["root"].as_u64().and_then(|root| u32::try_from(root).ok())).collect()
 }
 
-impl<'a> Smoke<'a> {
-	fn start(sandbox: &'a Sandbox, session: &'static str) -> Self {
-		let service_file = sandbox.path().join("data").join("jocasta-service.json");
-		fake_omp(sandbox);
-		let git_dir = git_folder();
-		let path = std::env::join_paths([sandbox.path().join("bin").as_path(), &git_dir]).expect("a PATH");
-		let worktree = leftover_worktree(sandbox);
-		let main = sandbox.path().join("code").join("demo");
-		let added = finish(
-			sandbox
-				.jocasta(&["project", "add", &main.display().to_string()])
-				.env("PATH", &path)
-				.spawn()
-				.expect("project add"),
-			30,
-		);
-		assert_eq!(added.code, Some(0), "{}{}", added.stdout, added.stderr);
-		let server = in_session(sandbox, session, &["server"])
-			.env("JOCASTA_SERVICE", "1")
-			.env("PATH", &path)
-			.env("Path", &path)
-			.stdout(Stdio::null())
-			.stderr(Stdio::null())
-			.spawn()
-			.expect("starting jocasta server");
-		let server = Ends(server);
-		wait_until(90, "the service never listened", || service_file.exists());
-		wait_until(90, "the service never made workspace Jocasta", || has_jocastas_workspace(sandbox, session));
-		let mut smoke = Self { sandbox, session, server, pane: String::new(), workspace: String::new() };
-		assert_eq!(smoke.threads().trim(), "No threads.");
-
-		let cwd = worktree.display().to_string();
-		let made = smoke.herdr(&["workspace", "create", "--cwd", &cwd, "--label", "left"]);
-		let made: Value = serde_json::from_str(&made.stdout)
-			.unwrap_or_else(|_| panic!("herdr's answer: {}{}", made.stdout, made.stderr));
-		smoke.pane =
-			answered(&made, "/root_pane/pane_id").unwrap_or_else(|| panic!("no root pane in {made}")).to_owned();
-		smoke.workspace =
-			answered(&made, "/workspace/workspace_id").unwrap_or_else(|| panic!("no workspace in {made}")).to_owned();
-		let omp = sandbox.path().join("bin").join(format!("omp{}", std::env::consts::EXE_SUFFIX)).display().to_string();
-		// `pane run` types the command into the pane's shell (PowerShell on Windows), and the sandbox path may hold spaces.
-		let omp = if cfg!(windows) { format!("& '{omp}'") } else { format!("'{omp}'") };
-		let pane = smoke.pane.clone();
-		let ran = smoke.herdr(&["pane", "run", &pane, &omp]);
-		assert_eq!(ran.code, Some(0), "{}{}", ran.stdout, ran.stderr);
-		let found = waited(20, || smoke.thread().is_some());
-		assert!(found, "the omp pane in the worktree never became a thread: {}", smoke.report());
-		smoke
-	}
-
-	/// A herdr word in the smoke's session.
-	fn herdr(&self, args: &[&str]) -> Out {
-		finish(in_session(self.sandbox, self.session, args).spawn().expect("a herdr word"), 30)
-	}
-
-	fn threads(&self) -> String {
-		finish(self.sandbox.jocasta(&["thread", "list"]).spawn().expect("thread list"), 30).stdout
-	}
-
-	/// The first thread's name in a `thread list` that answered (exit 0), or `None` while it lists none or doesn't
-	/// answer; the rest of its line (time, spend) changes from one call to the next.
-	fn thread(&self) -> Option<String> {
-		let listed = finish(self.sandbox.jocasta(&["thread", "list"]).spawn().expect("thread list"), 30);
-		let name = listed.stdout.split_whitespace().next()?;
-		(listed.code == Some(0) && listed.stdout.trim() != "No threads.").then(|| name.to_owned())
-	}
-
-	fn report(&self) -> String {
-		let panes = self.herdr(&["pane", "list"]).stdout;
-		format!("{}\nherdr's panes: {panes}\n{}", self.threads(), logs(self.sandbox, self.session))
-	}
-
-	/// `server stop`; the server process it started has ended (at once after a handoff), and so has the service.
-	fn stop(&mut self) {
-		let stop = self.herdr(&["server", "stop"]);
-		assert_eq!(stop.code, Some(0), "{}{}", stop.stdout, stop.stderr);
-		let service_file = self.sandbox.path().join("data").join("jocasta-service.json");
-		let server = &mut self.server.0;
-		wait_until(90, "the server never ended", || matches!(server.try_wait(), Ok(Some(_))) && !service_file.exists());
-	}
+/// The service's panes, each as the `panes` command's object.
+fn panes(sandbox: &Sandbox) -> Vec<Value> {
+	let listed = cli(sandbox, "panes", json!({})).expect("the panes command");
+	serde_json::from_str::<Value>(&listed).ok().and_then(|list| list.as_array().cloned()).expect("a list of panes")
 }
 
-/// The opt-in smoke on a real server (`mise run smoke`, `JOCASTA_HERDR_SMOKE=1`): herdr's events reach the service, so
-/// an omp started in a project's worktree is a thread within seconds and its closed workspace drops it, long before the
-/// minute's full refresh (fork plan finding 8).
+/// One `cli` command of the sandbox's running service on its bridge, as the `jocasta thread` words make it (`panes`
+/// and `pane_text` have no word of their own); the answer's text, or the error's.
+fn cli(sandbox: &Sandbox, command: &str, args: Value) -> Result<String, String> {
+	use jocasta::shared::bridge_wire::CliPeer;
+
+	let file = std::fs::read_to_string(sandbox.path().join("data").join("jocasta-service.json"))
+		.map_err(|error| format!("no service file: {error}"))?;
+	let file: Value = serde_json::from_str(&file).map_err(|error| error.to_string())?;
+	let port = file["port"].as_u64().and_then(|port| u16::try_from(port).ok()).ok_or("the file has no port")?;
+	let token = file["token"].as_str().ok_or("the file has no token")?.to_owned();
+	let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+	runtime.block_on(async move {
+		let mut peer = CliPeer::open(port, &token).await.map_err(|error| error.to_string())?;
+		let reply = peer
+			.request(json!({ "t": "cli", "command": command, "args": args }))
+			.await
+			.map_err(|error| error.to_string())?;
+		if reply.get("ok").and_then(Value::as_bool) == Some(false) {
+			return Err(reply["error"].as_str().unwrap_or_default().to_owned());
+		}
+		Ok(reply["text"].as_str().unwrap_or_default().to_owned())
+	})
+}
+
+/// The opt-in smoke on this machine (`mise run smoke`, `JOCASTA_HERDR_SMOKE=1`, the variable's name kept): a thread
+/// started from the command line (through his Allow in the terminal) gets a pane of its own in a worktree, which the
+/// service lists and reads through the bridge; closing the window ends every pane's process, the thread's too (0683;
+/// the old smoke's omp found as a thread on herdr's events).
 #[test]
-fn live_smoke_an_omp_pane_in_a_worktree_is_found_and_dropped_on_herdrs_events() {
-	if std::env::var("JOCASTA_HERDR_SMOKE").as_deref() != Ok("1") {
-		return;
-	}
-	let sandbox = Sandbox::new();
-	let mut smoke = Smoke::start(&sandbox, "l");
-	let workspace = smoke.workspace.clone();
-	let closed = smoke.herdr(&["workspace", "close", &workspace]);
-	assert_eq!(closed.code, Some(0), "{}{}", closed.stdout, closed.stderr);
-	let dropped = waited(20, || smoke.threads().trim() == "No threads.");
-	assert!(dropped, "the closed thread stayed: {}", smoke.report());
-	smoke.stop();
-}
-
-/// The opt-in smoke of an upgrade on Linux and macOS (0649): herdr's live handoff moves the panes to a new server
-/// process, the old one ends, and the service starts again in the new one and finds the same thread there, its omp
-/// never stopped.
-#[cfg(unix)]
-#[test]
-fn live_smoke_a_live_handoff_keeps_a_threads_pane_and_the_service_starts_again_in_the_new_server() {
+fn live_smoke_a_thread_gets_a_pane_the_service_reads_and_the_windows_close_ends_every_process() {
 	if std::env::var("JOCASTA_HERDR_SMOKE").as_deref() != Ok("1") {
 		return;
 	}
 	let sandbox = Sandbox::new();
 	let service_file = sandbox.path().join("data").join("jocasta-service.json");
-	let mut smoke = Smoke::start(&sandbox, "h");
-	let thread = smoke.thread().expect("the thread before the handoff");
-	let before = std::fs::read_to_string(&service_file).expect("the service file");
-	let handoff = smoke.herdr(&["server", "live-handoff"]);
-	assert_eq!(handoff.code, Some(0), "{}{}; {}", handoff.stdout, handoff.stderr, smoke.report());
-	assert!(handoff.stderr.contains("live handoff complete"), "{}", handoff.stderr);
-	let server = &mut smoke.server.0;
-	// The old server ends once its service has (its stop waits on herdr calls the handoff's loop answers late).
-	wait_until(90, "the old server outlived its handoff", || matches!(server.try_wait(), Ok(Some(_))));
-	let restarted = waited(90, || std::fs::read_to_string(&service_file).is_ok_and(|now| now != before));
-	assert!(restarted, "the service never started in the new server: {}", smoke.report());
-	let panes = smoke.herdr(&["pane", "list"]).stdout;
-	assert!(panes.contains(&smoke.pane), "the thread's pane didn't survive the handoff: {}", smoke.report());
-	let found = waited(60, || smoke.thread().as_ref() == Some(&thread));
-	assert!(found, "the new service never found thread {thread}: {}", smoke.report());
-	smoke.stop();
-}
+	fake_omp(&sandbox);
+	let git_dir = git_folder();
+	leftover_worktree(&sandbox);
+	let path = std::env::join_paths([sandbox.path().join("bin").as_path(), &git_dir]).expect("a PATH");
+	let main = sandbox.path().join("code").join("demo");
+	let added = finish(
+		sandbox
+			.jocasta(&["project", "add", &main.display().to_string()])
+			.env("PATH", &path)
+			.spawn()
+			.expect("project add"),
+		30,
+	);
+	assert_eq!(added.code, Some(0), "{}{}", added.stdout, added.stderr);
+	let mut terminal = Terminal::bare(&sandbox, Some(&git_dir));
+	assert!(waited(90, || service_file.exists()), "the service never listened; {}", terminal.report(&sandbox));
+	assert!(waited(60, || cli(&sandbox, "ping", json!({})).is_ok()), "no answer; {}", terminal.report(&sandbox));
+	assert!(waited(60, || !panes(&sandbox).is_empty()), "no boss pane; {}", terminal.report(&sandbox));
+	let before = panes(&sandbox);
+	let threads = |sandbox: &Sandbox| {
+		finish(sandbox.jocasta(&["thread", "list"]).spawn().expect("thread list"), 30).stdout.trim().to_owned()
+	};
+	assert_eq!(threads(&sandbox), "No threads.");
 
-/// A child process killed when the test ends, on a failure too.
-struct Ends(Child);
+	let mut last_code = None;
+	let started =
+		allowed(&sandbox, &mut terminal, &mut last_code, &["thread", "new", "demo", "say hi", "--title", "smoke"]);
+	assert_eq!(started.code, Some(0), "{}{}; {}", started.stdout, started.stderr, terminal.report(&sandbox));
+	let listed = waited(30, || threads(&sandbox) != "No threads.");
+	assert!(listed, "the thread never showed in the list; {}", terminal.report(&sandbox));
+	let grown = waited(30, || panes(&sandbox).len() > before.len());
+	assert!(grown, "the thread got no pane; {}", terminal.report(&sandbox));
+	let pane = panes(&sandbox)
+		.into_iter()
+		.find(|pane| !before.iter().any(|old| old["pane_id"] == pane["pane_id"]))
+		.expect("the thread's pane");
+	let id = pane["pane_id"].as_str().expect("its id").to_owned();
+	let root = pane["root"].as_u64().and_then(|root| u32::try_from(root).ok()).expect("its process");
+	assert!(jocasta::shared::proctree::pid_alive(root), "the thread's process isn't running");
+	cli(&sandbox, "pane_text", json!({ "pane": id })).expect("the pane's screen through the bridge");
 
-impl Drop for Ends {
-	fn drop(&mut self) {
-		let _ = self.0.kill();
-	}
+	// Closing the window ends the thread's pane process with the boss's: nothing outlives Jocasta.
+	let roots = pane_roots(&sandbox);
+	assert!(roots.contains(&root), "the thread's process isn't listed; {}", terminal.report(&sandbox));
+	terminal.close(&sandbox, &roots);
 }

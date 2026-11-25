@@ -18,7 +18,7 @@ use crate::frontier::protocol::{ServerMessage, ToastLevel, ToastPriority, ToastR
 use crate::frontier::server::bridge::Deliver;
 use crate::frontier::server::context::{BossRef, Calls, Link};
 use crate::frontier::server::day::AlertDetails;
-use crate::frontier::server::herdr::{AgentState, Note, NotificationResult, Sound, pane_text};
+use crate::frontier::server::surface::{AgentState, Note, NotificationResult, Sound, pane_text};
 use crate::frontier::server::thread::{ThreadRef, is_idle, settled, subject};
 use crate::frontier::server::wording::{cut, quoted};
 use crate::shared::clock::now_ms;

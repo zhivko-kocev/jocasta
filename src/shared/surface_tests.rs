@@ -1,6 +1,5 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::path::PathBuf;
 
 use super::*;
 use crate::shared::testing::{TempJocasta, temp_jocasta};
@@ -10,7 +9,6 @@ use crate::shared::testing::{TempJocasta, temp_jocasta};
 struct Fake {
 	states: RefCell<VecDeque<ServiceState>>,
 	last_error: Option<String>,
-	config: PathBuf,
 	printed: RefCell<Vec<String>>,
 }
 
@@ -25,10 +23,6 @@ impl SurfaceDeps for Fake {
 		self.last_error.clone()
 	}
 
-	fn herdr_config(&self) -> &Path {
-		&self.config
-	}
-
 	fn print(&self, line: &str) {
 		self.printed.borrow_mut().push(line.to_owned());
 	}
@@ -36,15 +30,8 @@ impl SurfaceDeps for Fake {
 	async fn sleep(&self, _ms: u64) {}
 }
 
-fn fake(j: &TempJocasta, states: &[ServiceState]) -> Fake {
-	let config = j.root().join("herdr.toml");
-	std::fs::write(&config, "").unwrap();
-	Fake {
-		states: RefCell::new(states.iter().copied().collect()),
-		last_error: None,
-		config,
-		printed: RefCell::default(),
-	}
+fn fake(_j: &TempJocasta, states: &[ServiceState]) -> Fake {
+	Fake { states: RefCell::new(states.iter().copied().collect()), last_error: None, printed: RefCell::default() }
 }
 
 #[tokio::test]
@@ -54,17 +41,6 @@ async fn a_service_that_is_closing_is_waited_for_after_saying_so_lc_3() {
 	before_surface(&f).await.unwrap();
 	assert_eq!(*f.printed.borrow(), ["jocasta: Jocasta is closing; it starts again once it has."]);
 	assert!(f.states.borrow().iter().all(|state| *state == ServiceState::Down));
-}
-
-#[tokio::test]
-async fn a_missing_herdr_toml_points_at_setup_and_the_client_still_attaches() {
-	let j = temp_jocasta();
-	let f = fake(&j, &[ServiceState::Down]);
-	std::fs::remove_file(&f.config).unwrap();
-	before_surface(&f).await.unwrap();
-	let printed = f.printed.borrow();
-	assert_eq!(printed.len(), 1);
-	assert!(printed[0].ends_with("is missing; run `jocasta setup` for Jocasta's herdr look."), "{printed:?}");
 }
 
 #[tokio::test]

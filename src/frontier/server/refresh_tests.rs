@@ -15,9 +15,9 @@ use super::*;
 use crate::frontier::protocol::ServerMessage;
 use crate::frontier::server::bridge::PaneAgent;
 use crate::frontier::server::context::{TestContext, test_context};
-use crate::frontier::server::herdr::AgentState::{Idle, Unknown, Working};
-use crate::frontier::server::herdr::WorkspaceInfo;
 use crate::frontier::server::service::ServiceOptions;
+use crate::frontier::server::surface::AgentState::{Idle, Unknown, Working};
+use crate::frontier::server::surface::WorkspaceInfo;
 use crate::shared::git::git;
 use crate::shared::pathkey::real_path;
 use crate::shared::paths::projects_file;
@@ -139,7 +139,7 @@ impl World {
 		to_boss.flat_map(|args| args[1].as_str().unwrap().lines().map(str::to_owned).collect::<Vec<_>>()).collect()
 	}
 
-	async fn snapshot(&self) -> HerdrSnapshot {
+	async fn snapshot(&self) -> SurfaceSnapshot {
 		self.t.ctx.herdr.snapshot().await.unwrap()
 	}
 
@@ -325,7 +325,7 @@ async fn a_thread_dropped_or_replaced_while_the_list_was_read_is_not_this_lists_
 	let old = w.t.with_thread("p-x", "Task A");
 	let tick = Tick {
 		read_at: 0,
-		snapshot: HerdrSnapshot::default(),
+		snapshot: SurfaceSnapshot::default(),
 		by_id: HashMap::new(),
 		known: vec![("p-x".to_owned(), old.clone())],
 	};
@@ -453,7 +453,7 @@ async fn discover_shows_a_working_pane_as_working_and_a_blocked_one_as_blocked()
 	w.r.discover(&w.snapshot().await).await.unwrap();
 	assert_eq!(w.t.ctx.threads.get("p-thread").unwrap().with(|t| t.shown), ThreadState::Working);
 	w.t.ctx.threads.drop_pane("p-thread");
-	w.t.herdr.set_state("p-thread", crate::frontier::server::herdr::AgentState::Blocked, None, false);
+	w.t.herdr.set_state("p-thread", crate::frontier::server::surface::AgentState::Blocked, None, false);
 	w.r.rediscover();
 	w.r.discover(&w.snapshot().await).await.unwrap();
 	assert_eq!(w.t.ctx.threads.get("p-thread").unwrap().with(|t| t.shown), ThreadState::Blocked);
@@ -667,7 +667,9 @@ impl World {
 		self.respawned()
 			.into_iter()
 			.map(|(pane, call)| (pane, command_of(&call)))
-			.filter(|(_, command)| command.iter().any(|word| word == "pane-sleep"))
+			.filter(|(_, command)| {
+				command.first().map(String::as_str) == Some(crate::frontier::server::surface::ASLEEP)
+			})
 			.collect()
 	}
 
@@ -709,7 +711,7 @@ async fn an_idle_project_pane_sleeps_after_the_idle_minutes_and_a_key_brings_the
 	let command = command_of(&woken.1);
 	let at = command.iter().position(|word| word == "--restore").expect("omp restores the session");
 	assert_eq!(command[at + 1], "session-a.jsonl");
-	assert!(!command.iter().any(|word| word == "pane-sleep"));
+	assert_ne!(command.first().map(String::as_str), Some(crate::frontier::server::surface::ASLEEP));
 	let omp_pane = w.pane_in(&w.main);
 	assert!(!w.t.ctx.launched.asleep(&omp_pane));
 	// Asked again, it is awake: nothing happens.

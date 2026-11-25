@@ -24,12 +24,12 @@ use crate::frontier::server::bridge::PaneAgent;
 use crate::frontier::server::context::{Link, ServiceContext};
 use crate::frontier::server::day::DayThread;
 use crate::frontier::server::events::Toast;
-use crate::frontier::server::herdr::{AgentState, HerdrResult, PaneMetadata, STOP_PING_MS, Tokens, WorkspaceInfo};
 use crate::frontier::server::native::{PIN_TOKEN, PIN_VALUE};
 use crate::frontier::server::pane_launch::thread_budget;
 use crate::frontier::server::report::report_line;
 use crate::frontier::server::sessions::SessionIndex;
 use crate::frontier::server::spend::{SpendTracker, spend_settled, spend_today};
+use crate::frontier::server::surface::{AgentState, PaneMetadata, STOP_PING_MS, SurfaceResult, Tokens, WorkspaceInfo};
 use crate::frontier::server::task_file::{save_task, task_file};
 use crate::frontier::server::thread::{Thread, ThreadRef, subject, thread_state};
 use crate::frontier::server::wording::{Overlap, money, overlap_said, review_said, short_model};
@@ -473,7 +473,7 @@ impl StatusViews {
 	}
 
 	/// Sends a report when it changed, or when the last one is old enough to renew before herdr expires it.
-	async fn report_once<F: Future<Output = HerdrResult<()>>>(
+	async fn report_once<F: Future<Output = SurfaceResult<()>>>(
 		&self,
 		key: &str,
 		json: String,

@@ -29,7 +29,7 @@ modelRoles:
   dictation: local/parakeet-tdt-0.6b-v3
 
 # Dictation through omp's own speech-to-text (0556): Right Ctrl, anywhere, sends `app.stt.toggle`'s key to this pane
-# through herdr on press and again on release; the text is sent as soon as recording stops. No fallback model: the
+# through the shell on press and again on release; the text is sent as soon as recording stops. No fallback model: the
 # audio never leaves this machine. Keys checked against omp 19.1.1's source.
 stt:
   enabled: true

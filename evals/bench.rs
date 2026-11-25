@@ -93,8 +93,6 @@ pub struct BenchOptions {
 	/// The setup-before-the-harness limit; [`SETUP_LIMIT_MS`] when unset (tests shorten it). Held for the run.
 	pub setup_timeout_ms: Option<u64>,
 	pub profile: Option<String>,
-	/// The bench herdr session for plan-review trials' terminals (`--pty-session`, 0567).
-	pub pty_session: Option<String>,
 	/// Recorded in `conditions.json`.
 	pub pilot: bool,
 	pub pace: Option<Arc<dyn Fn() -> BoxFuture<'static, ()> + Send + Sync>>,
@@ -132,7 +130,6 @@ impl BenchOptions {
 			timeout_ms: None,
 			setup_timeout_ms: None,
 			profile: None,
-			pty_session: None,
 			pilot: false,
 			pace: None,
 			account_full: None,
@@ -540,7 +537,6 @@ impl Context<'_> {
 				setup_timeout_ms: options.setup_timeout_ms,
 				transcript_name: Some(transcript_name.to_owned()),
 				work_dir: options.work_dir.clone(),
-				pty_session: options.pty_session.clone(),
 				log_dir: Some(options.out_dir.join("logs").join(transcript_name)),
 				sessions_dir: Some(at.sessions_dir.clone()),
 				..TrialOptions::default()

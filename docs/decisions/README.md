@@ -679,9 +679,9 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0671](0671-the-check-queue-learns-what-checks-cost.md) | The check queue learns what each check costs | product | v1 | HUD round | 2026-11-23 |  |
 | [0672](0672-phone-check-in-through-ntfy.md) | Phone check-in through ntfy, with Allow from the phone | product | v1 | HUD round | 2026-11-23 |  |
 | [0673](0673-scheduled-threads.md) | Scheduled threads | product | v1 | HUD round | 2026-11-23 |  |
-| [0674](0674-the-lightweight-program-and-its-order.md) | The lightweight program, its order and its footprint budget | product, process | v1 | lightweight program | 2026-11-24 |  |
-| [0675](0675-the-bridge-one-extension-one-pipe.md) | The bridge: one omp extension and one local pipe | product | v1 | lightweight program | 2026-11-24 |  |
-| [0676](0676-process-diet.md) | Process diet: panes start on demand and sleep; a footprint that only goes down | product | v1 | lightweight program | 2026-11-24 |  |
+| [0674](0674-the-lightweight-program-and-its-order.md) | The lightweight program, its order and its footprint budget | product, process | v1 | lightweight program | 2026-11-24 | 0689 |
+| [0675](0675-the-bridge-one-extension-one-pipe.md) | The bridge: one omp extension and one local pipe | product | v1 | lightweight program | 2026-11-24 | 0683 |
+| [0676](0676-process-diet.md) | Process diet: panes start on demand and sleep; a footprint that only goes down | product | v1 | lightweight program | 2026-11-24 | 0689 |
 | [0677](0677-deterministic-loops.md) | Deterministic validation loops | product | v1 | lightweight program | 2026-11-24 |  |
 | [0678](0678-briefs-as-html-pages.md) | Briefs: animated HTML pages served on loopback | product | v1 | lightweight program | 2026-11-24 |  |
 | [0679](0679-whiteboard-and-hunk-removed.md) | Whiteboard and hunk removed; `show` draws a brief | product | v1 | lightweight program | 2026-11-24 |  |
@@ -694,3 +694,4 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0686](0686-circuit-breakers.md) | Circuit breakers: loop cap, cost cap, pressure sleep, stop-all | product | v1 | lightweight program | 2026-11-24 |  |
 | [0687](0687-thread-dependencies-and-running-limit.md) | Thread dependencies (`after`) and a running limit of 4 | product | v1 | lightweight program | 2026-11-24 |  |
 | [0688](0688-the-journal.md) | The journal: one append-only file of events | product | v1 | lightweight program | 2026-11-24 |  |
+| [0689](0689-sleeping-panes-in-process-and-footprint-count.md) | Sleeping panes drawn by the shell; the footprint counts Jocasta's own processes | product | v1 | lightweight program | 2026-11-25 |  |

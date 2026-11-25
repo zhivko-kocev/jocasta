@@ -7,10 +7,7 @@ use serde_json::{Map, Value, json};
 
 use super::snapshot::plan_snapshot;
 use super::steps::{SetupChange, Step, folder_undo, json, owned_step, shown};
-use super::{
-	HerdrCheck, RunOutput, RunProgram, SetupDeps, SetupIo, SetupPaths, TOKYO_NIGHT_SCHEME, answered_yes,
-	default_herdr_check,
-};
+use super::{RunOutput, RunProgram, SetupDeps, SetupIo, SetupPaths, TOKYO_NIGHT_SCHEME, answered_yes};
 use crate::setup::markers::{Marker, Undo, fingerprint, markers_dir};
 use crate::setup::mise::MISE_FRAGMENT;
 use crate::setup::uninstall::holds_install_marker;
@@ -44,21 +41,13 @@ pub(super) fn marker_name(migration: &Migration) -> String {
 	format!("{:04}-{}", migration.id, migration.slug)
 }
 
-/// Said under what `herdr config check` reported when it found issues.
-const IGNORED_KEYS_NOTE: &str = "herdr ignores the keys named above: fix them in the shipped template or report them.";
+/// The file herdr's `integration install omp` wrote into omp's `extensions/` folder.
+const HERDR_OMP_HOOK_FILE: &str = "herdr-omp-agent-state.ts";
 
-/// The migrations, in the order they apply. Numbers 1, 3, 4, 6, 9–13, 15 and 17 were the merges into omp's files and
-/// the clean-ups of earlier versions: the omp snapshot (19) replaced them, and their markers are ignored.
+/// The migrations, in the order they apply. Numbers 1, 3, 4, 5, 6, 9–13, 15 and 17 were the merges into omp's files and
+/// the clean-ups of earlier versions, and the herdr config: the omp snapshot (19) and `herdr-gone` (22) replaced them,
+/// and their markers are ignored.
 pub(super) static MIGRATIONS: [Migration; 8] = [
-	Migration {
-		// Jocasta's own herdr config follows the shipped template (0440). herdr then checks what was written and names
-		// each key it ignores (0608).
-		id: 5,
-		slug: "herdr-config",
-		refresh: Some("herdr.toml"),
-		servers: None,
-		plan: plan_herdr_config,
-	},
 	Migration {
 		// The Tokyo Night scheme for Windows Terminal (0401, 0474).
 		id: 7,
@@ -117,6 +106,14 @@ pub(super) static MIGRATIONS: [Migration; 8] = [
 		refresh: None,
 		servers: None,
 		plan: plan_whiteboard_hunk_gone,
+	},
+	Migration {
+		// herdr is gone (0683): its omp hook and `herdr.toml` leave; migration 5 (the herdr config) is retired.
+		id: 22,
+		slug: "herdr-gone",
+		refresh: None,
+		servers: None,
+		plan: plan_herdr_gone,
 	},
 ];
 
@@ -182,52 +179,30 @@ pub(super) fn asset(paths: &SetupPaths, relative: &[&str]) -> Result<String> {
 	Ok(fs::read_to_string(path)?)
 }
 
-/// Runs `herdr config check` on `path` (`HERDR_CONFIG_PATH`) and prints what it reports, each unknown-key line (0608).
-/// A check that can't run, or finds issues, never stops setup: the file is already written.
-async fn print_herdr_check(deps: &SetupDeps, path: &Path, io: &dyn SetupIo) {
-	let result: Result<HerdrCheck> = match &deps.check_herdr_config {
-		Some(check) => check(deps.herdr.clone(), path.to_path_buf()).await,
-		None => default_herdr_check(&deps.herdr, path).await,
-	};
-	let result = match result {
-		Ok(result) => result,
-		Err(error) => {
-			io.print(&format!("herdr config check didn't run: {error}"));
-			return;
-		}
-	};
-	io.print(&format!("herdr config check ({}):", path.display()));
-	for line in result.output.split('\n') {
-		if !line.trim().is_empty() {
-			io.print(&format!("  {}", line.trim()));
-		}
-	}
-	if result.code != Some(0) {
-		io.print(&format!("  {IGNORED_KEYS_NOTE}"));
-	}
+/// What herdr left in an install (0683): its omp hook, which fed its sidebar, and its config.
+fn herdr_leftovers(paths: &SetupPaths) -> Vec<PathBuf> {
+	[paths.omp_agent_dir.join("extensions").join(HERDR_OMP_HOOK_FILE), paths.jocasta_config_dir.join("herdr.toml")]
+		.into_iter()
+		.filter(|path| path.exists())
+		.collect()
 }
 
-fn plan_herdr_config(c: &mut PlanContext) -> Result<Option<Step>> {
-	let path = c.paths.jocasta_config_dir.join("herdr.toml");
-	let title = if path.exists() {
-		"Jocasta's herdr config, to the shipped template"
-	} else {
-		"herdr config for session `jocasta`"
-	};
-	let wanted = asset(c.paths, &["herdr.toml"])?;
-	let mut step = owned_step(title, &path, &wanted, vec![Undo::File { path: shown(&path) }])?;
-	let Some(change) = step.change.take() else { return Ok(Some(step)) };
-	let deps = c.deps.clone();
-	let SetupChange { title, path: shown_path, diff, kept, apply } = change;
+/// Takes herdr's omp hook and `herdr.toml` out (0683): Jocasta's own shell reads agent state from the bridge (0675) and
+/// has no config file of its own.
+fn plan_herdr_gone(c: &mut PlanContext) -> Result<Option<Step>> {
+	let files = herdr_leftovers(c.paths);
+	let Some(first) = files.first().cloned() else { return Ok(None) };
+	let mut step = Step::new(&first, fingerprint("herdr-gone"), Vec::new());
 	step.change = Some(SetupChange {
-		title,
-		path: shown_path,
-		diff,
-		kept,
-		apply: Box::new(move |io: &dyn SetupIo| {
+		title: "herdr is gone: its omp hook and its config leave".to_owned(),
+		path: shown(&first),
+		diff: files.iter().map(|path| format!("- {}", path.display())).collect(),
+		kept: Vec::new(),
+		apply: Box::new(move |_io| {
 			Box::pin(async move {
-				apply(io).await?;
-				print_herdr_check(&deps, &path, io).await;
+				for path in &files {
+					remove_tree(path)?;
+				}
 				Ok(())
 			})
 		}),

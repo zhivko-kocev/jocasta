@@ -332,7 +332,7 @@ async fn the_box_names_the_pane_that_pushed_a_thread_the_boss_or_a_project_pane(
 	let w = world(Reply::Answer(false, PopupEnd::Closed)).await;
 	let main = w.main.display().to_string();
 	w.t.with_thread("p-thread", "Readme line");
-	w.t.with_boss(crate::frontier::server::herdr::AgentState::Idle);
+	w.t.with_boss(crate::frontier::server::surface::AgentState::Idle);
 	w.t.ctx.launched.add("p-thread", &main, Some("key-thread")).unwrap();
 	w.t.ctx.launched.add("boss-1", &main, Some("key-boss")).unwrap();
 	w.t.ctx.launched.add("p-project", &main, Some("key-project")).unwrap();

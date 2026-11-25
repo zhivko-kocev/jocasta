@@ -5,7 +5,7 @@
 //! and ACP's approval keeps the context too, so neither is "execute". The interactive review is answerable without
 //! keys: it emits `plan_review_requested` to extensions, and `ctx.resolvePlanReview(reviewId, "execute" | "keep")`
 //! answers it "as if the operator picked" (`extensibility/extensions/types.ts:834-847`). So such a trial's first turn
-//! runs omp interactive in a terminal (a bench herdr pane: interactive mode needs a TTY on stdin, `main.ts`), starting
+//! runs omp interactive in a terminal (a bench pty: interactive mode needs a TTY on stdin, `main.ts`), starting
 //! in plan mode (`plan.defaultOnStartup`), with a per-trial extension (this file's [`plan_review_extension`]) that
 //! answers the review with the arm's choice, logs what it saw, and shuts omp down once the approved plan's execution
 //! has run: after the approval, the next run that started (an `agent_start`, or a user message, as the synthetic

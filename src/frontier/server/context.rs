@@ -20,7 +20,6 @@ use crate::frontier::server::checks::{Admission, CheckRunner, CheckRunnerOptions
 use crate::frontier::server::day::{Day, SharedCatalog};
 use crate::frontier::server::events::{BossPane, Events};
 use crate::frontier::server::finish::Finisher;
-use crate::frontier::server::herdr::Herdr;
 use crate::frontier::server::journal::Journal;
 use crate::frontier::server::omp_processes::OmpTracker;
 use crate::frontier::server::pane_launch::PaneLauncher;
@@ -31,6 +30,7 @@ use crate::frontier::server::service::ServiceOptions;
 use crate::frontier::server::sessions::SessionIndex;
 use crate::frontier::server::sleep::PaneSleeps;
 use crate::frontier::server::status::StatusViews;
+use crate::frontier::server::surface::Surface;
 use crate::frontier::server::thread::ThreadRegistry;
 use crate::frontier::server::thread_facts::ThreadFacts;
 use crate::frontier::server::thread_lifecycle::ThreadLifecycle;
@@ -184,7 +184,7 @@ impl Link {
 pub struct ServiceContext {
 	pub catalog: SharedCatalog,
 	pub options: ServiceOptions,
-	pub herdr: Arc<dyn Herdr>,
+	pub herdr: Arc<dyn Surface>,
 	/// The bridge to the panes' omps (0675): their prompts, control and state.
 	pub bridge: Bridge,
 	/// The session index. Its methods take `&mut self` and `warm` and `prepare` run in steps over awaits, so it is behind

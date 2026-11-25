@@ -18,8 +18,8 @@ use crate::frontier::server::helpers::{
 	Page, TEST_BOSS_KEY, TestServer, boss_lines, boss_pane, call, demo_project, start_test_server, until, with_server,
 	write_settings,
 };
-use crate::frontier::server::herdr::AgentState;
 use crate::frontier::server::server::ServerOptions;
+use crate::frontier::server::surface::AgentState;
 use crate::frontier::server::tools::{Caller, ToolReply};
 use crate::shared::events::queue::{EventPriority, EventSource, NewEvent};
 use crate::shared::paths::{config_dir, data_dir, projects_file};

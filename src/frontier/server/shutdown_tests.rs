@@ -1,21 +1,19 @@
 //! Tests of how the server closes: the cases of `test/frontier/server/shutdown.test.ts` (the stop runner's own case is
 //! in `stop_sequence_tests.rs`).
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use serde_json::{Value, json};
 
 use super::*;
 use crate::frontier::server::helpers::{
-	TestServer, ThreadOptions, call, demo_project, http, start_test_server, start_test_server_with, start_thread,
-	until, with_test_defaults,
+	TestServer, ThreadOptions, call, demo_project, start_test_server, start_test_server_with, start_thread, until,
+	with_test_defaults,
 };
-use crate::frontier::server::herdr::AgentState;
-use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
-use crate::frontier::server::launch::{SHUTDOWN_PATH, ask_shutdown};
 use crate::frontier::server::popups::{CANCEL, STOP};
 use crate::frontier::server::stop_sequence::StopRun;
+use crate::frontier::server::surface::AgentState;
+use crate::frontier::server::surface::fake_surface::FakeSurface;
 use crate::shared::errors::Error;
 use crate::shared::paths::data_dir;
 use crate::shared::service_file::{read_service_file, service_file_path};
@@ -47,7 +45,6 @@ struct Guarded {
 	server: TestServer,
 	asked: Log,
 	steps: Log,
-	reattached: Arc<AtomicUsize>,
 }
 
 /// A server whose close question is answered with `answers` in turn (Stop everything, typed with its code, for true;
@@ -56,10 +53,9 @@ struct Guarded {
 async fn guarded(answers: Vec<bool>, options: ServerOptions) -> Guarded {
 	let asked: Log = Log::default();
 	let steps: Log = Log::default();
-	let reattached = Arc::new(AtomicUsize::new(0));
 	let answers = Arc::new(Mutex::new(answers));
 	let address: Arc<OnceLock<JocastaServer>> = Arc::new(OnceLock::new());
-	let (told, heard, counted) = (Arc::clone(&asked), Arc::clone(&address), Arc::clone(&reattached));
+	let (told, heard) = (Arc::clone(&asked), Arc::clone(&address));
 	let options = ServerOptions {
 		on_question: Some(Arc::new(move |popup| {
 			push(&told, popup.view().message.clone());
@@ -76,10 +72,6 @@ async fn guarded(answers: Vec<bool>, options: ServerOptions) -> Guarded {
 				server.answer(&code, &json!({ "choice": choice, "typed": typed }));
 			});
 		})),
-		reattach: Some(Arc::new(move || {
-			counted.fetch_add(1, Ordering::SeqCst);
-			Ok(())
-		})),
 		..options
 	};
 	let server = start_test_server(options).await;
@@ -91,10 +83,10 @@ async fn guarded(answers: Vec<bool>, options: ServerOptions) -> Guarded {
 		step_run(move || push(&log, format!("stopped after {}", herdr.methods().join(",")))),
 		None,
 	);
-	Guarded { server, asked, steps, reattached }
+	Guarded { server, asked, steps }
 }
 
-fn methods_after(herdr: &FakeHerdr, before: usize) -> Vec<String> {
+fn methods_after(herdr: &FakeSurface, before: usize) -> Vec<String> {
 	herdr.methods().split_off(before)
 }
 
@@ -114,7 +106,7 @@ async fn the_guard_asks_only_while_a_thread_is_working_or_awaiting_him_counting_
  {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
-	let Guarded { server, asked, steps, reattached } = guarded(vec![false, false], ServerOptions::default()).await;
+	let Guarded { server, asked, steps } = guarded(vec![false, false], ServerOptions::default()).await;
 	let herdr = Arc::clone(&server.herdr);
 	let pane = start_thread(&server, ThreadOptions::default()).await.pane_id;
 	herdr.set_state(&pane, AgentState::Working, None, true);
@@ -127,8 +119,6 @@ async fn the_guard_asks_only_while_a_thread_is_working_or_awaiting_him_counting_
 	until(|| server.service.hud(None).is_ok_and(|hud| hud.blocked == 1)).await;
 	assert_eq!(server.shutdown(true).await, CloseOutcome::Kept);
 	assert_eq!(lines(&asked), [WORKING, AWAITING]);
-	// The quit action asks where he is: no new terminal.
-	assert_eq!(reattached.load(Ordering::SeqCst), 0);
 
 	// Kept: herdr wasn't stopped, no container stopped, the service still answers.
 	let after = methods_after(&herdr, before);
@@ -187,7 +177,7 @@ async fn a_close_right_after_a_service_restart_waits_for_the_threads_to_be_found
 {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
-	let herdr = Arc::new(FakeHerdr::new());
+	let herdr = Arc::new(FakeSurface::new());
 	let first = start_test_server_with(Arc::clone(&herdr), ServerOptions::default()).await;
 	let pane = start_thread(&first, ThreadOptions::default()).await.pane_id;
 	herdr.set_state(&pane, AgentState::Working, None, true);
@@ -239,45 +229,4 @@ async fn a_stop_step_that_throws_or_hangs_never_keeps_the_close_from_finishing()
 	assert_eq!(hung.shutdown(true).await, CloseOutcome::Stopped);
 	hung.stopped().await;
 	assert!(!service_file_path(None).exists());
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn bare_jocastas_post_api_shutdown_needs_the_token_is_answered_at_once_and_with_nothing_at_work_stops_everything()
-{
-	let _j = temp_jocasta();
-	let Guarded { server, asked, steps, reattached } = guarded(vec![], ServerOptions::default()).await;
-	let url = format!("http://127.0.0.1:{}{SHUTDOWN_PATH}", server.port);
-	let client = http();
-	assert_eq!(client.post(&url).bearer_auth("nope").send().await.unwrap().status().as_u16(), 401);
-	assert_eq!(client.post(&url).send().await.unwrap().status().as_u16(), 401);
-	let file = read_service_file().expect("jocasta-service.json");
-	assert!(ask_shutdown(&file).await);
-	server.stopped().await;
-	assert!(lines(&asked).is_empty());
-	assert_eq!(reattached.load(Ordering::SeqCst), 0);
-	assert_eq!(lines(&steps).len(), 1);
-	assert_eq!(server.herdr.of("stopServer").len(), 1);
-	// Nobody answers now: bare jocasta stops herdr and the containers itself.
-	assert!(!ask_shutdown(&file).await);
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn his_client_closing_while_a_thread_works_opens_a_terminal_on_the_session_and_asks_there_cancel_keeps_all_stop_stops_all()
- {
-	let j = temp_jocasta();
-	demo_project(j.root(), "demo").await;
-	let Guarded { server, asked, steps, reattached } = guarded(vec![false, true], ServerOptions::default()).await;
-	let pane = start_thread(&server, ThreadOptions::default()).await.pane_id;
-	server.herdr.set_state(&pane, AgentState::Working, None, true);
-	until(|| server.service.busy_threads().is_ok_and(|busy| busy.working == 1)).await;
-	assert_eq!(server.client_closed().await, CloseOutcome::Kept);
-	assert_eq!(reattached.load(Ordering::SeqCst), 1);
-	assert_eq!(lines(&asked), [WORKING]);
-	assert!(server.herdr.of("stopServer").is_empty());
-	assert!(lines(&steps).is_empty());
-	assert_eq!(server.client_closed().await, CloseOutcome::Stopped);
-	assert_eq!(reattached.load(Ordering::SeqCst), 2);
-	assert_eq!(server.herdr.of("stopServer").len(), 1);
-	assert_eq!(lines(&steps).len(), 1);
-	server.stop().await;
 }

@@ -10,7 +10,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use crate::frontier::server::context::{Link, ServiceContext};
-use crate::frontier::server::herdr::{AgentState, PaneInfo};
+use crate::frontier::server::surface::{AgentState, PaneInfo};
 use crate::frontier::server::thread::{ThreadOmp, ThreadRef, settled, subject};
 use crate::frontier::server::thread_lifecycle::StateSource;
 use crate::shared::errors::Result;

@@ -380,14 +380,14 @@ fn today_connecting_at_first_offline_keeps_the_time_and_says_since_when_quiet_ho
 	let offline = TodayState { seen: true, down_since: Some(at(2026, 11, 9, 14, 28)), ..TodayState::default() };
 	assert_eq!(lines(&offline, 80, 5)[0], "14:30 · Jocasta isn't answering (since 14:28); trying again…");
 	let services = vec![ServiceHealth {
-		name: ServiceName::Herdr,
+		name: ServiceName::Surface,
 		state: ServiceState::Down,
 		note: Some("not answering".to_string()),
 	}];
 	let quiet_hud = Hud { quiet: Some(true), ..hud() };
 	let broken = up(None, Some(quiet_hud), Some(Dashboard { services, ..dashboard() }));
 	let header = &lines(&broken, 200, 5)[0];
-	assert!(header.starts_with("Mon 9 Nov 14:30 · quiet · herdr down (not answering) · "));
+	assert!(header.starts_with("Mon 9 Nov 14:30 · quiet · surface down (not answering) · "));
 	let empty = Today {
 		needs_you: Vec::new(),
 		underway: Vec::new(),

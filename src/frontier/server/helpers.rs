@@ -27,12 +27,12 @@ use crate::frontier::protocol::{ClientMessage, ServerMessage};
 use crate::frontier::server::allow::Answer;
 use crate::frontier::server::bridge::{PaneAgent, PaneEvent};
 use crate::frontier::server::day::DayOptions;
-use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
-use crate::frontier::server::herdr::{AgentState, Env};
 use crate::frontier::server::overlay::overlay_file;
 use crate::frontier::server::popups::PopupEnd;
 use crate::frontier::server::review_prompt::{ReviewContext, review_prompt};
 use crate::frontier::server::server::{JocastaServer, ServerOptions, start_server};
+use crate::frontier::server::surface::fake_surface::FakeSurface;
+use crate::frontier::server::surface::{AgentState, Env};
 use crate::frontier::server::tools::{Caller, ToolReply};
 use crate::frontier::server::wording::{HANDOFF_PROMPT, REVIEW_LEAD};
 use crate::shared::bridge_wire::{BRIDGE_ENV, BRIDGE_EXTENSION};
@@ -252,7 +252,7 @@ impl Drop for Page {
 #[derive(Clone)]
 pub(crate) struct TestServer {
 	pub server: JocastaServer,
-	pub herdr: Arc<FakeHerdr>,
+	pub herdr: Arc<FakeSurface>,
 }
 
 impl std::ops::Deref for TestServer {
@@ -264,7 +264,7 @@ impl std::ops::Deref for TestServer {
 }
 
 /// Every default of [`start_test_server`] under what the test gave.
-pub(crate) fn with_test_defaults(mut options: ServerOptions, herdr: &Arc<FakeHerdr>) -> ServerOptions {
+pub(crate) fn with_test_defaults(mut options: ServerOptions, herdr: &Arc<FakeSurface>) -> ServerOptions {
 	let data = data_dir();
 	options.herdr.get_or_insert_with(|| herdr.clone());
 	options.bridge.get_or_insert_with(|| herdr.recording_bridge());
@@ -289,13 +289,12 @@ pub(crate) fn with_test_defaults(mut options: ServerOptions, herdr: &Arc<FakeHer
 	options
 		.confirm
 		.get_or_insert_with(|| Arc::new(|_, _| async { Ok(Answer { allow: true, how: PopupEnd::Answered }) }.boxed()));
-	options.reattach.get_or_insert_with(|| Arc::new(|| Ok(())));
 	options
 }
 
 /// Starts a server for tests on a new fake herdr; see [`start_test_server_with`].
 pub(crate) async fn start_test_server(options: ServerOptions) -> TestServer {
-	start_test_server_with(Arc::new(FakeHerdr::new()), options).await
+	start_test_server_with(Arc::new(FakeSurface::new()), options).await
 }
 
 /// Starts a server for tests: `herdr` (so a test can restart the service on the same panes), pollers off (never the
@@ -304,7 +303,7 @@ pub(crate) async fn start_test_server(options: ServerOptions) -> TestServer {
 /// the wait pass their own `confirm`), no steer for a missing report (its test passes `ask_report: Some(true)`), and the
 /// boss's `jocasta` MCP entry as setup writes it, so no start warns that the boss has no tools (TST-14). Waits for the
 /// service to start.
-pub(crate) async fn start_test_server_with(herdr: Arc<FakeHerdr>, options: ServerOptions) -> TestServer {
+pub(crate) async fn start_test_server_with(herdr: Arc<FakeSurface>, options: ServerOptions) -> TestServer {
 	let data = data_dir();
 	fs::create_dir_all(data.join("omp-sessions")).unwrap();
 
@@ -418,14 +417,14 @@ pub(crate) fn review(range: &str, brief: Option<&str>) -> String {
 }
 
 /// The boss pane: workspace Jocasta's pane.
-pub(crate) fn boss_pane(herdr: &FakeHerdr) -> Option<String> {
+pub(crate) fn boss_pane(herdr: &FakeSurface) -> Option<String> {
 	let state = herdr.state();
 	let jocasta = state.workspace_list.iter().find(|workspace| workspace.label == "Jocasta")?.id.clone();
 	state.pane_list.iter().find(|pane| pane.workspace_id == jocasta).map(|pane| pane.pane_id.clone())
 }
 
 /// The thread pane in worktree `path` .
-pub(crate) fn thread_pane(herdr: &FakeHerdr, path: &Path) -> String {
+pub(crate) fn thread_pane(herdr: &FakeSurface, path: &Path) -> String {
 	let key = path_key(path);
 	let state = herdr.state();
 	let pane = state.pane_list.iter().find(|pane| {
@@ -734,7 +733,7 @@ pub(crate) async fn to_handoff(server: &TestServer, pane_id: &str, path: &Path) 
 
 /// Restores the thread's pane as a shell, lets the service relaunch it, and brings its new omp up idle without an
 /// event.
-pub(crate) async fn relaunch_idle(server: &TestServer, herdr: &FakeHerdr, path: &Path, session: Option<&str>) {
+pub(crate) async fn relaunch_idle(server: &TestServer, herdr: &FakeSurface, path: &Path, session: Option<&str>) {
 	server.service.refresh().await;
 	herdr.restore();
 	server.service.refresh().await;
@@ -762,7 +761,7 @@ pub(crate) fn boss_idle(server: &TestServer) {
 }
 
 /// How many review prompts (0394) the fake has recorded: a review's start, now that no pane opens beside the thread.
-pub(crate) fn review_asked(herdr: &FakeHerdr) -> usize {
+pub(crate) fn review_asked(herdr: &FakeSurface) -> usize {
 	herdr
 		.of("prompt")
 		.iter()

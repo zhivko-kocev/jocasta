@@ -11,7 +11,7 @@ use serde_json::json;
 
 use super::*;
 use crate::setup::markers::markers_dir;
-use crate::setup::setup::{CalendarStore, HerdrCheck, RunOutput, SetupDeps, SetupPaths, run_setup, setup_undo};
+use crate::setup::setup::{CalendarStore, SetupDeps, SetupPaths, run_setup, setup_undo};
 use crate::shared::credentials::CALENDAR_CREDENTIAL;
 use crate::shared::testing::{TempDir, TempJocasta, temp_dir, temp_jocasta};
 
@@ -103,12 +103,10 @@ struct Machine {
 /// His own `keybindings.yml` from before Jocasta, with CRLF line ends and a comment.
 const HIS_KEYS: &str = "# mine\r\napp.model.cycle: [ctrl+k] # cycle\r\n";
 
-/// `jocasta setup`, answering `y`, with herdr's config check standing in.
+/// `jocasta setup`, answering `y`.
 async fn setup_run(paths: &SetupPaths, mise: Option<&str>, calendar: bool) {
-	let mut deps = SetupDeps::new(PathBuf::from("herdr.exe"));
+	let mut deps = SetupDeps::new();
 	deps.mise = mise.map(PathBuf::from);
-	deps.check_herdr_config =
-		Some(Arc::new(|_, _| Box::pin(async { Ok(HerdrCheck { code: Some(0), output: "config: ok\n".to_owned() }) })));
 	if calendar {
 		deps.calendar = Some(Arc::new(Calendar { stored: AtomicBool::new(false) }));
 	}
@@ -178,18 +176,10 @@ impl Machine {
 	}
 
 	fn deps(&self, state: ServiceState) -> UninstallDeps {
-		let run_calls = self.calls.clone();
-		let run: RunProgram = Arc::new(move |argv| {
-			run_calls.lock().unwrap().push(argv.join(" "));
-			Box::pin(async { Ok(RunOutput { code: 0, output: String::new() }) })
-		});
 		let (path_calls, run_value_calls, credential_calls, exit_calls) =
 			(self.calls.clone(), self.calls.clone(), self.calls.clone(), self.calls.clone());
 		UninstallDeps {
 			service_state: Arc::new(move || Box::pin(async move { Ok(state) })),
-			herdr: PathBuf::from("herdr.exe"),
-			session: "jocasta-test".to_owned(),
-			run,
 			setup_undo: setup_undo(&self.setup, |target| target == CALENDAR_CREDENTIAL),
 			remove_path_entry: Arc::new(move |entry| {
 				path_calls.lock().unwrap().push(format!("path {}", entry.display()));
@@ -225,14 +215,6 @@ impl Machine {
 	}
 }
 
-fn run_with(output: impl Fn(&[String]) -> (i32, String) + Send + Sync + 'static, calls: Calls) -> RunProgram {
-	Arc::new(move |argv| {
-		calls.lock().unwrap().push(argv.join(" "));
-		let (code, output) = output(&argv);
-		Box::pin(async move { Ok(RunOutput { code, output }) })
-	})
-}
-
 #[tokio::test]
 async fn a_running_jocasta_is_refused_and_n_removes_nothing() {
 	let m = Machine::new().await;
@@ -242,7 +224,6 @@ async fn a_running_jocasta_is_refused_and_n_removes_nothing() {
 	assert_eq!(code, 0);
 	assert_eq!(asked, ["Remove these? [y/N] "]);
 	let agent = &m.setup.omp_agent_dir;
-	assert!(text.contains("herdr session `jocasta-test` (stopped, its panes closed, then deleted)"));
 	assert!(text.contains(&format!(
 		"{}: yours from before Jocasta's omp snapshot back (while it is the snapshot's)",
 		agent.join("keybindings.yml").display()
@@ -255,7 +236,7 @@ async fn a_running_jocasta_is_refused_and_n_removes_nothing() {
 	assert!(text.contains("Windows Credential Manager: jocasta/calendar-ical"));
 	assert!(text.ends_with("Nothing removed."));
 	assert!(m.calls().is_empty());
-	assert!(m.setup.jocasta_config_dir.join("herdr.toml").exists());
+	assert!(m.root.join("Fragments").join("jocasta").exists());
 }
 
 #[tokio::test]
@@ -277,8 +258,6 @@ async fn y_removes_what_install_and_setup_added_and_keeps_his_own_the_data_folde
 	assert_eq!(
 		m.calls(),
 		[
-			"herdr.exe session stop jocasta-test".to_owned(),
-			"herdr.exe session delete jocasta-test".to_owned(),
 			"credential jocasta/calendar-ical".to_owned(),
 			format!("run Jocasta {}", record.dir.join("app").join("bin").join("launcher.exe").display()),
 			format!("path {}", record.dir.display()),
@@ -361,21 +340,12 @@ async fn the_data_folder_goes_on_its_own_y_and_a_running_installs_folder_goes_af
 #[tokio::test]
 async fn a_step_that_fails_is_said_and_the_rest_still_go_the_exit_code_says_so() {
 	let m = Machine::new().await;
+	let record = m.install();
 	let mut failing = m.deps(ServiceState::Down);
-	failing.run = run_with(
-		|argv| {
-			if argv.iter().any(|word| word == "delete") {
-				(1, "session is running\n".to_owned())
-			} else {
-				(0, String::new())
-			}
-		},
-		m.calls.clone(),
-	);
-	let Out { code, text, .. } = m.uninstall(&["y", "n"], &m.paths(None, false), &failing).await.unwrap();
+	failing.remove_path_entry = Arc::new(|_| Err(crate::shared::errors::Error::other("access denied")));
+	let Out { code, text, .. } = m.uninstall(&["y", "n"], &m.paths(Some(record), false), &failing).await.unwrap();
 	assert_eq!(code, 1);
-	assert!(text.contains("couldn't remove herdr session `jocasta-test`"));
-	assert!(text.contains("herdr session delete jocasta-test exited 1: session is running"));
+	assert!(text.contains("couldn't remove") && text.contains("access denied"), "{text}");
 	assert!(text.ends_with("Done, except 1 thing above; remove it by hand."));
 	assert!(!m.setup.jocasta_config_dir.exists());
 }
@@ -391,7 +361,6 @@ async fn without_setups_markers_nothing_outside_jocastas_own_folders_is_listed_o
 	assert_eq!(
 		listed,
 		[
-			"- herdr session `jocasta-test` (stopped, its panes closed, then deleted)".to_owned(),
 			format!(
 				"- Jocasta's mise config for a project: {}",
 				m.setup.mise_config_dir.join("config.jocasta-p1.override.toml").display()
@@ -401,11 +370,10 @@ async fn without_setups_markers_nothing_outside_jocastas_own_folders_is_listed_o
 	);
 	let Out { code, .. } = m.run(&["y", "n"]).await;
 	assert_eq!(code, 0);
-	assert_eq!(m.calls(), ["herdr.exe session stop jocasta-test", "herdr.exe session delete jocasta-test"]);
+	assert!(m.calls().is_empty());
 	assert_eq!(read(&mcp), his);
 	let agent = &m.setup.omp_agent_dir;
 	for kept in [
-		agent.join("extensions").join(herdr::embed::OMP_HOOK_FILE),
 		agent.join("keybindings.yml"),
 		agent.join("skills").join("mise").join("SKILL.md"),
 		m.setup.mise_config_dir.join("conf.d").join("jocasta.toml"),

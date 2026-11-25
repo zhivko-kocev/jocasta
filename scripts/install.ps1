@@ -1,4 +1,4 @@
-# Installs or upgrades Jocasta for windows-x64 (0049): jocasta.exe, its config\ and, on Windows, herdr's ConPTY runtime.
+# Installs or upgrades Jocasta for windows-x64 (0049): jocasta.exe, its config\ and, on Windows, the ConPTY runtime.
 # Source: the latest GitHub release. Its zip must match the SHA-256 in the repository at the release's tag (0484): the
 # release workflow commits `checksums.sha256` on top of the release's tag and tags that commit `checksums-<tag>`, so a
 # replaced release asset is refused; the hash never comes from the release itself. With $env:JOCASTA_INSTALL_FROM set
@@ -11,7 +11,7 @@
 # Layout: <dir>\jocasta.exe, <dir>\config\, <dir>\conpty\ with <dir>\THIRD-PARTY-NOTICES\ (Microsoft's ConPTY, 0661), and
 # <dir>\install.json naming <dir>, the release's top-level entries (what
 # `jocasta uninstall` removes, 0579) and what this install adds beyond the folder (0468): its user PATH entry.
-# Upgrade (CR-06): Jocasta's server (`jocasta.exe server`, herdr's server with the service in it, fork plan phase 4),
+# Upgrade (CR-06): a running Jocasta (bare `jocasta.exe`: the service and the shell in one process, 0683),
 # omp sessions' `jocasta.exe mcp` and panes' OpenConsole.exe run from the install, so neither
 # those files nor the folder can be replaced (a running program's file can't be overwritten, and its folder can't be
 # renamed). A running program's file can be renamed, though: the release is staged complete beside the install, an
@@ -19,7 +19,7 @@
 # (.exe, .dll) is renamed in place to `<name>.old-<stamp>`, and robocopy mirrors the staged release over the
 # install, leaving those `.old-*` files alone. Running programs keep their old files until they exit; `.old-*` files
 # no longer in use are removed now and by every later install. A running Jocasta keeps its panes and the old build
-# until he restarts it: Windows has no live handoff (fork plan finding 20). If the renames or the copy fail, the
+# until he restarts it: there is no live handoff (0683). If the renames or the copy fail, the
 # install is mirrored back from the copy aside, so there is never half an install.
 # Everything runs in its own scope, so `irm … | iex` leaves his shell's preferences as they were.
 & {
@@ -125,7 +125,7 @@
 		$running = @()
 		if ($upgrading) {
 			# An older install's companion (launcher.exe and its bun.exe under app\) stops: it would keep its old
-			# service's port. A running Jocasta stays: stopping its server would close his panes.
+			# service's port. A running Jocasta stays: stopping it would close his panes.
 			$companion = @(Get-CimInstance Win32_Process |
 				Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith("$dir\app\", [StringComparison]::OrdinalIgnoreCase) })
 			if ($companion.Count -gt 0) {
@@ -135,7 +135,7 @@
 			}
 			$running = @(Get-CimInstance Win32_Process -Filter "Name = 'jocasta.exe'" |
 				Where-Object {
-					$_.ExecutablePath -and $_.ExecutablePath -ieq "$dir\jocasta.exe" -and $_.CommandLine -match '\sserver\s*$'
+					$_.ExecutablePath -and $_.ExecutablePath -ieq "$dir\jocasta.exe" -and $_.CommandLine -match '^\s*"?[^"]*jocasta\.exe"?\s*$'
 				})
 			# The install as it is, to put back if the copy fails (running programs' files can be read).
 			try { Sync-Folder $dir $aside } catch {
@@ -147,7 +147,7 @@
 			if ($upgrading) {
 				# Files in use move aside under a new name, so the new ones can take theirs. One in conpty\ (its
 				# OpenConsole.exe runs for every open pane) moves to the install's top as conpty-<path>.old-<stamp>:
-				# herdr loads the bundle only with exactly its pinned files in it (0661).
+				# the vendored pty loads the bundle only with exactly its pinned files in it (0661).
 				$bundle = Join-Path $dir 'conpty'
 				Get-ChildItem -Path $dir -Recurse -File -Include '*.exe', '*.dll' |
 					Where-Object { $_.Name -notlike '*.old-*' -and (Test-InUse $_.FullName) } |
@@ -198,7 +198,7 @@ public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint msg, UIntPtr wP
 			}
 		}
 		if ($running.Count -gt 0) {
-			Write-Host "jocasta install: Jocasta is running on the old build; close it and run jocasta again to use the new one (Windows can't hand its panes over live)."
+			Write-Host "jocasta install: Jocasta is running on the old build; close it and run jocasta again to use the new one (a running Jocasta can't be handed over)."
 		} elseif (Get-ChildItem -Path $dir -Recurse -File -Filter '*.old-*' -ErrorAction SilentlyContinue) {
 			Write-Host "jocasta install: omp sessions started before the upgrade run the old build until they restart."
 		}

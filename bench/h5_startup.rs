@@ -1,21 +1,21 @@
 //! H5 (0482, 0576): startup time to a usable prompt, Jocasta against omp, Claude Code and OpenCode.
 //!
 //!   jocasta-bench h5-startup --out <dir> [--runs 20] [--tools jocasta,omp,claude,opencode] [--cwd <fixture repo>]
-//!                            [--pty-session bench-pty] [--ready omp=<regex>,…] [--timeout 60] [--dry-run]
+//!                            [--ready omp=<regex>,…] [--timeout 60] [--dry-run]
 //!
 //! Each tool starts `--runs` times "cold" (the first start after its processes were gone for 30 s; an OS-cold start
 //! needs a reboot per run and is done by hand) and `--runs` times warm (straight after the previous run).
-//!   jocasta   (sandbox: JOCASTA_DATA_DIR, JOCASTA_HERDR_SESSION, JOCASTA_CODING_AGENT_DIR) starts `jocasta` and times
-//!             the boss pane's screen matching omp's ready pattern (`readyMs`, the same end point as omp alone, 0576),
-//!             herdr reporting the boss's omp idle (`bossIdleMs`), and the new service answering `/health`
-//!             (`serviceMs`). Between runs it closes Jocasta the product's way (Stop everything, `/api/shutdown`) and
-//!             waits until `jocasta-service.json` is gone and the started surface has exited (killed after 60 s as a fallback).
-//!   omp, claude, opencode start in a tab of the bench herdr session (Bun's PTY is POSIX-only) in `--cwd`, timed until
-//!             the visible screen matches the tool's ready pattern (herdr `pane.wait_for_output`), then closed.
+//!   jocasta   (sandbox: JOCASTA_DATA_DIR, JOCASTA_CODING_AGENT_DIR) starts `jocasta` in a pty (bare `jocasta` is the
+//!             terminal itself, 0683) and times the window's screen matching omp's ready pattern (`readyMs`, the same end
+//!             point as omp alone, 0576), the boss's omp reported idle (`bossIdleMs`), and the new service answering
+//!             `/health` (`serviceMs`). Between runs it closes Jocasta as he does, by closing its window (0683), and
+//!             waits until `jocasta-service.json` is gone and the window has ended (killed after 60 s
+//!             as a fallback).
+//!   omp, claude, opencode start in a pty of their own in `--cwd`, timed until the visible screen matches the tool's
+//!             ready pattern, then closed.
 //! Writes h5-startup.jsonl (one row per start) and h5-startup.json (per tool and mode: median, p95, CI). Rows before
 //! 0576 named `serviceMs` `companionMs` and had no `bossIdleMs`; `row_service_ms` reads both.
 
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -26,22 +26,20 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use crate::evals::args::number_of;
-use crate::h3_recovery::start_detached;
 use crate::lib::args::{ArgSpec, BenchArgs, BenchUsageError, flag, flag_or, list_flag, parse_bench_args, run_script};
-use crate::lib::jocasta::{SandboxJocasta, open_sandbox};
+use crate::lib::jocasta::{BenchPane, SandboxJocasta, open_sandbox};
 use crate::lib::launch::{
-	BENCH_TOOLS, BenchTool, LaunchOptions, bench_herdr, close_pane, launch_in_pane, ready_patterns,
-	require_trusted_cwd, tool_command, wait_ready,
+	BENCH_TOOLS, BenchTool, close_pty, launch, ready_patterns, require_trusted_cwd, tool_command,
 };
 use crate::lib::output::{append_row, claim_rows, conditions, print_plan, write_json};
-use crate::lib::sandbox::BENCH_PTY_SESSION;
+use crate::lib::pty::Pty;
 use crate::lib::stats::{BootstrapOptions, summarize};
 use crate::lib::temp::mkdtemp;
 use crate::lib::timing::{WaitOptions, wait_for};
 use jocasta::frontier::protocol::js_number_text;
 use jocasta::frontier::server::boss::BOSS_WORKSPACE;
-use jocasta::frontier::server::herdr::{HerdrOptions, PaneInfo, WorkspaceInfo, connect_herdr};
-use jocasta::frontier::server::launch::{ServiceState, ask_shutdown};
+use jocasta::frontier::server::launch::ServiceState;
+use jocasta::frontier::server::surface::AgentState;
 use jocasta::shared::errors::Result;
 use jocasta::shared::pathkey::resolve;
 use jocasta::shared::proctree::{kill_tree, pid_alive};
@@ -58,9 +56,9 @@ pub struct H5Row {
 	pub tool: String,
 	pub mode: &'static str,
 	pub run: usize,
-	/// To the usable prompt: the tool's ready pattern on its screen; for jocasta, on the boss pane.
+	/// To the usable prompt: the tool's ready pattern on its screen; for jocasta, on its window.
 	pub ready_ms: Option<f64>,
-	/// jocasta only: to herdr reporting the boss pane's omp idle.
+	/// jocasta only: to the boss pane's omp being reported idle.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub boss_idle_ms: Option<Option<f64>>,
 	/// jocasta only: to the new service answering `/health`.
@@ -81,55 +79,44 @@ pub fn schedule(runs: usize) -> Vec<(&'static str, usize)> {
 	(0..runs).flat_map(|run| [("cold", run), ("warm", run)]).collect()
 }
 
-/// Closes the sandbox Jocasta as he does (Stop everything, 0549): asks the service to shut down, waits until
-/// `jocasta-service.json` is gone and `surface` (the `jocasta` H5 started) has exited; past `CLOSE_MS` it ends what is
-/// left and stops the session's herdr server.
-async fn stop_jocasta(jocasta: &SandboxJocasta, surface: Option<u32>) {
-	if let Some(running) = read_service_file()
-		&& jocasta.health(Some(&running)).await == ServiceState::Up
-	{
-		ask_shutdown(&running).await;
+/// Closes the sandbox Jocasta as he does, by closing its window (0683): waits until `jocasta-service.json` is gone and
+/// `window` (the pty H5 started `jocasta` in) has ended; past `CLOSE_MS` it ends what is left.
+async fn stop_jocasta(window: Option<&Pty>) {
+	if let Some(window) = window {
+		window.close_window();
 	}
 	let closed = wait_for(
-		|| async move { read_service_file().is_none() && surface.is_none_or(|pid| !pid_alive(pid)) },
+		|| async move { read_service_file().is_none() && window.is_none_or(|window| !window.running()) },
 		WaitOptions { timeout_ms: CLOSE_MS, interval_ms: 250 },
 	)
 	.await;
-	if closed.is_some() {
-		return;
+	if closed.is_none() {
+		eprintln!("Jocasta didn't close within {} s; ending its processes", CLOSE_MS / 1000);
+		if let Some(root) = window.and_then(Pty::pid) {
+			kill_tree(root).await;
+		}
+		if let Some(left) = read_service_file()
+			&& pid_alive(left.pid)
+		{
+			kill_tree(left.pid).await;
+		}
 	}
-	eprintln!("Jocasta didn't close within {} s; ending its processes", CLOSE_MS / 1000);
-	if let Some(surface) = surface.filter(|pid| pid_alive(*pid)) {
-		kill_tree(surface).await;
-	}
-	if let Some(left) = read_service_file()
-		&& pid_alive(left.pid)
-	{
-		kill_tree(left.pid).await;
-	}
-	let options = HerdrOptions { session: jocasta.sandbox.herdr_session.clone(), ..HerdrOptions::default() };
-	if let Ok(herdr) = connect_herdr(options).await {
-		let _ = herdr.stop_server().await;
-		herdr.close();
+	if let Some(window) = window {
+		window.end();
 	}
 }
 
-/// The boss pane in herdr's lists: the pane in workspace "Jocasta".
-pub fn boss_pane<'a>(workspaces: &[WorkspaceInfo], panes: &'a [PaneInfo]) -> Option<&'a PaneInfo> {
-	let home = workspaces.iter().find(|w| w.label == BOSS_WORKSPACE).map(|w| w.id.as_str())?;
-	panes.iter().find(|pane| pane.workspace_id == home)
+/// The boss pane in Jocasta's list: the pane in workspace "Jocasta".
+pub fn boss_pane(panes: &[BenchPane]) -> Option<&BenchPane> {
+	panes.iter().find(|pane| pane.workspace.as_deref() == Some(BOSS_WORKSPACE))
 }
 
-/// How long each of H5's herdr reads may take while Jocasta starts.
-const LIST_MS: i64 = 2_000;
-
-async fn list_boss(jocasta: &SandboxJocasta) -> Option<PaneInfo> {
-	let snapshot = jocasta.herdr().await.ok()?.snapshot().await.ok()?;
-	boss_pane(&snapshot.workspaces, &snapshot.panes).cloned()
+async fn list_boss(jocasta: &SandboxJocasta) -> Option<BenchPane> {
+	boss_pane(&jocasta.bench_panes().await.ok()?).cloned()
 }
 
 struct Started {
-	surface: Option<u32>,
+	window: Pty,
 	ready_ms: Option<f64>,
 	boss_idle_ms: Option<f64>,
 	service_ms: Option<f64>,
@@ -138,7 +125,8 @@ struct Started {
 async fn start_jocasta(jocasta: &SandboxJocasta, ready_pattern: &str, timeout_ms: f64) -> Result<Started> {
 	let before = read_service_file().map(|file| file.pid);
 	let started = Instant::now();
-	let surface = start_detached("jocasta")?;
+	// Bare `jocasta` is the terminal itself (0683): it starts in a pty, with the sandbox's environment this process has.
+	let window = Pty::spawn(&[jocasta_program()?], &std::env::temp_dir(), &[], &[])?;
 	let since = || started.elapsed().as_secs_f64() * 1000.0;
 	let wait = |interval_ms: u64| WaitOptions { timeout_ms: timeout_ms as u64, interval_ms };
 	let service = async {
@@ -158,33 +146,21 @@ async fn start_jocasta(jocasta: &SandboxJocasta, ready_pattern: &str, timeout_ms
 	};
 	let idle = async {
 		let seen = wait_for(
-			|| async { list_boss(jocasta).await.is_some_and(|pane| pane.agent_state.as_str() == "idle") },
+			|| async { list_boss(jocasta).await.is_some_and(|pane| pane.info.agent_state == AgentState::Idle) },
 			wait(100),
 		)
 		.await;
 		seen.map(|_| since())
 	};
-	let ready = async {
-		let pane_id: RefCell<Option<String>> = RefCell::new(None);
-		wait_for(
-			|| async {
-				let found = list_boss(jocasta).await.map(|pane| pane.pane_id);
-				let some = found.is_some();
-				*pane_id.borrow_mut() = found;
-				some
-			},
-			wait(100),
-		)
-		.await;
-		let pane_id = pane_id.into_inner()?;
-		let left = timeout_ms - since();
-		if left <= 0.0 {
-			return None;
-		}
-		wait_ready(&jocasta.sandbox.herdr_session, &pane_id, ready_pattern, left as i64).await.map(|_| since())
-	};
+	let ready = async { window.wait_for(ready_pattern, timeout_ms as i64).await.map(|_| since()) };
 	let (service_ms, boss_idle_ms, ready_ms) = tokio::join!(service, idle, ready);
-	Ok(Started { surface: Some(surface), ready_ms, boss_idle_ms, service_ms })
+	Ok(Started { window, ready_ms, boss_idle_ms, service_ms })
+}
+
+/// The `jocasta` beside this binary, which the pty runs.
+fn jocasta_program() -> Result<String> {
+	let exe = std::env::current_exe()?;
+	Ok(exe.with_file_name(format!("jocasta{}", std::env::consts::EXE_SUFFIX)).display().to_string())
 }
 
 fn times(of: &[&H5Row], pick: impl Fn(&H5Row) -> Option<f64>) -> Value {
@@ -200,7 +176,6 @@ pub async fn main(argv: Vec<String>) -> ExitCode {
 struct H5Settings<'a> {
 	tools: Vec<String>,
 	ready: BTreeMap<BenchTool, String>,
-	pty_session: &'a str,
 	timeout_ms: f64,
 	cwd: Option<&'a str>,
 	runs: usize,
@@ -220,7 +195,6 @@ fn h5_settings(args: &BenchArgs) -> Result<H5Settings<'_>> {
 	Ok(H5Settings {
 		tools,
 		ready: ready_patterns(flag(args, "ready"))?,
-		pty_session: flag_or(args, "pty-session", BENCH_PTY_SESSION),
 		timeout_ms: number_of(flag_or(args, "timeout", "60")) * 1000.0,
 		cwd: flag(args, "cwd"),
 		runs: usize::try_from(args.runs).unwrap_or(usize::MAX),
@@ -229,7 +203,7 @@ fn h5_settings(args: &BenchArgs) -> Result<H5Settings<'_>> {
 
 /// The `--dry-run` plan.
 fn print_h5_plan(args: &BenchArgs, settings: &H5Settings) {
-	let H5Settings { tools, ready, pty_session, timeout_ms, cwd, .. } = settings;
+	let H5Settings { tools, ready, timeout_ms, cwd, .. } = settings;
 	let shown = if timeout_ms.is_nan() { "NaN".to_owned() } else { js_number_text(timeout_ms / 1000.0) };
 	let mut lines = vec![format!(
 		"{} cold and {} warm starts of: {}; limit {shown} s each",
@@ -240,12 +214,12 @@ fn print_h5_plan(args: &BenchArgs, settings: &H5Settings) {
 	for tool in tools {
 		lines.push(if tool == "jocasta" {
 			format!(
-				"jocasta: start `jocasta`, time the boss pane matching /{}/ (readyMs), the boss idle (bossIdleMs) and /health (serviceMs); close it with Stop everything between runs",
+				"jocasta: start `jocasta` in a pty, time its window matching /{}/ (readyMs), the boss idle (bossIdleMs) and /health (serviceMs); close it with Stop everything between runs",
 				ready[&BenchTool::Omp]
 			)
 		} else {
 			let pattern = bench_tool(tool).map_or("", |known| ready[&known].as_str());
-			format!("{tool}: a tab in herdr session {pty_session}, timed to the screen matching /{pattern}/")
+			format!("{tool}: in a pty of its own, timed to the screen matching /{pattern}/")
 		});
 	}
 	let folder = match cwd {
@@ -266,14 +240,14 @@ async fn time_jocasta(
 	out: &Path,
 	rows: &mut Vec<H5Row>,
 ) -> Result<()> {
-	let mut surface: Option<u32> = None;
+	let mut window: Option<Pty> = None;
 	for (mode, run) in schedule(settings.runs) {
-		stop_jocasta(jocasta, surface).await;
+		stop_jocasta(window.as_ref()).await;
 		if mode == "cold" {
 			tokio::time::sleep(Duration::from_secs(30)).await;
 		}
 		let result = start_jocasta(jocasta, &settings.ready[&BenchTool::Omp], settings.timeout_ms).await?;
-		surface = result.surface;
+		window = Some(result.window);
 		let row = H5Row {
 			tool: "jocasta".to_owned(),
 			mode,
@@ -286,11 +260,11 @@ async fn time_jocasta(
 		append_row(out, "h5-startup", &row)?;
 		rows.push(row);
 	}
-	stop_jocasta(jocasta, surface).await;
+	stop_jocasta(window.as_ref()).await;
 	Ok(())
 }
 
-/// A competitor's starts in a tab of the bench herdr session; appends each row.
+/// A competitor's starts, each in a pty of its own; appends each row.
 async fn time_competitor(
 	tool: &str,
 	settings: &H5Settings<'_>,
@@ -298,19 +272,16 @@ async fn time_competitor(
 	out: &Path,
 	rows: &mut Vec<H5Row>,
 ) -> Result<()> {
-	let session = settings.pty_session;
 	let known = bench_tool(tool).expect("a listed tool is known");
-	let herdr = bench_herdr(session, None).await?;
-	let workspace = herdr.ensure_workspace("bench", cwd, None, None).await?;
-	// Resolved before any start is timed (`tool_command`: herdr can't start npm's extensionless shim).
+	// Resolved before any start is timed (`tool_command`: a pty can't start npm's extensionless shim).
 	let command = tool_command(known)?;
 	for (mode, run) in schedule(settings.runs) {
 		if mode == "cold" {
 			tokio::time::sleep(Duration::from_secs(30)).await;
 		}
 		let t0 = Instant::now();
-		let pane = launch_in_pane(&*herdr, &workspace, &command, cwd, LaunchOptions::default()).await?;
-		let waited = wait_ready(session, &pane.pane_id, &settings.ready[&known], settings.timeout_ms as i64).await;
+		let pty = launch(&command, cwd, &[])?;
+		let waited = pty.wait_for(&settings.ready[&known], settings.timeout_ms as i64).await;
 		let row = H5Row {
 			tool: tool.to_owned(),
 			mode,
@@ -322,9 +293,8 @@ async fn time_competitor(
 		};
 		append_row(out, "h5-startup", &row)?;
 		rows.push(row);
-		close_pane(&*herdr, session, &pane).await;
+		close_pty(&pty).await;
 	}
-	herdr.close();
 	Ok(())
 }
 
@@ -350,11 +320,8 @@ fn h5_summary(tools: &[String], rows: &[H5Row]) -> Map<String, Value> {
 }
 
 async fn run(argv: Vec<String>) -> Result<()> {
-	let spec = ArgSpec {
-		default_runs: 20,
-		valued: &["--tools", "--cwd", "--pty-session", "--ready", "--timeout"],
-		..ArgSpec::default()
-	};
+	let spec =
+		ArgSpec { default_runs: 20, valued: &["--tools", "--cwd", "--ready", "--timeout"], ..ArgSpec::default() };
 	let args = parse_bench_args(&argv, &spec)?;
 	let settings = h5_settings(&args)?;
 	if args.dry_run {
@@ -364,9 +331,9 @@ async fn run(argv: Vec<String>) -> Result<()> {
 	require_trusted_cwd(&settings.tools, settings.cwd)?;
 	let out = args.out.clone().expect("a real run has --out");
 	let with_jocasta = settings.tools.iter().any(|tool| tool == "jocasta");
-	let jocasta = if with_jocasta { Some(open_sandbox(Some(LIST_MS))?) } else { None };
+	let jocasta = if with_jocasta { Some(open_sandbox()?) } else { None };
 	claim_rows(&out, &["h5-startup"])?;
-	let mut measured = vec!["omp", "claude", "opencode", "herdr"];
+	let mut measured = vec!["omp", "claude", "opencode"];
 	if with_jocasta {
 		measured.push("jocasta");
 	}

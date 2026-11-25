@@ -1,15 +1,14 @@
 //! H6 (0482, 0552): RAM per pane and in total: working set and private bytes of each process tree.
 //!
 //!   jocasta-bench h6-memory --out <dir> [--runs 3] [--threads 0,1,4,8] [--tools omp,claude,opencode]
-//!                           [--project <name>] [--idle 120] [--turn] [--pty-session bench-pty] [--cwd <repo>] [--dry-run]
+//!                           [--project <name>] [--idle 120] [--turn] [--cwd <repo>] [--dry-run]
 //!
 //! Jocasta (sandbox; `--threads` above 0 needs `--project`): for each thread count it starts that many threads as
 //! `jocasta thread new` does (no Allow, 0544; each brief one short turn, so a model runs: VM only), waits `--idle`
-//! seconds, then sums Jocasta's processes: the service's tree (`jocasta-service.json`'s pid), the sandbox herdr server's
-//! tree (every pane, its omp and MCP processes) and each attached surface's tree (bare `jocasta` and its herdr client,
-//! `<data>/surfaces/`), each part also on its own, and each thread pane's tree on its own. Count 0 is the service,
-//! herdr, the surfaces and the boss alone.
-//! Competitors: each tool in a tab of the bench herdr session, `--idle` seconds after its prompt is ready, then with
+//! seconds, then sums Jocasta's processes: the tree of the one `jocasta` process `jocasta-service.json` names (the
+//! service, the shell and every pane with its omp and MCP processes, 0683) and each thread pane's tree on its own.
+//! Count 0 is Jocasta and the boss alone.
+//! Competitors: each tool in a pty of its own, `--idle` seconds after its prompt is ready, then with
 //! `--turn` once more after one scripted prompt (a model call). A tool the VM runs unsigned (0506: opencode) gets no
 //! prompt; h6-memory.json's `skipped` says why. Windows reads private bytes; POSIX only RSS.
 //! Writes h6-memory.jsonl (one snapshot per row) and h6-memory.json (per condition: median and CI of each sum).
@@ -28,20 +27,18 @@ use crate::lib::args::{
 	ArgSpec, BenchArgs, BenchUsageError, FlagValue, flag, flag_or, list_flag, number_list_flag, parse_bench_args,
 	run_script,
 };
-use crate::lib::herdr::herdr_request;
 use crate::lib::jocasta::{SandboxJocasta, open_sandbox};
 use crate::lib::launch::{
-	BENCH_TOOLS, BenchTool, LaunchOptions, LaunchedPane, bench_herdr, close_pane, launch_in_pane, ready_patterns,
-	require_trusted_cwd, tool_command, wait_ready,
+	BENCH_TOOLS, BenchTool, close_pty, launch, ready_patterns, require_trusted_cwd, tool_command,
 };
 use crate::lib::output::{append_row, claim_rows, conditions, print_plan, write_json};
-use crate::lib::proctree::{Memory, Parts, jocasta_processes, snapshot_processes, tree_memory, tree_of};
-use crate::lib::sandbox::BENCH_PTY_SESSION;
+use crate::lib::proctree::{Memory, snapshot_processes, tree_memory, tree_of};
+use crate::lib::pty::Pty;
 use crate::lib::stats::{BootstrapOptions, summarize};
 use crate::lib::temp::mkdtemp;
 use crate::lib::threads::{start_thread, wait_for_enter};
 use jocasta::frontier::protocol::js_number_text;
-use jocasta::frontier::server::herdr::{Herdr, pane_text};
+use jocasta::frontier::server::surface::pane_text;
 use jocasta::shared::errors::{Error, Result};
 use jocasta::shared::pathkey::resolve;
 use jocasta::shared::service_file::read_service_file;
@@ -62,9 +59,6 @@ pub struct H6Row {
 	pub run: u64,
 	#[serde(flatten)]
 	pub memory: Memory,
-	/// Jocasta only: its parts on their own (service, herdr's server, the surfaces), which the sums above add up.
-	#[serde(skip_serializing_if = "Option::is_none")]
-	pub parts: Option<Parts>,
 	/// Per pane, for Jocasta's thread panes.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub per_pane: Option<Vec<PaneMemory>>,
@@ -98,7 +92,6 @@ struct H6Settings<'a> {
 	/// The tools the VM runs unsigned, which get no prompt: their `skipped` entries.
 	skipped: Vec<Value>,
 	skip_jocasta: bool,
-	pty_session: &'a str,
 	ready: BTreeMap<BenchTool, String>,
 	cwd: Option<&'a str>,
 }
@@ -145,7 +138,6 @@ fn h6_settings(args: &BenchArgs) -> Result<H6Settings<'_>> {
 		turn,
 		skipped,
 		skip_jocasta: is_set(args, "skip-jocasta"),
-		pty_session: flag_or(args, "pty-session", BENCH_PTY_SESSION),
 		ready: ready_patterns(flag(args, "ready"))?,
 		cwd: flag(args, "cwd"),
 	})
@@ -160,7 +152,7 @@ fn print_h6_plan(args: &BenchArgs, settings: &H6Settings) {
 		"Jocasta skipped".to_owned()
 	} else {
 		format!(
-			"Jocasta with {} threads in {} (jocasta thread new; model turns: VM only), {shown} s idle, service + herdr + surface trees summed and apart, each thread pane alone",
+			"Jocasta with {} threads in {} (jocasta thread new; model turns: VM only), {shown} s idle, its one process tree summed, each thread pane alone",
 			counts.join(", "),
 			settings.project.unwrap_or("<--project>")
 		)
@@ -176,9 +168,8 @@ fn print_h6_plan(args: &BenchArgs, settings: &H6Settings) {
 		&[
 			jocasta,
 			format!(
-				"{}: one tab each in herdr session {}, {shown} s after ready{}{no_prompt}",
+				"{}: one pty each, {shown} s after ready{}{no_prompt}",
 				settings.tool_names().join(", "),
-				settings.pty_session,
 				if settings.turn { ", again after one scripted prompt" } else { "" },
 			),
 			format!("{} runs per condition; working set and private bytes (Windows) per process tree", args.runs),
@@ -187,21 +178,18 @@ fn print_h6_plan(args: &BenchArgs, settings: &H6Settings) {
 	);
 }
 
-/// One snapshot of Jocasta's processes: the sums, the parts and each thread pane's tree.
+/// One snapshot of Jocasta's processes: the one tree (service, shell and every pane, 0683) and each thread pane's tree.
 async fn jocasta_row(jocasta: &SandboxJocasta, count: u64, run: u64) -> Result<H6Row> {
 	if read_service_file().is_none() {
 		return Err(Error::other("no service: <data>/jocasta-service.json is missing"));
 	}
-	let herdr = jocasta.herdr().await?;
-	let mut roots: Vec<(String, u32)> = Vec::new();
-	for pane in herdr.panes().await? {
-		if let Some(root) = herdr.pane_root(&pane.pane_id, None).await.ok().flatten().filter(|root| *root != 0) {
-			roots.push((pane.pane_id, root));
-		}
-	}
+	let roots: Vec<(String, u32)> = jocasta
+		.bench_panes()
+		.await?
+		.into_iter()
+		.filter_map(|pane| Some((pane.info.pane_id, pane.root.filter(|root| *root != 0)?)))
+		.collect();
 	let processes = snapshot_processes()?;
-	let pane_roots: Vec<u32> = roots.iter().map(|(_, root)| *root).collect();
-	let trees = jocasta_processes(&jocasta.processes(&processes, Some(&pane_roots)).await?, &processes);
 	let per_pane = roots
 		.iter()
 		.map(|(pane_id, root)| {
@@ -217,15 +205,14 @@ async fn jocasta_row(jocasta: &SandboxJocasta, count: u64, run: u64) -> Result<H
 		subject: "jocasta".to_owned(),
 		condition: format!("{count} threads"),
 		run,
-		memory: tree_memory(&trees.all),
-		parts: Some(trees.parts),
+		memory: tree_memory(&jocasta.process_tree(&processes)),
 		per_pane: Some(per_pane),
 	})
 }
 
 /// Jocasta with each thread count, `runs` times.
 async fn measure_jocasta(settings: &H6Settings<'_>, runs: u64, out: &Path, rows: &mut Vec<H6Row>) -> Result<()> {
-	let jocasta = open_sandbox(None)?;
+	let jocasta = open_sandbox()?;
 	if settings.thread_counts.iter().any(|n| *n > 0) && settings.project.is_none() {
 		return Err(BenchUsageError::err("thread counts above 0 need --project"));
 	}
@@ -250,15 +237,9 @@ async fn measure_jocasta(settings: &H6Settings<'_>, runs: u64, out: &Path, rows:
 	Ok(())
 }
 
-/// One tool's pane: idle, then with `--turn` after one prompt.
-async fn measure_pane(
-	herdr: &dyn Herdr,
-	settings: &H6Settings<'_>,
-	tool: BenchTool,
-	pane: &LaunchedPane,
-	run: u64,
-) -> Result<Vec<H6Row>> {
-	if wait_ready(settings.pty_session, &pane.pane_id, &settings.ready[&tool], 60_000).await.is_none() {
+/// One tool's pty: idle, then with `--turn` after one prompt.
+async fn measure_pane(settings: &H6Settings<'_>, tool: BenchTool, pty: &Pty, run: u64) -> Result<Vec<H6Row>> {
+	if pty.wait_for(&settings.ready[&tool], 60_000).await.is_none() {
 		return Err(Error::other(format!(
 			"{} never showed its ready pattern /{}/",
 			tool.as_str(),
@@ -271,29 +252,26 @@ async fn measure_pane(
 			if !settings.turn || tool.unsigned().is_some() {
 				break;
 			}
-			// `agent.prompt`: a bracketed paste then Enter into the competitor's TUI; the `Herdr` interface has no method for
-			// it now that Jocasta's own prompts go over the bridge (0675).
-			let params = json!({ "target": pane.pane_id, "text": pane_text(TURN_PROMPT) });
-			herdr_request::<Value>(settings.pty_session, "agent.prompt", &params, None).await?;
+			// A bracketed paste then Enter into the competitor's TUI, as typed.
+			pty.send(format!("\u{1b}[200~{}\u{1b}[201~", pane_text(TURN_PROMPT)).as_bytes());
+			pty.send(b"\r");
 		}
 		settings.idle().await;
-		let shell = herdr.pane_root(&pane.pane_id, Some(10_000)).await.ok().flatten().filter(|root| *root != 0);
-		let Some(shell) = shell else {
-			return Err(Error::other(format!("no process for {}'s pane", tool.as_str())));
+		let Some(root) = pty.pid() else {
+			return Err(Error::other(format!("no process for {}'s pty", tool.as_str())));
 		};
 		rows.push(H6Row {
 			subject: tool.as_str().to_owned(),
 			condition: condition.to_owned(),
 			run,
-			memory: tree_memory(&tree_of(shell, &snapshot_processes()?)),
-			parts: None,
+			memory: tree_memory(&tree_of(root, &snapshot_processes()?)),
 			per_pane: None,
 		});
 	}
 	Ok(rows)
 }
 
-/// Each competitor in a tab of the bench herdr session, `runs` times.
+/// Each competitor in a pty of its own, `runs` times.
 async fn measure_tools(
 	settings: &H6Settings<'_>,
 	cwd: &Path,
@@ -301,20 +279,17 @@ async fn measure_tools(
 	out: &Path,
 	rows: &mut Vec<H6Row>,
 ) -> Result<()> {
-	let herdr = bench_herdr(settings.pty_session, None).await?;
-	let workspace = herdr.ensure_workspace("bench", cwd, None, None).await?;
 	for &tool in &settings.tools {
 		for run in 0..runs {
-			let pane = launch_in_pane(&*herdr, &workspace, &tool_command(tool)?, cwd, LaunchOptions::default()).await?;
-			let measured = measure_pane(&*herdr, settings, tool, &pane, run).await;
-			close_pane(&*herdr, settings.pty_session, &pane).await;
+			let pty = launch(&tool_command(tool)?, cwd, &[])?;
+			let measured = measure_pane(settings, tool, &pty, run).await;
+			close_pty(&pty).await;
 			// Rows of a pane that failed midway were recorded before; here the whole pane's rows or its error.
 			for row in measured? {
 				record(rows, out, row)?;
 			}
 		}
 	}
-	herdr.close();
 	Ok(())
 }
 
@@ -354,7 +329,7 @@ fn h6_summary(rows: &[H6Row]) -> Vec<Value> {
 async fn run(argv: Vec<String>) -> Result<()> {
 	let spec = ArgSpec {
 		default_runs: 3,
-		valued: &["--threads", "--tools", "--project", "--idle", "--pty-session", "--cwd", "--ready"],
+		valued: &["--threads", "--tools", "--project", "--idle", "--cwd", "--ready"],
 		booleans: &["--turn", "--skip-jocasta"],
 		..ArgSpec::default()
 	};
@@ -366,7 +341,7 @@ async fn run(argv: Vec<String>) -> Result<()> {
 	}
 	require_trusted_cwd(&settings.tool_names(), settings.cwd)?;
 	let out = args.out.clone().expect("a real run has --out");
-	let mut measured = vec!["omp", "claude", "opencode", "herdr"];
+	let mut measured = vec!["omp", "claude", "opencode"];
 	if !settings.skip_jocasta {
 		measured.push("jocasta");
 	}

@@ -1,6 +1,6 @@
 //! `jocasta uninstall` (0468): removes exactly what install and setup added. The installer records its part in
 //! `install.json` (the folder, the release's top-level entries, its PATH entry, the autostart value, the companion's
-//! WebView2 data); setup's migrations record theirs in their markers (`setup_undo`). herdr session `jocasta` and
+//! WebView2 data); setup's migrations record theirs in their markers (`setup_undo`).
 //! Jocasta's per-project mise configs (0477) go too. The data folder (history, models) is asked about separately. Each
 //! of omp's files the omp snapshot wrote gets back the one it replaced while it is still the snapshot's text (fork plan
 //! phase 6). From the install folder only the release's entries go, and the folder once it is empty (0579); omp
@@ -19,11 +19,10 @@ use serde_json::{Map, Value};
 use crate::frontier::server::launch::ServiceState;
 use crate::setup::markers::{Undo, fingerprint};
 use crate::setup::run_value::{RUN_KEY, delete_run_value, read_run_value};
-use crate::setup::setup::{McpUndo, RunProgram, SetupIo, SetupUndo, answered_yes};
+use crate::setup::setup::{McpUndo, SetupIo, SetupUndo, answered_yes};
 use crate::shared::env;
 use crate::shared::errors::{Error, Result};
 use crate::shared::fsx::{read_json_object, remove_tree, write_atomically};
-use crate::shared::herdr_session::DEFAULT_SESSION;
 use crate::shared::install::INSTALL_MARKER;
 use crate::shared::pathkey::{is_inside, resolve, same_path};
 
@@ -143,11 +142,6 @@ type ProcessesUnder = Arc<dyn Fn(&Path) -> Vec<InstallProcess> + Send + Sync>;
 #[derive(Clone)]
 pub struct UninstallDeps {
 	pub service_state: Arc<dyn Fn() -> BoxFuture<'static, Result<ServiceState>> + Send + Sync>,
-	/// The program that runs herdr's words: this `jocasta`.
-	pub herdr: PathBuf,
-	/// herdr's session, `jocasta` (`JOCASTA_HERDR_SESSION` for checks).
-	pub session: String,
-	pub run: RunProgram,
 	/// How to undo what setup added here (`setup_undo`).
 	pub setup_undo: Vec<SetupUndo>,
 	/// Removes `entry` from the user PATH; false when it wasn't there.
@@ -173,7 +167,6 @@ enum Action {
 	Path(PathBuf),
 	SetupFolder(PathBuf, Option<String>),
 	Mcp(McpUndo),
-	HerdrSession,
 	Restore(PathBuf, Option<PathBuf>, String),
 	Credential(String),
 	Autostart(String, PathBuf),
@@ -610,11 +603,6 @@ fn remove_if_empty(dir: &Path) {
 	let _ = fs::remove_dir(dir);
 }
 
-/// The argv of a herdr command.
-fn argv(herdr: &Path, rest: &[&str]) -> Vec<String> {
-	std::iter::once(herdr.to_string_lossy().into_owned()).chain(rest.iter().map(|word| (*word).to_owned())).collect()
-}
-
 /// Does one removal.
 async fn perform(action: &Action, deps: &UninstallDeps) -> Result<String> {
 	match action {
@@ -622,28 +610,6 @@ async fn perform(action: &Action, deps: &UninstallDeps) -> Result<String> {
 		Action::SetupFolder(path, file) => remove_setup_folder(path, file.as_deref()),
 		Action::Mcp(item) => remove_mcp_servers(item),
 		Action::Restore(path, backup, expected) => restore_file(path, backup.as_deref(), expected),
-		Action::HerdrSession => {
-			let herdr = &deps.herdr;
-			// Jocasta's own session is herdr's default one in Jocasta's data folder: its server stops, and its files go
-			// with that folder.
-			if deps.session == DEFAULT_SESSION {
-				let out = (deps.run)(argv(herdr, &["server", "stop"])).await?;
-				return Ok(
-					if out.code == 0 { "stopped herdr's server" } else { "herdr's server wasn't running" }.to_owned()
-				);
-			}
-			(deps.run)(argv(herdr, &["session", "stop", &deps.session])).await?;
-			let out = (deps.run)(argv(herdr, &["session", "delete", &deps.session])).await?;
-			if out.code != 0 {
-				return Err(Error::other(format!(
-					"herdr session delete {} exited {}: {}",
-					deps.session,
-					out.code,
-					out.output.trim()
-				)));
-			}
-			Ok(format!("removed herdr session `{}`", deps.session))
-		}
 		Action::Credential(target) => Ok(if (deps.delete_credential)(target) {
 			format!("removed {target}")
 		} else {
@@ -701,14 +667,7 @@ fn install_removals(install: &InstallRecord) -> Vec<Removal> {
 
 /// Everything to remove, in order.
 fn plan(paths: &UninstallPaths, deps: &UninstallDeps) -> Result<Vec<Removal>> {
-	let mut removals = vec![Removal {
-		what: if deps.session == DEFAULT_SESSION {
-			"herdr's server (stopped, its panes closed)".to_owned()
-		} else {
-			format!("herdr session `{}` (stopped, its panes closed, then deleted)", deps.session)
-		},
-		action: Action::HerdrSession,
-	}];
+	let mut removals = Vec::new();
 	for item in &deps.setup_undo {
 		removals.push(undo_removal(item)?);
 	}
@@ -791,7 +750,7 @@ fn remove_data_folder(data_dir: &Path) -> Result<String> {
 pub async fn run_uninstall(paths: &UninstallPaths, deps: &UninstallDeps, io: &dyn SetupIo) -> Result<i32> {
 	if (deps.service_state)().await? != ServiceState::Down {
 		return Err(Error::user_with_code(
-			"Jocasta is running: close it (quit herdr's client in the `jocasta` terminal), then run `jocasta uninstall` again.",
+			"Jocasta is running: close its window (or press Ctrl+B, then Alt+Q), then run `jocasta uninstall` again.",
 			1,
 		));
 	}

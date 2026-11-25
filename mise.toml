@@ -11,10 +11,8 @@ cargo-deny = "0.20.2"
 "github:bnjbvr/cargo-machete" = "0.9.2"
 # Runs the Rust tests, each in its own process, so the tests' environment lock never makes one wait (0644).
 "aqua:nextest-rs/nextest/cargo-nextest" = "0.9.151"
-# The herdr fork's terminal binding builds its vendored libghostty-vt with Zig, at the version its build names.
-zig = "0.16.0"
 
-# Cargo's build jobs, held down so the fork's build, its link and a test run fit in his PC's memory beside his work.
+# Cargo's build jobs, held down so a build, its link and a test run fit in his PC's memory beside his work.
 [env]
 CARGO_BUILD_JOBS = "4"
 
@@ -64,13 +62,9 @@ description = "the release build against the footprint budget (jocasta-bench foo
 run = ["cargo build --release --locked --bin jocasta --bin jocasta-bench", "cargo run --release --locked --bin jocasta-bench -- footprint"]
 
 [tasks.smoke]
-# One test at a time: each starts its own herdr server and service on this machine.
-description = "the opt-in smoke on this machine: throwaway herdr sessions, one at a time"
+# One test at a time: each starts its own Jocasta (the single-instance lock and the bridge's port are per machine).
+description = "the opt-in smoke on this machine: a throwaway Jocasta in a pty, one test at a time"
 env = { JOCASTA_HERDR_SMOKE = "1" }
-run = "cargo nextest run --locked -j 1 -E 'test(/live_smoke/)'"
+# Double quotes: cmd, which runs tasks on Windows, doesn't take single ones.
+run = 'cargo nextest run --locked -j 1 -E "test(/live_smoke/)"'
 
-# What Jocasta's weekly review runs for a project that has this task (0616); here clippy's counts, jscpd's duplicated
-# share of `src` and cargo-deny's advisories line (0610, 0614, 0645). It prints and fails nothing.
-[tasks.scorecard]
-description = "the quality scorecard the weekly review keeps week on week (scripts/scorecard.ts)"
-run = "bun scripts/scorecard.ts"

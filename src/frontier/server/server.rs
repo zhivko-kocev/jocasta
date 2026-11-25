@@ -24,10 +24,8 @@ use crate::frontier::server::asker::{Ask, Show, asker};
 use crate::frontier::server::bridge::{Bridge, BridgeService, Secrets};
 use crate::frontier::server::close::{CloseFlow, CloseHow, CloseOutcome, CloseParts, CloseService, close_flow};
 use crate::frontier::server::day::{DayOptions, SharedCatalog};
-use crate::frontier::server::door_routes::{DoorParts, door_routes};
 use crate::frontier::server::feed::{FeedService, Guard, Reply, feed_route, feed_socket, publish};
 use crate::frontier::server::health_route::health_route;
-use crate::frontier::server::herdr::{Herdr, HerdrOptions, Note, connect_herdr};
 use crate::frontier::server::native::{Native, NativeServer};
 use crate::frontier::server::page_routes::{LaunchCodes, PageParts, PageResponder, page_responder};
 use crate::frontier::server::phone::{Phone, PhoneOptions, Timing, topics};
@@ -37,10 +35,10 @@ use crate::frontier::server::service::{Changed, Heal, JocastaService, ServiceOpt
 use crate::frontier::server::stop_sequence::{
 	StopBounds, StopParts, StopRun, StopService, StopStep, StopWhen, Stopper, stop_steps, stopper, undo_start,
 };
+use crate::frontier::server::surface::{Note, Surface};
 use crate::frontier::server::thread_keys::{ActionService, KeyParts, ThreadKeys};
 use crate::shared::credentials::{calendar_secret, gmail_secret, jira_secret, take_calendar_env, take_source_envs};
 use crate::shared::errors::Result;
-use crate::shared::herdr_session::herdr_session;
 use crate::shared::link::open_in_browser;
 use crate::shared::log::{LogLevel, log};
 use crate::shared::paths::data_dir;
@@ -60,9 +58,6 @@ const PHONE_STOP_MS: u64 = 5_000;
 
 /// What sends a message to every state-feed client.
 type Broadcast = Arc<dyn Fn(ServerMessage) + Send + Sync>;
-
-/// Opens a terminal on herdr's session for the close question.
-pub type Reattach = Arc<dyn Fn() -> Result<()> + Send + Sync>;
 
 /// What shows a question to him: it gets the question's one-time code.
 pub type OnQuestion = Arc<dyn Fn(&Popup) + Send + Sync>;
@@ -117,11 +112,7 @@ pub struct ServerOptions {
 	/// How long a plan-mode turn's end waits for the session to show its proposal; `PLAN_SETTLE_MS` (test seam).
 	pub plan_settle_ms: Option<i64>,
 	/// herdr (test seam): the server this service lives in by default.
-	pub herdr: Option<Arc<dyn Herdr>>,
-	/// herdr's session, for its name in the stop steps and the panes' commands (smoke seam); `jocasta` by default.
-	pub herdr_session: Option<String>,
-	/// The API socket of the herdr server this service lives in, as clients connect to it; the session's when absent.
-	pub herdr_socket: Option<String>,
+	pub herdr: Option<Arc<dyn Surface>>,
 	/// Phase 8's pollers and clock (test seam); tests pass `pollers: Some(false)` so nothing calls the real gh or az.
 	pub day: Option<DayOptions>,
 	/// The port to try first (test seam): `service.port`, else 47400 (0358).
@@ -133,10 +124,6 @@ pub struct ServerOptions {
 	/// herdr's client shells (fork plan phase 5): the dock beside the boss, the Agents view, his questions and his
 	/// thread keys. The service herdr's server runs has them; a test's server has none unless set.
 	pub shell: Option<Arc<Native>>,
-	/// Opens a new terminal attached to herdr's session, as bare `jocasta` does (0549): his client closed while
-	/// threads are at work, so the close question has somewhere to show. A new Windows Terminal window running
-	/// `jocasta` by default (test seam).
-	pub reattach: Option<Reattach>,
 	/// Each stop step's bound in ms (test seam): service 30 s, herdr 15 s.
 	pub stop_bounds_ms: StopBounds,
 }
@@ -192,7 +179,7 @@ struct Inner {
 	question: Ask,
 	popups: Arc<Popups>,
 	keys: Arc<ThreadKeys>,
-	herdr: Arc<dyn Herdr>,
+	herdr: Arc<dyn Surface>,
 }
 
 impl JocastaServer {
@@ -211,14 +198,7 @@ impl JocastaServer {
 	/// the close question is asked first (Stop everything or Cancel); Cancel leaves everything as it was. Otherwise
 	/// everything Jocasta started stops (`stop_everything`) and `stopped` resolves.
 	pub async fn shutdown(&self, ask: bool) -> CloseOutcome {
-		self.inner.close.close(CloseHow { ask, reattach: false }).await
-	}
-
-	/// His herdr client closed (he quit it, or closed its terminal; 0549): with nothing working or awaiting him,
-	/// everything stops at once; otherwise a new terminal attaches to the session again and the close question is
-	/// asked there.
-	pub async fn client_closed(&self) -> CloseOutcome {
-		self.inner.close.close(CloseHow { ask: true, reattach: true }).await
+		self.inner.close.close(CloseHow { ask }).await
 	}
 
 	/// Registers something else Jocasta started that stops with it (0549): run on Stop everything after herdr's stops,
@@ -314,12 +294,6 @@ fn configured_port() -> u16 {
 		.and_then(|value| value.as_u64())
 		.and_then(|port| u16::try_from(port).ok())
 		.unwrap_or(DEFAULT_PORT)
-}
-
-/// The herdr server of `session` this service lives in, at `socket` when given; it is never started from here.
-async fn connect_session(session: &str, socket: Option<String>) -> Result<Arc<dyn Herdr>> {
-	let options = HerdrOptions { session: session.to_owned(), socket_path: socket, ..HerdrOptions::default() };
-	Ok(connect_herdr(options).await?)
 }
 
 /// His Allow/Deny before a risky boss action (0484), Deny by default and answered only with its one-time code. When the
@@ -438,13 +412,12 @@ fn questions(options: &mut ServerOptions, shell: Option<&Arc<Native>>) -> Questi
 	Questions { popups, question }
 }
 
-/// The Agents view and the dock's workspace, healed on every refresh: the service's `dock` hook.
-fn heal_of(herdr: &Arc<dyn Herdr>, shell: Arc<Native>) -> Heal {
-	let herdr = Arc::clone(herdr);
+/// The boss's workspace, told to the shell on every refresh: the service's `dock` hook.
+fn heal_of(shell: Arc<Native>) -> Heal {
 	Arc::new(move |snapshot, boss| {
-		let (herdr, shell) = (Arc::clone(&herdr), Arc::clone(&shell));
+		let shell = Arc::clone(&shell);
 		Box::pin(async move {
-			shell.heal(&*herdr, &snapshot, boss.as_deref()).await;
+			shell.heal(&snapshot, boss.as_deref()).await;
 			Ok(())
 		})
 	})
@@ -458,7 +431,7 @@ fn changes_of(shell: Arc<Native>) -> Changed {
 /// The service over a new catalog, with the options that pass through and the server's own seams in place.
 fn build_service(
 	options: &mut ServerOptions,
-	herdr: &Arc<dyn Herdr>,
+	herdr: &Arc<dyn Surface>,
 	broadcast: &Broadcast,
 	briefs: Arc<dyn BriefLinks>,
 ) -> Result<(Arc<JocastaService>, Questions)> {
@@ -468,7 +441,7 @@ fn build_service(
 	let given = options.briefs.take();
 	let confirm = options.confirm.take();
 	options.pass_on(&mut service);
-	service.dock = shell.clone().map(|shell| heal_of(herdr, shell));
+	service.dock = shell.clone().map(heal_of);
 	service.herdr_changed = shell.map(changes_of);
 	service.confirm = Some(confirm.unwrap_or_else(|| allow_box(Arc::clone(&asking.question))));
 	service.ask = Some(Arc::clone(&asking.question));
@@ -479,9 +452,7 @@ fn build_service(
 
 /// What the stopper, the close and the routes are built from.
 struct Rig<'a> {
-	tokens: &'a Tokens,
-	herdr: &'a Arc<dyn Herdr>,
-	session: &'a str,
+	herdr: &'a Arc<dyn Surface>,
 	service: &'a Arc<JocastaService>,
 	asking: &'a Questions,
 	broadcast: &'a Broadcast,
@@ -525,7 +496,7 @@ fn stopper_of(
 	bounds: StopBounds,
 ) -> Arc<Stopper> {
 	let popups = Arc::clone(&rig.asking.popups);
-	let (herdr, session) = (Arc::clone(rig.herdr), rig.session.to_owned());
+	let herdr = Arc::clone(rig.herdr);
 	let service = Arc::clone(rig.service);
 	let (broadcast, listening) = (Arc::clone(rig.broadcast), Arc::clone(listening));
 	let phone = rig.phone.cloned();
@@ -548,7 +519,6 @@ fn stopper_of(
 			popups: Arc::clone(&popups),
 			broadcast: Arc::clone(&broadcast),
 			herdr: Arc::clone(&herdr),
-			session: session.clone(),
 			service: Arc::clone(&service) as Arc<dyn StopService>,
 			extra_stops,
 			bridge: Arc::clone(&bridge),
@@ -559,7 +529,7 @@ fn stopper_of(
 }
 
 /// His close: asks first with threads at work, then stops everything.
-fn close_of(rig: &Rig<'_>, stops: &Arc<Stopper>, reattach: Option<Reattach>) -> CloseFlow {
+fn close_of(rig: &Rig<'_>, stops: &Arc<Stopper>) -> CloseFlow {
 	let (stopping, stop_all) = (Arc::clone(stops), Arc::clone(stops));
 	close_flow(CloseParts {
 		service: Arc::clone(rig.service) as Arc<dyn CloseService>,
@@ -571,19 +541,6 @@ fn close_of(rig: &Rig<'_>, stops: &Arc<Stopper>, reattach: Option<Reattach>) -> 
 		stop_all: Arc::new(move || {
 			let stops = Arc::clone(&stop_all);
 			async move { stops.stop(true).await }.boxed()
-		}),
-		reattach,
-	})
-}
-
-/// The API's routes in order, before the pages.
-fn routes_of(rig: &Rig<'_>, close: &CloseFlow) -> Vec<Box<dyn Route>> {
-	let closed = close.clone();
-	door_routes(DoorParts {
-		token: rig.tokens.api.clone(),
-		client_closed: Arc::new(move || {
-			let close = closed.clone();
-			tokio::spawn(async move { close.close(CloseHow { ask: true, reattach: true }).await });
 		}),
 	})
 }
@@ -602,14 +559,14 @@ fn keys_of(rig: &Rig<'_>, close: &CloseFlow, waiting_ms: i64, shell: Option<Arc<
 		broadcast: Arc::clone(rig.broadcast),
 		quit: Arc::new(move || {
 			let close = quitting.clone();
-			async move { close.close(CloseHow { ask: true, reattach: false }).await }.boxed()
+			async move { close.close(CloseHow { ask: true }).await }.boxed()
 		}),
 		waiting_ms,
 	})
 }
 
-/// The undo step that closes herdr's connection.
-fn undo_herdr(herdr: &Arc<dyn Herdr>) -> StopStep {
+/// The undo step that closes the surface's watches.
+fn undo_herdr(herdr: &Arc<dyn Surface>) -> StopStep {
 	let herdr = Arc::clone(herdr);
 	StopStep::sync("herdr's connection", move || {
 		herdr.close();
@@ -711,13 +668,8 @@ async fn start_rest(
 		}
 		publish(locked(&slot).as_ref(), &message);
 	});
-	let session = match options.herdr_session.take() {
-		Some(session) => session,
-		None => herdr_session()?,
-	};
-	let herdr = match options.herdr.clone() {
-		Some(herdr) => herdr,
-		None => connect_session(&session, options.herdr_socket.take()).await?,
+	let Some(herdr) = options.herdr.clone() else {
+		return Err(crate::shared::errors::Error::other("the server was started without a surface"));
 	};
 	undo.push(undo_herdr(&herdr));
 	let briefs_of_server =
@@ -731,18 +683,10 @@ async fn start_rest(
 	if let Some(phone) = &phone {
 		undo.push(phone_stop(phone));
 	}
-	let rig = Rig {
-		tokens: &tokens,
-		herdr: &herdr,
-		session: &session,
-		service: &service,
-		asking: &asking,
-		broadcast: &broadcast,
-		phone: phone.as_ref(),
-	};
+	let rig = Rig { herdr: &herdr, service: &service, asking: &asking, broadcast: &broadcast, phone: phone.as_ref() };
 	let stops = stopper_of(&rig, bridge_stop(&bridge), &listening, options.stop_bounds_ms);
-	let close = close_of(&rig, &stops, options.reattach.take());
-	let mut routes = routes_of(&rig, &close);
+	let close = close_of(&rig, &stops);
+	let mut routes: Vec<Box<dyn Route>> = Vec::new();
 	let closing = Arc::clone(&stops);
 	let actions = Arc::clone(&service) as Arc<dyn BriefActions>;
 	let brief_routes = BriefRoutes::new(

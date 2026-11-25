@@ -16,9 +16,9 @@ use crate::frontier::server::helpers::{
 	with_server,
 };
 use crate::frontier::server::helpers_procs::{ShimTree, with_server_on};
-use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
-use crate::frontier::server::herdr::{AgentState, Env, Herdr, TabSpec};
 use crate::frontier::server::server::ServerOptions;
+use crate::frontier::server::surface::fake_surface::FakeSurface;
+use crate::frontier::server::surface::{AgentState, Env, Surface, TabSpec};
 use crate::frontier::server::tools::{TOOLS, ToolReply};
 use crate::frontier::server::wording::HANDOFF_PROMPT;
 use crate::shared::proctree::pid_alive;
@@ -30,7 +30,7 @@ fn error_reply(text: &str) -> ToolReply {
 }
 
 /// The text of each prompt sent to a pane, with the pane: `[pane, text]` of every `prompt` call.
-fn prompts(herdr: &FakeHerdr) -> Vec<(String, String)> {
+fn prompts(herdr: &FakeSurface) -> Vec<(String, String)> {
 	herdr
 		.of("prompt")
 		.into_iter()
@@ -41,7 +41,7 @@ fn prompts(herdr: &FakeHerdr) -> Vec<(String, String)> {
 		.collect()
 }
 
-fn workspace_of(herdr: &FakeHerdr, pane_id: &str) -> String {
+fn workspace_of(herdr: &FakeSurface, pane_id: &str) -> String {
 	let state = herdr.state();
 	state.pane_list.iter().find(|p| p.pane_id == pane_id).map(|p| p.workspace_id.clone()).expect("the pane")
 }
@@ -168,7 +168,7 @@ struct Respawned {
 	env: Option<Env>,
 }
 
-fn respawns_since(herdr: &FakeHerdr, before: usize) -> Vec<Respawned> {
+fn respawns_since(herdr: &FakeSurface, before: usize) -> Vec<Respawned> {
 	let state = herdr.state();
 	state.calls[before..]
 		.iter()
@@ -200,7 +200,7 @@ async fn herdr_restored_its_panes_as_shells_jocasta_goes_first_the_boss_project_
  {
 	let j = temp_jocasta();
 	let project = demo_project(j.root(), "demo").await;
-	let herdr = Arc::new(FakeHerdr::new());
+	let herdr = Arc::new(FakeSurface::new());
 	let options = |boss_key: Option<&str>, wait: Option<i64>| ServerOptions {
 		agent_wait_ms: wait,
 		boss_key: boss_key.map(str::to_owned),
@@ -229,7 +229,7 @@ async fn herdr_restored_its_panes_as_shells_jocasta_goes_first_the_boss_project_
 		let (herdr, path) = keep;
 		let respawned = respawns_since(&herdr, before);
 		let thread = thread_omp(&project_id, "Readme line");
-		let heads: Vec<Vec<String>> = respawned.iter().map(|r| r.command[..3].to_vec()).collect();
+		let heads: Vec<Vec<String>> = respawned.iter().map(|r| r.command.iter().take(3).cloned().collect()).collect();
 		let words = |list: &[&str]| list.iter().map(|w| (*w).to_owned()).collect::<Vec<_>>();
 		assert_eq!(
 			heads[..2],
@@ -247,7 +247,7 @@ async fn herdr_restored_its_panes_as_shells_jocasta_goes_first_the_boss_project_
 		assert!(expected == thread_env, "{thread_env:?}");
 		assert!(same(&respawned[2].cwd, &main_path), "{}", respawned[2].cwd);
 		// A project pane that was asleep is the sleeper again (0676), with only its own pane key.
-		assert_eq!(respawned[2].command[1], "pane-sleep");
+		assert_eq!(respawned[2].command[0], crate::frontier::server::surface::ASLEEP);
 		assert!(respawned[2].env.as_ref().is_some_and(|env| env.iter().any(|(name, _)| name == "JOCASTA_PANE_KEY")));
 		let keys: std::collections::HashSet<Option<String>> = respawned
 			.iter()
@@ -309,7 +309,7 @@ async fn herdr_restored_its_panes_as_shells_jocasta_goes_first_the_boss_project_
 async fn a_boss_pane_an_earlier_run_started_is_told_it_lacks_the_key_only_when_it_sends_none_a_wrong_key_gets_the_plain_refusal_0484()
  {
 	let _j = temp_jocasta();
-	let herdr = Arc::new(FakeHerdr::new());
+	let herdr = Arc::new(FakeSurface::new());
 	let first = ServerOptions::default();
 	let server = start_test_server_with(herdr.clone(), first).await;
 	server.stop().await;
@@ -366,7 +366,7 @@ fn home() -> std::path::PathBuf {
 	std::env::home_dir().expect("a home folder")
 }
 
-async fn touch_default(herdr: &FakeHerdr, pane_id: &str, touch: Touch, root: &Path) {
+async fn touch_default(herdr: &FakeSurface, pane_id: &str, touch: Touch, root: &Path) {
 	match touch {
 		Touch::Nothing => {}
 		Touch::SecondPane => {
@@ -410,8 +410,8 @@ async fn default_workspace_after_start(
 	touch: Touch,
 	before: Before,
 	root: &Path,
-) -> (Arc<FakeHerdr>, String, Vec<String>) {
-	let herdr = Arc::new(FakeHerdr::new());
+) -> (Arc<FakeSurface>, String, Vec<String>) {
+	let herdr = Arc::new(FakeSurface::new());
 	match before {
 		Before::Nothing => {}
 		Before::ServerAlreadyRunning => herdr.state().started_server = false,
@@ -443,7 +443,7 @@ async fn a_session_jocasta_created_loses_herdrs_untouched_default_workspace_once
 	assert_eq!(labels, vec!["Jocasta".to_owned()]);
 
 	// An empty new session (Jocasta started its server, no client attached yet) has nothing to close.
-	let empty = Arc::new(FakeHerdr::new());
+	let empty = Arc::new(FakeSurface::new());
 	let options = ServerOptions::default();
 	let server = start_test_server_with(empty.clone(), options).await;
 	server.service.refresh().await;

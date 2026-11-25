@@ -3,15 +3,15 @@
 //!
 //!   jocasta-bench footprint [--write-budget]
 //!
-//! It builds a throwaway sandbox (its own data folder, config folder and herdr session), registers four projects,
+//! It builds a throwaway sandbox (its own data folder and config folder), registers four projects,
 //! puts a stub `omp` first on PATH (this binary under the name `omp`, which idles and answers `usage` and `config`
-//! with nothing), starts the release `jocasta` as its server (`JOCASTA_SERVICE=1 jocasta server`, no client window),
-//! opens the four projects' workspaces so their panes start, waits 60 s idle and prints one JSON object:
+//! with nothing), starts the release `jocasta` in a pty as bare `jocasta` runs (the terminal itself, 0683),
+//! starts a thread in each project so their panes start, waits 60 s idle and prints one JSON object:
 //! `processes` and `idle_rss_mb` (Jocasta's own tree, without the agents), `idle_cpu_pct` (that tree's CPU over the
 //! idle minute, in percent of one core), `startup_ms` (the server's start to `/health` answering, polled every 2 ms),
 //! `binary_mb`, and `bridge_ms` (the median of 20 `ping` round trips over the bridge on one connection with the
-//! service's token, 0675). Processes named `omp` and their trees are listed under `omp` and never budgeted. The
-//! client (bare `jocasta`'s window) is not measured.
+//! service's token, 0675). Processes named `omp` and their trees are listed under `omp` and never budgeted; the ConPTY
+//! hosts the OS runs for every terminal pane (`OpenConsole.exe`, `conhost.exe`) are left out (0689).
 //! It measures three times, each in a fresh sandbox. `--write-budget` writes each number's worst run to
 //! `bench/footprint-budget.json`; without it each number's median over its budget's limit prints
 //! `footprint: <key> <value> over budget <budget>` and exits 1 (a null budget is skipped). The limit is 5% over the
@@ -27,14 +27,15 @@ use std::time::{Duration, Instant};
 use serde_json::{Map, Value, json};
 
 use crate::lib::proctree::{ProcessInfo, snapshot_processes, tree_of};
+use crate::lib::pty::Pty;
 use crate::lib::sandbox::require_sandbox;
 use crate::lib::temp::mkdtemp;
+use crate::lib::threads::start_thread;
 use crate::lib::timing::{WaitOptions, wait_for};
-use jocasta::frontier::server::herdr::{HerdrOptions, connect_herdr};
-use jocasta::frontier::server::launch::{ServiceState, ask_shutdown, service_state};
+use jocasta::frontier::server::launch::{ServiceState, service_state};
 use jocasta::shared::bridge_wire::CliPeer;
 use jocasta::shared::errors::{Error, Result};
-use jocasta::shared::proctree::{kill_tree, pid_alive};
+use jocasta::shared::proctree::kill_tree;
 use jocasta::shared::service_file::read_service_file;
 
 const BUDGET_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/bench/footprint-budget.json");
@@ -59,7 +60,8 @@ const MIB: f64 = 1024.0 * 1024.0;
 /// Set on the inner run, which finds the sandbox already in its environment.
 const INNER_ENV: &str = "JOCASTA_FOOTPRINT_SANDBOX";
 
-/// The stub agent: this binary started as `omp`. `usage` and `config` answer nothing; anything else idles until killed.
+/// The stub agent: this binary started as `omp`. `usage` and `config` answer nothing; anything else joins the bridge as
+/// a pane's omp does (a hello with the pane's key, an `ack` for every prompt) and idles until killed.
 pub fn stub_agent() -> Option<ExitCode> {
 	let exe = std::env::current_exe().ok()?;
 	if !exe.file_stem().is_some_and(|stem| stem.eq_ignore_ascii_case("omp")) {
@@ -73,12 +75,48 @@ pub fn stub_agent() -> Option<ExitCode> {
 		Some("config") => println!("{}", json!({ "value": null })),
 		_ => {
 			println!("footprint stub agent: idle");
+			// `main` runs on a runtime, so the bridge's own runtime lives on a thread of its own.
+			std::thread::spawn(|| {
+				if let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() {
+					runtime.block_on(stub_bridge());
+				}
+			});
 			loop {
 				std::thread::sleep(Duration::from_secs(3600));
 			}
 		}
 	}
 	Some(ExitCode::SUCCESS)
+}
+
+/// The stub's side of the bridge: the hello a pane's omp sends, then an `ack` for every prompt, until the pipe closes.
+/// Without `JOCASTA_BRIDGE` and the pane's key the stub just idles.
+async fn stub_bridge() {
+	use tokio::io::AsyncWriteExt;
+
+	use jocasta::shared::bridge_wire::{BRIDGE_ENV, MAX_LINE, VERSION, connect, line_of};
+	use jocasta::shared::line_rpc::LineReader;
+
+	let (Ok(address), Ok(key)) = (std::env::var(BRIDGE_ENV), std::env::var("JOCASTA_PANE_KEY")) else { return };
+	let Ok(stream) = connect(&address).await else { return };
+	let (read, mut write) = tokio::io::split(stream);
+	let hello = json!({
+		"t": "hello", "v": VERSION, "key": key, "pid": std::process::id(), "session": null,
+		"harness": "omp", "harness_version": "19.1.1", "caps": ["prompt"],
+	});
+	if write.write_all(line_of(&hello).as_bytes()).await.is_err() {
+		return;
+	}
+	let mut lines = LineReader::new(read, MAX_LINE);
+	while let Ok(Some(line)) = lines.next_line().await {
+		let Ok(message) = serde_json::from_str::<Value>(&line) else { continue };
+		if message["t"] == "prompt" {
+			let ack = json!({ "t": "ack", "id": message["id"] });
+			if write.write_all(line_of(&ack).as_bytes()).await.is_err() {
+				return;
+			}
+		}
+	}
 }
 
 /// `jocasta-bench footprint [--write-budget]`: in the sandbox's child, the measured run; otherwise the runs, then the
@@ -110,6 +148,13 @@ fn release_jocasta() -> Result<PathBuf> {
 	if !exe.is_file() {
 		return Err(Error::other(format!("{} is missing; run cargo build --release first", exe.display())));
 	}
+	// The shipped layout (0661): without `conpty\` beside it the pty falls back to Windows' conhost, not what ships.
+	if cfg!(windows) && !dir.join("conpty").join("conpty.dll").is_file() {
+		return Err(Error::other(format!(
+			"{} has no conpty\\ beside it; run `mise run build` once, which lays it out there",
+			exe.display()
+		)));
+	}
 	Ok(exe)
 }
 
@@ -127,8 +172,8 @@ fn git(dir: &Path, args: &[&str]) -> Result<()> {
 fn measure_runs() -> Result<Vec<Map<String, Value>>> {
 	let jocasta = release_jocasta()?;
 	let mut runs = Vec::new();
-	for run in 1..=RUNS {
-		let measured = one_run(&jocasta, run)?;
+	for _ in 1..=RUNS {
+		let measured = one_run(&jocasta)?;
 		println!("{}", Value::Object(measured.clone()));
 		runs.push(measured.into_iter().filter(|(key, _)| key != "omp" && key != "own").collect::<Map<_, _>>());
 	}
@@ -195,7 +240,7 @@ pub fn combine(runs: &[Map<String, Value>], pick: impl Fn(&[f64]) -> f64) -> Map
 
 /// One measurement in a fresh sandbox, run in a child with the sandbox's environment so this process's own never
 /// changes.
-fn one_run(jocasta: &Path, run: usize) -> Result<Map<String, Value>> {
+fn one_run(jocasta: &Path) -> Result<Map<String, Value>> {
 	let root = mkdtemp("jocasta-footprint-")?;
 	let (data, config, omp_agent, stub, projects) =
 		(root.join("data"), root.join("config"), root.join("omp-agent"), root.join("stub"), root.join("projects"));
@@ -207,21 +252,19 @@ fn one_run(jocasta: &Path, run: usize) -> Result<Map<String, Value>> {
 		std::iter::once(stub.clone()).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())),
 	)
 	.map_err(|error| Error::other(error.to_string()))?;
-	let session = format!("footprint-{}-{run}", std::process::id());
 	let sandbox_env = |command: &mut Command| {
 		command
 			.env("JOCASTA_DATA_DIR", &data)
 			.env("JOCASTA_CODING_AGENT_DIR", &config)
 			// His omp folder (sessions, the ledger's history) stays out of the numbers.
 			.env("PI_CODING_AGENT_DIR", &omp_agent)
-			.env("JOCASTA_HERDR_SESSION", &session)
-			.env("HERDR_SESSION", &session)
 			.env("PATH", &path);
 	};
 	for n in 1..=PROJECTS {
 		let dir = projects.join(format!("acme-{n}"));
 		fs::create_dir_all(&dir)?;
-		fs::write(dir.join("README.md"), "# footprint fixture\n")?;
+		// Distinct content: identical fixtures made in one second share a root commit, which is one project.
+		fs::write(dir.join("README.md"), format!("# footprint fixture {n}\n"))?;
 		git(&dir, &["init", "-q"])?;
 		git(&dir, &["-c", "user.name=bench", "-c", "user.email=bench@example.org", "add", "."])?;
 		git(&dir, &["-c", "user.name=bench", "-c", "user.email=bench@example.org", "commit", "-qm", "fixture"])?;
@@ -236,7 +279,7 @@ fn one_run(jocasta: &Path, run: usize) -> Result<Map<String, Value>> {
 	inner.arg("footprint").env(INNER_ENV, &root).env("JOCASTA_FOOTPRINT_EXE", jocasta).stderr(Stdio::inherit());
 	sandbox_env(&mut inner);
 	let output = inner.output()?;
-	// `JOCASTA_FOOTPRINT_KEEP=1` leaves the sandbox (its logs, herdr's log) for a look after a bad run.
+	// `JOCASTA_FOOTPRINT_KEEP=1` leaves the sandbox (its logs) for a look after a bad run.
 	if std::env::var_os("JOCASTA_FOOTPRINT_KEEP").is_some() {
 		eprintln!("footprint: sandbox kept at {}", root.display());
 	} else {
@@ -289,20 +332,12 @@ async fn bridge_ms() -> Result<f64> {
 
 /// The measured run, inside the sandbox's environment: start, open the projects, idle, read, stop.
 async fn inner() -> Result<ExitCode> {
-	// The guard the live benchmarks share: never his own data folder, herdr session or config folder.
+	// The guard the live benchmarks share: never his own data folder or config folder.
 	require_sandbox()?;
 	let jocasta = PathBuf::from(std::env::var_os("JOCASTA_FOOTPRINT_EXE").unwrap_or_default());
-	let session = std::env::var("HERDR_SESSION").unwrap_or_default();
 	let started = Instant::now();
-	let mut server = Command::new(&jocasta);
-	server.arg("server").env("JOCASTA_SERVICE", "1").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-	#[cfg(windows)]
-	{
-		use std::os::windows::process::CommandExt;
-		const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-		server.creation_flags(CREATE_NO_WINDOW);
-	}
-	let child = server.spawn()?;
+	// Bare `jocasta` is the terminal itself (0683): it runs in a pty, with the sandbox's environment this process has.
+	let window = Pty::spawn(&[jocasta.display().to_string()], &std::env::temp_dir(), &[], &[])?;
 	let up = wait_for(
 		|| async {
 			let file = read_service_file();
@@ -313,32 +348,24 @@ async fn inner() -> Result<ExitCode> {
 	.await;
 	let startup_ms = started.elapsed().as_secs_f64() * 1000.0;
 	let result = match up {
-		Some(_) => measure(&session, startup_ms, &jocasta).await,
+		Some(_) => measure(startup_ms, &jocasta).await,
 		None => Err(Error::other("the service didn't answer /health within 120 s")),
 	};
-	stop(child.id()).await;
+	stop(&window).await;
 	let row = result?;
 	println!("{row}");
 	Ok(ExitCode::SUCCESS)
 }
 
-async fn measure(session: &str, startup_ms: f64, jocasta: &Path) -> Result<Value> {
+async fn measure(startup_ms: f64, jocasta: &Path) -> Result<Value> {
 	let service = read_service_file().ok_or_else(|| Error::other("no service file"))?.pid;
-	let herdr = connect_herdr(HerdrOptions { session: session.to_owned(), ..HerdrOptions::default() })
-		.await
-		.map_err(|error| Error::other(format!("herdr: {error}")))?;
-	let root = PathBuf::from(std::env::var_os(INNER_ENV).unwrap_or_default());
-	// A project pane comes with a thread today; here each project's workspace runs the stub agent as its command, by
-	// its full path (herdr's panes on Windows don't take the service's PATH).
-	let agent = vec![root.join("stub").join(format!("omp{}", std::env::consts::EXE_SUFFIX)).display().to_string()];
+	// Each project's thread runs the stub agent (it is first on PATH as `omp`), so the four project panes and the boss
+	// each hold one, as a day's threads do.
 	for n in 1..=PROJECTS {
-		let dir = root.join("projects").join(format!("acme-{n}"));
-		herdr
-			.ensure_workspace(&format!("acme-{n}"), &dir, Some(&agent), None)
+		start_thread(&format!("acme-{n}"), &format!("footprint {n}"), "idle")
 			.await
-			.map_err(|error| Error::other(format!("herdr workspace acme-{n}: {error}")))?;
+			.map_err(|error| Error::other(format!("thread in acme-{n}: {error}")))?;
 	}
-	herdr.close();
 	// The boss and the four project panes each run the stub agent.
 	let agents = wait_for(
 		|| async move { snapshot_processes().is_ok_and(|all| split(&tree_of(service, &all)).1.len() > PROJECTS) },
@@ -357,7 +384,8 @@ async fn measure(session: &str, startup_ms: f64, jocasta: &Path) -> Result<Value
 	let all = snapshot_processes()?;
 	let (own, agents) = split(&tree_of(service, &all));
 	let rss: u64 = own.iter().map(|info| info.working_set).sum();
-	let cpu: f64 = own.iter().map(|info| after.get(info.pid) - before.get(info.pid)).sum();
+	let cpu_of = |info: &ProcessInfo| after.get(info.pid) - before.get(info.pid);
+	let cpu: f64 = own.iter().map(cpu_of).sum();
 	let binary = fs::metadata(jocasta)?.len();
 	Ok(json!({
 		"processes": own.len(),
@@ -367,7 +395,7 @@ async fn measure(session: &str, startup_ms: f64, jocasta: &Path) -> Result<Value
 		"binary_mb": round2(binary as f64 / MIB),
 		"bridge_ms": round2(bridge),
 		"omp": agents.iter().map(|info| json!({"name": info.name, "mb": round2(info.working_set as f64 / MIB)})).collect::<Vec<_>>(),
-		"own": own.iter().map(|info| json!({"name": info.name, "mb": round2(info.working_set as f64 / MIB)})).collect::<Vec<_>>(),
+		"own": own.iter().map(|info| json!({"name": info.name, "mb": round2(info.working_set as f64 / MIB), "cpu_pct": round2(cpu_of(info).max(0.0) / wall * 100.0)})).collect::<Vec<_>>(),
 	}))
 }
 
@@ -375,16 +403,25 @@ fn round2(value: f64) -> f64 {
 	(value * 100.0).round() / 100.0
 }
 
-/// A tree split into Jocasta's own processes and the agents (each process named `omp` with its whole subtree).
+/// A tree split into Jocasta's own processes and the agents (each process named `omp` with its whole subtree); the
+/// ConPTY hosts are in neither (0689).
 fn split(tree: &[ProcessInfo]) -> (Vec<ProcessInfo>, Vec<ProcessInfo>) {
+	let stem_is = |info: &ProcessInfo, names: &[&str]| {
+		Path::new(&info.name)
+			.file_stem()
+			.and_then(|stem| stem.to_str())
+			.is_some_and(|stem| names.iter().any(|name| stem.eq_ignore_ascii_case(name)))
+	};
 	let mut agent: HashSet<u32> = HashSet::new();
 	for info in tree {
-		let named_omp = Path::new(&info.name).file_stem().is_some_and(|stem| stem.eq_ignore_ascii_case("omp"));
-		if named_omp || agent.contains(&info.ppid) {
+		if stem_is(info, &["omp"]) || agent.contains(&info.ppid) {
 			agent.insert(info.pid);
 		}
 	}
-	tree.iter().cloned().partition(|info| !agent.contains(&info.pid))
+	tree.iter()
+		.filter(|info| !stem_is(info, &["OpenConsole", "conhost"]))
+		.cloned()
+		.partition(|info| !agent.contains(&info.pid))
 }
 
 /// CPU seconds per process of `root`'s tree.
@@ -437,16 +474,16 @@ fn ps_seconds(time: &str) -> f64 {
 	days * 86_400.0 + seconds
 }
 
-/// Stops the sandbox's Jocasta the product's way, then ends whatever is left of the server's tree.
-async fn stop(server: u32) {
-	if let Some(file) = read_service_file() {
-		ask_shutdown(&file).await;
+/// Closes the sandbox's Jocasta the way he does, by closing its window, then ends whatever is left of its tree.
+async fn stop(window: &Pty) {
+	window.close_window();
+	let closed = window.wait_exit(30_000).await;
+	if closed.is_none()
+		&& let Some(root) = window.pid()
+	{
+		kill_tree(root).await;
 	}
-	let closed =
-		wait_for(|| async move { !pid_alive(server) }, WaitOptions { timeout_ms: 30_000, interval_ms: 250 }).await;
-	if closed.is_none() {
-		kill_tree(server).await;
-	}
+	window.end();
 }
 
 #[cfg(test)]

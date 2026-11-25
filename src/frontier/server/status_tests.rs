@@ -13,10 +13,10 @@ use serde_json::{Value, json};
 use super::*;
 use crate::frontier::protocol::{QuotaSpan, ServiceHealth};
 use crate::frontier::server::day::{AlertDetails, Day, DayHooks, DayOptions, SharedCatalog};
-use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
 use crate::frontier::server::report::{Outcome, ThreadReport};
 use crate::frontier::server::service::ServiceOptions;
 use crate::frontier::server::sessions::TestsResult;
+use crate::frontier::server::surface::fake_surface::FakeSurface;
 use crate::frontier::server::task_file::{NewTask, TaskReport, TaskReview, new_task, task_dir};
 use crate::frontier::server::thread::{Phase, PlanProposed, ReviewResult, ThreadPlan, ThreadReview};
 use crate::frontier::server::worklog::WorklogSession;
@@ -76,14 +76,14 @@ impl DayHooks for StatusHooks {
 /// A context over a temp Jocasta, a [`FakeHerdr`] and a day wired like the service's.
 pub(crate) struct World {
 	pub ctx: Arc<ServiceContext>,
-	pub herdr: Arc<FakeHerdr>,
+	pub herdr: Arc<FakeSurface>,
 	pub sent: Arc<Mutex<Vec<ServerMessage>>>,
 	pub j: TempJocasta,
 }
 
 pub(crate) fn world(options: impl FnOnce(&mut ServiceOptions)) -> World {
 	let j = temp_jocasta();
-	let herdr = Arc::new(FakeHerdr::new());
+	let herdr = Arc::new(FakeSurface::new());
 	let sent = Arc::new(Mutex::new(Vec::new()));
 	let broadcast = Arc::clone(&sent);
 	let mut service = ServiceOptions::new(
@@ -525,7 +525,7 @@ async fn a_pane_that_is_no_thread_gets_no_tokens_and_a_forgotten_thread_s_tokens
 	w.herdr
 		.state()
 		.pane_list
-		.push(crate::frontier::server::herdr::PaneInfo { pane_id: "shell-1".to_owned(), ..Default::default() });
+		.push(crate::frontier::server::surface::PaneInfo { pane_id: "shell-1".to_owned(), ..Default::default() });
 	let t = thread(&w, "1-1", "Readme line");
 	w.ctx.status.report().await.unwrap();
 	assert!(pane_reports(&w).iter().all(|call| call[0] != json!("shell-1")));

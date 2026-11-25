@@ -21,8 +21,8 @@
 //! service is started with `JOCASTA_LAYER=off` for `--layer off`, and H8 reads the layer's state from `/health` and
 //! refuses a mismatch. Each run also measures the cost per finished thread (every omp session of each thread since the
 //! run started, its planning session included, with their subagents, priced by the benchmark's ledger at the pinned
-//! table), the peak working set and private bytes of Jocasta's processes (the service's, herdr's server's with the
-//! threads, and the attached surfaces' trees; sampled every 10 s), and, layer on, the run's shared check hits, as the
+//! table), the peak working set and private bytes of Jocasta's one process tree (the service, the shell and the
+//! threads' panes; sampled every 10 s), and, layer on, the run's shared check hits, as the
 //! sandbox service counts them in its data dir.
 //! Writes h8-parallel.jsonl (one row per thread count and run) and h8-parallel.json.
 
@@ -46,14 +46,14 @@ use crate::lib::jocasta::{SandboxJocasta, open_sandbox};
 use crate::lib::ledger::bench_pricing;
 use crate::lib::output::{append_row, claim_rows, conditions, print_plan, write_json};
 use crate::lib::prices::{PriceTable, load_price_table};
-use crate::lib::proctree::{jocasta_processes, snapshot_processes, tree_memory};
+use crate::lib::proctree::{snapshot_processes, tree_memory};
 use crate::lib::sandbox::{Switch, require_service_switch};
 use crate::lib::temp::mkdtemp;
 use crate::lib::threads::{ThreadLine, list_threads, start_thread, wait_for_enter};
 use jocasta::frontier::server::checks::{checks_dir, read_check_hits};
-use jocasta::frontier::server::herdr::PaneInfo;
 use jocasta::frontier::server::launch::OnOff;
 use jocasta::frontier::server::sessions::SessionIndex;
+use jocasta::frontier::server::surface::PaneInfo;
 use jocasta::shared::errors::{Error, Result};
 use jocasta::shared::fsx::remove_tree;
 use jocasta::shared::ledger::{thread_session_records, trial_ledger};
@@ -78,8 +78,8 @@ pub fn read_layer_counters(data_dir: &Path) -> LayerCounters {
 }
 
 /// Each thread's omp session files since `since` (epoch ms), as the service's own ledger finds them (0538, 0546): the
-/// session herdr reports for the pane in the thread's worktree, followed where omp moved it, and every other session in
-/// its folder that began since, oldest first. omp starts a new session on "Approve and execute", so the session herdr
+/// session the panes list reports for the pane in the thread's worktree, followed where omp moved it, and every other session in
+/// its folder that began since, oldest first. omp starts a new session on "Approve and execute", so the session the panes list
 /// reports at the end is only the execution's; the planning one sits beside it. `worktrees` are (branch, folder) in
 /// order; the result keeps that order. `index` is a fresh one when `None`.
 pub fn thread_session_files(
@@ -437,7 +437,7 @@ fn plan(args: &BenchArgs, counts: &[u64], runs: u64, layer: Option<OnOff>, timeo
 	if let Some(layer) = layer {
 		let word = layer_text(layer);
 		lines.push(format!(
-			"K11 (0543): the layer {word} in the sandbox (the service started {} JOCASTA_LAYER=off; /health checked); cost per finished thread from every omp session of each thread since the run started at the pinned price table; peak memory of the service's, herdr's and the surfaces' trees every {} s",
+			"K11 (0543): the layer {word} in the sandbox (the service started {} JOCASTA_LAYER=off; /health checked); cost per finished thread from every omp session of each thread since the run started at the pinned price table; peak memory of Jocasta's one process tree every {} s",
 			if layer == OnOff::Off { "with" } else { "without" },
 			MEMORY_SAMPLE_MS / 1000
 		));
@@ -464,8 +464,8 @@ struct Peaks {
 async fn sample(jocasta: &SandboxJocasta, peaks: &Mutex<Peaks>) -> Result<()> {
 	let processes =
 		tokio::task::spawn_blocking(snapshot_processes).await.map_err(|error| Error::other(error.to_string()))??;
-	let roots = jocasta.processes(&processes, None).await?;
-	let memory = tree_memory(&jocasta_processes(&roots, &processes).all);
+	let tree = jocasta.process_tree(&processes);
+	let memory = tree_memory(&tree);
 	let mut peaks = peaks.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
 	peaks.working_set = Some(peaks.working_set.unwrap_or(0.0).max(memory.working_set as f64));
 	if let Some(private) = memory.private_bytes {
@@ -674,7 +674,7 @@ async fn k11_measures(
 	(started_at, counted_before, peaks): (i64, Option<LayerCounters>, &Mutex<Peaks>),
 ) -> Result<K11Measures> {
 	let finished_threads = finished_count(&live.repo, lines)?;
-	let panes = live.jocasta.herdr().await?.panes().await?;
+	let panes = live.jocasta.panes().await?;
 	let ours: Vec<(String, String)> =
 		worktrees.iter().filter(|(branch, _)| lines.iter().any(|line| line.branch == *branch)).cloned().collect();
 	let pricing = bench_pricing(prices);
@@ -778,7 +778,7 @@ fn by_threads(counts: &[u64], scores: &[RunRow], layer: Option<OnOff>) -> Vec<Va
 
 /// Every thread count and run; the rows and the summary.
 async fn run_live(live: &Live) -> Result<()> {
-	let started = conditions(&["omp", "herdr", "git", "jocasta"]);
+	let started = conditions(&["omp", "git", "jocasta"]);
 	let mut scores: Vec<RunRow> = Vec::new();
 	for &n in &live.counts {
 		for run in 0..live.runs {
@@ -842,7 +842,7 @@ async fn run(argv: Vec<String>) -> Result<()> {
 	if args.flags.get("make-fixture") == Some(&FlagValue::Set) {
 		return make_fixture(project, &repo, &counts);
 	}
-	let jocasta = Arc::new(open_sandbox(None)?);
+	let jocasta = Arc::new(open_sandbox()?);
 	claim_rows(&out, &["h8-parallel"])?;
 	if let Some(layer) = layer {
 		require_service_switch(Switch::Layer, layer).await?;

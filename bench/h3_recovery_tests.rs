@@ -1,16 +1,13 @@
 //! Ported from the `H3` block of `test/bench/scripts.test.ts`.
 
-use std::cell::Cell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use super::{
-	FOLDER_SPACING_MS, FolderState, Picked, closed_itself, end_restart, folder_key, folders_intact, herdr_recovery,
-	omp_back, pane_back, pick_pane, same_pane_ids, session_parses,
+	FOLDER_SPACING_MS, FolderState, Picked, closed_itself, folder_key, folders_intact, omp_back, pane_back, pick_pane,
+	same_pane_ids, session_parses,
 };
-use crate::lib::proctree::ProcessInfo;
-use jocasta::frontier::server::herdr::{AgentState, PaneInfo};
-use jocasta::shared::errors::Error;
+use jocasta::frontier::server::surface::{AgentState, PaneInfo};
 
 fn pane(pane_id: &str, agent: Option<&str>, status: AgentState, workspace_id: &str, cwd: Option<&str>) -> PaneInfo {
 	PaneInfo {
@@ -64,16 +61,11 @@ fn the_pane_faults_pane_is_back_only_when_omp_runs_in_its_workspace_under_anothe
 }
 
 #[test]
-fn a_run_counts_as_jocasta_closing_itself_only_with_no_service_and_no_panes_0530() {
-	let listed = [plain("w1:p1", Some("omp"))];
-	// Herdr gone with Jocasta, or answering with nothing: closed itself.
-	assert!(closed_itself(false, false, None));
-	assert!(closed_itself(false, false, Some(&[])));
-	// The service fault's own kill leaves herdr's panes: not a close, so no second restart.
-	assert!(!closed_itself(false, false, Some(&listed)));
+fn a_run_counts_as_jocasta_closing_itself_only_when_it_didnt_recover_and_no_service_answers_0530() {
+	assert!(closed_itself(false, false));
 	// A slow relaunch with the service up, or a recovered run: not a close.
-	assert!(!closed_itself(false, true, Some(&[])));
-	assert!(!closed_itself(true, false, None));
+	assert!(!closed_itself(false, true));
+	assert!(!closed_itself(true, false));
 }
 
 #[test]
@@ -100,38 +92,6 @@ fn the_pane_fault_kills_each_folders_omp_at_most_once_in_10_minutes_the_longest_
 }
 
 #[test]
-fn a_restarts_client_ends_root_first_and_never_the_new_services_tree_0528() {
-	let proc = |pid: u32, ppid: u32, name: &str| ProcessInfo {
-		pid,
-		ppid,
-		name: name.to_owned(),
-		command_line: name.to_owned(),
-		working_set: 0,
-		private_bytes: None,
-		created: None,
-	};
-	let processes = [
-		proc(10, 1, "cmd.exe"),
-		proc(11, 10, "jocasta.exe"),
-		proc(12, 11, "herdr.exe"),
-		proc(13, 11, "bun.exe"),
-		proc(14, 13, "node.exe"),
-		proc(20, 1, "launcher.exe"),
-	];
-	let mut killed: Vec<u32> = Vec::new();
-	let kill = |pid: u32| {
-		if pid == 12 {
-			return Err(Error::other("gone"));
-		}
-		killed.push(pid);
-		Ok(())
-	};
-	// jocasta.exe goes before its herdr client, so it can't see the client exit and ask to close; the kept tree stays.
-	assert_eq!(end_restart(10, &HashSet::from([13, 14]), &processes, kill), vec![10, 11]);
-	assert_eq!(killed, vec![10, 11]);
-}
-
-#[test]
 fn recovered_when_every_workspace_that_had_omp_has_omp_again_under_any_pane_id_0522() {
 	let before = [
 		pane("a", Some("omp"), AgentState::Idle, "w1", None),
@@ -153,40 +113,6 @@ fn recovered_when_every_workspace_that_had_omp_has_omp_again_under_any_pane_id_0
 		&before,
 		&[pane("a", Some("omp"), AgentState::Idle, "w1", None), pane("c", None, AgentState::Unknown, "w3", None)]
 	));
-}
-
-#[test]
-fn the_herdr_fault_notes_when_the_old_pane_ids_were_first_listed_beside_omp_being_back_0522() {
-	let before =
-		[pane("a", Some("omp"), AgentState::Working, "w1", None), pane("b", Some("omp"), AgentState::Idle, "w2", None)];
-	let clock = Cell::new(1_000.0);
-	let mut watch = herdr_recovery(&before, 1_000.0, || clock.get());
-	clock.set(1_250.0);
-	assert!(!watch.check(None));
-	clock.set(3_300.0);
-	// herdr is back with the old panes, not yet running omp.
-	assert!(!watch.check(Some(&[
-		pane("a", None, AgentState::Unknown, "w1", None),
-		pane("b", None, AgentState::Unknown, "w2", None)
-	])));
-	clock.set(3_600.0);
-	assert!(!watch.check(Some(&[
-		pane("x", Some("omp"), AgentState::Idle, "w1", None),
-		pane("b", None, AgentState::Unknown, "w2", None)
-	])));
-	clock.set(8_800.0);
-	assert!(watch.check(Some(&[
-		pane("x", Some("omp"), AgentState::Idle, "w1", None),
-		pane("y", Some("omp"), AgentState::Idle, "w2", None)
-	])));
-	assert_eq!(watch.old_pane_ids_ms(), Some(2_300.0));
-
-	let mut missed = herdr_recovery(&before, 0.0, || 500.0);
-	assert!(missed.check(Some(&[
-		pane("x", Some("omp"), AgentState::Idle, "w1", None),
-		pane("y", Some("omp"), AgentState::Idle, "w2", None)
-	])));
-	assert_eq!(missed.old_pane_ids_ms(), None);
 }
 
 #[test]

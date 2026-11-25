@@ -1,7 +1,7 @@
-//! Jocasta inside herdr's client shell (fork plan phase 5): the `today` dock beside the boss's panes (0551, 0555, 0581)
-//! and his questions over everything (0553, 0558, 0568, 0578). herdr's own client draws both from the service's
-//! messages, which come over herdr's client connection (`protocol.rs`'s `SHELL_*` kinds); no pane, popup or second
-//! program runs for them.
+//! Jocasta's own shell (0683): the `today` dock beside the boss's tab (0551, 0555, 0581) and his questions over
+//! everything (0553, 0558, 0568, 0578), drawn from the service's messages (`protocol.rs`'s `SHELL_*` kinds, in-process);
+//! no pane, popup or second program runs for them. `shell/` holds the terminal side: panes on `alacritty_terminal`, tabs,
+//! the sidebar and the event loop.
 //!
 //! The dock draws the service's feed and takes his keys once he clicks it or presses its key: up/down pick a row (at the
 //! NEWS box's edge they scroll it, as does the wheel over it), Enter goes to a thread's pane or opens a link row, f, s, r
@@ -28,7 +28,16 @@ use crate::frontier::today::view::{NewsBox, Pick, SAID_MS, Said, TodayState, not
 use crate::frontier::tui::{TOKYO_NIGHT, render_lines};
 use crate::shared::clock::now_ms;
 use crate::shared::service_file::NOT_RUNNING;
-use herdr::embed::{Reply, ShellExtension};
+
+/// What a shell call asks of its caller: messages for the service, whether to redraw, whether the dock gives the keys
+/// back, and whether the key goes on to the pane.
+#[derive(Debug, Clone, Default)]
+pub struct Reply {
+	pub send: Vec<(String, String)>,
+	pub redraw: bool,
+	pub release: bool,
+	pub pass: bool,
+}
 
 /// Keys this soon after a question first shows are dropped: typing meant for a pane spends no tries (0578).
 const KEY_GRACE_MS: i64 = 750;
@@ -334,8 +343,8 @@ impl JocastaShell {
 	}
 }
 
-impl ShellExtension for JocastaShell {
-	fn message(&mut self, kind: &str, data: &str) -> Reply {
+impl JocastaShell {
+	pub fn message(&mut self, kind: &str, data: &str) -> Reply {
 		let redraw = |redraw| Reply { redraw, ..Reply::default() };
 		match kind {
 			SHELL_FEED => redraw(serde_json::from_str::<ServerMessage>(data).is_ok_and(|message| self.apply(message))),
@@ -355,11 +364,11 @@ impl ShellExtension for JocastaShell {
 		}
 	}
 
-	fn docks(&self, workspace_id: &str) -> bool {
+	pub fn docks(&self, workspace_id: &str) -> bool {
 		self.boss.as_deref() == Some(workspace_id)
 	}
 
-	fn draw_dock(&mut self, buffer: &mut Buffer, area: Rect, focused: bool) {
+	pub fn draw_dock(&mut self, buffer: &mut Buffer, area: Rect, focused: bool) {
 		let bar = if focused { TOKYO_NIGHT.blue } else { TOKYO_NIGHT.bg3 };
 		buffer.set_style(Rect { width: 1, ..area }, Style::new().fg(bar).bg(TOKYO_NIGHT.bg0));
 		for y in area.y..area.y + area.height {
@@ -388,7 +397,7 @@ impl ShellExtension for JocastaShell {
 		}
 	}
 
-	fn dock_key(&mut self, key: KeyEvent) -> Reply {
+	pub fn dock_key(&mut self, key: KeyEvent) -> Reply {
 		let key = Key::from(key);
 		if key.ctrl || key.meta {
 			return Reply { pass: true, ..Reply::default() };
@@ -430,19 +439,19 @@ impl ShellExtension for JocastaShell {
 		Reply { redraw: true, ..Reply::default() }
 	}
 
-	fn dock_mouse(&mut self, column: u16, row: u16) -> Reply {
+	pub fn dock_mouse(&mut self, column: u16, row: u16) -> Reply {
 		self.click(column, row)
 	}
 
-	fn dock_scroll(&mut self, column: u16, row: u16, step: isize) -> Reply {
+	pub fn dock_scroll(&mut self, column: u16, row: u16, step: isize) -> Reply {
 		self.scroll_news(column, row, step)
 	}
 
-	fn asking(&self) -> bool {
+	pub fn asking(&self) -> bool {
 		self.question.is_some()
 	}
 
-	fn draw_question(&mut self, buffer: &mut Buffer, area: Rect) -> Rect {
+	pub fn draw_question(&mut self, buffer: &mut Buffer, area: Rect) -> Rect {
 		let Some(asking) = self.question.as_mut() else { return Rect::default() };
 		let width = (u32::from(area.width) * u32::from(QUESTION_PERCENT) / 100).max(44).min(u32::from(area.width));
 		let width = u16::try_from(width).unwrap_or(area.width);
@@ -467,7 +476,7 @@ impl ShellExtension for JocastaShell {
 		outer
 	}
 
-	fn question_key(&mut self, key: KeyEvent) -> Reply {
+	pub fn question_key(&mut self, key: KeyEvent) -> Reply {
 		let now = (self.now)();
 		let Some(asking) = self.question.as_mut() else { return Reply::default() };
 		if asking.closing_at.is_some() || now - asking.shown_at < KEY_GRACE_MS {
@@ -487,13 +496,13 @@ impl ShellExtension for JocastaShell {
 		Reply { send: vec![sent(SHELL_ANSWER, &ShellAnswer { code, answer })], redraw: true, ..Reply::default() }
 	}
 
-	fn question_paste(&mut self, text: &str) -> Reply {
+	pub fn question_paste(&mut self, text: &str) -> Reply {
 		let Some(asking) = self.question.as_mut() else { return Reply::default() };
 		paste(&mut asking.state, &crate::frontier::tui::strip_ansi(text));
 		Reply { redraw: true, ..Reply::default() }
 	}
 
-	fn tick(&mut self) -> bool {
+	pub fn tick(&mut self) -> bool {
 		let now = (self.now)();
 		let mut redraw = false;
 		if self.question.as_ref().and_then(|asking| asking.closing_at).is_some_and(|at| now >= at) {
@@ -518,7 +527,7 @@ impl ShellExtension for JocastaShell {
 
 	/// The HUD's figures beside herdr's clock (0403): Awaiting you's rows and today's spend, `7 awaiting you · $48.73
 	/// today`; the one text for a service that stopped (0581 UX-13); none before the first message.
-	fn status(&self) -> Option<String> {
+	pub fn status(&self) -> Option<String> {
 		if !self.today.up {
 			if self.silent {
 				return Some(not_answering(self.today.down_since));
@@ -531,10 +540,21 @@ impl ShellExtension for JocastaShell {
 	}
 }
 
-/// Registers the shell extension with herdr's client for this process.
-pub fn register() {
-	herdr::embed::set_shell_extension(Box::new(JocastaShell::default()));
-}
+/// The shell's frame, panes and tabs (0683).
+mod app;
+mod keys;
+mod pty;
+mod sidebar;
+mod tabs;
+mod term;
+#[cfg(windows)]
+mod winin;
+
+pub use app::{Parts, run};
+pub use keys::bytes_for_names;
+pub use pty::{Pane, Ui, Wake};
+pub use tabs::{AgentInfo, AgentLookup, Hub, Start};
+pub use term::screen_text;
 
 #[cfg(test)]
 #[path = "shell_tests.rs"]

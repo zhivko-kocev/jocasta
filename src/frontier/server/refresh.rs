@@ -16,8 +16,8 @@ use crate::frontier::protocol::ThreadState;
 use crate::frontier::server::boss::{DefaultClosed, close_herdr_default};
 use crate::frontier::server::context::{Finishing, Link, ServiceContext, Shared};
 use crate::frontier::server::day_briefs;
-use crate::frontier::server::herdr::{AgentState, HerdrSnapshot, PaneInfo};
 use crate::frontier::server::pane_launch::{OmpBackoff, Respawn};
+use crate::frontier::server::surface::{AgentState, PaneInfo, SurfaceSnapshot};
 use crate::frontier::server::task_file::find_task;
 use crate::frontier::server::thread::{Phase, ReviewResult, Thread, ThreadPlan, ThreadRef, ThreadReview, is_idle};
 use crate::frontier::server::worktrees::git_out;
@@ -52,7 +52,7 @@ struct Underway {
 /// or closed herdr's default workspace), its panes by id, and the threads known before the list was read (SVC-2).
 struct Tick {
 	read_at: i64,
-	snapshot: HerdrSnapshot,
+	snapshot: SurfaceSnapshot,
 	by_id: HashMap<String, PaneInfo>,
 	known: Vec<(String, ThreadRef)>,
 }
@@ -175,7 +175,7 @@ impl Refresher {
 
 	/// Threads herdr runs that the service doesn't know yet: a pane in a linked worktree of a watched project that
 	/// Jocasta started omp in or that runs omp (CR-01), never a plain shell.
-	pub async fn discover(&self, snapshot: &HerdrSnapshot) -> Result<()> {
+	pub async fn discover(&self, snapshot: &SurfaceSnapshot) -> Result<()> {
 		self.inner.discover(snapshot).await
 	}
 }
@@ -215,7 +215,7 @@ impl Inner {
 	}
 
 	/// The snapshot a tick works from, or `None` when this tick ends (herdr didn't answer).
-	async fn read(&self) -> Option<HerdrSnapshot> {
+	async fn read(&self) -> Option<SurfaceSnapshot> {
 		let c = &self.ctx;
 		let read = self.step("reading herdr's panes", c.herdr.snapshot()).await?;
 		if let Err(error) = c.launched.seen(&read.panes) {
@@ -299,7 +299,7 @@ impl Inner {
 
 	/// The boss pane, ensured again when it is gone (after 0521's doubling wait when it keeps closing), its omp ended
 	/// (0521) or it runs omp without this run's key (0484).
-	async fn boss_pane(&self, read: &HerdrSnapshot) -> Result<HerdrSnapshot> {
+	async fn boss_pane(&self, read: &SurfaceSnapshot) -> Result<SurfaceSnapshot> {
 		let c = &self.ctx;
 		let boss_id = c.boss().map(|boss| boss.with(|boss| boss.pane_id.clone()));
 		let current = read.panes.iter().find(|p| Some(&p.pane_id) == boss_id.as_ref());
@@ -322,7 +322,7 @@ impl Inner {
 	}
 
 	/// herdr's default workspace in a new session (0495): closed while untouched, once Jocasta's exists.
-	async fn herdr_default_closed(&self, before: &HerdrSnapshot) -> Result<HerdrSnapshot> {
+	async fn herdr_default_closed(&self, before: &SurfaceSnapshot) -> Result<SurfaceSnapshot> {
 		let outcome = close_herdr_default(self.ctx.herdr.as_ref(), before, None).await?;
 		if outcome != DefaultClosed::Wait {
 			self.herdr_default.store(false, Ordering::SeqCst);
@@ -361,7 +361,7 @@ impl Inner {
 		Ok(())
 	}
 
-	async fn discover(&self, snapshot: &HerdrSnapshot) -> Result<()> {
+	async fn discover(&self, snapshot: &SurfaceSnapshot) -> Result<()> {
 		let c = &self.ctx;
 		if c.rediscover.swap(false, Ordering::SeqCst) {
 			self.rediscover();
@@ -410,7 +410,7 @@ impl Inner {
 	/// A thread found in `pane`: read from its session (as at the start), its task file and HEAD, then registered.
 	async fn found(
 		&self,
-		snapshot: &HerdrSnapshot,
+		snapshot: &SurfaceSnapshot,
 		pane: &PaneInfo,
 		project: crate::shared::projects::Project,
 		checkout: &crate::frontier::server::places::Checkout,

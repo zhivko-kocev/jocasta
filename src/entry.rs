@@ -11,10 +11,8 @@ use std::sync::Arc;
 use futures_util::future::BoxFuture;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-use crate::frontier::client::{ask_push, ask_wake};
-use crate::frontier::server::boss::{EnsureBossOptions, LaunchedPanes, PANE_KEY_ENV, boss_command, ensure_boss_pane};
-use crate::frontier::server::embedded::{SERVICE_ENV, register, serves};
-use crate::frontier::server::herdr::{HerdrOptions, connect_herdr};
+use crate::frontier::client::ask_push;
+use crate::frontier::server::embedded::run_embedded;
 use crate::frontier::server::launch::{service_health, service_state};
 use crate::frontier::server::pane_launch::pane_omp_program;
 use crate::setup::diagnose::{DiagnoseDeps, ServiceInfo, run_diagnose};
@@ -30,10 +28,8 @@ use crate::shared::credentials::{delete_credential, read_credential, take_calend
 use crate::shared::env;
 use crate::shared::errors::{Error, Result};
 use crate::shared::git::git;
-use crate::shared::herdr_session::{DEFAULT_SESSION, herdr_program, herdr_session, session_args};
 use crate::shared::install::{install_dir, self_command, shipped_config_dir};
 use crate::shared::log::logs_dir;
-use crate::shared::pane_sleep::{Keys, run_pane_sleep};
 use crate::shared::paths::{config_dir, data_dir};
 use crate::shared::process::{RunOptions, on_path, run_program, run_program_sync};
 use crate::shared::project_cli::project_command;
@@ -58,14 +54,9 @@ fn version_of(program: Option<PathBuf>) -> String {
 	text.rsplit(|c: char| c.is_whitespace() || c == '/').next().unwrap_or(text).to_owned()
 }
 
-/// `jocasta --version`'s line: Jocasta's, omp's and the built-in herdr's versions.
+/// `jocasta --version`'s line: Jocasta's and omp's versions.
 fn version_line() -> String {
-	format!(
-		"jocasta {} (omp {}, herdr {})",
-		env!("CARGO_PKG_VERSION"),
-		version_of(on_path("omp", None)),
-		herdr::embed::version()
-	)
+	format!("jocasta {} (omp {})", env!("CARGO_PKG_VERSION"), version_of(on_path("omp", None)))
 }
 
 /// A line to stdout; a closed pipe is no reason to fail.
@@ -141,9 +132,8 @@ impl SetupIo for ConsoleIo {
 }
 
 async fn run_setup_route(refresh: Option<String>, calendar_env: Option<String>) -> Result<i32> {
-	let herdr = herdr_program()?;
 	let paths = default_setup_paths(&shipped_config_dir(None), self_command(None));
-	let mut deps = SetupDeps::new(herdr.clone());
+	let mut deps = SetupDeps::new();
 	deps.mise = on_path("mise", None);
 	deps.calendar = default_calendar_store(calendar_env);
 	deps.secrets = default_secret_store();
@@ -152,14 +142,6 @@ async fn run_setup_route(refresh: Option<String>, calendar_env: Option<String>) 
 			let out = run(vec!["git".to_owned(), "--version".to_owned()]).await.ok()?;
 			(out.code == 0).then_some(out.output)
 		})
-	}));
-	let session = herdr_session()?;
-	deps.reload_herdr = Some(Arc::new(move || {
-		let argv = std::iter::once(herdr.display().to_string())
-			.chain(session_args(&session))
-			.chain(["server".to_owned(), "reload-config".to_owned()])
-			.collect();
-		Box::pin(run(argv))
 	}));
 	deps.docker = Some(run_program_dep());
 	let io = ConsoleIo::new();
@@ -170,7 +152,6 @@ async fn run_setup_route(refresh: Option<String>, calendar_env: Option<String>) 
 }
 
 async fn run_uninstall_route() -> Result<i32> {
-	let session = herdr_session()?;
 	// Only the install this command runs from: a source run removes no install.
 	let install = install_dir(None).and_then(|dir| {
 		let local = env::var("LOCALAPPDATA").map(PathBuf::from);
@@ -187,9 +168,6 @@ async fn run_uninstall_route() -> Result<i32> {
 	let setup = default_setup_paths(&shipped_config_dir(None), self_command(None));
 	let deps = UninstallDeps {
 		service_state: Arc::new(|| Box::pin(async { Ok(service_state(read_service_file().as_ref(), None).await) })),
-		herdr: herdr_program()?,
-		session,
-		run: run_program_dep(),
 		setup_undo: setup_undo(&setup, |target| read_credential(target).is_some()),
 		remove_path_entry: Arc::new(remove_user_path_entry),
 		remove_run_value: Arc::new(remove_run_value_for),
@@ -201,37 +179,57 @@ async fn run_uninstall_route() -> Result<i32> {
 }
 
 async fn run_diagnose_route() -> Result<i32> {
-	let session = herdr_session()?;
-	let connecting = HerdrOptions { session: session.clone(), ..HerdrOptions::default() };
 	let deps = DiagnoseDeps {
 		data_dir: data_dir(),
 		assets_dir: shipped_config_dir(None),
-		omp: vec!["omp".to_owned()],
+		omp: pane_omp_program(),
 		versions: version_line(),
-		session,
 		service: Box::new(|| {
 			Box::pin(async {
 				let file = read_service_file();
 				Ok(ServiceInfo { state: service_state(file.as_ref(), None).await, file })
 			})
 		}),
-		connect: Box::new(move || {
-			let options = connecting.clone();
-			Box::pin(async move { Ok(connect_herdr(options).await?) })
-		}),
-		ensure_boss: Box::new(|herdr| {
-			Box::pin(async move {
-				let launched = LaunchedPanes::new(None);
-				let assets = shipped_config_dir(None);
-				let mut options = EnsureBossOptions::new(boss_command(&pane_omp_program(), Some(&assets)), &launched);
-				options.config_dir = Some(assets);
-				ensure_boss_pane(&*herdr, options).await
-			})
-		}),
+		run_omp: Box::new(|command, dir| Box::pin(open_diagnose(command, dir))),
 		setup_check: Box::new(|| Box::pin(setup_check())),
 		now: None,
 	};
 	run_diagnose(&deps, &out).await
+}
+
+/// 0472: the read-only omp opens as a tab of the running Jocasta's boss workspace, which the service makes (it reaches
+/// the shell in its own process over the bridge pipe). With no Jocasta running it runs in this terminal, and says so.
+async fn open_diagnose(command: Vec<String>, dir: PathBuf) -> Result<i32> {
+	if let Some(service) = running_service() {
+		let message = serde_json::json!({
+			"t": "cli",
+			"command": "diagnose tab",
+			"args": { "command": command, "cwd": dir.display().to_string() },
+		});
+		let answer = match crate::shared::bridge_wire::CliPeer::open(service.port, &service.token).await {
+			Ok(mut peer) => peer.request(message).await,
+			Err(error) => Err(error),
+		};
+		if let Ok(answer) = answer {
+			let text = ["text", "error"].iter().find_map(|key| answer.get(key).and_then(serde_json::Value::as_str));
+			let done = answer.get("ok") == Some(&serde_json::Value::Bool(true));
+			out(text.unwrap_or("Jocasta's service answered without a result"));
+			if done {
+				out("Switch to Jocasta's window to read it.");
+			}
+			return Ok(i32::from(!done));
+		}
+	}
+	out("Jocasta isn't running: starting the read-only diagnose session of omp in this terminal instead.");
+	let mut argv = command.into_iter();
+	let program = argv.next().ok_or_else(|| Error::other("no omp command to run"))?;
+	let status = tokio::process::Command::new(program)
+		.args(argv)
+		.current_dir(dir)
+		.status()
+		.await
+		.map_err(|error| Error::other(format!("omp didn't start: {error}")))?;
+	Ok(status.code().unwrap_or(1))
 }
 
 /// What git runs before a push (0613): the exit code is its verdict, the reason goes to stderr.
@@ -269,14 +267,6 @@ async fn run_push_hook_route(args: &[String]) -> Result<i32> {
 	Ok(run_push_hook(args, &stdin, &hook).await)
 }
 
-/// A sleeping pane (0676): shows its text, and on a key asks the service to start omp in the pane again.
-async fn run_pane_sleep_route(args: &[String]) -> Result<i32> {
-	let key = env::var_nonempty(PANE_KEY_ENV).unwrap_or_default();
-	let mut keys = Keys::new();
-	let mut out = std::io::stdout();
-	Ok(run_pane_sleep(args, &mut out, || keys.wait_key(), || ask_wake(&key)).await)
-}
-
 /// `thread` and `worktree` go through the running service, which asks him first for the changes (0544).
 struct ServiceCli;
 
@@ -294,10 +284,8 @@ impl CliDeps for ServiceCli {
 	}
 }
 
-/// Bare `jocasta` (0392, 0552; fork plan phase 4): what the work surface needs from this machine.
-struct Surface {
-	herdr_config: PathBuf,
-}
+/// Bare `jocasta` (0392, 0552, 0683): what the work surface needs from this machine.
+struct Surface;
 
 impl SurfaceDeps for Surface {
 	async fn service_health(&self) -> crate::frontier::server::launch::ServiceHealth {
@@ -308,16 +296,12 @@ impl SurfaceDeps for Surface {
 		last_logged_error(&logs_dir(), since)
 	}
 
-	fn herdr_config(&self) -> &Path {
-		&self.herdr_config
-	}
-
 	fn print(&self, line: &str) {
 		err(line);
 	}
 }
 
-/// Runs `future` on a runtime of its own that is gone before herdr's entry builds its own.
+/// Runs `future` on a runtime of its own that is gone before the service's runtime is built.
 fn on_runtime<T>(future: impl Future<Output = T>) -> std::io::Result<T> {
 	let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
 	let result = runtime.block_on(future);
@@ -325,28 +309,12 @@ fn on_runtime<T>(future: impl Future<Output = T>) -> std::io::Result<T> {
 	Ok(result)
 }
 
-/// Bare `jocasta`: herdr's client on Jocasta's session, whose server, launched here when none runs, runs the service
-/// (`JOCASTA_SERVICE=1`). herdr's socket overrides a pane passed down are dropped, so a `jocasta` run inside a pane
-/// opens Jocasta's session, not that pane's; `JOCASTA_HERDR_SESSION` picks a throwaway one for live checks (0441).
-/// The calendar's secret stays for that server, which takes it before it starts anything (SEC-5, 0430).
+/// Bare `jocasta` (0683): Jocasta's own shell and the service in this one process, until its window closes. The
+/// calendar's and the sources' secrets are taken out of the environment before any thread starts, so no pane inherits
+/// them (SEC-5, 0430).
 fn run_surface() -> ExitCode {
-	let session = match herdr_session() {
-		Ok(session) => session,
-		Err(error) => return ExitCode::from(fail(&error)),
-	};
-	// SAFETY: before any thread starts, as `std::env::set_var` and `remove_var` require.
-	unsafe {
-		for name in ["HERDR_SOCKET_PATH", "HERDR_CLIENT_SOCKET_PATH", "HERDR_SESSION"] {
-			std::env::remove_var(name);
-		}
-		if session != DEFAULT_SESSION {
-			std::env::set_var("HERDR_SESSION", &session);
-		}
-		std::env::set_var(SERVICE_ENV, "1");
-	}
-	let surface = Surface { herdr_config: config_dir().join("herdr.toml") };
 	let since = crate::shared::clock::now_ms();
-	match on_runtime(before_surface(&surface)) {
+	match on_runtime(before_surface(&Surface)) {
 		Ok(Ok(())) => {}
 		Ok(Err(error)) => return ExitCode::from(fail(&error)),
 		Err(error) => {
@@ -354,16 +322,21 @@ fn run_surface() -> ExitCode {
 			return ExitCode::from(1);
 		}
 	}
-	// herdr's client ends the process itself when its server stops under it: Jocasta's word comes first there too.
-	herdr::embed::set_exit_hook(Box::new(move |code| surface_ended(since, code)));
-	let code = i32::from(run_herdr(&[]) != ExitCode::SUCCESS);
+	take_calendar_env();
+	take_source_envs();
+	let code = match run_embedded() {
+		Ok(()) => 0,
+		Err(error) => {
+			err(&format!("jocasta: {error}"));
+			1
+		}
+	};
 	ExitCode::from(u8::try_from(surface_ended(since, code)).unwrap_or(1))
 }
 
-/// Once herdr's client ended with `code`: why Jocasta stopped, if it stopped while starting (0582); the exit code.
+/// Once the shell ended with `code`: why Jocasta stopped, if it stopped while starting (0582); the exit code.
 fn surface_ended(since: i64, code: i32) -> i32 {
-	let surface = Surface { herdr_config: config_dir().join("herdr.toml") };
-	on_runtime(after_surface(&surface, since, code)).unwrap_or(code)
+	on_runtime(after_surface(&Surface, since, code)).unwrap_or(code)
 }
 
 /// Runs what `target` names; resolves the exit code.
@@ -382,47 +355,15 @@ async fn run_route(target: Route, calendar_env: Option<String>) -> Result<i32> {
 		Route::Thread { args } => run_service_cli(CliWord::Thread, &args).await,
 		Route::Worktree { args } => run_service_cli(CliWord::Worktree, &args).await,
 		Route::PushHook { args } => run_push_hook_route(&args).await,
-		Route::PaneSleep { args } => run_pane_sleep_route(&args).await,
 		Route::Setup { refresh } => run_setup_route(refresh, calendar_env).await,
 		Route::Uninstall => run_uninstall_route().await,
 		Route::Diagnose => run_diagnose_route().await,
-		Route::Surface | Route::Herdr => unreachable!("`main` runs these before Jocasta's runtime exists"),
+		Route::Surface => unreachable!("`main` runs this before Jocasta's runtime exists"),
 	}
 }
 
 async fn run_service_cli(word: CliWord, args: &[String]) -> Result<i32> {
 	Ok(run_cli_command(&cli_request(word, args)?, &ServiceCli).await)
-}
-
-/// A word of herdr's: herdr's own entry, which reads the command line itself and builds its own runtime (its server,
-/// its client, its socket API's commands), in Jocasta's dirs: its sessions, sockets and plugins under
-/// `<data>/herdr`, their state under `<data>/herdr/state`, its config Jocasta's `herdr.toml` (`HERDR_CONFIG_PATH`
-/// still wins). Its exits inside (usage errors, a busy socket) are its own. A server bare `jocasta` launched runs the
-/// Jocasta service: the calendar's secret is taken for it and `JOCASTA_SERVICE` dropped before anything starts, so
-/// no pane inherits either.
-fn run_herdr(args: &[String]) -> ExitCode {
-	let herdr_dir = data_dir().join("herdr");
-	herdr::embed::set_dirs(herdr::embed::Dirs {
-		state: herdr_dir.join("state"),
-		config: herdr_dir,
-		config_file: config_dir().join("herdr.toml"),
-	});
-	// His client draws the dock and his questions (fork plan phase 5); a run that is no client never asks.
-	crate::frontier::shell::register();
-	if serves(args, env::var(SERVICE_ENV).as_deref()) {
-		take_calendar_env();
-		take_source_envs();
-		// SAFETY: before any thread starts, as `std::env::remove_var` requires.
-		unsafe { std::env::remove_var(SERVICE_ENV) };
-		register();
-	}
-	match herdr::main() {
-		Ok(()) => ExitCode::SUCCESS,
-		Err(error) => {
-			err(&format!("jocasta: {error}"));
-			ExitCode::from(1)
-		}
-	}
 }
 
 /// Loud one-line failures (0101): DB failures exit 1; refusals exit with their code, 2 for an invocation error (0140).
@@ -450,10 +391,8 @@ pub fn main() -> ExitCode {
 			return ExitCode::from(u8::try_from(error.exit_code()).unwrap_or(2));
 		}
 	};
-	match target {
-		Route::Herdr => return run_herdr(&args),
-		Route::Surface => return run_surface(),
-		_ => {}
+	if target == Route::Surface {
+		return run_surface();
 	}
 	// The calendar's secret never reaches herdr's server, omp or anything else this command starts (SEC-5, 0430); taken
 	// before any thread starts.

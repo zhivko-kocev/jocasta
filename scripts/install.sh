@@ -10,10 +10,8 @@
 # instead (0487). Tests only: JOCASTA_INSTALL_NO_PATH=1 leaves the rc file alone, and install.json then names none.
 # Upgrade (0579): the release is unpacked complete beside the install (`<dir>.new-<stamp>`), then the old install is
 # moved aside, the new one moved in and the old one removed, so no stale file stays and an interrupted unpack leaves
-# the install as it was. A running program keeps its old files until it exits. On Linux a running Jocasta then hands
-# its panes to the new build (herdr's live handoff, fork plan finding 20): his panes and their omps keep running, and
-# the service starts again on the new build. On macOS a running Jocasta keeps the old build until he restarts it: the
-# handoff's own tests haven't passed there.
+# the install as it was. A running program keeps its old files until it exits, so a running Jocasta keeps the old
+# build until he closes it and runs jocasta again (0683: the shell is Jocasta's own, with no live handoff).
 # install.json names the folder, the release's top-level entries (what `jocasta uninstall` removes) and the rc file.
 set -eu
 
@@ -135,15 +133,7 @@ else
 	mv "$stage" "$dir"
 fi
 
-# On a Linux upgrade, his running Jocasta takes the new build without closing a pane (herdr prints "live handoff
-# complete"); none running, or a handoff that fails, leaves it as it is, on the old build until it restarts.
-if [ -n "$upgraded" ] && [ "$target" = "linux-x64" ]; then
-	why="$("$dir/jocasta" server live-handoff --import-exe "$dir/jocasta" 2>&1)" || true
-	case "$why" in
-	*"live handoff complete"*) echo "jocasta install: the running Jocasta now runs the new build; its panes kept running." ;;
-	*) echo "jocasta install: no running Jocasta took the new build ($(printf '%s' "$why" | head -n 1)); one still running uses it once restarted." ;;
-	esac
-elif [ -n "$upgraded" ]; then
+if [ -n "$upgraded" ]; then
 	echo "jocasta install: a Jocasta already running keeps the old build until you close it and run jocasta again."
 fi
 

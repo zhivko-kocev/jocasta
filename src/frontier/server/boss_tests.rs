@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use serde_json::{Value, json};
 
 use super::*;
-use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
+use crate::frontier::server::surface::fake_surface::FakeSurface;
 use crate::shared::testing::temp_jocasta;
 use crate::shared::yaml::parse_value;
 
@@ -46,12 +46,12 @@ fn home_string() -> String {
 	boss_home().display().to_string()
 }
 
-fn pane_key(herdr: &FakeHerdr, pane_id: &str) -> String {
+fn pane_key(herdr: &FakeSurface, pane_id: &str) -> String {
 	let env = herdr.env_of(pane_id).expect("the pane has an env");
 	env.iter().find(|(name, _)| name == PANE_KEY_ENV).map(|(_, key)| key.clone()).expect("its pane key")
 }
 
-fn labels(herdr: &FakeHerdr) -> Vec<String> {
+fn labels(herdr: &FakeSurface) -> Vec<String> {
 	herdr.state().workspace_list.iter().map(|w| w.label.clone()).collect()
 }
 
@@ -71,7 +71,7 @@ fn recorded(calls: &[Vec<Value>]) -> Vec<Vec<Value>> {
 async fn workspace_jocasta_is_made_first_made_first_again_after_he_closes_it_with_the_guard_its_manual_and_its_skills()
 {
 	let j = temp_jocasta();
-	let herdr = FakeHerdr::new();
+	let herdr = FakeSurface::new();
 	herdr.ensure_workspace("demo", j.root(), None, None).await.unwrap();
 	let command = command();
 	let shipped = shipped_config_dir(None);
@@ -133,7 +133,7 @@ async fn workspace_jocasta_is_made_first_made_first_again_after_he_closes_it_wit
 #[tokio::test]
 async fn the_boss_panes_omp_starts_with_its_env_and_a_stale_one_starts_again_with_it() {
 	let _j = temp_jocasta();
-	let herdr = FakeHerdr::new();
+	let herdr = FakeSurface::new();
 	let command = command();
 	let launched = LaunchedPanes::new(None);
 	let env1 = [("JOCASTA_BOSS_KEY", "run-1")];
@@ -219,7 +219,7 @@ fn the_boss_session_has_no_collab_relay_and_its_share_stays_on_a_dead_loopback_p
 #[tokio::test]
 async fn bare_jocasta_and_the_service_making_workspace_jocasta_at_once_leave_one_the_oldest_the_other_closed() {
 	let j = temp_jocasta();
-	let herdr = FakeHerdr::new();
+	let herdr = FakeSurface::new();
 	let cli = LaunchedPanes::new(Some(&j.root().join("cli.json")));
 	let service = LaunchedPanes::new(None);
 	let (a, b) = tokio::join!(ensure_boss_pane(&herdr, ensure(&cli)), ensure_boss_pane(&herdr, ensure(&service)));
@@ -235,7 +235,7 @@ async fn bare_jocasta_and_the_service_making_workspace_jocasta_at_once_leave_one
 async fn a_boss_pane_herdr_restored_as_a_shell_runs_omp_again_one_whose_omp_ended_is_the_services_to_start_and_one_jocasta_didnt_start_is_left_alone()
  {
 	let j = temp_jocasta();
-	let herdr = FakeHerdr::new();
+	let herdr = FakeSurface::new();
 	let command = command();
 	let launched = LaunchedPanes::new(None);
 	let pane = ensure_boss_pane(&herdr, ensure(&launched)).await.unwrap();
@@ -309,7 +309,7 @@ fn a_panes_omp_ended_in_its_own_terminal_only_once_omp_was_seen_running_there() 
 #[tokio::test]
 async fn at_the_services_start_a_boss_pane_with_no_omp_runs_omp_even_without_a_record_one_running_omp_is_left_alone() {
 	let j = temp_jocasta();
-	let herdr = FakeHerdr::new();
+	let herdr = FakeSurface::new();
 	let command = command();
 	// herdr restored workspace "Jocasta" from its own saved session: a shell Jocasta has no record of.
 	let earlier = LaunchedPanes::new(Some(&j.root().join("earlier.json")));
@@ -339,7 +339,7 @@ async fn at_the_services_start_a_boss_pane_with_no_omp_runs_omp_even_without_a_r
 #[tokio::test]
 async fn his_own_shell_tab_in_workspace_jocasta_is_never_taken_for_the_boss_jocastas_or_omps_pane_is_else_a_new_tab() {
 	let j = temp_jocasta();
-	let herdr = FakeHerdr::new();
+	let herdr = FakeSurface::new();
 	let launched = LaunchedPanes::new(None);
 	let boss = ensure_boss_pane(&herdr, ensure(&launched)).await.unwrap();
 	// He opened a shell tab there, before the boss's in herdr's list.

@@ -7,6 +7,8 @@ fn a_started_threads_branch_is_read_from_the_reply() {
 	assert_eq!(started_branch("Started T in acme on branch feature/t-1."), Some("feature/t-1".to_owned()));
 	assert_eq!(started_branch("Started T in acme on branch feature/t-1, plan mode"), Some("feature/t-1".to_owned()));
 	assert_eq!(started_branch("Started T in acme on branch feature/t-1"), Some("feature/t-1".to_owned()));
+	let cli = "Started acme/T 1 on feature/t-1: it plans first; approve its plan in its pane.";
+	assert_eq!(started_branch(cli), Some("feature/t-1".to_owned()));
 	assert_eq!(started_branch("refused"), None);
 }
 

@@ -3,9 +3,9 @@
 
 use super::*;
 use crate::frontier::server::context::{TestContext, test_context};
-use crate::frontier::server::herdr::Herdr;
 use crate::frontier::server::mise::tests::captured_shim;
 use crate::frontier::server::overlay::overlay_file;
+use crate::frontier::server::surface::Surface;
 use crate::frontier::server::task_file::{NewTask, new_task, task_dir};
 use crate::frontier::server::thread::Thread;
 use crate::shared::bridge_wire::BRIDGE_EXTENSION;

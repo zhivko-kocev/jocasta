@@ -1,165 +1,38 @@
-//! The Jocasta service inside herdr's server (fork plan phase 4): one process. Bare `jocasta` launches herdr's server
-//! with `JOCASTA_SERVICE=1`, and that server runs the service as its `ServerExtension`: it starts once the server
-//! listens, hears when his last terminal leaves (0549's close: stop at once, or ask first while threads are at work),
-//! and ends before the process does. A plain `jocasta server` (a test's, the benchmark's) runs none. The service takes
-//! the single-instance lock as the plain service did (taking over a hung holder, 0534) and starts the push-to-talk hook
-//! (0556). herdr's own signal handling ends the server; the service's stop follows.
+//! Bare `jocasta` (0683): one process holds the service and Jocasta's own shell. The main thread runs the shell (the
+//! terminal window, `frontier/shell`); a tokio runtime beside it runs the service. They meet in-process: the service's
+//! surface is [`OwnSurface`] over the shell's tabs, its shell half is [`Native`] over the UI thread's channel, and the
+//! panes' agent state is what the bridge says (0675). Closing the window ends the process: the console input ends, the
+//! shell returns, and the service stops everything at once (no question can be asked of a closed window). The service
+//! takes the single-instance lock as the plain service did (taking over a hung holder, 0534) and starts the
+//! push-to-talk hook (0556). A service that can't start logs why and the window closes; bare `jocasta` says it (0582).
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
+use std::sync::mpsc::{Sender, channel};
 use std::time::Duration;
 
-use herdr::embed::{ServerExtension, ServerHost};
-use tokio::runtime::Runtime;
+use tokio::sync::Notify;
 
-use crate::frontier::server::herdr::herdr_pipe;
+use crate::frontier::server::bridge::Bridge;
 use crate::frontier::server::instance::{Instance, InstanceOptions, take_instance};
 use crate::frontier::server::launch::service_state;
-use crate::frontier::server::native::Native;
+use crate::frontier::server::native::{Native, ShellHost, Target};
+use crate::frontier::server::own_surface::OwnSurface;
 use crate::frontier::server::ptt::start_push_to_talk;
-use crate::frontier::server::server::{JocastaServer, ServerOptions, start_server};
-use crate::shared::herdr_session::herdr_session;
+use crate::frontier::server::server::{ServerOptions, start_server};
+use crate::frontier::shell::{AgentInfo, Hub, JocastaShell, Parts, Ui, run};
+use crate::shared::clock::now_ms;
+use crate::shared::errors::{Error, Result};
 use crate::shared::log::{LogLevel, log};
 use crate::shared::paths::data_dir;
 use crate::shared::proctree::end_processes;
 use crate::shared::service_file::read_service_file;
 
-/// How long the process waits for the service to end after herdr's server stopped: every stop step is bounded, so
-/// this only guards against a hang.
+/// How long the process waits for the service to end once the window closed: every stop step is bounded, so this only
+/// guards against a hang.
 const STOP_WAIT: Duration = Duration::from_secs(60);
 
-/// The service herdr's server runs: see the module docs.
-#[derive(Default)]
-pub struct EmbeddedService {
-	running: Option<Running>,
-	/// herdr's host, kept to start again when a live handoff fails.
-	host: Option<ServerHost>,
-	/// Services a live handoff is ending, each on a thread of its own; joined before the process ends.
-	ending: Vec<std::thread::JoinHandle<()>>,
-}
-
-struct Running {
-	runtime: Runtime,
-	/// The server once it listens; `None` while it starts or when it couldn't.
-	server: Arc<OnceLock<JocastaServer>>,
-	/// herdr's client shells: there from the start, so no shell that attaches early is missed.
-	shell: Arc<Native>,
-	/// The task that runs the service until it stops.
-	task: tokio::task::JoinHandle<()>,
-}
-
-impl ServerExtension for EmbeddedService {
-	fn started(&mut self, host: ServerHost) {
-		let socket = herdr_pipe(&host.api_socket.to_string_lossy());
-		let stop = Arc::clone(&host.stop);
-		let session = match herdr_session() {
-			Ok(session) => session,
-			Err(error) => return failed(&error.to_string(), &stop),
-		};
-		let runtime = match tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build() {
-			Ok(runtime) => runtime,
-			Err(error) => return failed(&error.to_string(), &stop),
-		};
-		self.host = Some(host.clone());
-		let shell = Native::new(host, runtime.handle().clone());
-		let server = Arc::new(OnceLock::new());
-		let task = runtime.spawn(run(session, socket, stop, Arc::clone(&server), Arc::clone(&shell)));
-		self.running = Some(Running { runtime, server, shell, task });
-	}
-
-	fn last_client_left(&mut self) {
-		let Some(running) = &self.running else { return };
-		if let Some(server) = running.server.get() {
-			let server = server.clone();
-			running.runtime.spawn(async move { server.client_closed().await });
-		}
-	}
-
-	fn stopped(&mut self) {
-		// A service a handoff let go of ends first; then herdr's server is gone: Jocasta closes as one, unasked (a stop
-		// already under way is joined).
-		for ending in self.ending.drain(..) {
-			let _ = ending.join();
-		}
-		if let Some(running) = self.running.take() {
-			end(running, Ending::Everything);
-		}
-	}
-
-	fn before_handoff(&mut self) -> Vec<(String, String)> {
-		// The service's lock, ports and service file go; herdr's panes and their processes stay for the next server,
-		// whose service adopts them as a restarted service does (0392). It ends on a thread of its own: its stop asks
-		// herdr, whose loop runs this handoff. The next service's lock waits while this one says it is closing (0534).
-		log(LogLevel::Info, "service", "a live handoff: handing over to the next server", None);
-		if let Some(running) = self.running.take() {
-			self.ending.push(std::thread::spawn(move || end(running, Ending::ServiceOnly)));
-		}
-		vec![(SERVICE_ENV.to_owned(), "1".to_owned())]
-	}
-
-	fn handoff_failed(&mut self) {
-		// This server stays: a service starts again, its lock waiting out the one still ending.
-		log(LogLevel::Warn, "service", "the live handoff failed: starting again", None);
-		if self.running.is_none()
-			&& let Some(host) = self.host.clone()
-		{
-			self.started(host);
-		}
-	}
-
-	fn client_joined(&mut self, client: u64, pid: Option<u32>) {
-		if let Some(running) = &self.running {
-			running.shell.joined(client, pid);
-		}
-	}
-
-	fn client_left(&mut self, client: u64) {
-		if let Some(running) = &self.running {
-			running.shell.left(client);
-		}
-	}
-
-	fn client_message(&mut self, client: u64, kind: &str, data: &str) {
-		if let Some(running) = &self.running {
-			running.shell.message(client, kind, data);
-		}
-	}
-
-	fn action(&mut self, action: &str, pane_id: Option<&str>) -> bool {
-		self.running.as_ref().is_some_and(|running| running.shell.action(action, pane_id))
-	}
-}
-
-/// How the service ends.
-enum Ending {
-	/// Jocasta closes as one (0434, 0549).
-	Everything,
-	/// Only the service stops, as after a failed start; herdr's panes keep running.
-	ServiceOnly,
-}
-
-/// Ends the service as `how` says and waits for it (bounded).
-fn end(running: Running, how: Ending) {
-	let Running { runtime, server, task, .. } = running;
-	runtime.block_on(async move {
-		if let Some(server) = server.get() {
-			let server = server.clone();
-			match how {
-				Ending::Everything => tokio::spawn(async move {
-					server.shutdown(false).await;
-				}),
-				Ending::ServiceOnly => tokio::spawn(async move { server.stop().await }),
-			};
-		}
-		if tokio::time::timeout(STOP_WAIT, task).await.is_err() {
-			log(LogLevel::Warn, "service", "didn't stop within a minute; ending", None);
-		}
-	});
-	runtime.shutdown_timeout(Duration::from_secs(1));
-}
-
 /// Takes the single-instance lock: the lock this service holds, or `None` when another service holds it and answers.
-async fn take_lock() -> crate::shared::errors::Result<Option<Instance>> {
+async fn take_lock() -> Result<Option<Instance>> {
 	take_instance(InstanceOptions::new(
 		data_dir().join("service.lock"),
 		|| async { service_state(read_service_file().as_ref(), None).await },
@@ -170,102 +43,111 @@ async fn take_lock() -> crate::shared::errors::Result<Option<Instance>> {
 	.await
 }
 
-/// Runs the service until it stops, publishing its server once it listens.
-async fn run(
-	session: String,
-	socket: String,
-	stop: Arc<dyn Fn() + Send + Sync>,
-	published: Arc<OnceLock<JocastaServer>>,
-	shell: Arc<Native>,
-) {
-	let instance = match take_lock().await {
-		Ok(Some(instance)) => instance,
-		Ok(None) => return failed("another Jocasta service is running; close it first", &stop),
-		Err(error) => return failed(&error.to_string(), &stop),
-	};
-	let options = ServerOptions {
-		herdr_session: Some(session),
-		herdr_socket: Some(socket),
-		shell: Some(Arc::clone(&shell)),
-		..ServerOptions::default()
-	};
-	let server = match start_server(options).await {
-		Ok(server) => server,
-		Err(error) => {
-			release(&instance);
-			return failed(&error.to_string(), &stop);
-		}
-	};
-	shell.attach(Arc::new(server.clone()));
-	let _ = published.set(server.clone());
-	// A start that fails after the server listened (LC-10) stops what it started, herdr's server among its steps (the
-	// panes' processes listed first, 0486), so the service says it is closing before herdr's client ends; herdr's own
-	// stop follows here, once that stop ended. The failure is marked before its stop begins: the stop's end wakes this
-	// task too, which then aborts the watcher. The service's own start logged why.
-	let failed = server.clone();
-	let start_failed = Arc::new(AtomicBool::new(false));
-	let marked = Arc::clone(&start_failed);
-	let watching = tokio::spawn(async move {
-		if failed.ready().await.is_err() {
-			marked.store(true, Ordering::SeqCst);
-			failed.stop().await;
-		}
-	});
-	// Right Ctrl toggles omp's dictation in the boss pane (0556).
-	let service = Arc::clone(&server.service);
-	let ptt = start_push_to_talk(move || {
-		let service = Arc::clone(&service);
-		async move { service.toggle_dictation().await }
-	});
-	server.stopped().await;
-	watching.abort();
-	if start_failed.load(Ordering::SeqCst) {
-		stop();
-	}
-	if let Some(ptt) = ptt {
-		ptt.stop().await;
-	}
-	release(&instance);
-}
-
-/// A service that couldn't start says why and stops its herdr server: a work surface without Jocasta would mislead
-/// him, and bare `jocasta` says why once its client ends (0582).
-fn failed(why: &str, stop: &Arc<dyn Fn() + Send + Sync>) {
-	log(LogLevel::Error, "service", &format!("didn't start: {why}"), None);
-	stop();
-}
-
 fn release(instance: &Instance) {
 	if let Err(error) = instance.release() {
 		log(LogLevel::Warn, "service", &format!("couldn't give the lock up: {error}"), None);
 	}
 }
 
-/// The env var bare `jocasta` sets for the herdr server it launches: that server runs the service.
-pub const SERVICE_ENV: &str = "JOCASTA_SERVICE";
+/// A service that couldn't start says why in the log and closes the window.
+fn failed(why: &str, ui: &Sender<Ui>) {
+	log(LogLevel::Error, "service", &format!("didn't start: {why}"), None);
+	let _ = ui.send(Ui::Quit);
+}
 
-/// Whether `jocasta <herdr words>` runs the service: a server run (its words are `server` alone, after
-/// `--session <name>` if any, or the server a live handoff starts, `server --handoff-import <socket> <token>`) that
-/// bare `jocasta` launched or a serving server handed over to (`service_env` is `JOCASTA_SERVICE`'s value).
-pub fn serves(args: &[String], service_env: Option<&str>) -> bool {
-	let mut words = args.iter().map(String::as_str);
-	let mut rest = Vec::new();
-	while let Some(word) = words.next() {
-		if word == "--session" {
-			words.next();
-		} else if !word.starts_with("--session=") {
-			rest.push(word);
+/// Runs the service until it stops or `closed` is notified (the window closed), then stops everything at once.
+async fn serve(native: Arc<Native>, surface: Arc<OwnSurface>, bridge: Bridge, ui: Sender<Ui>, closed: Arc<Notify>) {
+	let instance = match take_lock().await {
+		Ok(Some(instance)) => instance,
+		Ok(None) => return failed("another Jocasta service is running; close it first", &ui),
+		Err(error) => return failed(&error.to_string(), &ui),
+	};
+	let options = ServerOptions {
+		herdr: Some(surface),
+		shell: Some(Arc::clone(&native)),
+		bridge: Some(bridge),
+		..ServerOptions::default()
+	};
+	let server = match start_server(options).await {
+		Ok(server) => server,
+		Err(error) => {
+			release(&instance);
+			return failed(&error.to_string(), &ui);
+		}
+	};
+	native.attach(Arc::new(server.clone()));
+	// A start that fails after the server listened (LC-10) stops what it started, then the window closes; the
+	// service's own start logged why.
+	let watched = server.clone();
+	let starting = tokio::spawn(async move {
+		if watched.ready().await.is_err() {
+			watched.stop().await;
+		}
+	});
+	// Right Ctrl toggles omp's dictation in the boss pane (0556).
+	let dictation = Arc::clone(&server.service);
+	let ptt = start_push_to_talk(move || {
+		let service = Arc::clone(&dictation);
+		async move { service.toggle_dictation().await }
+	});
+	tokio::select! {
+		() = server.stopped() => {}
+		() = closed.notified() => {
+			server.shutdown(false).await;
+			server.stopped().await;
 		}
 	}
-	let server = matches!(rest.as_slice(), ["server"] | ["server", "--handoff-import", _, _]);
-	service_env == Some("1") && server
+	starting.abort();
+	if let Some(ptt) = ptt {
+		ptt.stop().await;
+	}
+	release(&instance);
+	let _ = ui.send(Ui::Quit);
 }
 
-/// Registers the service with herdr's server for this process.
-pub fn register() {
-	herdr::embed::set_server_extension(Box::new(EmbeddedService::default()));
+/// Runs Jocasta: the service on a runtime of its own and the shell here, until the window closes or the service
+/// stops. The caller took the secrets out of the environment before any thread started.
+pub fn run_embedded() -> Result<()> {
+	let runtime = tokio::runtime::Builder::new_multi_thread()
+		.worker_threads(2)
+		.enable_all()
+		.build()
+		.map_err(|error| Error::other(format!("the runtime didn't start: {error}")))?;
+	let (tx, rx) = channel::<Ui>();
+	let hub = Hub::new(tx.clone());
+	let bridge = Bridge::new();
+	let asked = bridge.clone();
+	hub.set_lookup(Arc::new(move |pane_id| {
+		let agent = asked.agent(pane_id);
+		AgentInfo {
+			connected: asked.connected(pane_id),
+			working: agent.as_ref().is_some_and(|agent| agent.working),
+			input_open: agent.as_ref().is_some_and(|agent| agent.input_open),
+			session: asked.session(pane_id).map(Into::into),
+		}
+	}));
+	let to_ui = tx.clone();
+	let host = ShellHost::new(
+		Arc::new(move |_target: Target, kind: &str, data: String| {
+			let _ = to_ui.send(Ui::Service(kind.to_owned(), data));
+		}),
+		hub.changed(),
+	);
+	let native = Native::new(host, runtime.handle().clone());
+	let surface = OwnSurface::new(Arc::clone(&hub));
+	let closed = Arc::new(Notify::new());
+	let service = runtime.spawn(serve(Arc::clone(&native), surface, bridge, tx.clone(), Arc::clone(&closed)));
+	let parts = Parts { hub, shell: JocastaShell::new(now_ms), native, tx, rx };
+	crate::shared::log::set_stderr(false);
+	let ran = run(parts);
+	crate::shared::log::set_stderr(true);
+	// The window closed, or the service stopped under it: what is left stops now, and the process waits for it.
+	closed.notify_one();
+	runtime.block_on(async {
+		if tokio::time::timeout(STOP_WAIT, service).await.is_err() {
+			log(LogLevel::Warn, "service", "didn't stop within a minute; ending", None);
+		}
+	});
+	runtime.shutdown_timeout(Duration::from_secs(1));
+	ran.map_err(|error| Error::other(format!("the terminal failed: {error}")))
 }
-
-#[cfg(test)]
-#[path = "embedded_tests.rs"]
-mod tests;

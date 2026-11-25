@@ -9,8 +9,8 @@ use futures_util::future::BoxFuture;
 use super::*;
 use crate::frontier::protocol::{Leftover, ServerMessage, ServiceHealth, ToastLevel, ToastPriority};
 use crate::frontier::server::day::{AlertDetails, DayHooks, DayOptions, DayThread};
-use crate::frontier::server::herdr::AgentState;
-use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
+use crate::frontier::server::surface::AgentState;
+use crate::frontier::server::surface::fake_surface::FakeSurface;
 use crate::frontier::server::thread::{Thread, ThreadRef};
 use crate::frontier::server::worklog::WorklogSession;
 use crate::shared::errors::Result;
@@ -65,7 +65,7 @@ impl DayHooks for NoHooks {
 /// every part. Hold it for the test's whole length: it keeps the temp roots and the environment lock.
 pub(crate) struct TestContext {
 	pub ctx: Arc<ServiceContext>,
-	pub herdr: Arc<FakeHerdr>,
+	pub herdr: Arc<FakeSurface>,
 	/// Every message the service broadcast to its clients, in order.
 	pub sent: Arc<Mutex<Vec<ServerMessage>>>,
 	_jocasta: TempJocasta,
@@ -109,7 +109,7 @@ impl TestContext {
 /// the test context's own. Call it inside a tokio test (`#[tokio::test]`): the check runner needs a runtime.
 pub(crate) fn test_context(options: impl FnOnce(&mut ServiceOptions)) -> TestContext {
 	let jocasta = temp_jocasta();
-	let herdr = Arc::new(FakeHerdr::new());
+	let herdr = Arc::new(FakeSurface::new());
 	let sent = Arc::new(Mutex::new(Vec::new()));
 	let broadcast = Arc::clone(&sent);
 	let mut service = ServiceOptions::new(

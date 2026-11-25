@@ -6,7 +6,7 @@
 use std::sync::atomic::AtomicBool;
 
 use super::*;
-use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
+use crate::frontier::server::surface::fake_surface::FakeSurface;
 use crate::shared::service_file::{ServiceFile, service_file_path, write_service_file};
 use crate::shared::testing::temp_jocasta;
 
@@ -125,7 +125,7 @@ impl StopService for FakeService {
 }
 
 struct World {
-	herdr: Arc<FakeHerdr>,
+	herdr: Arc<FakeSurface>,
 	popups: Arc<Popups>,
 	log: Log,
 	service: Arc<FakeService>,
@@ -136,7 +136,7 @@ impl World {
 	fn new() -> Self {
 		let log: Log = Arc::default();
 		Self {
-			herdr: Arc::new(FakeHerdr::new()),
+			herdr: Arc::new(FakeSurface::new()),
 			popups: Arc::new(Popups::new()),
 			service: Arc::new(FakeService { log: Arc::clone(&log), fail_stop: AtomicBool::new(false) }),
 			log,
@@ -153,7 +153,6 @@ impl World {
 			popups: Arc::clone(&self.popups),
 			broadcast: Arc::new(move |message| sent.lock().unwrap_or_else(PoisonError::into_inner).push(message)),
 			herdr: self.herdr.clone(),
-			session: "jocasta".to_owned(),
 			service: self.service.clone(),
 			extra_stops,
 			bridge,
@@ -180,7 +179,7 @@ fn the_sequence_stops_everything_in_its_order_with_the_extra_stops_after_the_lef
 			"noting the threads at work",
 			"the service",
 			"the turns at work",
-			"herdr session jocasta",
+			"the shell's panes",
 			"the threads' leftovers",
 			"the test's stop",
 			"the bridge",
@@ -191,7 +190,7 @@ fn the_sequence_stops_everything_in_its_order_with_the_extra_stops_after_the_lef
 	let by = |name: &str| steps.iter().find(|step| step.name == name).unwrap();
 	assert_eq!(by("noting the threads at work").ms, Some(15_000));
 	assert_eq!(by("the service").ms, Some(30_000));
-	assert_eq!(by("herdr session jocasta").ms, Some(15_000));
+	assert_eq!(by("the shell's panes").ms, Some(15_000));
 	assert_eq!(by("the server").when, StopWhen::Finally);
 	assert_eq!(by("the bridge").when, StopWhen::Always);
 }

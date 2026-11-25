@@ -12,7 +12,6 @@ pub mod context;
 pub mod cost_cap;
 pub mod day;
 pub mod day_briefs;
-pub mod door_routes;
 #[cfg(test)]
 mod e2e_allow_tests;
 #[cfg(test)]
@@ -49,7 +48,6 @@ pub mod health_route;
 pub(crate) mod helpers;
 #[cfg(test)]
 mod helpers_procs;
-pub mod herdr;
 pub mod history;
 pub mod instance;
 pub mod journal;
@@ -60,6 +58,7 @@ pub mod mise;
 pub mod native;
 pub mod omp_processes;
 pub mod overlay;
+pub mod own_surface;
 pub mod page_routes;
 pub mod pane_launch;
 pub mod pending;
@@ -89,6 +88,7 @@ pub mod sleep;
 pub mod spend;
 pub mod status;
 pub mod stop_sequence;
+pub mod surface;
 pub mod task_file;
 pub mod thread;
 pub mod thread_brief;

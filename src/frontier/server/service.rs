@@ -41,7 +41,6 @@ use crate::frontier::server::cost_cap;
 use crate::frontier::server::day::{AlertDetails, Day, DayHooks, DayOptions, DayThread, ScheduleStart, SharedCatalog};
 use crate::frontier::server::events::{Toast, clean};
 use crate::frontier::server::feed::{FeedService, Reply};
-use crate::frontier::server::herdr::{AgentState, Herdr, HerdrSnapshot, StopWatch, pane_text};
 use crate::frontier::server::keys::{FinishHow, KeyFinishable, KeyOutcome, Keys, NewThreadForm};
 use crate::frontier::server::phone::PhoneFacts;
 use crate::frontier::server::popups::Counts;
@@ -51,6 +50,7 @@ use crate::frontier::server::push_gate::PushGate;
 use crate::frontier::server::refresh::Refresher;
 use crate::frontier::server::status::Busy;
 use crate::frontier::server::stop_sequence::StopService;
+use crate::frontier::server::surface::{AgentState, StopWatch, Surface, SurfaceSnapshot, pane_text};
 use crate::frontier::server::thread_keys::KeyService;
 use crate::frontier::server::tool_specs::{ToolSpec, bad_arguments, tools_for};
 use crate::frontier::server::tools::{Caller, ToolReply, Tools};
@@ -72,7 +72,7 @@ use crate::shared::settings::settings_problems;
 
 /// The dock's workspace and the Agents view (0553), healed on every refresh with herdr's panes as read and the boss
 /// pane's id.
-pub type Heal = Arc<dyn Fn(HerdrSnapshot, Option<String>) -> BoxFuture<'static, Result<()>> + Send + Sync>;
+pub type Heal = Arc<dyn Fn(SurfaceSnapshot, Option<String>) -> BoxFuture<'static, Result<()>> + Send + Sync>;
 
 /// Resolves at herdr's next change the refresh reads (`ServerHost::herdr_changed`).
 pub type Changed = Arc<dyn Fn() -> BoxFuture<'static, ()> + Send + Sync>;
@@ -81,7 +81,7 @@ pub type Changed = Arc<dyn Fn() -> BoxFuture<'static, ()> + Send + Sync>;
 /// absent option, and the default each field names is the service's, not this struct's. The service takes `day` out
 /// (`Option::take`) to build the day, so the context's copy has none.
 pub struct ServiceOptions {
-	pub herdr: Arc<dyn Herdr>,
+	pub herdr: Arc<dyn Surface>,
 	pub broadcast: Arc<dyn Fn(ServerMessage) + Send + Sync>,
 	/// The dock's workspace and the Agents view (0553): healed on every refresh. Absent in tests that don't need it.
 	pub dock: Option<Heal>,
@@ -164,7 +164,7 @@ pub struct ServiceOptions {
 
 impl ServiceOptions {
 	/// Options with herdr and the broadcast, and every default.
-	pub fn new(herdr: Arc<dyn Herdr>, broadcast: Arc<dyn Fn(ServerMessage) + Send + Sync>) -> Self {
+	pub fn new(herdr: Arc<dyn Surface>, broadcast: Arc<dyn Fn(ServerMessage) + Send + Sync>) -> Self {
 		Self {
 			herdr,
 			broadcast,
@@ -310,9 +310,9 @@ impl DayHooks for ServiceHooks {
 		let c = self.link.ctx();
 		Box::pin(async move {
 			let herdr = match c.herdr.ping().await {
-				Ok(_) => ServiceHealth { name: ServiceName::Herdr, state: ServiceState::Up, note: None },
+				Ok(_) => ServiceHealth { name: ServiceName::Surface, state: ServiceState::Up, note: None },
 				Err(_) => ServiceHealth {
-					name: ServiceName::Herdr,
+					name: ServiceName::Surface,
 					state: ServiceState::Down,
 					note: Some("not answering".to_owned()),
 				},

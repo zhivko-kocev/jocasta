@@ -1,6 +1,6 @@
 ---
 name: Jocasta
-description: "Tokyo Night everywhere Jocasta draws: the `today` pane and the `ask` popup in herdr, drawn with ratatui, and the brief pages in his browser."
+description: "Tokyo Night everywhere Jocasta draws: the `today` dock and the question box in Jocasta's shell, drawn with ratatui, and the brief pages in his browser."
 colors:
   bg-0: "#1a1b26"
   bg-1: "#232636"
@@ -140,17 +140,17 @@ components:
 
 Jocasta has no window of its own (0552). What it draws is three surfaces, all on one Tokyo Night palette:
 
-- **the `today` pane**, a terminal pane beside the boss in herdr's workspace "Jocasta", drawn with ratatui (0551, 0553, 0555, 0634);
-- **the `ask` popup**, herdr's popup in front of whatever he is on, also ratatui, for his questions (0553, 0558, 0568);
+- **the `today` dock**, beside the boss in the shell's workspace "Jocasta", drawn with ratatui (0551, 0553, 0555, 0634, 0683);
+- **the question box**, the shell's own box in front of whatever he is on, also ratatui, for his questions (0553, 0558, 0568, 0683);
 - **the brief pages**, plain-DOM pages the service serves to his browser: the thread brief, the boss's `show` and the later briefs (0678, 0679).
 
-herdr itself draws everything else with its own `tokyo-night` theme, without custom colours (0554); omp's panes use omp's `dark-tokyo-night` (0401). The terminals inherit the Windows Terminal scheme `jocasta setup` writes from the same palette.
+The shell draws everything else with its `tokyo-night` theme (0554, 0683); omp's panes use omp's `dark-tokyo-night` (0401). The terminals inherit the Windows Terminal scheme `jocasta setup` writes from the same palette.
 
 The two terminal surfaces are coloured text only: ratatui draws plain lines of coloured runs (`src/frontier/today/view.rs`, `src/frontier/ask/view.rs`; 0634) on bg-0. There are no borders, boxes or motion; layout is lines, blank lines and the terminal's width.
 
 ## Colors
 
-The palette is Tokyo Night as herdr 0.9.5 draws it. The brief pages' `:root` in `src/frontier/brief/page/brief.css` holds its hex values for the browser (0678); the terminal surfaces and the Windows Terminal scheme `jocasta setup` writes take theirs from `src/frontier/today/view.rs` and setup. The front matter above mirrors it.
+The palette is Tokyo Night as the shell draws it (the same as herdr 0.9.5's, 0554). The brief pages' `:root` in `src/frontier/brief/page/brief.css` holds its hex values for the browser (0678); the terminal surfaces and the Windows Terminal scheme `jocasta setup` writes take theirs from `src/frontier/today/view.rs` and setup. The front matter above mirrors it.
 
 ### Grounds
 - **BG 0** (bg-0): the `today` pane's and the `ask` popup's ground, a brief page's first paint, and the terminal scheme's background.
@@ -195,7 +195,7 @@ Up and down pick a row: a thread (Enter goes to its pane) or a row with a link (
 
 ## The `ask` popup
 
-The popup (0553) is herdr's: 70% wide and 18 rows high (the plugin's manifest), titled "Jocasta asks". Inside, ratatui draws: the question's title in bold blue ("Jocasta: Allow or Deny", "Jocasta: Stop everything?", "Jocasta: Finish <thread>", "Jocasta: New thread"), a blank line, the message wrapped in fg, the detail wrapped in fg-2 (a word longer than the line is split, never cut), and then the foot. The foot is laid out first so it always shows (0578); a question taller than the rows left shows its first lines and `… N more lines · PgDn reads on` in fg-3, and PgUp/PgDn read it. The popup redraws when its size changes, and keys in its first 750 ms are dropped.
+The box (0553, 0683) is the shell's: 70% wide and 18 rows high (the plugin manifest's size, kept), titled "Jocasta asks". Inside, ratatui draws: the question's title in bold blue ("Jocasta: Allow or Deny", "Jocasta: Stop everything?", "Jocasta: Finish <thread>", "Jocasta: New thread"), a blank line, the message wrapped in fg, the detail wrapped in fg-2 (a word longer than the line is split, never cut), and then the foot. The foot is laid out first so it always shows (0578); a question taller than the rows left shows its first lines and `… N more lines · PgDn reads on` in fg-3, and PgUp/PgDn read it. The popup redraws when its size changes, and keys in its first 750 ms are dropped.
 
 - **Choices**: one row of buttons, each ` <choice> ` with two spaces between; the picked one bold bg-0 on blue, the others fg on bg-2.
 - **A coded choice** (Allow, Merge, PR, Stop everything; 0558, 0568): "Type `XYZ` for <choice>" with the code in bold yellow, then `> ` and the letters typed so far, padded with `_`, in bold yellow; the hint `←→ choose · Esc <fallback>` (with `PgUp/PgDn read` before Esc when the question scrolls).

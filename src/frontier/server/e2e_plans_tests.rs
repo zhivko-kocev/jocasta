@@ -17,10 +17,10 @@ use crate::frontier::server::helpers::{
 	handoff_entry, plan_mode_file, proposed_plan_file, review, sh, start_test_server_with, start_thread, to_handoff,
 	until, until_async, with_server,
 };
-use crate::frontier::server::herdr::AgentState;
-use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
 use crate::frontier::server::server::ServerOptions;
 use crate::frontier::server::status::Busy;
+use crate::frontier::server::surface::AgentState;
+use crate::frontier::server::surface::fake_surface::FakeSurface;
 use crate::frontier::server::tools::ToolReply;
 use crate::frontier::server::wording::HANDOFF_PROMPT;
 use crate::shared::testing::temp_jocasta;
@@ -53,7 +53,7 @@ fn path_text(file: &Path) -> &str {
 }
 
 /// A server on `herdr` with `agent_wait_ms` and `plan_settle_ms` as given.
-async fn start(herdr: &Arc<FakeHerdr>, agent_wait_ms: Option<i64>, plan_settle_ms: Option<i64>) -> TestServer {
+async fn start(herdr: &Arc<FakeSurface>, agent_wait_ms: Option<i64>, plan_settle_ms: Option<i64>) -> TestServer {
 	let options = ServerOptions { agent_wait_ms, plan_settle_ms, ..ServerOptions::default() };
 	start_test_server_with(Arc::clone(herdr), options).await
 }
@@ -66,7 +66,7 @@ fn awaiting(server: &TestServer) -> u32 {
 	server.service.hud(None).unwrap().awaiting
 }
 
-fn typed(herdr: &FakeHerdr, pane_id: &str) -> Vec<Vec<Value>> {
+fn typed(herdr: &FakeSurface, pane_id: &str) -> Vec<Vec<Value>> {
 	herdr.of("prompt").into_iter().filter(|args| args[0] == json!(pane_id)).collect()
 }
 
@@ -74,7 +74,7 @@ fn said(server: &TestServer, line: &str) -> usize {
 	boss_lines(server).iter().filter(|l| l.starts_with(line)).count()
 }
 
-fn count_prompts(herdr: &FakeHerdr, pane_id: &str, text: &str) -> usize {
+fn count_prompts(herdr: &FakeSurface, pane_id: &str, text: &str) -> usize {
 	herdr.of("prompt").into_iter().filter(|args| args[0] == json!(pane_id) && args[1] == json!(text)).count()
 }
 
@@ -82,7 +82,7 @@ fn plan_mode_entry(id: &str) -> Value {
 	json!({"type": "mode_change", "id": id, "mode": "plan", "data": {"planFilePath": "local://readme-line-plan.md"}})
 }
 
-fn fresh_pane(herdr: &FakeHerdr) -> String {
+fn fresh_pane(herdr: &FakeSurface) -> String {
 	herdr
 		.state()
 		.pane_list
@@ -159,7 +159,7 @@ async fn b3_a_plan_awaiting_him_survives_stop_everything_and_reopen_the_resumed_
  {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
-	let herdr = Arc::new(FakeHerdr::new());
+	let herdr = Arc::new(FakeSurface::new());
 	let server = start(&herdr, Some(10_000), None).await;
 	let file = finally(&server, |server| async move {
 		let started = start_thread(&server, ThreadOptions::default()).await;
@@ -206,7 +206,7 @@ async fn a_done_and_reviewed_thread_survives_stop_everything_and_reopen_still_in
  {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
-	let herdr = Arc::new(FakeHerdr::new());
+	let herdr = Arc::new(FakeSurface::new());
 	let server = start(&herdr, Some(10_000), None).await;
 	let file = finally(&server, |server| async move {
 		let started = start_thread(&server, ThreadOptions::default()).await;
@@ -237,13 +237,13 @@ async fn a_done_and_reviewed_thread_survives_stop_everything_and_reopen_still_in
 /// herdr restores its pane as a shell, the thread's omp resumes with `--continue` and goes idle, its bridge reporting `agent`.
 struct Reopened {
 	server: TestServer,
-	herdr: Arc<FakeHerdr>,
+	herdr: Arc<FakeSurface>,
 	fresh: String,
 }
 
 async fn reopened(root: &Path, session: fn(&Path) -> PathBuf, agent: PaneAgent) -> Reopened {
 	demo_project(root, "demo").await;
-	let herdr = Arc::new(FakeHerdr::new());
+	let herdr = Arc::new(FakeSurface::new());
 	// A plan-mode turn's end reads the session again for 200 ms, not the product's 2 s (TST-5, TST-7).
 	let server = start(&herdr, Some(10_000), Some(200)).await;
 	let file = finally(&server, |server| async move {

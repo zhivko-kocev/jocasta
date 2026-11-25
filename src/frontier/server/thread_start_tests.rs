@@ -17,11 +17,11 @@ use serde_json::{Value, json};
 use super::*;
 use crate::frontier::server::allow::{Answer, Confirm, Confirmation};
 use crate::frontier::server::context::{TestContext, test_context};
-use crate::frontier::server::herdr::Herdr;
 use crate::frontier::server::keys::Keys;
 use crate::frontier::server::overlay::overlay_file;
 use crate::frontier::server::popups::PopupEnd;
 use crate::frontier::server::service::ServiceOptions;
+use crate::frontier::server::surface::Surface;
 use crate::frontier::server::wording::{WHEN_YOU_FINISH, fallback_slug};
 use crate::shared::bridge_wire::BRIDGE_EXTENSION;
 use crate::shared::env::overlay as env_overlay;
@@ -542,7 +542,7 @@ async fn a_start_that_fails_once_herdr_made_its_worktree_takes_back_the_workspac
 	let w = world();
 	let main = w.project("demo");
 	w.t.herdr.state().create_worktree_fails =
-		Some(crate::frontier::server::herdr::HerdrError::new("error", "herdr's layout failed"));
+		Some(crate::frontier::server::surface::SurfaceError::new("error", "herdr's layout failed"));
 	let reply = refusal(w.start("demo", "Readme line", BRIEF).await);
 	assert!(reply.contains("herdr's layout failed"), "{reply}");
 	let folder = main.parent().unwrap().join("demo.wt").join("readme-line");
@@ -655,7 +655,7 @@ async fn the_boss_asks_before_a_start_in_another_project_than_the_last_one_he_fo
 	focus(&thread_pane);
 	w.t.ctx.starts.note_focus(&w.t.herdr.state().pane_list.clone()).unwrap();
 	w.t.herdr.state().pane_list.iter_mut().for_each(|p| p.focused = false);
-	Herdr::ensure_workspace(&*w.t.herdr, "home", &crate::shared::paths::data_dir(), None, None).await.unwrap();
+	Surface::ensure_workspace(&*w.t.herdr, "home", &crate::shared::paths::data_dir(), None, None).await.unwrap();
 	let shell = w.t.herdr.state().pane_list.last().unwrap().pane_id.clone();
 	focus(&shell);
 	w.t.ctx.starts.note_focus(&w.t.herdr.state().pane_list.clone()).unwrap();
@@ -794,7 +794,7 @@ async fn the_new_thread_form_picks_the_picked_threads_project_else_the_last_focu
 	};
 	assert_eq!(keys.new_thread_form(None).await.unwrap().project, other);
 	// He focuses a pane in the first project's main checkout.
-	Herdr::ensure_workspace(&*w.t.herdr, &first, &main_of(&first), None, None).await.unwrap();
+	Surface::ensure_workspace(&*w.t.herdr, &first, &main_of(&first), None, None).await.unwrap();
 	w.t.herdr.state().pane_list.last_mut().unwrap().focused = true;
 	assert_eq!(keys.new_thread_form(None).await.unwrap().project, first);
 	// The thread picked in today wins.

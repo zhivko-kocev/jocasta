@@ -28,7 +28,6 @@ use crate::lib::args::{
 };
 use crate::lib::launch::tool_command;
 use crate::lib::output::read_version;
-use crate::lib::sandbox::BENCH_PTY_SESSION;
 use jocasta::shared::env;
 use jocasta::shared::errors::Result;
 use jocasta::shared::pathkey::{is_inside, resolve};
@@ -123,7 +122,6 @@ struct Plan {
 	pilot: bool,
 	validate: bool,
 	followup: bool,
-	pty_session: String,
 	cache_dir: PathBuf,
 	work_dir: Option<PathBuf>,
 	out_dir: PathBuf,
@@ -152,7 +150,6 @@ fn bench_spec() -> ArgSpec {
 			"--timeout",
 			"--profile",
 			"--work",
-			"--pty-session",
 		],
 		booleans: &["--pilot", "--validate"],
 		..ArgSpec::default()
@@ -259,7 +256,6 @@ fn plan_of(argv: &[String]) -> Result<(Plan, BenchArgs)> {
 	// Each layered arm needs Jocasta's layer; it is linked into this binary, so no checkout lacks it.
 	let layered: Vec<String> =
 		variants.iter().filter(|(_, variant)| variant.layer).map(|(name, _)| name.clone()).collect();
-	let pty_session = flag_or(&args, "pty-session", BENCH_PTY_SESSION).to_owned();
 	let plan = Plan {
 		tasks,
 		arm_names,
@@ -273,7 +269,6 @@ fn plan_of(argv: &[String]) -> Result<(Plan, BenchArgs)> {
 		pilot,
 		validate,
 		followup,
-		pty_session,
 		cache_dir,
 		work_dir,
 		out_dir,
@@ -339,7 +334,6 @@ async fn run(argv: Vec<String>) -> Result<u8> {
 	options.profile = plan.profile.clone();
 	options.pilot = plan.pilot;
 	options.work_dir = plan.work_dir.clone();
-	options.pty_session = Some(plan.pty_session.clone());
 	// The start floor rides with the pacer so the tests' runs never wait on the machine's memory.
 	options.pace = Some(Arc::new(move || {
 		let pacer = pacer.clone();
@@ -383,8 +377,7 @@ fn print_arm(plan: &Plan, name: &str) -> Result<()> {
 	}
 	if let Some(choice) = variant.plan_review {
 		println!(
-			"  arm {name} plan review (0567): turn 1 runs omp interactive in a pane of the herdr session {}, plan mode at startup; the extension answers \"{}\"{} and shuts omp down after the execution",
-			plan.pty_session,
+			"  arm {name} plan review (0567): turn 1 runs omp interactive in a pty, plan mode at startup; the extension answers \"{}\"{} and shuts omp down after the execution",
 			if choice == super::plan_review::PlanReviewChoice::Execute {
 				"Approve and execute"
 			} else {

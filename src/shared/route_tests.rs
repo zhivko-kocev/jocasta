@@ -123,13 +123,6 @@ fn the_command_word_routes_to_the_hook_with_gits_arguments_and_stays_out_of_the_
 }
 
 #[test]
-fn the_pane_sleep_role_takes_its_text_and_stays_out_of_the_help_0676() {
-	assert!(!help().contains("pane-sleep"));
-	assert_eq!(go(&["pane-sleep", "acme · asleep"]), Route::PaneSleep { args: words(&["acme · asleep"]) });
-	assert_eq!(go(&["pane-sleep"]), Route::PaneSleep { args: vec![] });
-}
-
-#[test]
 fn the_service_and_plugin_words_are_hidden_from_the_help() {
 	let text = help();
 	for line in text.lines().map(str::trim_start) {
@@ -138,41 +131,13 @@ fn the_service_and_plugin_words_are_hidden_from_the_help() {
 }
 
 #[test]
-fn herdrs_words_and_flags_go_to_the_fork_jocastas_shared_ones_stay_jocastas() {
-	for args in [
-		&["server"][..],
-		&["server", "stop"],
-		&["client"],
-		&["pane", "list"],
-		&["workspace", "--help"],
-		&["status"],
-		&["config", "check"],
-		&["session", "list"],
-		&["completion", "zsh"],
-		&["--session", "t", "server"],
-		&["--session=t", "pane", "list"],
-		&["--default-config"],
-		&["--skill"],
-		&["-V"],
-		&["--notification-activate", "herdr-toast://x"],
-		&["worktree"],
-		&["worktree", "list"],
-		&["worktree", "create", "--workspace", "w1"],
-		&["worktree", "remove", "--workspace", "w1"],
-		&["plugin"],
-		&["plugin", "list"],
-		&["plugin", "install", "x"],
-		&["plugin", "action", "invoke", "panes"],
-		&["plugin", "action", "merge"],
-		&["plugin", "action", "finish"],
-	] {
-		assert_eq!(go(args), Route::Herdr, "{args:?}");
-	}
+fn herdrs_words_are_gone_and_the_worktree_word_is_jocastas_0683() {
 	assert_eq!(go(&["worktree", "leftover"]), Route::Worktree { args: words(&["leftover"]) });
 	assert_eq!(go(&["worktree", "remove", "/tmp/w"]), Route::Worktree { args: words(&["remove", "/tmp/w"]) });
 	assert_eq!(go(&["worktree", "remove"]), Route::Worktree { args: words(&["remove"]) });
-	assert_eq!(go(&["plugin", "today"]), Route::Herdr, "the plugin is gone: every plugin word is herdr's");
 	assert_eq!(go(&["--version"]), Route::Version);
-	let text = help();
-	assert!(text.contains("herdr's commands, built in"), "{text}");
+	for args in [&["server"][..], &["pane", "list"], &["plugin", "today"], &["-V"], &["--session", "t"]] {
+		assert!(route(&words(args)).is_err(), "{args:?} is no command now");
+	}
+	assert!(!help().contains("herdr"), "{}", help());
 }

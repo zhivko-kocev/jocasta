@@ -1,5 +1,5 @@
 //! Jocasta's omp snapshot (fork plan phase 6, migration 19): the files in `config/omp/`, an `mcp.json` made for this
-//! install and herdr's omp hook, each written over the one in omp's folder after the diff and his `y`. Every file it
+//! install, each written over the one in omp's folder after the diff and his `y`. Every file it
 //! replaces is kept first in `~/.jocasta/agent/setup/omp-backup/<UTC time>/`, and uninstall puts it back while the file
 //! is still the snapshot's text. `secrets.yml` holds his own strings: it is written only when missing and never shown.
 //! Logins, sessions, memory and history are files the snapshot doesn't have, so they are never touched.
@@ -24,7 +24,7 @@ struct SnapshotFile {
 	only_when_missing: bool,
 }
 
-/// (0594), and the hook herdr's own `integration install omp` writes.
+/// (0594). herdr's own omp hook is no longer written (0683).
 fn snapshot_files(paths: &SetupPaths) -> Result<Vec<SnapshotFile>> {
 	let shipped = |relative: &str| asset(paths, &["omp", relative]);
 	let file =
@@ -35,7 +35,6 @@ fn snapshot_files(paths: &SetupPaths) -> Result<Vec<SnapshotFile>> {
 		file("lsp.json", shipped("lsp.json")?),
 		file("WATCHDOG.md", shipped("WATCHDOG.md")?),
 		file("skills/mise/SKILL.md", asset(paths, &["omp", "skills", "mise", "SKILL.md"])?),
-		file(&format!("extensions/{}", herdr::embed::OMP_HOOK_FILE), herdr::embed::OMP_HOOK.to_owned()),
 		SnapshotFile { relative: "secrets.yml".to_owned(), text: shipped("secrets.yml")?, only_when_missing: true },
 	])
 }

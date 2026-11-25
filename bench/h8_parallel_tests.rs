@@ -13,7 +13,7 @@ use super::{
 	score, thread_session_files,
 };
 use crate::lib::threads::{ThreadLine, parse_thread_line};
-use jocasta::frontier::server::herdr::PaneInfo;
+use jocasta::frontier::server::surface::PaneInfo;
 use jocasta::shared::errors::Result;
 use jocasta::shared::process::{RunOptions, run_program_sync};
 use jocasta::shared::testing::temp_dir;
@@ -38,14 +38,14 @@ fn k11_a_threads_sessions_since_the_run_started_its_planning_session_included_la
 	fs::write(&planning, header("plan", "2026-11-09T10:00:00Z")).unwrap();
 	// "Approve and execute" starts a new session with no parentSession (omp's /clear).
 	fs::write(&execution, header("exec", "2026-11-09T10:05:00Z")).unwrap();
-	// herdr's form of the folder: a trailing separator, and on Windows (0521) other case and slashes.
-	let herdr_cwd = if cfg!(windows) {
+	// the panes list's form of the folder: a trailing separator, and on Windows (0521) other case and slashes.
+	let listed_cwd = if cfg!(windows) {
 		format!("{}/", worktree(0).to_string_lossy().to_uppercase().replace('\\', "/"))
 	} else {
 		format!("{}/", worktree(0).to_string_lossy())
 	};
 	let panes = [
-		PaneInfo { cwd: Some(PathBuf::from(herdr_cwd)), session_path: Some(execution.clone()), ..PaneInfo::default() },
+		PaneInfo { cwd: Some(PathBuf::from(listed_cwd)), session_path: Some(execution.clone()), ..PaneInfo::default() },
 		PaneInfo {
 			cwd: Some(std::env::temp_dir().join("elsewhere")),
 			session_path: Some(dir.join("other.jsonl")),

@@ -6,12 +6,12 @@ use crate::shared::env;
 
 /// The harness-OS layer's test-only switch (0576): `JOCASTA_LAYER=off` leaves the layer out of thread panes (the
 /// `check` and `report_result` tools, the task file's prompt parts, the code index), for K11's same-build comparison.
-/// Like `JOCASTA_HERDR_SESSION` (0441) it is for benchmarks and tests; anything else leaves the layer on.
+/// Like `JOCASTA_HOSTS` below it is for benchmarks and tests; anything else leaves the layer on.
 pub const LAYER_ENV: &str = "JOCASTA_LAYER";
 
-/// H2's `herdr` condition (0576): `JOCASTA_HOSTS=off` makes a sandbox service ignore the states omp pushes over the
-/// bridge (0675), so a thread's state comes from herdr's events and tick only. For benchmarks and tests, like
-/// [`LAYER_ENV`].
+/// H2's `tick` condition (0576): `JOCASTA_HOSTS=off` makes a sandbox service ignore the states omp pushes over the
+/// bridge (0675), so a thread's state comes from the surface's events and the refresh tick only. For benchmarks and
+/// tests, like [`LAYER_ENV`].
 pub const HOSTS_ENV: &str = "JOCASTA_HOSTS";
 
 fn is_on(name: &str, environment: Option<&HashMap<String, String>>) -> bool {

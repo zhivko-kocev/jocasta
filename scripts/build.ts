@@ -1,6 +1,6 @@
 // Packaging (0043, 0044, 0552, 0636, 0679): `mise run build` runs `cargo build --release --locked` (the `jocasta` product
 // and `jocasta-bench`), then this script, which lays out `dist/<target>/`: `target/release/jocasta` beside the shipped
-// `config/` (0392) and, on Windows, herdr's ConPTY runtime (0661), packs it and writes the archive's `.sha256`.
+// `config/` (0392) and, on Windows, the ConPTY runtime (0661), packs it and writes the archive's `.sha256`.
 // `jocasta-bench` goes to `dist/<target>/bench/` for the VM and stays out of the archive.
 // Each target builds on its own OS (0043): the target is this machine's.
 // Usage: mise run build
@@ -37,8 +37,8 @@ function fail(message: string): never {
 /** Windows ships bsdtar in System32; Git's GNU tar earlier on PATH would read `D:` as a host. */
 const TAR = process.platform === "win32" ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe") : "tar";
 
-/** herdr's pin of Microsoft's ConPTY runtime (0661): the package, its files and notices, each with its SHA-256. */
-const CONPTY_PIN = join(root, "crates", "herdr", "packaging", "windows", "conpty.json");
+/** The pin of Microsoft's ConPTY runtime (0661, kept by 0683): the package, its files and notices, each with its SHA-256. */
+const CONPTY_PIN = join(root, "packaging", "windows", "conpty.json");
 
 type ConptyPin = {
 	package: { id: string; version: string; url: string; sha256: string };
@@ -47,9 +47,9 @@ type ConptyPin = {
 };
 
 /**
- * The Windows build's `conpty\` folder and its notices (0661), laid out as herdr's `package_windows_conpty.py` does:
- * herdr's toasts need `conpty\x64\OpenConsole.exe`, and its pty loads the folder only when every file and the marker
- * are there and match their hashes. The package is downloaded once into the cache and checked against its pinned SHA-256.
+ * The Windows build's `conpty\` folder and its notices (0661), laid out as the herdr fork's packaging script did:
+ * the vendored pty (`crates/portable-pty`) loads the folder only when every file and the marker are there and match
+ * their hashes. The package is downloaded once into the cache and checked against its pinned SHA-256.
  */
 async function shipConpty(out: string): Promise<void> {
 	const pin = JSON.parse(readFileSync(CONPTY_PIN, "utf8")) as ConptyPin;
@@ -99,7 +99,7 @@ async function shipConpty(out: string): Promise<void> {
 	};
 	writeFileSync(join(out, "conpty", "herdr-conpty.json"), `${JSON.stringify(marker, null, 2)}\n`);
 	for (const notice of pin.notices) {
-		copyChecked(join(root, "crates", "herdr", notice.source), notice.destination, notice.sha256);
+		copyChecked(join(root, notice.source), notice.destination, notice.sha256);
 	}
 }
 
@@ -151,7 +151,12 @@ async function build(): Promise<void> {
 	// The boss manual and the templates `jocasta setup` writes from, beside the exe (0392, 0396, 0401).
 	cpSync(join(root, "config"), join(out, "config"), { recursive: true });
 
-	if (target === "windows-x64") await shipConpty(out);
+	if (target === "windows-x64") {
+		await shipConpty(out);
+		// The release build runs as shipped too (the footprint bench, live checks): the vendored pty loads the bundled
+		// runtime only from `conpty\` beside the exe, else it falls back to Windows' own conhost.
+		await shipConpty(release);
+	}
 
 	await pack(target, out);
 }

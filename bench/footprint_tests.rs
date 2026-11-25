@@ -1,6 +1,27 @@
 use serde_json::{Map, Value, json};
 
-use super::{over_budget, ps_seconds, ratchet};
+use super::{over_budget, ps_seconds, ratchet, split};
+use crate::lib::proctree::ProcessInfo;
+
+fn process(pid: u32, ppid: u32, name: &str) -> ProcessInfo {
+	let name = name.to_owned();
+	ProcessInfo { pid, ppid, name, command_line: String::new(), working_set: 0, private_bytes: None, created: None }
+}
+
+#[test]
+fn the_count_is_jocastas_own_processes_without_the_agents_or_the_console_hosts_0689() {
+	let tree = [
+		process(1, 0, "jocasta.exe"),
+		process(2, 1, "OpenConsole.exe"),
+		process(3, 1, "omp.exe"),
+		process(4, 3, "bun.exe"),
+		process(5, 1, "conhost.exe"),
+		process(6, 1, "git.exe"),
+	];
+	let (own, agents) = split(&tree);
+	assert_eq!(own.iter().map(|p| p.pid).collect::<Vec<_>>(), [1, 6]);
+	assert_eq!(agents.iter().map(|p| p.pid).collect::<Vec<_>>(), [3, 4]);
+}
 
 fn object(value: Value) -> Map<String, Value> {
 	value.as_object().cloned().unwrap()

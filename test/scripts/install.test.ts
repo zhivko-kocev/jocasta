@@ -231,7 +231,7 @@ test.if(windows)(
 		await companion.exited;
 		expect(existsSync(join(dir, "app"))).toBe(false);
 		expect(readFileSync(join(dir, "config", "boss.md"), "utf8")).toBe("the newer config\n");
-		// herdr loads the bundle only with exactly its own files in it.
+		// the vendored pty loads the bundle only with exactly its own files in it.
 		expect(readdirSync(join(dir, "conpty", "x64"))).toEqual(["OpenConsole.exe"]);
 		expect(readdirSync(dir).some((name) => /^conpty-x64-OpenConsole\.exe\.old-\d+$/.test(name))).toBe(true);
 		expect(readInstallRecord(dir).dir).toBe(dir);

@@ -110,22 +110,6 @@ pub async fn service_state(file: Option<&ServiceFile>, timeout_ms: Option<u64>) 
 	service_health(file, timeout_ms).await.state
 }
 
-/// Where bare `jocasta` tells the service its herdr client closed (0434, 0549): `POST` with the token as a bearer. The
-/// service stops everything, or, with threads at work, asks first in a terminal it opens again.
-pub const SHUTDOWN_PATH: &str = "/api/shutdown";
-
-/// Tells the service named by `jocasta-service.json` that his client closed; true when it took it.
-pub async fn ask_shutdown(file: &ServiceFile) -> bool {
-	let Some(client) = client(Duration::from_millis(DEFAULT_TIMEOUT_MS)) else { return false };
-	let sent = client
-		.post(format!("http://127.0.0.1:{}{SHUTDOWN_PATH}", file.port))
-		.bearer_auth(&file.token)
-		.timeout(Duration::from_millis(DEFAULT_TIMEOUT_MS))
-		.send()
-		.await;
-	sent.is_ok_and(|response| response.status().is_success())
-}
-
 #[cfg(test)]
 mod tests {
 	use std::sync::{Arc, Mutex};
@@ -133,7 +117,7 @@ mod tests {
 	use axum::Router;
 	use axum::http::HeaderMap;
 	use axum::response::{IntoResponse, Response};
-	use axum::routing::{any, post};
+	use axum::routing::any;
 	use serde_json::json;
 
 	use super::*;
@@ -222,27 +206,5 @@ mod tests {
 			serde_json::to_value(ServiceHealth::of(ServiceState::Closing)).unwrap(),
 			json!({ "state": "closing" })
 		);
-	}
-
-	#[tokio::test]
-	async fn ask_shutdown_posts_with_the_token_as_a_bearer_and_is_true_when_the_service_took_it() {
-		let seen: Arc<Mutex<Vec<String>>> = Arc::default();
-		let log = Arc::clone(&seen);
-		let app = Router::new().route(
-			SHUTDOWN_PATH,
-			post(move |headers: HeaderMap| {
-				let log = Arc::clone(&log);
-				async move {
-					log.lock().unwrap().push(headers["authorization"].to_str().unwrap().to_owned());
-					"ok"
-				}
-			}),
-		);
-		let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-		let port = listener.local_addr().unwrap().port();
-		tokio::spawn(async move { axum::serve(listener, app).await });
-		assert!(ask_shutdown(&file(port, 1)).await);
-		assert_eq!(*seen.lock().unwrap(), ["Bearer t".to_owned()]);
-		assert!(!ask_shutdown(&file(free_port().unwrap(), 1)).await);
 	}
 }

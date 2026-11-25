@@ -34,10 +34,9 @@ use crate::evals::layer::{BENCH_LAYER, BenchLayer, LayerSetup, LayerTrial};
 use crate::evals::plan_review::{PlanReviewChoice, PlanReviewSummary, plan_review_extension, read_plan_review_log};
 use crate::evals::report::render_report;
 pub use crate::evals::report::{MEASUREMENT_NOTES, to_fixed};
-use crate::evals::terminal::{TerminalRunner, TerminalTurn, herdr_terminal};
+use crate::evals::terminal::{TerminalRunner, TerminalTurn, pty_terminal};
 use crate::evals::variants::{Harness, Variant, deep_merge, default_variant, variant_args};
 use crate::lib::output::{iso_now, json_text, read_version};
-use crate::lib::sandbox::BENCH_PTY_SESSION;
 use jocasta::frontier::protocol::js_number;
 use jocasta::shared::env;
 use jocasta::shared::errors::Result;
@@ -230,9 +229,7 @@ pub struct TrialOptions {
 	/// runs with `--session-dir` in the trial root), Claude Code's transcripts and subagent transcripts, and opencode's
 	/// `opencode export` of each session. Emptied first, so a retried attempt keeps only its own.
 	pub sessions_dir: Option<PathBuf>,
-	/// The bench herdr session whose panes give a plan-review trial's first turn its terminal (0567).
-	pub pty_session: Option<String>,
-	/// Runs that turn instead of a herdr pane (tests).
+	/// Runs that turn instead of a pty (tests).
 	pub run_in_terminal: Option<TerminalRunner>,
 	/// The grading limit; [`GRADING_LIMIT_MS`] when unset.
 	pub grading_timeout_ms: Option<u64>,
@@ -601,17 +598,11 @@ impl TrialCtx<'_> {
 	async fn run_review_turn(&self, review: &PlanReview, turn: TerminalTurn) -> Result<HarnessOutput> {
 		let terminal = match &self.options.run_in_terminal {
 			Some(terminal) => terminal.clone(),
-			None => herdr_terminal(
-				self.options.pty_session.as_deref().unwrap_or(BENCH_PTY_SESSION),
-				crate::evals::terminal::TerminalDeps {
-					workspace_cwd: Some(self.options.work_dir.clone().unwrap_or_else(std::env::temp_dir)),
-					..Default::default()
-				},
-			)?,
+			None => pty_terminal(),
 		};
 		let ended = terminal(turn).await?;
 		let log = fs::read_to_string(&review.log).unwrap_or_default();
-		// herdr reports no exit code: the turn counts as ended well when the extension shut omp down.
+		// The pty's exit code isn't read: the turn counts as ended well when the extension shut omp down.
 		let ok =
 			!ended.timed_out && read_plan_review_log(&log, review.choice, review.role.as_deref()).shutdown.is_some();
 		Ok(HarnessOutput {

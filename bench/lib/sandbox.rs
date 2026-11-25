@@ -1,8 +1,8 @@
 //! The live benchmarks (H2–H6, H8) act on a running Jocasta: they kill its processes, start threads and plant facts.
-//! They run only against a sandbox (the 0441 walkthrough's, or 0481's VM) with its own data folder, herdr session and
-//! config folder (0502, 0576): `JOCASTA_DATA_DIR` set and not the OS default, `JOCASTA_HERDR_SESSION` naming a session
-//! that isn't his own (`jocasta`, or `jarvis` before the cutover), and `JOCASTA_CODING_AGENT_DIR` set and not
-//! `~/.jocasta/agent`: the config folder picks the projects and herdr's config, so a sandbox on it would act on his.
+//! They run only against a sandbox (the 0441 walkthrough's, or 0481's VM) with its own data folder and config folder
+//! (0502, 0576): `JOCASTA_DATA_DIR` set and not the OS default, and `JOCASTA_CODING_AGENT_DIR` set and not
+//! `~/.jocasta/agent`: the config folder picks the projects, so a sandbox on it would act on his. Bare `jocasta` is the
+//! terminal itself (0683), so a benchmark starts it in a pty of its own (`pty.rs`) with this environment.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -21,11 +21,6 @@ use jocasta::shared::pathkey::resolve;
 use jocasta::shared::paths::default_data_dir;
 use jocasta::shared::process::{RunOptions, run_program_sync};
 use jocasta::shared::service_file::read_service_file;
-
-const HIS_SESSIONS: [&str; 2] = ["jocasta", "jarvis"];
-
-/// The bench herdr session the competitors' panes run in (H5, H6, the task benchmark's plan-review turns).
-pub const BENCH_PTY_SESSION: &str = "bench-pty";
 
 /// 0481's VM: a throwaway Windows 11 machine, the only one the scripts that run commands or uninstall touch.
 pub const VM_MACHINE: &str = "JOCASTA-CLEAN";
@@ -51,23 +46,9 @@ pub fn require_vm(machine: &str, what: &str) -> Result<()> {
 	Ok(())
 }
 
-/// Whether `session` is one of his own herdr sessions.
-fn is_his_session(session: &str) -> bool {
-	HIS_SESSIONS.contains(&session.to_lowercase().as_str())
-}
-
-/// Refuses his own herdr session for a bench flag or variable (`what` names it in the refusal).
-pub fn refuse_his_session(session: &str, what: &str) -> Result<()> {
-	if is_his_session(session) {
-		return Err(BenchUsageError::err(format!("{what} can't be {session}")));
-	}
-	Ok(())
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sandbox {
 	pub data_dir: String,
-	pub herdr_session: String,
 	pub config_dir: String,
 }
 
@@ -90,7 +71,7 @@ fn path_key(path: &str, windows: bool) -> String {
 
 /// The sandbox the process's environment names; refuses anything else ([`require_sandbox_in`]).
 pub fn require_sandbox() -> Result<Sandbox> {
-	let given: HashMap<String, String> = ["JOCASTA_DATA_DIR", "JOCASTA_HERDR_SESSION", "JOCASTA_CODING_AGENT_DIR"]
+	let given: HashMap<String, String> = ["JOCASTA_DATA_DIR", "JOCASTA_CODING_AGENT_DIR"]
 		.iter()
 		.filter_map(|name| Some(((*name).to_owned(), env::var_nonempty(name)?)))
 		.collect();
@@ -98,11 +79,10 @@ pub fn require_sandbox() -> Result<Sandbox> {
 }
 
 /// The sandbox `env` names, for a host that compares paths as `windows` says; refuses a data folder that is
-/// `his_data_dir`, one of his herdr sessions, and the config folder `~/.jocasta/agent`.
+/// `his_data_dir` and the config folder `~/.jocasta/agent`.
 pub fn require_sandbox_in(env: &HashMap<String, String>, windows: bool, his_data_dir: &Path) -> Result<Sandbox> {
 	let get = |name: &str| env.get(name).filter(|value| !value.is_empty());
 	let data_dir = get("JOCASTA_DATA_DIR");
-	let herdr_session = get("JOCASTA_HERDR_SESSION");
 	let config_dir = get("JOCASTA_CODING_AGENT_DIR");
 	let Some(data_dir) = data_dir else {
 		return Err(BenchUsageError::err(
@@ -115,18 +95,13 @@ pub fn require_sandbox_in(env: &HashMap<String, String>, windows: bool, his_data
 			"set JOCASTA_DATA_DIR to the sandbox's data folder, not his own ({his})"
 		)));
 	}
-	let Some(herdr_session) = herdr_session.filter(|session| !is_his_session(session)) else {
-		return Err(BenchUsageError::err(
-			"set JOCASTA_HERDR_SESSION to a sandbox herdr session (not jocasta or jarvis)",
-		));
-	};
 	let his_config = home_dir().join(".jocasta").join("agent").to_string_lossy().into_owned();
 	let Some(config_dir) = config_dir.filter(|dir| path_key(dir, windows) != path_key(&his_config, windows)) else {
 		return Err(BenchUsageError::err(
-			"set JOCASTA_CODING_AGENT_DIR to the sandbox's config folder; with ~/.jocasta/agent the sandbox uses his projects and herdr config",
+			"set JOCASTA_CODING_AGENT_DIR to the sandbox's config folder; with ~/.jocasta/agent the sandbox uses his projects",
 		));
 	};
-	Ok(Sandbox { data_dir: data_dir.clone(), herdr_session: herdr_session.clone(), config_dir: config_dir.clone() })
+	Ok(Sandbox { data_dir: data_dir.clone(), config_dir: config_dir.clone() })
 }
 
 /// What the service's bridge answers to a tool call or a `jocasta` command: a `result` line's text (or error).
@@ -243,7 +218,7 @@ impl Switch {
 			Self::Hosts => SwitchWords {
 				env: HOSTS_ENV,
 				what: "omp's host registry",
-				off: "--condition herdr",
+				off: "--condition tick",
 				on: "--condition host",
 			},
 		}

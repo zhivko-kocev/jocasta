@@ -543,6 +543,12 @@ impl Tools {
 			"ping" => Ok("ok".to_owned()),
 			// A sleeping pane's key was pressed (0676): its sleeper asks for its omp back. Internal, no Allow.
 			"wake" => c.sleep.wake_by_key(&args.text("key")?).await,
+			// The pane's visible grid as text (0683): the benchmark and live checks read panes through the pipe.
+			"pane_text" => Ok(c.herdr.screen(&args.text("pane")?).await.map_err(Error::from)?),
+			// The panes as JSON text (0683): the benchmark and live checks list the shell's panes through the pipe.
+			"panes" => self.panes_json().await,
+			// `jocasta diagnose` (0472): a read-only omp in a tab of the boss's workspace.
+			"diagnose tab" => self.diagnose_tab(&args).await,
 			"thread new" => self.start_tool(&args, Door::Cli).await,
 			"thread list" => {
 				let project = args.optional("project").map(|name| c.places.find(&name)).transpose()?;
@@ -562,6 +568,60 @@ impl Tools {
 			"worktree remove" => self.remove_leftover(&args.text("path")?, Door::Cli).await,
 			_ => Err(Error::user(format!("no command jocasta {command}."))),
 		}
+	}
+
+	/// Every pane as `{"pane_id","workspace_id","workspace","tab_id","agent_state","agent","label","cwd","session_path",
+	/// "root"}` (`root` is the pid of the pane's process), read together from the surface.
+	async fn panes_json(&self) -> Result<String> {
+		let herdr = &self.c.herdr;
+		let snapshot = herdr.snapshot().await?;
+		let mut panes = Vec::with_capacity(snapshot.panes.len());
+		for pane in &snapshot.panes {
+			let workspace = snapshot.workspaces.iter().find(|workspace| workspace.id == pane.workspace_id);
+			let root = herdr.pane_root(&pane.pane_id, Some(2_000)).await.ok().flatten();
+			panes.push(json!({
+				"pane_id": pane.pane_id,
+				"workspace_id": pane.workspace_id,
+				"workspace": workspace.map(|workspace| workspace.label.as_str()),
+				"tab_id": pane.tab_id,
+				"agent_state": pane.agent_state.as_str(),
+				"agent": pane.agent,
+				"label": pane.label,
+				"cwd": pane.cwd,
+				"session_path": pane.session_path,
+				"root": root,
+			}));
+		}
+		Ok(Value::Array(panes).to_string())
+	}
+
+	/// `jocasta diagnose` asks for its read-only omp to open as a tab of the boss's workspace and be brought to the
+	/// front. Only an omp command is run, so the pipe's token never starts another program.
+	async fn diagnose_tab(&self, args: &Args<'_>) -> Result<String> {
+		let command: Vec<String> = match args.values.get("command") {
+			Some(Value::Array(words)) => words.iter().filter_map(|word| word.as_str().map(str::to_owned)).collect(),
+			_ => Vec::new(),
+		};
+		let is_omp = command.first().is_some_and(|program| {
+			Path::new(program).file_stem().is_some_and(|stem| stem.to_string_lossy().eq_ignore_ascii_case("omp"))
+		});
+		if !is_omp {
+			return Err(Error::user("jocasta diagnose tab: the command must be omp."));
+		}
+		let cwd = std::path::PathBuf::from(args.text("cwd")?);
+		let herdr = &self.c.herdr;
+		let workspace = herdr
+			.workspaces()
+			.await?
+			.into_iter()
+			.find(|workspace| workspace.label == crate::frontier::server::boss::BOSS_WORKSPACE)
+			.ok_or_else(|| {
+				Error::user("jocasta diagnose tab: Jocasta's workspace isn't open yet; try again in a moment.")
+			})?;
+		let spec = crate::frontier::server::surface::TabSpec { title: "diagnose".to_owned(), cwd, command, env: None };
+		let tab = herdr.create_tab(&workspace.id, &spec).await?;
+		herdr.focus(&tab.pane_id).await?;
+		Ok(format!("Opened a read-only diagnose pane in workspace {}.", workspace.label))
 	}
 
 	async fn leftovers_text(&self) -> Result<String> {

@@ -1,3 +1,0 @@
-# The fork keeps herdr's own style, rustfmt's defaults: this file stops the repo root's rustfmt.toml (tabs, 120
-# columns) from reaching herdr's sources, so upstream merges stay line-for-line.
-edition = "2021"

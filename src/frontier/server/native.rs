@@ -1,41 +1,68 @@
-//! Jocasta's half of herdr's client shell (fork plan phase 5): the service talks to the `today` dock and the question
-//! box that herdr's own client draws (`frontier/shell.rs`), over herdr's client connection, in place of the herdr
-//! plugin's panes and popup (0553). Every shell gets the boss's workspace and the state feed; his questions go one at a
-//! time to the shell that attached first among those not run from inside one of the server's panes, which becomes the
-//! question's only reader (0578): an answer from another client is refused, and the reader leaving ends the question as
-//! its popup closing did (`Closed`). A question nobody got yet goes to the next such shell that attaches. A terminal a
-//! thread's program attached (`jocasta` run in a pane) never reads a question. Each question but those his own keys
-//! opened also goes out as a notification with herdr's request sound, for when the terminal isn't in front (0552, 0581).
-//! The Agents view (the boss's row pinned first, then blocked and done first, then working, then idle; the boss's
-//! workspace otherwise left out) is set once per boss workspace and pane.
+//! Jocasta's half of its own shell (0553, 0683): the service talks to the `today` dock and the question box that the
+//! shell (`frontier/shell.rs`) draws, over in-process messages (`protocol.rs`'s `SHELL_*` kinds). The shell gets the
+//! boss's workspace and the state feed; his questions go to it, which becomes the question's only reader (0578): an
+//! answer from another client is refused, and the reader leaving ends the question as its popup closing did (`Closed`).
+//! A question nobody got yet goes to the next shell that attaches. A terminal a thread's program attached (`jocasta`
+//! run in a pane) never reads a question. Each question but those his own keys opened also goes out as a
+//! notification with the request sound, for when the terminal isn't in front (0552, 0581).
+//! The sidebar's agents list pins the boss's row first by the `pin` token `status.rs` reports on the boss pane (0667).
 
-use std::collections::HashMap;
-use std::fmt::Display;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
-use herdr::embed::{ServerHost, Target};
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::runtime::Handle;
 
 use super::feed::Reply;
-use super::herdr::{AgentView, Herdr, HerdrSnapshot, Note, Sound};
 use super::popups::{AnswerTaken, Popup, PopupEnd};
+use super::surface::{Note, Sound, SurfaceSnapshot};
 use crate::frontier::protocol::{
 	AnswerReply, ClientMessage, PLUGIN_ACTIONS, PluginAction, SHELL_ACTION, SHELL_ANSWER, SHELL_ANSWERED, SHELL_BOSS,
 	SHELL_FEED, SHELL_GONE, SHELL_QUESTION, ServerMessage, ShellAction, ShellAnswer, ShellAnswered, ShellQuestion,
 };
 use crate::shared::log::{LogLevel, log};
 use crate::shared::proctree::descends_from;
+/// Where a message to the shell goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+	/// One shell, by the id `joined` was given.
+	Client(u64),
+	/// Every shell.
+	Shells,
+}
 
-/// The Agents view's source: Jocasta's own, not a plugin's.
-pub const VIEW_SOURCE: &str = "jocasta";
-/// Text cut to herdr's notification body (240 characters).
+/// Prefix of every kind of a shell message (`protocol.rs`'s `SHELL_*`).
+pub const KIND_PREFIX: &str = "jocasta.";
+
+type SendFn = Arc<dyn Fn(Target, &str, String) + Send + Sync>;
+
+/// What the service's half of the shell needs from the process's shell: a way to send it messages and a signal for
+/// every change of the surface's panes the refresh reads (0683: one process, so both are in-process calls).
+#[derive(Clone)]
+pub struct ShellHost {
+	send: SendFn,
+	changed: Arc<tokio::sync::Notify>,
+}
+
+impl ShellHost {
+	pub fn new(send: SendFn, changed: Arc<tokio::sync::Notify>) -> Self {
+		Self { send, changed }
+	}
+
+	/// Sends `data` as a `kind` message to `target`, from any thread.
+	pub fn send(&self, target: Target, kind: &str, data: String) {
+		(self.send)(target, kind, data);
+	}
+
+	/// Resolves at the surface's next change; changes while nothing waits are one wake.
+	pub async fn changed(&self) {
+		self.changed.notified().await;
+	}
+}
+
 const NOTE_BODY: usize = 240;
-/// One warning per subject this often, so a failing herdr call on every refresh doesn't fill the log.
-const WARN_EVERY_MS: i64 = 10 * 60_000;
 
 fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 	mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -49,28 +76,6 @@ fn json_of<T: Serialize>(value: &T) -> String {
 pub const PIN_TOKEN: &str = "pin";
 /// The token's value on the boss pane.
 pub const PIN_VALUE: &str = "1";
-
-/// The Agents view (0553, 0554, 0667): the boss's row first, then blocked and done threads, then working, then idle, as
-/// herdr's status sort puts them; every other pane of the boss's workspace (the dock) left out.
-pub fn agent_view(boss_workspace_id: &str, boss_pane_id: &str) -> AgentView {
-	AgentView {
-		source: VIEW_SOURCE.to_owned(),
-		label: Some("threads".to_owned()),
-		filter: Some(json!({
-			"op": "any",
-			"filters": [
-				{"op": "not", "filter": {"op": "eq", "field": "workspace_id", "value": boss_workspace_id}},
-				{"op": "eq", "field": "pane_id", "value": boss_pane_id},
-			],
-		})),
-		sort: Some(vec![
-			json!({"field": {"token": PIN_TOKEN}, "order": "asc"}),
-			json!({"field": "attention", "order": "desc"}),
-			json!({"field": "status", "order": "desc"}),
-			json!({"field": "state_change_seq", "order": "desc"}),
-		]),
-	}
-}
 
 /// `text` cut to herdr's notification body: 240 UTF-16 units, the last of a cut one an ellipsis.
 pub fn note_body(text: &str) -> String {
@@ -115,18 +120,14 @@ struct State {
 	/// The attached shells in the order they attached, each with whether it runs inside one of the server's panes.
 	clients: Vec<(u64, bool)>,
 	boss: Option<String>,
-	/// The boss workspace and pane the Agents view was set for.
-	view_for: Option<(String, String)>,
 	queue: Vec<Popup>,
 	current: Option<Shown>,
-	/// When each warning subject was last logged.
-	warned: HashMap<String, i64>,
 }
 
 /// The service's side of herdr's client shells: see the module's text. Cheap to share; its calls from herdr's server
 /// thread return at once, and their work runs on the service's runtime.
 pub struct Native {
-	host: ServerHost,
+	host: ShellHost,
 	runtime: Handle,
 	server: OnceLock<Arc<dyn NativeServer>>,
 	state: Mutex<State>,
@@ -134,7 +135,7 @@ pub struct Native {
 
 impl Native {
 	/// Jocasta's half of the client shell on herdr's `host`; its herdr calls run on `runtime`.
-	pub fn new(host: ServerHost, runtime: Handle) -> Arc<Self> {
+	pub fn new(host: ShellHost, runtime: Handle) -> Arc<Self> {
 		Arc::new(Self { host, runtime, server: OnceLock::new(), state: Mutex::new(State::default()) })
 	}
 
@@ -146,19 +147,7 @@ impl Native {
 	/// Resolves at herdr's next change the refresh reads, as herdr's server reports it.
 	pub fn herdr_changed(&self) -> BoxFuture<'static, ()> {
 		let host = self.host.clone();
-		async move { host.herdr_changed().await }.boxed()
-	}
-
-	fn warn(&self, subject: &str, error: &dyn Display) {
-		let now = chrono::Utc::now().timestamp_millis();
-		{
-			let mut state = locked(&self.state);
-			if state.warned.get(subject).is_some_and(|last| now - last < WARN_EVERY_MS) {
-				return;
-			}
-			state.warned.insert(subject.to_owned(), now);
-		}
-		log(LogLevel::Warn, "shell", &format!("{subject}: {error}"), None);
+		async move { host.changed().await }.boxed()
 	}
 
 	// What the service calls.
@@ -168,15 +157,13 @@ impl Native {
 		self.host.send(Target::Shells, SHELL_FEED, json_of(message));
 	}
 
-	/// Heals against `snapshot` (the service's refresh): the Agents view once per boss workspace and pane (a relaunched
-	/// boss pane has a new id), and the boss's workspace for every shell, whose dock shows there. Nothing without a
-	/// boss pane in the snapshot.
-	pub async fn heal(&self, herdr: &dyn Herdr, snapshot: &HerdrSnapshot, boss_pane_id: Option<&str>) {
+	/// Heals against `snapshot` (the service's refresh): the boss's workspace for every shell, whose dock shows there.
+	/// Nothing without a boss pane in the snapshot.
+	pub async fn heal(&self, snapshot: &SurfaceSnapshot, boss_pane_id: Option<&str>) {
 		let Some(boss) = boss_pane_id.and_then(|id| snapshot.panes.iter().find(|pane| pane.pane_id == id)) else {
 			return;
 		};
 		let workspace = boss.workspace_id.clone();
-		let pane = boss.pane_id.clone();
 		let changed = {
 			let mut state = locked(&self.state);
 			let changed = state.boss.as_ref() != Some(&workspace);
@@ -185,14 +172,6 @@ impl Native {
 		};
 		if changed {
 			self.host.send(Target::Shells, SHELL_BOSS, json_of(&workspace));
-		}
-		let key = (workspace, pane);
-		if locked(&self.state).view_for.as_ref() == Some(&key) {
-			return;
-		}
-		match herdr.set_agent_view(&agent_view(&key.0, &key.1)).await {
-			Ok(()) => locked(&self.state).view_for = Some(key),
-			Err(error) => self.warn("the Agents view wasn't set", &error),
 		}
 	}
 

@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::*;
 use crate::frontier::server::context::test_context;
-use crate::frontier::server::herdr::NotificationResult;
+use crate::frontier::server::surface::NotificationResult;
 
 const URGENT: ToastPriority = ToastPriority::Urgent;
 const NORMAL: ToastPriority = ToastPriority::Normal;

@@ -3,7 +3,7 @@
 
 pub mod args;
 pub mod git;
-pub mod herdr;
+
 pub mod jocasta;
 pub mod jsonl;
 pub mod launch;
@@ -11,6 +11,7 @@ pub mod ledger;
 pub mod output;
 pub mod prices;
 pub mod proctree;
+pub mod pty;
 pub mod sandbox;
 pub mod service_feed;
 pub mod sessions;

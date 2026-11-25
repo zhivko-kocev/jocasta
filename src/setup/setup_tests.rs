@@ -26,9 +26,6 @@ fn assets() -> PathBuf {
 	Path::new(REPO).join("config")
 }
 
-type CheckFn = Arc<dyn Fn(PathBuf, PathBuf) -> BoxFuture<'static, Result<HerdrCheck>> + Send + Sync>;
-type ReloadFn = Arc<dyn Fn() -> BoxFuture<'static, Result<RunOutput>> + Send + Sync>;
-
 /// A terminal that answers from a list and records what it was told and asked.
 struct TestIo {
 	out: Mutex<Vec<String>>,
@@ -95,25 +92,10 @@ struct Out {
 	asked: Vec<String>,
 }
 
-fn ok_check() -> CheckFn {
-	Arc::new(|_, _| Box::pin(async { Ok(HerdrCheck { code: Some(0), output: "config: ok\n".to_owned() }) }))
-}
-
-fn reloader(code: i32, output: &str, log: Arc<Mutex<Vec<String>>>) -> ReloadFn {
-	let output = output.to_owned();
-	Arc::new(move || {
-		log.lock().unwrap().push("reload".to_owned());
-		let output = output.clone();
-		Box::pin(async move { Ok(RunOutput { code, output }) })
-	})
-}
-
 struct Harness {
 	root: TempDir,
 	paths: SetupPaths,
 	mise: Option<PathBuf>,
-	check: Option<CheckFn>,
-	reload: Option<ReloadFn>,
 	git_version: Option<Arc<dyn Fn() -> BoxFuture<'static, Option<String>> + Send + Sync>>,
 }
 
@@ -131,15 +113,12 @@ impl Harness {
 			mise_config_dir: base.join("mise"),
 			jocasta_command: vec![PathBuf::from("C:\\Jocasta\\jocasta.exe")],
 		};
-		// herdr's own check isn't run against a stand-in `herdr.exe`.
-		Self { root, paths, mise: None, check: Some(ok_check()), reload: None, git_version: None }
+		Self { root, paths, mise: None, git_version: None }
 	}
 
 	fn deps(&self) -> SetupDeps {
-		let mut deps = SetupDeps::new(PathBuf::from("herdr.exe"));
+		let mut deps = SetupDeps::new();
 		deps.mise = self.mise.clone();
-		deps.check_herdr_config = self.check.clone();
-		deps.reload_herdr = self.reload.clone();
 		deps.git_version = self.git_version.clone();
 		deps
 	}
@@ -181,10 +160,6 @@ impl Harness {
 		self.paths.omp_agent_dir.join("config.yml")
 	}
 
-	fn herdr_toml(&self) -> PathBuf {
-		self.paths.jocasta_config_dir.join("herdr.toml")
-	}
-
 	fn fragment(&self) -> PathBuf {
 		self.root.path().join("Fragments").join("jocasta").join("jocasta.json")
 	}
@@ -213,9 +188,9 @@ impl Harness {
 		self.paths.omp_agent_dir.join("secrets.yml")
 	}
 
-	/// herdr's omp hook as the snapshot writes it.
+	/// herdr's omp hook as it was left in omp's `extensions/` folder (migration 22 takes it out).
 	fn hook(&self) -> PathBuf {
-		self.paths.omp_agent_dir.join("extensions").join(herdr::embed::OMP_HOOK_FILE)
+		self.paths.omp_agent_dir.join("extensions").join("herdr-omp-agent-state.ts")
 	}
 
 	/// The snapshot's backups of this run's replaced files: the one folder under `omp-backup/`.
@@ -228,15 +203,7 @@ impl Harness {
 
 	/// Every file of the snapshot, as omp's folder names it.
 	fn snapshot_paths(&self) -> Vec<PathBuf> {
-		vec![
-			self.omp_config(),
-			self.keybindings(),
-			self.lsp(),
-			self.watchdog(),
-			self.mise_skill(),
-			self.hook(),
-			self.secrets(),
-		]
+		vec![self.omp_config(), self.keybindings(), self.lsp(), self.watchdog(), self.mise_skill(), self.secrets()]
 	}
 
 	fn plugin_dir(&self) -> PathBuf {
@@ -314,7 +281,6 @@ async fn a_fresh_machine_the_diff_names_every_file_and_n_writes_nothing() {
 	let Out { code, text, asked } = h.setup(Some("n")).await;
 	assert_eq!(code, 0);
 	assert_eq!(asked, ["Write these changes? [y/N] "]);
-	assert!(text.contains(&format!("herdr config for session `jocasta`: {}", s(&h.herdr_toml()))));
 	assert!(text.contains(&format!("Windows Terminal scheme Tokyo Night: {}", s(&h.fragment()))));
 	assert!(text.contains(&format!(
 		"Jocasta's omp snapshot over your omp files, each replaced one kept first in {}",
@@ -330,7 +296,6 @@ async fn a_fresh_machine_the_diff_names_every_file_and_n_writes_nothing() {
 	assert!(!h.root.path().join("omp").exists());
 	assert!(!h.paths.data_dir.exists());
 	assert!(!markers_dir(&h.paths.jocasta_config_dir).exists());
-	assert!(!h.herdr_toml().exists());
 	assert!(!h.fragment().exists());
 	// End of input is a no too.
 	assert!(h.setup(None).await.text.ends_with("Nothing written."));
@@ -345,33 +310,22 @@ async fn y_writes_every_file_marks_each_migration_and_a_second_run_has_nothing_t
 	// No `mcp.json` anywhere any more (0675, 0679).
 	assert!(!h.global_mcp().exists());
 	assert!(!h.boss_mcp().exists());
-	// The snapshot as shipped: `config/omp/` file for file, and herdr's hook from the fork's own asset.
+	// The snapshot as shipped: `config/omp/` file for file.
 	assert_eq!(read(&h.omp_config()), asset_text("omp/config.yml"));
 	assert_eq!(read(&h.keybindings()), asset_text("omp/keybindings.yml"));
 	assert_eq!(read(&h.lsp()), asset_text("omp/lsp.json"));
 	assert_eq!(read(&h.watchdog()), asset_text("omp/WATCHDOG.md"));
 	assert_eq!(read(&h.mise_skill()), asset_text("omp/skills/mise/SKILL.md"));
 	assert_eq!(read(&h.secrets()), asset_text("omp/secrets.yml"));
-	assert_eq!(read(&h.hook()), herdr::embed::OMP_HOOK);
 	// Nothing was replaced: no backups.
 	assert_eq!(h.backups(), None);
-	// herdr's config as shipped: Jocasta draws the HUD itself, beside herdr's clock.
-	assert_eq!(read(&h.herdr_toml()), asset_text("herdr.toml"));
 	assert_eq!(read_json(&h.fragment()), json!({"schemes": [&*TOKYO_NIGHT_SCHEME]}));
 	let mut markers: Vec<String> = fs::read_dir(markers_dir(&h.paths.jocasta_config_dir))
 		.unwrap()
 		.map(|entry| entry.unwrap().file_name().into_string().unwrap())
 		.collect();
 	markers.sort();
-	assert_eq!(
-		markers,
-		[
-			"0005-herdr-config.json",
-			"0007-terminal-scheme.json",
-			"0018-herdr-plugin-gone.json",
-			"0019-omp-snapshot.json",
-		]
-	);
+	assert_eq!(markers, ["0007-terminal-scheme.json", "0018-herdr-plugin-gone.json", "0019-omp-snapshot.json"]);
 	assert_eq!(h.setup(Some("y")).await.text, IN_PLACE);
 }
 
@@ -616,115 +570,42 @@ fn the_terminal_scheme_comes_from_the_one_palette_file_byte_for_byte_what_setup_
 }
 
 #[tokio::test]
-async fn a_herdr_toml_that_differs_from_the_shipped_template_shows_its_diff_and_is_replaced_only_after_y() {
-	let h = Harness::new();
-	let wanted = asset_text("herdr.toml");
-	let old = wanted.replacen("agent_panel_sort = \"priority\"", "agent_panel_sort = \"recent\"", 1);
-	put(&h.herdr_toml(), &old);
-	let no = h.setup(Some("n")).await;
-	assert!(no.text.contains(&format!("Jocasta's herdr config, to the shipped template: {}", s(&h.herdr_toml()))));
-	assert!(has_line(&no.text, r#"^- .*agent_panel_sort = "recent""#));
-	assert!(has_line(&no.text, r#"^\+ .*agent_panel_sort = "priority""#));
-	assert_eq!(read(&h.herdr_toml()), old);
-	let yes = h.setup(Some("y")).await;
-	assert!(yes.text.contains(&format!("wrote {}", s(&h.herdr_toml()))));
-	assert!(yes.text.contains("Done: run `jocasta` to open Jocasta."));
-	assert_eq!(read(&h.herdr_toml()), wanted);
-	assert!(!h.setup(Some("y")).await.text.contains(&s(&h.herdr_toml())));
-}
-
-#[tokio::test]
-async fn a_migration_runs_once_per_shipped_version_his_later_edit_stays_until_jocasta_ships_a_new_one() {
-	let mut h = Harness::new();
-	let dir = h.own_assets();
-	h.setup(Some("y")).await;
-	let edited = format!("{}# his line\n", read(&h.herdr_toml()));
-	put(&h.herdr_toml(), &edited);
-	assert_eq!(h.setup(Some("y")).await.text, IN_PLACE);
-	assert_eq!(read(&h.herdr_toml()), edited);
-
-	put(&dir.join("herdr.toml"), &format!("{}# shipped later\n", read(&dir.join("herdr.toml"))));
-	let newer = h.setup(Some("y")).await;
-	assert!(newer.text.contains(&format!("Jocasta's herdr config, to the shipped template: {}", s(&h.herdr_toml()))));
-	assert!(newer.text.contains("- # his line"));
-	assert!(read(&h.herdr_toml()).ends_with("# shipped later\n"));
-	assert_eq!(h.marker("0005-herdr-config").unwrap().fingerprint, fingerprint(&read(&h.herdr_toml())));
-}
-
-#[tokio::test]
 async fn a_failed_migration_stops_the_rest_and_says_why_the_ones_before_it_are_marked() {
 	let h = Harness::new();
 	let mut io = TestIo::new(&[Some("y")]);
-	// herdr.toml appears while the diff that named it new waits for his answer.
-	let herdr_toml = h.herdr_toml();
-	io.on_ask = Some(Box::new(move || put(&herdr_toml, "# his\n")));
+	// The scheme's file appears while the diff that named it new waits for his answer.
+	let fragment = h.fragment();
+	io.on_ask = Some(Box::new(move || put(&fragment, "his own\n")));
 	let code = run_setup(&h.paths, &h.deps(), &io).await.unwrap();
 	assert_eq!(code, 1);
 	let text = io.text();
 	assert!(
 		text.contains(&format!(
-			"jocasta setup: 0005-herdr-config (herdr config for session `jocasta`) failed: {} changed since the diff; run jocasta setup again; the 2 changes after it wait.",
-			s(&h.herdr_toml())
+			"jocasta setup: 0007-terminal-scheme (Windows Terminal scheme Tokyo Night) failed: {} changed since the diff; run jocasta setup again; the 1 change after it wait.",
+			s(&h.fragment())
 		)),
 		"{text}"
 	);
-	assert_eq!(read(&h.herdr_toml()), "# his\n");
-	assert!(h.marker("0005-herdr-config").is_none());
-	assert!(!h.global_mcp().exists());
+	assert_eq!(read(&h.fragment()), "his own\n");
+	assert!(h.marker("0007-terminal-scheme").is_none());
 	assert!(h.marker("0019-omp-snapshot").is_none());
 }
 
 #[tokio::test]
-async fn refresh_herdr_toml_shows_the_diff_keeps_a_dated_backup_writes_the_shipped_file_and_reloads_herdr() {
-	let mut h = Harness::new();
+async fn refresh_refuses_a_file_setup_doesnt_refresh() {
+	let h = Harness::new();
 	h.setup(Some("y")).await;
-	let shipped = read(&h.herdr_toml());
-	put(&h.herdr_toml(), &format!("{shipped}# his line\n"));
-	let reloads = Arc::new(Mutex::new(Vec::new()));
-	h.reload = Some(reloader(0, "", reloads.clone()));
-	let no = h.refresh("herdr.toml", Some("n")).await.unwrap();
-	assert!(no.text.contains("- # his line"));
-	assert!(no.text.ends_with("Nothing written."));
-	assert!(reloads.lock().unwrap().is_empty());
-
-	let yes = h.refresh("herdr.toml", Some("y")).await.unwrap();
-	let backup = format!("{}.bak.20261023-090507", s(&h.herdr_toml()));
-	assert_eq!(yes.code, 0);
-	assert!(yes.text.contains(&format!("kept {backup}")));
-	assert!(yes.text.ends_with("herdr reloaded its config."));
-	assert_eq!(read(Path::new(&backup)), format!("{shipped}# his line\n"));
-	assert_eq!(read(&h.herdr_toml()), shipped);
-	assert_eq!(*reloads.lock().unwrap(), ["reload"]);
-	assert_eq!(
-		h.refresh(&s(&h.herdr_toml()), Some("y")).await.unwrap().text,
-		format!("{} already is the shipped version.", s(&h.herdr_toml()))
-	);
-}
-
-#[tokio::test]
-async fn refresh_says_to_restart_herdr_when_it_cant_reload_and_refuses_other_files() {
-	let mut h = Harness::new();
-	h.setup(Some("y")).await;
-	put(&h.herdr_toml(), "# his\n");
-	h.reload = Some(reloader(1, "error: no running server for session jocasta\n", Arc::default()));
-	assert!(h.refresh("herdr.toml", Some("y")).await.unwrap().text.ends_with(
-		"herdr didn't reload its config (error: no running server for session jocasta): restart herdr to use it (close Jocasta, then run `jocasta`)."
-	));
-
 	let refused = h.refresh("config.yml", Some("y")).await.err().unwrap();
 	assert!(refused.is_user());
 	assert!(refused.to_string().contains("isn't a file setup refreshes"));
 }
 
 #[tokio::test]
-async fn refresh_jocasta_json_puts_back_the_terminal_scheme_he_changed_after_setup_keeping_his_copy_herdr_isnt_reloaded()
- {
-	let mut h = Harness::new();
+async fn refresh_jocasta_json_puts_back_the_terminal_scheme_he_changed_after_setup_keeping_his_copy() {
+	let h = Harness::new();
 	h.setup(Some("y")).await;
 	let shipped = read(&h.fragment());
 	put(&h.fragment(), "his own\n");
-	let reloads = Arc::new(Mutex::new(Vec::new()));
-	h.reload = Some(reloader(0, "", reloads.clone()));
 	let yes = h.refresh("JOCASTA.JSON", Some("y")).await.unwrap();
 	let backup = format!("{}.bak.20261023-090507", s(&h.fragment()));
 	assert_eq!(yes.code, 0);
@@ -732,7 +613,6 @@ async fn refresh_jocasta_json_puts_back_the_terminal_scheme_he_changed_after_set
 	assert!(yes.text.contains(&format!("kept {backup}")));
 	assert_eq!(read(Path::new(&backup)), "his own\n");
 	assert_eq!(read(&h.fragment()), shipped);
-	assert!(reloads.lock().unwrap().is_empty());
 	assert_eq!(
 		h.refresh(&s(&h.fragment()), Some("y")).await.unwrap().text,
 		format!("{} already is the shipped version.", s(&h.fragment()))
@@ -746,17 +626,17 @@ async fn setup_and_refresh_write_on_y_or_yes_in_any_case_and_spacing_any_other_a
 		let Out { code, text, .. } = h.setup(answer).await;
 		assert_eq!(code, 0);
 		assert!(text.ends_with("Nothing written."));
-		assert!(!h.herdr_toml().exists());
+		assert!(!h.fragment().exists());
 	}
 	h.setup(Some(" YES ")).await;
-	assert!(h.herdr_toml().exists());
-	put(&h.herdr_toml(), "# his\n");
+	assert!(h.fragment().exists());
+	put(&h.fragment(), "his own\n");
 	assert!(
-		h.refresh("herdr.toml", Some("Y"))
+		h.refresh("jocasta.json", Some("Y"))
 			.await
 			.unwrap()
 			.text
-			.contains(&format!("kept {}.bak.20261023-090507", s(&h.herdr_toml())))
+			.contains(&format!("kept {}.bak.20261023-090507", s(&h.fragment())))
 	);
 }
 
@@ -772,7 +652,6 @@ async fn setup_undo_names_what_setup_added_from_its_markers_only_a_step_without_
 	h.mise = Some(PathBuf::from("mise.exe"));
 	h.setup(Some("y")).await;
 	let undo = h.undo(false);
-	assert!(undo.contains(&other(Undo::File { path: s(&h.herdr_toml()) })));
 	assert!(undo.contains(&other(Undo::Dir {
 		path: s(h.fragment().parent().unwrap()),
 		file: Some("jocasta.json".to_owned())
@@ -877,6 +756,26 @@ async fn the_old_herdr_plugins_folder_and_migration_14s_marker_go_after_y_and_un
 }
 
 #[tokio::test]
+async fn migration_22_takes_herdrs_omp_hook_and_config_out_after_y_and_with_neither_there_is_no_step() {
+	let h = Harness::new();
+	// Neither file: no step, no marker.
+	h.setup(Some("y")).await;
+	assert!(h.marker("0022-herdr-gone").is_none());
+	let config = h.paths.jocasta_config_dir.join("herdr.toml");
+	put(&h.hook(), "// herdr's omp hook\n");
+	put(&config, "# herdr's config\n");
+	let no = h.setup(Some("n")).await;
+	assert!(no.text.contains("herdr is gone: its omp hook and its config leave"), "{}", no.text);
+	assert!(no.text.contains(&format!("- {}", s(&h.hook()))));
+	assert!(no.text.contains(&format!("- {}", s(&config))));
+	assert!(h.hook().exists() && config.exists());
+	h.setup(Some("y")).await;
+	assert!(!h.hook().exists() && !config.exists());
+	assert!(h.marker("0022-herdr-gone").is_some());
+	assert_eq!(h.setup(Some("y")).await.text, IN_PLACE);
+}
+
+#[tokio::test]
 async fn a_snapshot_file_changed_after_the_diff_is_refused_and_no_file_of_the_snapshot_is_written() {
 	let h = Harness::new();
 	put(&h.omp_config(), "modelRoles:\n  default: anthropic/model-a\n");
@@ -893,27 +792,9 @@ async fn a_snapshot_file_changed_after_the_diff_is_refused_and_no_file_of_the_sn
 		failed.ends_with(&format!("failed: {} changed since the diff; run jocasta setup again.", s(&h.omp_config())))
 	);
 	assert_eq!(read(&h.omp_config()), "modelRoles:\n  default: anthropic/model-b\n");
-	assert!(!h.keybindings().exists() && !h.global_mcp().exists() && !h.hook().exists());
+	assert!(!h.keybindings().exists() && !h.global_mcp().exists());
 	assert_eq!(h.backups(), None);
 	assert!(h.marker("0019-omp-snapshot").is_none());
-}
-
-#[tokio::test]
-async fn setup_reloads_herdr_after_writing_herdr_toml_and_says_so() {
-	let mut h = Harness::new();
-	let reloads = Arc::new(Mutex::new(Vec::new()));
-	h.reload = Some(reloader(0, "", reloads.clone()));
-	let first = h.setup(Some("y")).await;
-	// Once for the config, with the line.
-	assert_eq!(*reloads.lock().unwrap(), ["reload"]);
-	assert!(first.text.contains("herdr reloaded its config.\nDone: run `jocasta` to open Jocasta."));
-	reloads.lock().unwrap().clear();
-	let dir = h.own_assets();
-	put(&dir.join("herdr.toml"), &format!("{}# shipped later\n", read(&dir.join("herdr.toml"))));
-	h.reload = Some(reloader(1, "error: no running server for session jocasta\n", reloads));
-	assert!(h.setup(Some("y")).await.text.contains(
-		"herdr didn't reload its config (error: no running server for session jocasta): restart herdr to use it (close Jocasta, then run `jocasta`)."
-	));
 }
 
 /// A Credential Manager stand-in for the calendar's secret (0430).
@@ -949,7 +830,7 @@ impl CalendarStore for Calendar {
 
 async fn setup_with_calendar(h: &Harness, calendar: &Arc<Calendar>, answers: &[Option<&str>]) -> (String, Vec<String>) {
 	let io = TestIo::new(answers);
-	let mut deps = SetupDeps::new(PathBuf::from("herdr.exe"));
+	let mut deps = SetupDeps::new();
 	deps.calendar = Some(calendar.clone());
 	run_setup(&h.paths, &deps, &io).await.unwrap();
 	(io.text(), io.asked())
@@ -977,7 +858,7 @@ async fn the_calendars_secret_address_is_asked_for_as_a_secret_off_the_screen_wh
 	let calendar = Calendar::new(None);
 	let mut io = TestIo::new(&[Some("y")]);
 	io.secret_answer = Some("https://calendar.example/secret.ics".to_owned());
-	let mut deps = SetupDeps::new(PathBuf::from("herdr.exe"));
+	let mut deps = SetupDeps::new();
 	deps.calendar = Some(calendar.clone());
 	run_setup(&h.paths, &deps, &io).await.unwrap();
 	assert_eq!(
@@ -1038,7 +919,7 @@ async fn setup_asks_for_the_mail_and_jira_secrets_only_where_their_pollers_are_s
 	let run = async |store: &Arc<Secrets>, secret: &str| {
 		let mut io = TestIo::new(&[Some("y")]);
 		io.secret_answer = Some(secret.to_owned());
-		let mut deps = SetupDeps::new(PathBuf::from("herdr.exe"));
+		let mut deps = SetupDeps::new();
 		deps.secrets = Some(store.clone());
 		run_setup(&h.paths, &deps, &io).await.unwrap();
 		(io.text(), io.secrets.lock().unwrap().clone())
@@ -1092,43 +973,6 @@ async fn uninstall_lists_the_mail_and_jira_credentials_whoever_saved_them_while_
 	assert!(
 		!setup_undo(&h.paths, |_| false).iter().any(|item| matches!(item, SetupUndo::Other(Undo::Credential { .. })))
 	);
-}
-
-#[tokio::test]
-async fn after_writing_herdr_toml_setup_runs_herdr_config_check_on_it_and_prints_each_line_it_reports() {
-	let mut h = Harness::new();
-	let checked: Arc<Mutex<Vec<(PathBuf, PathBuf)>>> = Arc::default();
-	let seen = checked.clone();
-	h.check = Some(Arc::new(move |herdr, path| {
-		seen.lock().unwrap().push((herdr, path));
-		Box::pin(async {
-			Ok(HerdrCheck {
-				code: Some(1),
-				output: "config: issues found\nunknown config key made_up_key; ignoring key\n".to_owned(),
-			})
-		})
-	}));
-	let Out { code, text, .. } = h.setup(Some("y")).await;
-	assert_eq!(code, 0);
-	assert_eq!(*checked.lock().unwrap(), [(PathBuf::from("herdr.exe"), h.herdr_toml())]);
-	assert!(text.contains(&format!("herdr config check ({}):", s(&h.herdr_toml()))));
-	assert!(text.contains("  unknown config key made_up_key; ignoring key"));
-	// The file was written before the check ran, and nothing else is stopped by what it reports.
-	assert!(h.herdr_toml().exists());
-	assert!(text.contains("Done: run `jocasta` to open Jocasta."));
-	// Up to date: nothing written, no check.
-	checked.lock().unwrap().clear();
-	h.setup(Some("y")).await;
-	assert!(checked.lock().unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn a_herdr_config_check_that_cant_run_is_said_and_doesnt_stop_setup() {
-	let mut h = Harness::new();
-	h.check = Some(Arc::new(|_, _| Box::pin(async { Err(Error::other("spawn failed")) })));
-	let Out { code, text, .. } = h.setup(Some("y")).await;
-	assert_eq!(code, 0);
-	assert!(text.contains("herdr config check didn't run: spawn failed"));
 }
 
 #[tokio::test]

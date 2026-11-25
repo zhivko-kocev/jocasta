@@ -15,9 +15,9 @@ use super::*;
 use crate::frontier::server::bridge::PaneAgent;
 use crate::frontier::server::context::{TestContext, test_context};
 use crate::frontier::server::day::DayOptions;
-use crate::frontier::server::herdr::AgentState::{Blocked, Idle, Unknown, Working};
-use crate::frontier::server::herdr::PaneInfo;
 use crate::frontier::server::sessions::TestsResult;
+use crate::frontier::server::surface::AgentState::{Blocked, Idle, Unknown, Working};
+use crate::frontier::server::surface::PaneInfo;
 use crate::frontier::server::task_file::TaskRecord;
 use crate::frontier::server::thread::{ReviewResult, ReviewRunning, ThreadPlan, ThreadReview};
 use crate::shared::events::queue::EventRow;
@@ -108,7 +108,7 @@ impl World {
 	async fn change_with(&self, state: AgentState, session: Option<&Path>) {
 		let pane = self.pane();
 		self.t.herdr.set_state(&pane, state, session.and_then(Path::to_str), false);
-		self.t.ctx.lifecycle.state_changed(&pane, state, StateSource::Herdr);
+		self.t.ctx.lifecycle.state_changed(&pane, state, StateSource::Surface);
 		self.t.ctx.lifecycle.settled().await;
 	}
 
@@ -760,7 +760,7 @@ async fn reopening_plan_review_waits_for_an_idle_omp_with_no_state_change_being_
 	w.t.ctx.lifecycle.reopen_plan_review(&w.thread).await.unwrap();
 	w.thread.with(|t| t.state = Idle);
 	// A change of the pane waiting in its queue holds it off.
-	w.t.ctx.lifecycle.state_changed(&fresh, Working, StateSource::Herdr);
+	w.t.ctx.lifecycle.state_changed(&fresh, Working, StateSource::Surface);
 	assert!(w.t.ctx.lifecycle.busy(&fresh));
 	w.t.ctx.lifecycle.reopen_plan_review(&w.thread).await.unwrap();
 	assert!(w.prompts_to(&fresh).is_empty());
@@ -923,7 +923,7 @@ async fn a_task_end_whose_idle_event_herdr_lost_is_caught_on_the_refresh_tick_on
 	);
 	// A state pushed after the read isn't undone by it: the read is older than the event.
 	w.t.herdr.set_state("p-1", Working, None, false);
-	w.t.ctx.lifecycle.state_changed("p-1", Idle, StateSource::Herdr);
+	w.t.ctx.lifecycle.state_changed("p-1", Idle, StateSource::Surface);
 	w.t.ctx.lifecycle.settled().await;
 	w.t.herdr.set_state("p-1", Working, None, false);
 	w.t.ctx.lifecycle.reconcile(&w.by_id(), now() - 60_000).await.unwrap();
@@ -986,9 +986,9 @@ async fn states_are_handled_one_after_another_in_the_order_herdr_sent_them() {
 	let asked = session_file(&w.t, &w.repo, &[("Which format?", 0.1, Some("CSV or JSON?"))]);
 	w.t.herdr.set_state("p-1", Working, asked.to_str(), false);
 	let lifecycle = &w.t.ctx.lifecycle;
-	lifecycle.state_changed("p-1", Working, StateSource::Herdr);
-	lifecycle.state_changed("p-1", Blocked, StateSource::Herdr);
-	lifecycle.state_changed("p-1", Idle, StateSource::Herdr);
+	lifecycle.state_changed("p-1", Working, StateSource::Surface);
+	lifecycle.state_changed("p-1", Blocked, StateSource::Surface);
+	lifecycle.state_changed("p-1", Idle, StateSource::Surface);
 	assert!(lifecycle.busy("p-1"));
 	lifecycle.settled().await;
 	assert!(!lifecycle.busy("p-1"));
@@ -1010,7 +1010,7 @@ async fn a_state_change_stamps_when_herdr_pushed_it_and_a_reconcile_read_doesnt(
 	assert_eq!(w.thread.with(|t| t.event_at), None);
 	let before = now();
 	lifecycle.state_changed("p-1", Idle, StateSource::Host);
-	lifecycle.state_changed("boss-1", Working, StateSource::Herdr);
+	lifecycle.state_changed("boss-1", Working, StateSource::Surface);
 	lifecycle.settled().await;
 	assert!(w.thread.with(|t| t.event_at).unwrap() >= before);
 	assert!(boss.with(|b| b.event_at).unwrap() >= before);
@@ -1020,7 +1020,7 @@ async fn a_state_change_stamps_when_herdr_pushed_it_and_a_reconcile_read_doesnt(
 #[tokio::test]
 async fn nothing_is_handled_once_the_service_stops_and_unknown_panes_are_ignored() {
 	let w = world(|_| {});
-	w.t.ctx.lifecycle.state_changed("p-404", Working, StateSource::Herdr);
+	w.t.ctx.lifecycle.state_changed("p-404", Working, StateSource::Surface);
 	w.t.ctx.set_stopping();
 	w.change(Working).await;
 	assert_eq!(w.thread.with(|t| t.state), Idle);
@@ -1100,7 +1100,7 @@ async fn an_idle_boss_gets_what_waits_for_it_when_herdr_says_so() {
 	boss.with(|b| b.state = Working);
 	w.t.ctx.events.tell("[event] later", NORMAL, None).await;
 	assert!(w.prompts_to("boss-1").is_empty());
-	w.t.ctx.lifecycle.state_changed("boss-1", Idle, StateSource::Herdr);
+	w.t.ctx.lifecycle.state_changed("boss-1", Idle, StateSource::Surface);
 	w.t.ctx.lifecycle.settled().await;
 	assert_eq!(w.prompts_to("boss-1"), ["[event] later"]);
 }

@@ -548,7 +548,7 @@ pub struct Machine {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ServiceName {
-	Herdr,
+	Surface,
 }
 
 /// A service's state: `up` answers; `starting` while Jocasta starts it; `down` is broken.
@@ -1031,7 +1031,7 @@ mod tests {
 				disk: Disk { free: 100, total: 200 },
 			}),
 			services: vec![ServiceHealth {
-				name: ServiceName::Herdr,
+				name: ServiceName::Surface,
 				state: ServiceState::Down,
 				note: Some("not started".to_owned()),
 			}],
@@ -1061,7 +1061,7 @@ mod tests {
 			"weather": {"place": "Example City, Example Country", "tempC": 12, "code": 2, "summary": "Partly cloudy", "highC": 15.5, "lowC": 7, "at": "2026-10-08T09:00:00.000Z"},
 			"weatherError": "timed out",
 			"machine": {"cpu": 0, "ram": {"used": 8589934592_u64, "total": 17179869184_u64}, "disk": {"free": 100, "total": 200}},
-			"services": [{"name": "herdr", "state": "down", "note": "not started"}],
+			"services": [{"name": "surface", "state": "down", "note": "not started"}],
 			"activity": {
 				"events": [{"at": "2026-10-08T09:00:00.000Z", "text": "pipeline red"}],
 				"worklog": ["acme-api · 1h 20m · 3 commits"],
@@ -1077,7 +1077,7 @@ mod tests {
 		assert_eq!(token_cookie(5173), "jocasta_service_5173");
 		assert_eq!((WS_PATH, TOKEN_QUERY), ("/ws", "t"));
 		let kinds = [SHELL_FEED, SHELL_BOSS, SHELL_QUESTION, SHELL_GONE, SHELL_ANSWER, SHELL_ANSWERED, SHELL_ACTION];
-		assert!(kinds.iter().all(|kind| kind.starts_with(herdr::embed::KIND_PREFIX)));
+		assert!(kinds.iter().all(|kind| kind.starts_with(crate::frontier::server::native::KIND_PREFIX)));
 		wire(&AnswerReply::Wrong { left: Some(2) }, &json!({"type": "wrong", "left": 2}));
 		wire(&AnswerReply::Failed { text: "x".to_owned() }, &json!({"type": "failed", "text": "x"}));
 		wire(

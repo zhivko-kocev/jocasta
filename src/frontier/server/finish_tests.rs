@@ -16,9 +16,9 @@ use serde_json::{Value, json};
 use super::*;
 use crate::frontier::server::allow::{Answer, Confirm, Confirmation};
 use crate::frontier::server::context::{BossRef, Shared, TestContext, test_context};
-use crate::frontier::server::herdr::HerdrError;
 use crate::frontier::server::popups::PopupEnd;
 use crate::frontier::server::service::ServiceOptions;
+use crate::frontier::server::surface::SurfaceError;
 use crate::frontier::server::task_file::{NewTask, new_task, save_task, task_dir};
 use crate::frontier::server::thread::{Thread, ThreadPlan};
 use crate::shared::git::git;
@@ -273,7 +273,7 @@ async fn thread_finish_merge_a_pre_commit_hook_refusing_the_squash_commit_merges
 async fn thread_finish_merge_herdr_failing_to_close_the_workspace_after_the_merge_keeps_the_thread_tst_11() {
 	let w = world(standard);
 	w.one_commit();
-	w.t.herdr.state().close_workspace_fails = Some(HerdrError::new("transport", "herdr is gone"));
+	w.t.herdr.state().close_workspace_fails = Some(SurfaceError::new("transport", "herdr is gone"));
 	let reply = w.finish("merge").await.unwrap();
 	assert_merged(
 		&reply,
@@ -1004,7 +1004,7 @@ async fn pr_opened_says_what_stays_when_herdr_or_git_couldnt_remove_it_0426() {
 	let head = w.head(&w.path);
 	fake_gh(dir.path(), &GhState { head: Some(head), ..GhState::default() });
 	// herdr can't close the workspace: it all stays, and the thread is open again.
-	w.t.herdr.state().close_workspace_fails = Some(HerdrError::new("transport", "herdr is gone"));
+	w.t.herdr.state().close_workspace_fails = Some(SurfaceError::new("transport", "herdr is gone"));
 	w.t.ctx.finisher.pr_opened(&w.thread).await.unwrap();
 	let line = w.boss_lines().remove(0);
 	assert_eq!(

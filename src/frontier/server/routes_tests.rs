@@ -1,6 +1,5 @@
 use super::*;
 use crate::shared::testing::temp_jocasta;
-use axum::http::Method;
 
 fn request(headers: &[(&str, &str)]) -> Request {
 	let mut builder = axum::http::Request::builder().uri("http://127.0.0.1/");
@@ -11,7 +10,7 @@ fn request(headers: &[(&str, &str)]) -> Request {
 }
 
 #[tokio::test]
-async fn the_request_helpers_bearer_the_hosts_answered_args_only_as_an_object() {
+async fn the_request_helpers_bearer_and_the_hosts_answered() {
 	assert_eq!(bearer_token(&request(&[("authorization", "Bearer abc")])), "abc");
 	assert_eq!(bearer_token(&request(&[("authorization", "Basic abc")])), "");
 	assert_eq!(bearer_token(&request(&[])), "");
@@ -20,47 +19,6 @@ async fn the_request_helpers_bearer_the_hosts_answered_args_only_as_an_object() 
 	assert!(!host_allowed(Some("127.0.0.1:8"), 9));
 	assert!(!host_allowed(Some("host.docker.internal:9"), 9));
 	assert!(!host_allowed(None, 9));
-	assert_eq!(Value::Object(object_args(&json!({ "a": 1 }))), json!({ "a": 1 }));
-	for value in [Value::Null, json!([1]), json!("x")] {
-		assert!(object_args(&value).is_empty());
-	}
-}
-
-#[tokio::test]
-async fn a_post_route_refuses_a_missing_token_and_another_method_as_json_or_plain_text() {
-	let post = |auth: Option<&str>, method: Method| {
-		let mut builder = axum::http::Request::builder().method(method).uri("/api/x");
-		if let Some(auth) = auth {
-			builder = builder.header("authorization", auth);
-		}
-		builder.body(Body::empty()).unwrap()
-	};
-	let body = |response: Response| async move {
-		String::from_utf8(axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap()
-	};
-	let refused = refused_post(&post(None, Method::POST), "t", true).unwrap();
-	assert_eq!(refused.status(), 401);
-	assert_eq!(refused.headers()[header::CONTENT_TYPE], "application/json;charset=utf-8");
-	assert_eq!(body(refused).await, r#"{"text":"invalid token","isError":true}"#);
-	let wrong = refused_post(&post(Some("Bearer nope"), Method::POST), "t", false).unwrap();
-	assert_eq!(wrong.status(), 401);
-	assert_eq!(wrong.headers()[header::CONTENT_TYPE], "text/plain;charset=utf-8");
-	assert_eq!(body(wrong).await, "invalid token");
-	let method = refused_post(&post(Some("Bearer t"), Method::GET), "t", true).unwrap();
-	assert_eq!(method.status(), 405);
-	assert_eq!(body(method).await, r#"{"text":"POST only","isError":true}"#);
-	assert_eq!(body(refused_post(&post(Some("Bearer t"), Method::PUT), "t", false).unwrap()).await, "POST only");
-	assert!(refused_post(&post(Some("Bearer t"), Method::POST), "t", true).is_none());
-}
-
-#[tokio::test]
-async fn a_body_is_its_json_object_or_array_else_an_empty_object() {
-	let with = |text: &str| axum::http::Request::builder().body(Body::from(text.to_owned())).unwrap();
-	assert_eq!(body_object(with(r#"{"a":1}"#)).await, json!({ "a": 1 }));
-	assert_eq!(body_object(with("[1,2]")).await, json!([1, 2]));
-	for text in ["", "nope", "3", "null", "\"x\""] {
-		assert_eq!(body_object(with(text)).await, json!({}), "{text:?}");
-	}
 }
 
 struct Fixed {

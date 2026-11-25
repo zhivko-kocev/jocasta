@@ -15,9 +15,9 @@ use crate::frontier::server::helpers::{
 	proposed_plan_file, relaunch_idle, review, session_file, sh, start_thread, to_handoff, until,
 };
 use crate::frontier::server::helpers_procs::{Hooked, with_server_on};
-use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
-use crate::frontier::server::herdr::{AgentState, Herdr};
 use crate::frontier::server::server::ServerOptions;
+use crate::frontier::server::surface::fake_surface::FakeSurface;
+use crate::frontier::server::surface::{AgentState, Surface};
 use crate::frontier::server::tools::ToolReply;
 use crate::shared::paths::data_dir;
 use crate::shared::poll::wait_for;
@@ -34,7 +34,7 @@ fn leftovers(options: &mut ServerOptions) {
 	options.leftover_again_ms = Some(200);
 }
 
-fn prompts(herdr: &FakeHerdr) -> Vec<(String, String)> {
+fn prompts(herdr: &FakeSurface) -> Vec<(String, String)> {
 	herdr
 		.of("prompt")
 		.into_iter()
@@ -45,7 +45,7 @@ fn prompts(herdr: &FakeHerdr) -> Vec<(String, String)> {
 		.collect()
 }
 
-fn workspace_of(herdr: &FakeHerdr, pane_id: &str) -> String {
+fn workspace_of(herdr: &FakeSurface, pane_id: &str) -> String {
 	let state = herdr.state();
 	state.pane_list.iter().find(|p| p.pane_id == pane_id).map(|p| p.workspace_id.clone()).expect("the pane")
 }
@@ -64,7 +64,7 @@ async fn r3_a_thread_blocked_on_a_question_relaunched_no_longer_awaits_him_conti
  {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
-	let herdr = Arc::new(FakeHerdr::new());
+	let herdr = Arc::new(FakeSurface::new());
 	with_server_on(herdr.clone(), options().await, |server| async move {
 		let started = start_thread(&server, ThreadOptions::default()).await;
 		let asked = session_file(&started.path, &[Msg::new("Which format?", 0.1).ask("CSV or JSON?")]);
@@ -84,7 +84,7 @@ async fn r3_a_thread_blocked_on_a_question_relaunched_no_longer_awaits_him_conti
 async fn r3_a_thread_whose_plan_awaits_him_relaunched_still_awaits_him_0438_0494() {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
-	let herdr = Arc::new(FakeHerdr::new());
+	let herdr = Arc::new(FakeSurface::new());
 	with_server_on(herdr.clone(), options().await, |server| async move {
 		let started = start_thread(&server, ThreadOptions::default()).await;
 		let file = proposed_plan_file(&started.path);
@@ -108,11 +108,11 @@ async fn a_thread_pane_herdr_restored_as_a_shell_its_old_omp_still_running_and_w
  {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
-	let herdr = Arc::new(FakeHerdr::new());
+	let herdr = Arc::new(FakeSurface::new());
 	let hooked = Hooked::new(&herdr);
 	let mut options = options().await;
 	leftovers(&mut options);
-	options.herdr = Some(hooked.clone() as Arc<dyn Herdr>);
+	options.herdr = Some(hooked.clone() as Arc<dyn Surface>);
 	with_server_on(herdr.clone(), options, |server| async move {
 		let started = start_thread(&server, ThreadOptions::default()).await;
 		let (pane_id, path) = (started.pane_id, started.path);
@@ -175,11 +175,11 @@ async fn stop_everything_a_thread_in_its_review_turn_is_saved_for_restore_and_it
 	let project = demo_project(j.root(), "demo").await;
 	sh(&project.main_path, &["config", "user.name", "Test"]);
 	sh(&project.main_path, &["config", "user.email", "test@example.com"]);
-	let herdr = Arc::new(FakeHerdr::new());
+	let herdr = Arc::new(FakeSurface::new());
 	let hooked = Hooked::new(&herdr);
 	let mut options = options().await;
 	leftovers(&mut options);
-	options.herdr = Some(hooked.clone() as Arc<dyn Herdr>);
+	options.herdr = Some(hooked.clone() as Arc<dyn Surface>);
 	let root = j.root().to_path_buf();
 	with_server_on(herdr.clone(), options, |server| async move {
 		let started = start_thread(&server, ThreadOptions::default()).await;
@@ -253,7 +253,7 @@ async fn thread_finish_merge_after_main_moved_main_is_merged_into_the_branch_tes
 	let main = project.main_path.clone();
 	sh(&main, &["config", "user.name", "Test"]);
 	sh(&main, &["config", "user.email", "test@example.com"]);
-	let herdr = Arc::new(FakeHerdr::new());
+	let herdr = Arc::new(FakeSurface::new());
 	with_server_on(herdr.clone(), options().await, |server| async move {
 		let boss = boss_pane(&herdr).expect("the boss pane");
 		herdr.set_state(&boss, AgentState::Idle, None, true);

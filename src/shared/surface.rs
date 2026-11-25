@@ -1,7 +1,6 @@
-//! Bare `jocasta`'s work surface (0387, 0434, 0549; fork plan phase 4): herdr's own client on Jocasta's herdr server,
-//! which runs the service inside it. herdr's server knows its clients, so the last one leaving is the close (0549);
-//! what stays here runs around the client: a service that is closing is waited for first (LC-3), a missing herdr.toml
-//! is named, and a service that couldn't start is said once the client ends (0582).
+//! Bare `jocasta`'s work surface (0387, 0434, 0549, 0683): Jocasta's own shell and the service in one process. What
+//! stays here runs around it: a service that is closing is waited for first (LC-3), and a service that couldn't start
+//! is said once the shell ends (0582).
 
 use std::fs;
 use std::path::Path;
@@ -22,8 +21,6 @@ pub trait SurfaceDeps {
 	fn service_health(&self) -> impl Future<Output = ServiceHealth>;
 	/// The service's last ERROR line in Jocasta's log since `since` (epoch ms), its message only (`last_logged_error`).
 	fn last_error(&self, since: i64) -> Option<String>;
-	/// `~/.jocasta/agent/herdr.toml`.
-	fn herdr_config(&self) -> &Path;
 	fn print(&self, line: &str);
 	fn sleep(&self, ms: u64) -> impl Future<Output = ()> {
 		tokio::time::sleep(Duration::from_millis(ms))
@@ -59,8 +56,7 @@ pub fn last_logged_error(dir: &Path, since: i64) -> Option<String> {
 	last.map(|message| message.strip_prefix("didn't start: ").map_or_else(|| message.clone(), str::to_owned))
 }
 
-/// Before herdr's client attaches: a service that is closing Jocasta is waited for, up to a minute (LC-3), and a
-/// missing herdr.toml is named (herdr then runs on its defaults).
+/// Before the shell opens: a service that is closing Jocasta is waited for, up to a minute (LC-3).
 pub async fn before_surface(deps: &impl SurfaceDeps) -> Result<()> {
 	let mut state = deps.service_health().await.state;
 	if state == ServiceState::Closing {
@@ -76,12 +72,6 @@ pub async fn before_surface(deps: &impl SurfaceDeps) -> Result<()> {
 			deps.sleep(250).await;
 			state = deps.service_health().await.state;
 		}
-	}
-	if !deps.herdr_config().exists() {
-		deps.print(&format!(
-			"jocasta: {} is missing; run `jocasta setup` for Jocasta's herdr look.",
-			deps.herdr_config().display()
-		));
 	}
 	Ok(())
 }

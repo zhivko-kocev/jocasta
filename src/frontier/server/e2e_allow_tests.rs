@@ -19,12 +19,12 @@ use crate::frontier::server::helpers::{
 	TestServer, ThreadOptions, boss_pane, call, call_as, commit_in, demo_project, sh, start_thread, until, with_server,
 	with_test_defaults, write_settings,
 };
-use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
-use crate::frontier::server::herdr::{AgentState, Herdr};
 use crate::frontier::server::history::{HistoryEntry, add_history};
 use crate::frontier::server::overlay::overlay_file;
 use crate::frontier::server::popups::PopupEnd;
 use crate::frontier::server::server::{JocastaServer, OnQuestion, ServerOptions, start_server};
+use crate::frontier::server::surface::fake_surface::FakeSurface;
+use crate::frontier::server::surface::{AgentState, Surface};
 use crate::frontier::server::tools::ToolReply;
 use crate::shared::install::shipped_config_dir;
 use crate::shared::pathkey::path_key;
@@ -158,7 +158,7 @@ fn confirm_with(asks: &Arc<Mutex<Vec<Confirmation>>>, answer: impl Fn() -> Answe
 
 /// A server whose Allow box is its own question API: no test `confirm`.
 async fn start_with_question_api(options: ServerOptions) -> TestServer {
-	let herdr = Arc::new(FakeHerdr::new());
+	let herdr = Arc::new(FakeSurface::new());
 	let boss_omp = data_dir().join("home").join(".omp");
 	fs::create_dir_all(data_dir().join("omp-sessions")).unwrap();
 	fs::create_dir_all(&boss_omp).unwrap();

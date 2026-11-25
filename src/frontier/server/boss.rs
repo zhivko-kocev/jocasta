@@ -1,7 +1,7 @@
-//! The boss pane (0392, 0404, 0424): workspace "Jocasta", first in herdr's list (Alt+1), with one omp pane in
+//! The boss pane (0392, 0404, 0424): workspace "Jocasta", first in the sidebar's list (Alt+1), with one omp pane in
 //! `<data>/home`. Its manual is `<data>/home/.omp/APPEND_SYSTEM.md`, which omp loads for every session in that folder
 //! when no `--append-system-prompt` is given (omp 19.1.1 `pi-coding-agent/src/main.ts:1446-1469`, `:1515`), so a pane
-//! herdr restores or he starts by hand still has it; the procedures it rarely needs are skills in
+//! he starts by hand still has it; the procedures it rarely needs are skills in
 //! `<data>/home/.omp/skills/` (0465). Both the service and bare `jocasta` ensure it.
 
 use std::cmp::Ordering;
@@ -13,7 +13,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use serde_json::{Map, Value};
 
-use super::herdr::{AgentState, Env, Herdr, HerdrSnapshot, PaneInfo, RespawnOptions, TabSpec, WorkspaceInfo};
+use super::surface::{AgentState, Env, PaneInfo, RespawnOptions, Surface, SurfaceSnapshot, TabSpec, WorkspaceInfo};
 use crate::shared::bridge_wire::BRIDGE_EXTENSION;
 use crate::shared::errors::{Error, Result};
 use crate::shared::fsx::{read_json_object, same_token, write_atomically};
@@ -110,14 +110,12 @@ fn text<'a>(entry: &'a Map<String, Value>, field: &str) -> Option<&'a str> {
 }
 
 /// `<data>/panes.json`: the panes Jocasta started omp in (the boss, project and thread panes), each with its folder, its
-/// pane key (0578: kept, so a service restart knows the panes still working) and herdr's terminal
-/// behind it once seen. herdr keeps pane ids across a restart but gives each pane a new terminal, and
-/// with `[session] resume_agents_on_restore = false` (`config/herdr.toml`) it restores them as shells: such a pane, in
-/// the same folder and without omp, runs omp again with its own flags (its `--config`), which herdr's own resume
-/// (`omp --resume=<session>`) would drop. A pane that kept its terminal runs omp again only once omp was seen running
-/// in that terminal and has ended there (0521, `ended`); no pane Jocasta didn't start is ever touched. A thread pane
-/// that was mid-turn when Jocasta stopped everything keeps its session file as `restore` (0549): its omp comes back with
-/// `--restore` and goes on with that turn.
+/// pane key (0578: kept, so a service restart knows the panes still working) and the surface's terminal behind it once
+/// seen. The own shell keeps no session across a restart (0683), so after one a recorded pane has no terminal: such a
+/// pane, in the same folder and without omp, runs omp again with its own flags (its `--config`). A pane that kept its
+/// terminal runs omp again only once omp was seen running in that terminal and has ended there (0521, `ended`); no pane
+/// Jocasta didn't start is ever touched. A thread pane that was mid-turn when Jocasta stopped everything keeps its
+/// session file as `restore` (0549): its omp comes back with `--restore` and goes on with that turn.
 ///
 /// Its methods take `&self` (the record sits behind a lock never held across an await), so one record is shared as
 /// `Arc<LaunchedPanes>`.
@@ -174,9 +172,9 @@ impl LaunchedPanes {
 		self.put(pane_id, cwd, key, None)
 	}
 
-	/// `pane_id` runs the sleeper (`jocasta pane-sleep`, 0676) instead of omp, in `cwd`, started with pane key `key`;
+	/// `pane_id` is a sleeping pane (0676, drawn by the shell since 0689) instead of omp, in `cwd`, with pane key `key`;
 	/// `session` is the omp session file to come back to (kept as `restore`, so a wake resumes it; none: `--continue`).
-	/// The record is persisted, so a sleeper herdr restored as a shell after a restart is a sleeper again.
+	/// The record is persisted, so a sleeper restored after a restart is a sleeper again.
 	pub fn add_asleep(&self, pane_id: &str, cwd: &str, key: Option<&str>, session: Option<&str>) -> Result<()> {
 		self.put(pane_id, cwd, key, Some(session.unwrap_or_default()))
 	}
@@ -371,13 +369,13 @@ impl<'a> EnsureBossOptions<'a> {
 	}
 }
 
-async fn boss_workspaces(herdr: &dyn Herdr) -> Result<Vec<WorkspaceInfo>> {
+async fn boss_workspaces(herdr: &dyn Surface) -> Result<Vec<WorkspaceInfo>> {
 	let all = herdr.workspaces().await?;
 	Ok(all.into_iter().filter(|w| w.label == BOSS_WORKSPACE).collect())
 }
 
 /// The boss's pane in `workspace_id`: one Jocasta started, else one running omp, else the workspace's only pane.
-async fn in_boss(herdr: &dyn Herdr, workspace_id: &str, launched: &LaunchedPanes) -> Result<Option<PaneInfo>> {
+async fn in_boss(herdr: &dyn Surface, workspace_id: &str, launched: &LaunchedPanes) -> Result<Option<PaneInfo>> {
 	let panes: Vec<PaneInfo> = herdr.panes().await?.into_iter().filter(|p| p.workspace_id == workspace_id).collect();
 	let found = panes
 		.iter()
@@ -387,7 +385,7 @@ async fn in_boss(herdr: &dyn Herdr, workspace_id: &str, launched: &LaunchedPanes
 	Ok(found.cloned())
 }
 
-async fn pane_by_id(herdr: &dyn Herdr, pane_id: &str) -> Result<Option<PaneInfo>> {
+async fn pane_by_id(herdr: &dyn Surface, pane_id: &str) -> Result<Option<PaneInfo>> {
 	Ok(herdr.panes().await?.into_iter().find(|p| p.pane_id == pane_id))
 }
 
@@ -409,7 +407,7 @@ fn record_start(options: &EnsureBossOptions<'_>, start: &Start, pane_id: &str) -
 /// Starts the boss: a tab in workspace `workspace_id` when there is one, else the workspace (CR-10: the oldest
 /// "Jocasta" stays, any other is closed). Returns the workspace and its pane.
 async fn make_boss(
-	herdr: &dyn Herdr,
+	herdr: &dyn Surface,
 	options: &EnsureBossOptions<'_>,
 	start: &Start,
 	workspace_id: Option<String>,
@@ -443,7 +441,7 @@ async fn make_boss(
 
 /// Runs omp again in a boss pane herdr restored as a shell, or whose omp is stale.
 async fn respawn_boss(
-	herdr: &dyn Herdr,
+	herdr: &dyn Surface,
 	options: &EnsureBossOptions<'_>,
 	start: &Start,
 	pane: &PaneInfo,
@@ -463,7 +461,7 @@ async fn respawn_boss(
 /// create aren't one step): after making it, the oldest "Jocasta" stays and any other is closed (CR-10). The boss pane
 /// is one Jocasta started or one running omp; another pane is adopted only when it is the workspace's only one, so his
 /// own shell tab there is never taken over (CO-21).
-pub async fn ensure_boss_pane(herdr: &dyn Herdr, options: EnsureBossOptions<'_>) -> Result<PaneInfo> {
+pub async fn ensure_boss_pane(herdr: &dyn Surface, options: EnsureBossOptions<'_>) -> Result<PaneInfo> {
 	let home = options.home.clone().unwrap_or_else(boss_home);
 	let config_dir = options.config_dir.clone().unwrap_or_else(|| shipped_config_dir(None));
 	install_boss_files(&home, &config_dir)?;
@@ -562,8 +560,8 @@ pub enum DefaultClosed {
 /// drawn its prompt); `None` when there is no default to close ("Jocasta" came first) or it was touched. `home` is his
 /// home folder by default.
 pub async fn close_herdr_default(
-	herdr: &dyn Herdr,
-	snapshot: &HerdrSnapshot,
+	herdr: &dyn Surface,
+	snapshot: &SurfaceSnapshot,
 	home: Option<&Path>,
 ) -> Result<DefaultClosed> {
 	let home = home.map_or_else(|| std::env::home_dir().unwrap_or_default(), Path::to_path_buf);

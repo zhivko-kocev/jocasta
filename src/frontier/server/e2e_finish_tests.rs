@@ -21,10 +21,10 @@ use crate::frontier::server::helpers::{
 	Page, TestServer, ThreadOptions, boss_pane, call, commit_in, demo_project, push_state, review, sh,
 	start_test_server_with, start_thread, task_dir_of, until, with_server,
 };
-use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
-use crate::frontier::server::herdr::{AgentState, Herdr, HerdrError, TabSpec};
 use crate::frontier::server::server::{ServerOptions, start_server};
 use crate::frontier::server::service::JocastaService;
+use crate::frontier::server::surface::fake_surface::FakeSurface;
+use crate::frontier::server::surface::{AgentState, Surface, SurfaceError, TabSpec};
 use crate::frontier::server::wording::{HANDOFF_PROMPT, quoted};
 use crate::frontier::server::worklog::worklog_path;
 use crate::shared::paths::data_dir;
@@ -98,7 +98,7 @@ fn merge_args() -> Value {
 }
 
 /// Runs `run` on a server over `herdr` and always stops it.
-async fn with_herdr<F, Fut>(herdr: Arc<FakeHerdr>, options: ServerOptions, run: F)
+async fn with_herdr<F, Fut>(herdr: Arc<FakeSurface>, options: ServerOptions, run: F)
 where
 	F: FnOnce(TestServer) -> Fut,
 	Fut: Future<Output = ()>,
@@ -319,7 +319,7 @@ async fn thread_finish_merge_a_pre_commit_hook_refusing_the_squash_commit_merges
 
 		// The hook lets it through; herdr then fails to close the workspace: the commit has landed, the rest stays.
 		sh(main, &["config", "--unset", "core.hooksPath"]);
-		server.herdr.state().close_workspace_fails = Some(HerdrError::new("error", "herdr is gone"));
+		server.herdr.state().close_workspace_fails = Some(SurfaceError::new("error", "herdr is gone"));
 		let reply = ended(&server, &merge_args()).await;
 		assert!(
 			merged_reply(
@@ -427,7 +427,7 @@ async fn after_a_service_restart_the_next_task_reviews_again_a_plain_shell_in_a_
  {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
-	let herdr = Arc::new(FakeHerdr::new());
+	let herdr = Arc::new(FakeSurface::new());
 	let range = "main...feature/readme-line";
 	let first = wait_options();
 	let (pane, path) = {
@@ -655,7 +655,7 @@ async fn no_control_characters_reach_the_feed_a_reminder_not_yet_due_doesnt_awai
 async fn the_server_listens_and_answers_the_page_before_the_service_has_started_the_spend_reads_null_until_todays_sessions_are_read()
  {
 	let _j = temp_jocasta();
-	let herdr = Arc::new(FakeHerdr::new());
+	let herdr = Arc::new(FakeSurface::new());
 	// herdr is slow to answer: the service's start waits on it (the fake's snapshot gate, where the TypeScript held
 	// `ensureWorkspace`).
 	let (release, gate) = tokio::sync::watch::channel(false);

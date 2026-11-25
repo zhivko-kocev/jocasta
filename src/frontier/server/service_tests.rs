@@ -10,8 +10,8 @@ use serde_json::json;
 
 use super::*;
 use crate::frontier::protocol::ToastPriority;
-use crate::frontier::server::herdr::WorkspaceInfo;
-use crate::frontier::server::herdr::fake_herdr::FakeHerdr;
+use crate::frontier::server::surface::WorkspaceInfo;
+use crate::frontier::server::surface::fake_surface::FakeSurface;
 use crate::shared::schema::open_catalog;
 use crate::shared::testing::{TempJocasta, temp_jocasta};
 
@@ -21,14 +21,14 @@ const BOSS_KEY: &str = "boss-key-of-this-run";
 /// reviews, no mise, no prompt file, loopback relays, a refresh tick and a watcher scan that never come by themselves.
 struct Stand {
 	service: Arc<JocastaService>,
-	herdr: Arc<FakeHerdr>,
+	herdr: Arc<FakeSurface>,
 	sent: Arc<Mutex<Vec<ServerMessage>>>,
 	_jocasta: TempJocasta,
 }
 
 fn stand(change: impl FnOnce(&mut TempJocasta, &mut ServiceOptions)) -> Stand {
 	let mut jocasta = temp_jocasta();
-	let herdr = Arc::new(FakeHerdr::new());
+	let herdr = Arc::new(FakeSurface::new());
 	let sent = Arc::new(Mutex::new(Vec::new()));
 	let broadcast = Arc::clone(&sent);
 	let mut options = ServiceOptions::new(

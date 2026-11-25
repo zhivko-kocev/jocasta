@@ -32,13 +32,12 @@ use crate::shared::credentials::{
 };
 use crate::shared::env;
 use crate::shared::errors::{Error, Result};
-use crate::shared::herdr_session::herdr_program;
 use crate::shared::install::{self_command, shipped_config_dir};
 use crate::shared::log::{LogLevel, log};
 use crate::shared::pathkey::{path_key, same_path};
 use crate::shared::paths::{config_dir, data_dir, omp_agent_dir};
 use crate::shared::pollers::settings::{GmailSettings, JiraSettings, read_poller};
-use crate::shared::process::{RunOptions, on_path, run_program};
+use crate::shared::process::on_path;
 use crate::shared::settings::read_settings;
 
 #[path = "setup_migrations.rs"]
@@ -82,13 +81,6 @@ pub struct RunOutput {
 /// Runs a program to completion; resolves its exit code and combined output.
 pub type RunProgram = Arc<dyn Fn(Vec<String>) -> BoxFuture<'static, Result<RunOutput>> + Send + Sync>;
 
-/// What `herdr config check` said.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HerdrCheck {
-	pub code: Option<i32>,
-	pub output: String,
-}
-
 /// The calendar secret's store (0430): Windows Credential Manager target `jocasta/calendar-ical`.
 pub trait CalendarStore: Send + Sync {
 	/// Whether the secret is stored.
@@ -108,61 +100,38 @@ pub trait SecretStore: Send + Sync {
 	fn save(&self, target: &str, secret: &str) -> Result<()>;
 }
 
+#[derive(Default)]
 pub struct SetupDeps {
-	/// The program that runs herdr's words: this `jocasta`.
-	pub herdr: PathBuf,
 	/// The mise binary, or `None` when mise isn't installed: then setup writes no mise file (0476).
 	pub mise: Option<PathBuf>,
 	/// The calendar secret's store; `None` where there is none (off Windows).
 	pub calendar: Option<Arc<dyn CalendarStore>>,
 	/// The mail and Jira secrets' store (0680); `None` where there is none (off Windows): setup asks for neither.
 	pub secrets: Option<Arc<dyn SecretStore>>,
-	/// `herdr config check` on a config file (herdr, path), for setup's check of the herdr.toml it wrote (0608);
-	/// `run_program` by default.
-	#[allow(clippy::type_complexity)]
-	pub check_herdr_config:
-		Option<Arc<dyn Fn(PathBuf, PathBuf) -> BoxFuture<'static, Result<HerdrCheck>> + Send + Sync>>,
 	/// `git --version`'s output, or `None` when git can't run (0613); no function here skips the check.
 	#[allow(clippy::type_complexity)]
 	pub git_version: Option<Arc<dyn Fn() -> BoxFuture<'static, Option<String>> + Send + Sync>>,
-	/// `herdr server reload-config` for Jocasta's session, after a herdr.toml refresh (0467); `None` reloads nothing.
-	pub reload_herdr: Option<ReloadHerdr>,
 	/// Runs `docker` for migration 16's old containers (0603); `None` runs nothing, as when Docker's engine is down:
 	/// the files still go and the one command that removes the rest is named.
 	pub docker: Option<RunProgram>,
 }
 
-/// How setup asks herdr's server to read its config again.
-pub type ReloadHerdr = Arc<dyn Fn() -> BoxFuture<'static, Result<RunOutput>> + Send + Sync>;
-
 impl Clone for SetupDeps {
 	fn clone(&self) -> Self {
 		Self {
-			herdr: self.herdr.clone(),
 			mise: self.mise.clone(),
 			calendar: self.calendar.clone(),
 			secrets: self.secrets.clone(),
-			check_herdr_config: self.check_herdr_config.clone(),
 			git_version: self.git_version.clone(),
-			reload_herdr: self.reload_herdr.clone(),
 			docker: self.docker.clone(),
 		}
 	}
 }
 
 impl SetupDeps {
-	/// Deps with herdr and nothing else.
-	pub fn new(herdr: PathBuf) -> Self {
-		Self {
-			herdr,
-			mise: None,
-			calendar: None,
-			secrets: None,
-			check_herdr_config: None,
-			git_version: None,
-			reload_herdr: None,
-			docker: None,
-		}
+	/// Deps with nothing set.
+	pub fn new() -> Self {
+		Self { mise: None, calendar: None, secrets: None, git_version: None, docker: None }
 	}
 }
 
@@ -184,8 +153,6 @@ type Apply = Box<dyn for<'a> FnOnce(&'a dyn SetupIo) -> BoxFuture<'a, Result<()>
 struct PlannedChange {
 	/// The marker's name: `<NNNN>-<slug>` for a migration, `calendar` for the calendar's secret.
 	name: String,
-	/// The migration's slug (empty for the calendar's secret).
-	slug: String,
 	/// The file it is about.
 	path: String,
 	/// `None` when the target already is what Jocasta ships: only the marker is written.
@@ -467,7 +434,6 @@ fn plan_migrations(
 		let Step { path, fingerprint, change, undo } = step;
 		planned.push(PlannedChange {
 			name,
-			slug: migration.slug.to_owned(),
 			path,
 			change,
 			marker: Marker { fingerprint, undo, applied_at: String::new() },
@@ -497,7 +463,6 @@ fn plan_setup(paths: &SetupPaths, deps: &SetupDeps) -> Result<SetupPlan> {
 		let store = calendar.clone();
 		changes.push(PlannedChange {
 			name: "calendar".to_owned(),
-			slug: String::new(),
 			path: path.clone(),
 			change: Some(SetupChange {
 				title: format!("the calendar's secret address from {CALENDAR_ENV} into Windows Credential Manager"),
@@ -535,21 +500,6 @@ async fn apply_in_order(paths: &SetupPaths, changes: Vec<PlannedChange>, io: &dy
 	Ok(true)
 }
 
-/// herdr's config reloaded after a herdr.toml change (0467, 0584), or what to do when it can't be.
-async fn reload_herdr_saying(reload: &ReloadHerdr, io: &dyn SetupIo) -> Result<()> {
-	let reload = reload().await?;
-	if reload.code == 0 {
-		io.print("herdr reloaded its config.");
-		return Ok(());
-	}
-	let first = reload.output.trim().split('\n').next().unwrap_or_default().trim_end_matches('\r');
-	let why = if first.is_empty() { format!("exit {}", reload.code) } else { first.to_owned() };
-	io.print(&format!(
-		"herdr didn't reload its config ({why}): restart herdr to use it (close Jocasta, then run `jocasta`)."
-	));
-	Ok(())
-}
-
 /// The one note when git is missing or older than 2.54 (0613): an older git ignores the pre-push hook Jocasta gives
 /// every pane through its environment, in silence, so pushes to main, master and develop would go unasked. `None`
 /// when git is new enough.
@@ -571,8 +521,7 @@ fn git_version_note(output: Option<&str>) -> Option<String> {
 	))
 }
 
-/// Shows the plan, asks once, and writes everything only after `y`; then asks for a missing calendar address. herdr
-/// reloads a herdr.toml setup wrote; with herdr missing, setup ends by saying so rather than "Done" (0584).
+/// Shows the plan, asks once, and writes everything only after `y`; then asks for a missing calendar address.
 pub async fn run_setup(paths: &SetupPaths, deps: &SetupDeps, io: &dyn SetupIo) -> Result<i32> {
 	let SetupPlan { changes, settled } = plan_setup(paths, deps)?;
 	if let Some(git) = &deps.git_version
@@ -597,15 +546,11 @@ pub async fn run_setup(paths: &SetupPaths, deps: &SetupDeps, io: &dyn SetupIo) -
 			io.print("Nothing written.");
 			return Ok(0);
 		}
-		let wrote_config = changes.iter().any(|p| p.slug == "herdr-config");
 		if !apply_in_order(paths, changes, io).await? {
 			return Ok(1);
 		}
 		for planned in &settled {
 			mark(paths, planned)?;
-		}
-		if wrote_config && let Some(reload) = &deps.reload_herdr {
-			reload_herdr_saying(reload, io).await?;
 		}
 		io.print("Done: run `jocasta` to open Jocasta.");
 	}
@@ -702,10 +647,9 @@ pub fn backup_stamp(now: Option<DateTime<Local>>) -> String {
 	now.unwrap_or_else(Local::now).format("%Y%m%d-%H%M%S").to_string()
 }
 
-/// `jocasta setup --refresh <file>` (0467): resets one Jocasta-owned file (`herdr.toml`, the Terminal fragment
+/// `jocasta setup --refresh <file>` (0467): resets one Jocasta-owned file (the Terminal fragment
 /// `jocasta.json`, Jocasta's entries in omp's `mcp.json`, by name or full path) to the shipped version after showing the
-/// diff and his `y`, keeping the old one as `<name>.bak.<YYYYMMDD-HHMMSS>` beside it; herdr reloads its config after a
-/// herdr.toml refresh.
+/// diff and his `y`, keeping the old one as `<name>.bak.<YYYYMMDD-HHMMSS>` beside it.
 pub async fn refresh_setup(
 	paths: &SetupPaths,
 	deps: &SetupDeps,
@@ -725,7 +669,7 @@ pub async fn refresh_setup(
 	if chosen.is_empty() {
 		return Err(Error::user_with_code(
 			format!(
-				"setup --refresh: {file} isn't a file setup refreshes; use herdr.toml, jocasta.json (the Windows Terminal scheme) or mcp.json (Jocasta's MCP entries)"
+				"setup --refresh: {file} isn't a file setup refreshes; use jocasta.json (the Windows Terminal scheme) or mcp.json (Jocasta's MCP entries)"
 			),
 			2,
 		));
@@ -756,12 +700,8 @@ pub async fn refresh_setup(
 			io.print(&format!("kept {backup}"));
 		}
 	}
-	let wrote_config = changes.iter().any(|p| p.slug == "herdr-config");
 	if !apply_in_order(paths, changes, io).await? {
 		return Ok(1);
-	}
-	if wrote_config && let Some(reload) = &deps.reload_herdr {
-		reload_herdr_saying(reload, io).await?;
 	}
 	Ok(0)
 }
@@ -777,11 +717,7 @@ pub struct SetupCheck {
 
 /// Setup's pending changes on this machine, read only (0466); a failure is returned, never thrown (SET-14).
 pub async fn setup_check() -> SetupCheck {
-	let herdr = match herdr_program() {
-		Ok(herdr) => herdr,
-		Err(error) => return SetupCheck { waiting: None, failed: Some(error.to_string()) },
-	};
-	let mut deps = SetupDeps::new(herdr);
+	let mut deps = SetupDeps::new();
 	deps.mise = on_path("mise", None);
 	deps.calendar = default_calendar_store(None);
 	let paths = default_setup_paths(&shipped_config_dir(None), self_command(None));
@@ -809,19 +745,6 @@ pub async fn setup_toast() -> Option<String> {
 		log(LogLevel::Warn, "setup", &format!("checking for setup changes: {failed}"), None);
 	}
 	waiting
-}
-
-/// `herdr config check` on `path`, with the output of both streams.
-async fn default_herdr_check(herdr: &Path, path: &Path) -> Result<HerdrCheck> {
-	let mut vars: std::collections::HashMap<String, String> = env::vars()
-		.into_iter()
-		.filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
-		.collect();
-	vars.insert("HERDR_CONFIG_PATH".to_owned(), path.display().to_string());
-	let argv = [herdr.as_os_str(), "config".as_ref(), "check".as_ref()];
-	let result =
-		run_program(&argv, RunOptions { env: Some(vars), timeout_ms: Some(30_000), ..RunOptions::default() }).await?;
-	Ok(HerdrCheck { code: result.code, output: format!("{}{}", result.stdout, result.stderr) })
 }
 
 #[cfg(test)]
