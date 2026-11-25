@@ -1,5 +1,5 @@
 //! The question an omp `ask` call puts to him, as one line (0589). Since omp 18.18.3 the call's arguments are one HTML
-//! form, `{html}` (`tools/ask.ts:64-66`); before, `{questions: [{question, …}]}`. For a form the question is the first
+//! form, `{html}` (`tools/ask.ts:69-71` `askSchema`); before, `{questions: [{question, …}]}`. For a form the question is the first
 //! named control's, worded as omp words it for its own blocked status (`modes/controllers/extension-ui-controller.ts:1042`,
 //! `tools/html-form/data.ts:136-155` `fieldQuestions`, in pi-tui before 19.2.0): the control's own label (a text field, number, select or
 //! textarea wrapped in `<label>`, a `<label for>`, its `aria-label` or `title`; a radio or checkbox group has none),
