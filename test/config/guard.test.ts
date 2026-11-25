@@ -1,7 +1,7 @@
 // The guard every pane loads (0450, 0476, 0580), through H1's evaluator (the built `jocasta-bench h1-guard evaluate`,
 // the matcher `src/shared/guard.rs` it wraps): whitespace runs collapse, `*` is the only wildcard, the match is anchored and
 // case-sensitive, a deny or prompt rule fires on the whole command or any one segment of a compound one, and the first
-// matching rule wins. Each case runs again through omp's own resolver where omp 19.1.1 (H1's pinned omp) is installed
+// matching rule wins. Each case runs again through omp's own resolver where omp 19.2.0 (H1's pinned omp) is installed
 // (`bench/h1-guard/omp-verdicts.ts`'s oracle: omp's `BashTool` approval and `resolveApproval` over the guard, nothing executed), asserting the
 // same verdicts; without it (CI) those tests are skipped and say why. omp's verdict here is its approval: `bash.gitGuard`
 // is a refusal by omp's embedded shell at run time, not an approval, and H1's live check measures it (0580).
@@ -62,8 +62,8 @@ const evaluator: Resolver = async (corpus) => {
 	}
 };
 
-/** omp 19.1.1, H1's pinned omp: the oracle refuses any other version. */
-const PINNED_OMP = "19.1.1";
+/** omp 19.2.0, H1's pinned omp: the oracle refuses any other version. */
+const PINNED_OMP = "19.2.0";
 
 /** What every answer line of the oracle starts with (`ORACLE_MARK` in `bench/h1-guard/omp-verdicts.ts`). */
 const ORACLE_MARK = "\u0001ORACLE ";

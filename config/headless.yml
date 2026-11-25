@@ -7,6 +7,6 @@
 async:
   enabled: false
 # No advisor (0619): in `omp -p` it cost 61% to 83% more in the trials and every note it wrote came after the last
-# turn. Checked against omp 19.1.1 (`advisor/settings.ts` `advisor.enabled`).
+# turn. Checked against omp 19.2.0 (`advisor/settings.ts` `advisor.enabled`).
 advisor:
   enabled: false

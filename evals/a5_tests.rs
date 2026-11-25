@@ -118,7 +118,7 @@ fn interventions_attention_minutes_and_batch_time_from_the_feed_and_the_sessions
 #[test]
 fn an_approval_that_keeps_the_context_counts_once_though_omp_18_20_2_writes_two_mode_changes_to_none_0589() {
 	// "Approve and keep context": omp leaves plan mode (`none`), then records the approved plan with a second `none`
-	// (`interactive-mode.ts:7188`), both in the planning session.
+	// (`interactive-mode.ts:5575`), both in the planning session.
 	let plan = json!({ "planFilePath": "local://PLAN.md" });
 	let approved = json!({ "approvedPlanFilePath": "local://PLAN.md" });
 	let session = [

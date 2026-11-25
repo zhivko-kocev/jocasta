@@ -39,7 +39,7 @@ While threads work, you keep talking to the boss. It tells you when one needs yo
 ## Requirements
 
 - **Windows 11.** Linux (x64) and macOS (Apple silicon) builds exist but are untested in daily use.
-- **[omp](https://github.com/can1357/oh-my-pi)** on your PATH and signed in to a model provider: run `omp`, then `/login`. This release is checked against omp 19.1.1. Jocasta names no model: the boss and threads use your omp model roles, and a `--heavy` thread uses your `slow` role.
+- **[omp](https://github.com/can1357/oh-my-pi)** on your PATH and signed in to a model provider: run `omp`, then `/login`. This release is checked against omp 19.2.0. Jocasta names no model: the boss and threads use your omp model roles, and a `--heavy` thread uses your `slow` role.
 - The terminal shell needs no install: it is built into `jocasta`.
 - **git**, version 2.54 or newer for the push check.
 - **[mise](https://mise.jdx.dev)** (optional). With it, setup pins gh, and each project can have its own check and test tasks.

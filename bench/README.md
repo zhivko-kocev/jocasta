@@ -33,7 +33,7 @@ runs, how often and what is measured is fixed there, as amended for the harness-
 
 | Script | Model calls | Where |
 |---|---|---|
-| `h1-guard omp-verdicts`, `h1-guard evaluate` | none | anywhere with omp 19.1.1 installed (no command runs) |
+| `h1-guard omp-verdicts`, `h1-guard evaluate` | none | anywhere with omp 19.2.0 installed (no command runs) |
 | `h1-guard live-check` | 31 cheap-model turns (30 picks and a canary; a few cents) | his PC (its ACP client runs none of the picks, 0585, 0657) |
 | `h1-guard git-guard-check` | none, but it runs the corpus's git lines (`--run`) | the VM `JOCASTA-CLEAN` only; not rerun since the VM, its VM results stand (0657) |
 | `h7-longpath` | none | anywhere (git only, temp folders) |
@@ -53,7 +53,7 @@ start their threads as `jocasta thread new` does (a `cli` message on the bridge:
 threads still open in plan mode and wait for the operator's approval of their plan in their pane. The bench never
 closes threads or removes worktrees: those ask him first (0484), so H6 and H8 wait for Enter between runs.
 
-Since 0652 the benchmarks run on his PC, on his own omp (19.1.1) and the Jocasta release built for the commit, and
+Since 0652 the benchmarks run on his PC, on his own omp (19.2.0) and the Jocasta release built for the commit, and
 the VM is removed; its results are in `D:/thesis/data/vm-results/`. Since 0657 every script has its place in the table
 above; opencode 1.18.22 (A7, H5's and H6's competitor) and tokscale 4.21.0 are installed for the benchmarks only, in
 `D:/thesis/tools/opencode` and `D:/thesis/tools/tokscale`, and a bench session puts their `node_modules/.bin` on its
@@ -67,13 +67,13 @@ fixed before the long runs. The task benchmark refuses only an omp folder that w
 ## The scripts
 
 - **H1 (0482, 0500, 0501, 0535, 0600, 0623).** Four scripts; the corpus is a separate file and this folder holds no command list.
-  H1 runs on the build's omp, 19.1.1 (0535, 0623, 0663); `--any-version` is the exploration override.
+  H1 runs on the build's omp, 19.2.0 (0535, 0623, 0663, 0690); `--any-version` is the exploration override.
   - `jocasta-bench h1-guard omp-verdicts --corpus <corpus.jsonl> --guard <guard.yml> --out <dir>
     [--git-guard <git-guard-check.jsonl>] [--omp <package dir>] [--any-version]` starts `bun
     bench/h1-guard/omp-verdicts.ts`, the oracle (0636: the one TypeScript file of the bench, because omp loads only on
     Bun), which imports omp's own `config/settings.ts`, `tools/bash.ts` and `tools/approval.ts` from the install (found
     from `omp` on PATH or Bun's
-    global install; anything but 19.1.1 is refused), loads the guard as `--config` over omp's defaults, builds the
+    global install; anything but 19.2.0 is refused), loads the guard as `--config` over omp's defaults, builds the
     real `BashTool` on a session stub that throws if execution is reached, and asks omp's `resolveApproval` for each
     line, as a pane's tool wrapper does. Nothing runs. omp's git guard refuses only when the embedded shell runs `git`:
     with `--git-guard` the refusals `h1-guard git-guard-check` measured decide for the lines it ran, and the
@@ -103,14 +103,17 @@ fixed before the long runs. The task benchmark refuses only an omp folder that w
     corpus's SHA-256, the matcher and the as-written note) and one verdict per line in `h1-guard.jsonl`. The
     reimplementation's results of 2026-10-24 are in
     `D:/thesis/data/bench/h1/{pre-0485,0485,campaign}/`, omp 18.13.1's in `D:/thesis/data/bench/h1/omp-18.13.1/`;
-    the build's runs on omp 19.1.1 go in a folder of their own (`D:/thesis/data/bench/h1/omp-19.1.1/`). omp
+    the build's runs on omp 19.2.0 go in a folder of their own (`D:/thesis/data/bench/h1/omp-19.2.0/`). omp
     18.18.1 changed how its pattern rules combine (a deny matching any part of a compound line beats any prompt;
-    critical patterns come before prompt rules), so `h1-guard omp-verdicts` is run again on the build's omp, 19.1.1 (on the
+    critical patterns come before prompt rules), so `h1-guard omp-verdicts` is run again on the build's omp, 19.2.0 (on the
     0580 corpus 18.18.6's verdicts matched 18.18.2's line for line before 0589's move, and 18.20.2's matched 18.20.0's
     before 0623's, though 18.20.1 also matches a segment without its leading `NAME=value` words; 18.22.0 and 18.22.2 left the code
     that decides a verdict as 18.20.2 had it; 19.1.0 changed only how an allow rule treats leading `NAME=value` words, and the guard has no allow
     rule, and its oracle's session stub must now answer `toolCommands` with nothing; 19.1.1 left `tools/approval.ts` and the
-    approval and `bash.patterns` code of `tools/bash.ts` as 19.1.0 had them, and the oracle loads and answers on it (its `load` request names 19.1.1); checked from source, the corpus not yet rerun); and 18.14.0 rewrote
+    approval and `bash.patterns` code of `tools/bash.ts` as 19.1.0 had them; 19.2.0 changed one thing there: the
+    flag pattern behind "an argument that runs text as code" (`sh -c`, `git -c alias…`) now matches one flag word
+    and no longer runs across spaces (0690), so a quoted line with shell control and a later `-…c`/`-…e` word may no
+    longer count as reinterpreted; checked from source, the corpus not yet rerun); and 18.14.0 rewrote
     the git guard (whose checkout git is in first; refusals for a failed save of uncommitted changes and for
     submodule recursion), so H1's measured refusals are the VM's on 18.13.1; with the VM gone `h1-guard git-guard-check --run` isn't run again (0657), and H1 reports them as such.
   - **The 0580 lines.** The guard's 0580 rules (combined force flags, trunk pushes, restore, update-ref and git's
@@ -140,8 +143,8 @@ fixed before the long runs. The task benchmark refuses only an omp folder that w
     line, the turn's stop reason and any failure) and `live-check.json`. Run it on the frozen corpus (1,285 lines),
     as 0501 sampled it: the 0580 corpus has more lines, so seed 482 picks other lines there. In the VM: `--dry-run`
     first, then the run (a few cents), e.g. `--corpus D:/thesis/data/bench/h1-corpus.jsonl --out
-    D:/thesis/data/bench/h1/omp-19.1.1/live`; check that the canary reached the recorder's terminal ("canary reached
-    the recorder's terminal … nothing written"), that `live-check.json` names omp 19.1.1 and the recorder `ACP client
+    D:/thesis/data/bench/h1/omp-19.2.0/live`; check that the canary reached the recorder's terminal ("canary reached
+    the recorder's terminal … nothing written"), that `live-check.json` names omp 19.2.0 and the recorder `ACP client
     terminal (0585)`, that the outcomes agree with the in-process verdicts, and that no `h1-live-canary.txt` is left.
     The 18.13.1 run (24/24) used omp's bash interceptor as the recorder, which 18.15.0 moved into the bash tool's
     approval.

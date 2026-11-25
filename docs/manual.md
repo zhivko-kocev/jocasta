@@ -13,7 +13,7 @@ Jocasta is a work surface around your daily omp, in three parts (0386, 0392, 055
 ## Prerequisites
 
 - Windows 11 (Linux and macOS builds exist; the test suite passes there, the builds themselves are untested; see below).
-- omp on PATH, signed in (`omp`, then `/login`; 0386). This build is checked against omp 19.1.1 (0535, 0623, 0663; the fork build moved the pin). Dictation is omp's own: omp downloads its speech model on first use or with `omp setup speech` (0556).
+- omp on PATH, signed in (`omp`, then `/login`; 0386). This build is checked against omp 19.2.0 (0535, 0623, 0663, 0690; the fork build moved the pin). Dictation is omp's own: omp downloads its speech model on first use or with `omp setup speech` (0556).
 - [mise](https://mise.jdx.dev), optional: with it, setup pins gh (0476, 0542).
 
 ## Install

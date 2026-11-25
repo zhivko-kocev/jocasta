@@ -42,7 +42,7 @@ fn share_overlay() -> Vec<String> {
 /// whatever his global config says (0478): no Auto QA
 /// reports, no Claude Code plugins, web search on DuckDuckGo (an overlay's `modelRoles.web` leaves his other roles
 /// alone; its `disabledProviders` replaces his list); `/share` kept on this machine (0536, 0561, 0675). Keys checked
-/// against omp 19.1.1's source (`memory-backend/settings.ts`,
+/// against omp 19.2.0's source (`memory-backend/settings.ts`,
 /// `task/settings.ts`, `tools/settings.ts`). Paths are JSON strings, valid YAML.
 pub fn overlay_text(project_id: &str) -> String {
 	let skills = lessons_dir(project_id).parent().map(Path::to_path_buf).unwrap_or_default();

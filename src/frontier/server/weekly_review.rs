@@ -30,13 +30,13 @@ use crate::shared::projects::Project;
 /// How long the weekly big-picture review may run before it is stopped (0470).
 const WEEKLY_REVIEW_MS: i64 = 30 * 60_000;
 /// The most one big-picture review may spend, in US dollars (0608): omp's `--max-cost` stops sending model requests at
-/// it and exits with `COST_CAP_EXIT_CODE` (omp 19.1.1 `print-mode.ts`).
+/// it and exits with `COST_CAP_EXIT_CODE` (omp 19.2.0 `print-mode.ts`).
 const WEEKLY_REVIEW_MAX_COST_USD: u32 = 25;
 /// How long the project's `scorecard` task may run before the review goes on without it (0616).
 const SCORECARD_MS: i64 = 10 * 60_000;
 /// The most characters of one scorecard run's output that are kept and shown (0616); the rest is cut.
 pub const SCORECARD_MAX_CHARS: usize = 6000;
-/// The exit code omp's print mode ends with when `--max-cost` was reached (omp 19.1.1 `PRINT_MODE_COST_CAP_EXIT_CODE`).
+/// The exit code omp's print mode ends with when `--max-cost` was reached (omp 19.2.0 `PRINT_MODE_COST_CAP_EXIT_CODE`).
 const COST_CAP_EXIT_CODE: i32 = 3;
 /// git's empty tree: the start of a repo younger than the review's week.
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";

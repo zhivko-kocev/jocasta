@@ -1,4 +1,4 @@
-//! H1 (0482, 0500, 0501, 0535, 0600, 0623): omp 19.1.1's own verdict on every corpus line, computed in-process from
+//! H1 (0482, 0500, 0501, 0535, 0600, 0623, 0690): omp 19.2.0's own verdict on every corpus line, computed in-process from
 //! omp's installed sources, with nothing executed. Ported from the script half of `omp-verdicts.ts` (0636); the oracle
 //! half, which loads omp and judges through its `BashTool` approval and `resolveApproval`, stays TypeScript on Bun and
 //! is reached through `oracle.rs`.
@@ -37,7 +37,7 @@ use jocasta::shared::fsx::remove_tree;
 use jocasta::shared::guard::{GuardRule, Verdict, verdict};
 use jocasta::shared::pathkey;
 
-pub const PINNED_OMP: &str = "19.1.1";
+pub const PINNED_OMP: &str = "19.2.0";
 const PACKAGE: &str = "@oh-my-pi/pi-coding-agent";
 
 /// One row of `omp-verdicts.jsonl`.

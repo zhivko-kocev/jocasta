@@ -668,7 +668,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0660](0660-a-click-on-a-today-row-acts-like-enter.md) | A click on a `today` row acts like Enter | product, ux | v1 | fork build | 2026-11-23 | 0683 |
 | [0661](0661-bundled-conpty-runtime.md) | The Windows build ships Microsoft's ConPTY runtime, as herdr's does | product | v1 | fork build | 2026-11-23 | 0683 |
 | [0662](0662-a-silent-service-is-shown-and-cut.md) | A service that stops answering is shown in the dock, and the boss's calls to it end | product | v1 | fork build | 2026-11-23 | 0683 |
-| [0663](0663-omp-19-1-1-pinned.md) | omp 19.1.1 is the pinned omp | product, benchmark | v1 | fork build | 2026-11-23 | 0683 |
+| [0663](0663-omp-19-1-1-pinned.md) | omp 19.1.1 is the pinned omp | product, benchmark | v1 | fork build | 2026-11-23 | 0683, 0690 |
 | [0664](0664-the-sidebar-strip-keeps-only-menu.md) | The sidebar's top strip keeps only `menu` | product, ux | v1 | fork build | 2026-11-23 | 0667, 0683 |
 | [0665](0665-jocasta-owns-the-workspaces.md) | Jocasta owns the workspaces | product, ux | v1 | fork build | 2026-11-23 | 0683 |
 | [0666](0666-herdrs-leftovers-pruned.md) | herdr's leftovers pruned, the menu and help in Jocasta's words | product, ux | v1 | fork build | 2026-11-23 | 0683 |
@@ -695,3 +695,4 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0687](0687-thread-dependencies-and-running-limit.md) | Thread dependencies (`after`) and a running limit of 4 | product | v1 | lightweight program | 2026-11-24 |  |
 | [0688](0688-the-journal.md) | The journal: one append-only file of events | product | v1 | lightweight program | 2026-11-24 |  |
 | [0689](0689-sleeping-panes-in-process-and-footprint-count.md) | Sleeping panes drawn by the shell; the footprint counts Jocasta's own processes | product | v1 | lightweight program | 2026-11-25 |  |
+| [0690](0690-omp-19-2-0-pinned.md) | omp 19.2.0 is the pinned omp | product, benchmark | v1 | lightweight program | 2026-11-26 |  |

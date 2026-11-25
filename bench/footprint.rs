@@ -69,7 +69,7 @@ pub fn stub_agent() -> Option<ExitCode> {
 	}
 	let args: Vec<String> = std::env::args().skip(1).collect();
 	match args.first().map(String::as_str) {
-		Some("--version") => println!("19.1.1"),
+		Some("--version") => println!("19.2.0"),
 		Some("usage") => println!("{{}}"),
 		// `config get <key> --json` answers `{"value": …}`.
 		Some("config") => println!("{}", json!({ "value": null })),
@@ -102,7 +102,7 @@ async fn stub_bridge() {
 	let (read, mut write) = tokio::io::split(stream);
 	let hello = json!({
 		"t": "hello", "v": VERSION, "key": key, "pid": std::process::id(), "session": null,
-		"harness": "omp", "harness_version": "19.1.1", "caps": ["prompt"],
+		"harness": "omp", "harness_version": "19.2.0", "caps": ["prompt"],
 	});
 	if write.write_all(line_of(&hello).as_bytes()).await.is_err() {
 		return;

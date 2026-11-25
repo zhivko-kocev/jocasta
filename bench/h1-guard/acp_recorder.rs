@@ -1,12 +1,12 @@
-//! H1's live recorder on omp 19.1.1 (0585, 0623): an ACP client that gives omp a terminal and records what omp sends to
+//! H1's live recorder on omp 19.2.0 (0585, 0623, 0690): an ACP client that gives omp a terminal and records what omp sends to
 //! it.
 //!
 //! omp's ACP mode (`omp --mode acp`, `modes/acp/acp-mode.ts`) talks JSON-RPC 2.0 over stdio, one JSON object per line.
 //! A client that advertises the `terminal` capability at `initialize` gets every bash call that passed omp's approval
-//! routed to `terminal/create` instead of omp's own shell (`tools/bash.ts:2086-2088,2215-2495`): the approval gate runs
-//! first, in the ACP permission proxy (`session/session-tools.ts:1233-1285`, `resolveApproval` with the configured
+//! routed to `terminal/create` instead of omp's own shell (`tools/bash.ts:2107-2109,2236-2516`): the approval gate runs
+//! first, in the ACP permission proxy (`session/session-tools.ts:1243-1295`, `resolveApproval` with the configured
 //! mode; with `tools.approvalMode: yolo` set explicitly a deny throws, an allow runs, a prompt asks the client with
-//! `session/request_permission`) and in the tool wrapper (`extensibility/extensions/wrapper.ts:373-390`). So the client
+//! `session/request_permission`) and in the tool wrapper (`extensibility/extensions/wrapper.ts:372-389`). So the client
 //! sees exactly what omp let through: a `terminal/create` is "ran", a permission request is "asked" (the recorder
 //! rejects it once), and a call that ends `failed` with omp's policy text and neither is "refused". The terminal this
 //! client creates runs nothing: it answers `terminal/output` and `terminal/wait_for_exit` with the recorder's marker and

@@ -1,4 +1,4 @@
-# Follow-up study (0543, 0541 K8, 0608): A1 with omp's prewalk on (`--prewalk`, omp 19.1.1 `cli/args.ts:401`): after
+# Follow-up study (0543, 0541 K8, 0608): A1 with omp's prewalk on (`--prewalk`, omp 19.2.0 `cli/args.ts:402`): after
 # the plan's todo list exists, the first edit switches the session to the `smol` role. On A1, not A6: A6 starts in plan
 # mode, where omp turns prewalk's automatic switch off. Each trial's row records whether the switch happened
 # (`prewalk_switched` in `evals/runner.rs`, `read_prewalk_switch` in `evals/harness.rs`). Its baseline is A1.

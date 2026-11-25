@@ -181,9 +181,9 @@ impl OmpTracker {
 	/// Stop everything, once the service stopped and before herdr's server does (0549): the omp of each thread saved for
 	/// `--restore` ends at once with what runs under it (found by start-checked parent links, SRV-A-1), forced, so it
 	/// records no end of its turn. omp's own teardown on a signal or a closing pane aborts the turn and records the exit
-	/// (omp 19.1.1 `interactive-mode.ts:2710-2741`, `agent-session.ts:4218-4268`), after which `--restore` finds
+	/// (omp 19.2.0 `interactive-mode.ts:2022-2053`, `agent-session.ts:4250-4300`), after which `--restore` finds
 	/// nothing unfinished (`exit-diagnostics.ts:178-184`); a process that just ends leaves the turn open, and `--restore`
-	/// goes on with it (`agent-session.ts:14056-14090`). The other panes' omps end with herdr as before.
+	/// goes on with it (`agent-session.ts:14049-14083`). The other panes' omps end with herdr as before.
 	pub async fn cut_paused(&self) {
 		let paused = self.state().paused.clone();
 		for thread in paused {

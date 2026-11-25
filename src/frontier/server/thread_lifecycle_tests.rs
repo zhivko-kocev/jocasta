@@ -208,7 +208,7 @@ fn plan_mode_entry(id: &str) -> Value {
 	json!({"type": "mode_change", "id": id, "mode": "plan", "data": {"planFilePath": "local://readme-line-plan.md"}})
 }
 
-/// omp's proposal of a plan through the `propose` command, its turn silently aborted (omp 19.1.1's shape).
+/// omp's proposal of a plan through the `propose` command, its turn silently aborted (omp 19.2.0's shape).
 fn append_proposal(file: &Path) {
 	append(
 		file,
