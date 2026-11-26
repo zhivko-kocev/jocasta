@@ -490,7 +490,8 @@ async fn warm_reads_past_a_line_over_a_step_and_goes_on_stepping_after_it_pm_18(
 #[test]
 fn a_turn_omp_discards_durably_counts_once_in_today_s_spend_its_re_journaled_usage_is_the_same_call_srv_b_2() {
 	let j = temp_jocasta();
-	let at = now();
+	// Midday of today: a turn 10 minutes before it is today's whatever the wall clock says.
+	let at = day_start(&local_day(now()), 0) + 12 * 3_600_000;
 	let sessions = j.root().join("sessions");
 	let file = sessions.join("--d--work--acme--").join("2026-11-09T10-00-00-000Z_s1.jsonl");
 	let t0 = at - 10 * 60_000;
