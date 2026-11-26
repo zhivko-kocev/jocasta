@@ -216,6 +216,43 @@ async fn an_untrusted_repo_config_or_paranoid_trust_off_gives_only_mise_env_and_
 	assert!(f.trusts().is_empty());
 }
 
+fn git(dir: &Path, args: &[&str]) {
+	let mut command = std::process::Command::new("git");
+	command.args(["-c", "user.name=Test", "-c", "user.email=test@example.com"]).args(args).current_dir(dir);
+	crate::shared::env::apply_to(&mut command);
+	let output = command.output().expect("running git");
+	assert!(output.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&output.stderr));
+}
+
+#[tokio::test]
+async fn a_mise_file_named_after_the_repository_comes_before_jocasta_pid_in_every_worktree_of_it_0704() {
+	let f = Fixture::new();
+	let main = f.root().join("acme-api");
+	std::fs::create_dir_all(&main).unwrap();
+	git(&main, &["init", "-q"]);
+	git(&main, &["commit", "-q", "--allow-empty", "-m", "first"]);
+	let worktree = f.root().join("acme-api.wt").join("login");
+	git(&main, &["worktree", "add", "-q", "-b", "feature/login", &worktree.display().to_string()]);
+	let config = f.root().join("mise-config");
+	std::fs::create_dir_all(&config).unwrap();
+	let untrusted = [("FAKE_MISE_PARANOID", PARANOID), ("FAKE_MISE_TRUST", "~/src/demo/mise.toml: untrusted\n")];
+	let config_dir = config.display().to_string();
+	let base = f.base(&untrusted, &[("MISE_CONFIG_DIR", &config_dir), ("MISE_ENV", "ci,acme-api")]);
+	let mise_env_in = async |dir: &Path| mise_env("demo-1", dir, Some(&base), f.mise()).await["MISE_ENV"].clone();
+	// No file yet: as before.
+	let fresh = f.base(&untrusted, &[("MISE_CONFIG_DIR", &config_dir)]);
+	assert_eq!(mise_env("demo-1", &main, Some(&fresh), f.mise()).await["MISE_ENV"], "jocasta-demo-1");
+	assert_eq!(mise_env_in(&main).await, "ci,acme-api,jocasta-demo-1");
+	std::fs::write(config.join("config.acme-api.toml"), "[env]\nDEMO = \"1\"\n").unwrap();
+	for dir in [&main, &worktree] {
+		assert_eq!(mise_env_in(dir).await, "ci,acme-api,jocasta-demo-1", "{}", dir.display());
+	}
+	// Each name once, the repository's just before Jocasta's own.
+	assert_eq!(mise_env("demo-1", &worktree, Some(&fresh), f.mise()).await["MISE_ENV"], "acme-api,jocasta-demo-1");
+	// Outside git, nothing is added.
+	assert_eq!(mise_env("demo-1", &config, Some(&fresh), f.mise()).await["MISE_ENV"], "jocasta-demo-1");
+}
+
 #[tokio::test]
 async fn the_reviews_mise_check_is_verify_else_test_only_for_a_folder_mise_may_load() {
 	let f = Fixture::new();

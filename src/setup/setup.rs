@@ -227,10 +227,15 @@ fn homedir() -> PathBuf {
 
 /// mise's global config dir as mise resolves it: `MISE_CONFIG_DIR`, else `$XDG_CONFIG_HOME/mise`, else `~/.config/mise`.
 pub fn mise_config_dir() -> PathBuf {
-	if let Some(dir) = env::var_nonempty("MISE_CONFIG_DIR") {
+	mise_config_dir_in(env::var_nonempty)
+}
+
+/// [`mise_config_dir`] in the environment `var` reads (a pane's, 0704): a variable set to nothing counts as unset.
+pub fn mise_config_dir_in(var: impl Fn(&str) -> Option<String>) -> PathBuf {
+	if let Some(dir) = var("MISE_CONFIG_DIR") {
 		return PathBuf::from(dir);
 	}
-	env::var_nonempty("XDG_CONFIG_HOME").map_or_else(|| homedir().join(".config"), PathBuf::from).join("mise")
+	var("XDG_CONFIG_HOME").map_or_else(|| homedir().join(".config"), PathBuf::from).join("mise")
 }
 
 /// Linux's own folders omp fences (0701, #10): the keyring's unencrypted store, GnuPG's keys, gh's token, the system's

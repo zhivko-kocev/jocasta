@@ -483,7 +483,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0474](0474-palette-from-one-file.md) | Tokyo Night colours from one file | product | decided | program | 2026-10-23 |  |
 | [0475](0475-agents-md-rules-status-moves-out.md) | AGENTS.md keeps the rules; "Where we are" moves out | process | decided | program | 2026-10-23 |  |
 | [0476](0476-mise-single-development-entry.md) | mise as the single entry for development | product | decided | program | 2026-10-23 | 0627, 0630, 0639, 0644 |
-| [0477](0477-mise-for-every-project-uncommitted.md) | mise for every project, kept outside the repo | product | decided | program | 2026-10-23 | 0583 |
+| [0477](0477-mise-for-every-project-uncommitted.md) | mise for every project, kept outside the repo | product | decided | program | 2026-10-23 | 0583, 0704 |
 | [0478](0478-privacy-settings-in-every-pane.md) | The privacy settings ride in every Jarvis pane | product | decided | program | 2026-10-23 |  |
 | [0479](0479-setup-writes-three-omp-files.md) | Setup writes the three omp files after his y | product | decided | program | 2026-10-23 | 0584, 0594 |
 | [0480](0480-the-product-is-jocasta.md) | The product is Jocasta | product | decided | program | 2026-10-24 | 0564, 0584 |
@@ -705,3 +705,4 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0700](0700-jocasta-status-json.md) | `jocasta status --json` | product | v1 | ultron 0.3 iteration, J5 | 2026-11-26 |  |
 | [0701](0701-linux-guard-shapes-and-fenced-folders.md) | Linux guard shapes and fenced folders | product | v1 | ultron 0.3 iteration, J1 | 2026-11-26 |  |
 | [0702](0702-unix-runtime.md) | Unix runtime | product | v1 | ultron 0.3 iteration, J1 | 2026-11-26 |  |
+| [0704](0704-project-named-mise-file.md) | Project-named mise file | product | v1 | ultron 0.3 iteration, J9 | 2026-11-26 |  |

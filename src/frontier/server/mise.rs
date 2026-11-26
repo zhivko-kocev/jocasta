@@ -1,10 +1,12 @@
 //! mise in project and thread panes (0473, 0477). Every pane of a project gets `MISE_ENV=jocasta-<project id>`, so mise
 //! loads Jocasta's own config for that project, `~/.config/mise/config.jocasta-<project id>.override.toml` (global config,
-//! trusted by path), in every worktree without a copy. With paranoid config trust on (`paranoid = ["config"]`, which
-//! Jocasta's mise file sets, 0476) and every repo config in the folder trusted, `mise env --json` run there is merged
-//! into the pane's env too (shims carry no `[env]`), and the review may run its `verify` (else `test`) task. The only
-//! config Jocasta trusts itself is a thread worktree's unchanged copy of one the main checkout has trusted (0596): mise's
-//! own worktree rule, which paranoid trust turns off. Without mise on PATH nothing changes.
+//! trusted by path), in every worktree without a copy; when mise's global config folder holds `config.<repo>.toml`, named
+//! after the folder of the repository's git common dir, `<repo>` comes just before it (0704). With paranoid config trust
+//! on (`paranoid = ["config"]`, which Jocasta's mise file sets, 0476) and every repo config in the folder trusted,
+//! `mise env --json` run there is merged into the pane's env too (shims carry no `[env]`), and the review may run its
+//! `verify` (else `test`) task. The only config Jocasta trusts itself is a thread worktree's unchanged copy of one the
+//! main checkout has trusted (0596): mise's own worktree rule, which paranoid trust turns off. Without mise on PATH
+//! nothing changes.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -14,15 +16,19 @@ use regex::Regex;
 use serde_json::Value;
 
 use crate::frontier::protocol::js_number_text;
+use crate::setup::setup::mise_config_dir_in;
 use crate::shared::env;
 use crate::shared::errors::Error;
 use crate::shared::fsx::as_object;
+use crate::shared::git::{GitOptions, git_async};
 use crate::shared::log::{LogLevel, log};
 use crate::shared::pathkey::{is_inside, path_key, real_path};
 use crate::shared::process::{RunOptions, on_path, run_program};
 
 /// How long one mise call may take before it counts as failed.
 const MISE_TIMEOUT_MS: i64 = 15_000;
+/// How long the git call that names a folder's repository may take.
+const GIT_TIMEOUT_MS: i64 = 15_000;
 
 /// An environment: name to value (a name left out is the TypeScript's `undefined`).
 pub type Env = HashMap<String, String>;
@@ -94,24 +100,40 @@ async fn run_mise(mise: &[String], args: &[&str], cwd: &Path, env: &Env) -> Opti
 	None
 }
 
-/// `MISE_ENV` with the project's `jocasta-<pid>` appended to whatever the pane already has (0477).
-fn with_jocasta_env(project_id: &str, base: &Env) -> String {
+/// `MISE_ENV` with the repository's own name (when its file exists, 0704), then the project's `jocasta-<pid>`, appended
+/// to whatever the pane already has (0477); each name once.
+fn with_jocasta_env(project_id: &str, repo: Option<&str>, base: &Env) -> String {
 	let own = format!("jocasta-{project_id}");
-	let mut names: Vec<String> = base
+	let ours: Vec<&str> = repo.into_iter().chain([own.as_str()]).collect();
+	let mut names: Vec<&str> = base
 		.get("MISE_ENV")
 		.map_or("", String::as_str)
 		.split(',')
-		.map(|name| name.trim().to_owned())
-		.filter(|name| !name.is_empty() && *name != own)
+		.map(str::trim)
+		.filter(|name| !name.is_empty() && !ours.contains(name))
 		.collect();
-	names.push(own);
+	names.extend(ours);
 	names.join(",")
 }
 
-/// `base` with the project's `MISE_ENV`.
-fn jocasta_env(project_id: &str, base: &Env) -> Env {
+/// The name ultron's shell hook gives the repository `cwd` is in (0704): the folder holding its git common dir, so a
+/// worktree gets its main checkout's; `None` outside git or when mise's global config folder, as `base` resolves it, has
+/// no `config.<name>.toml`.
+async fn repo_mise_name(cwd: &Path, base: &Env) -> Option<String> {
+	let args = ["rev-parse", "--path-format=absolute", "--git-common-dir"];
+	let out =
+		git_async(cwd, &args, GIT_TIMEOUT_MS, GitOptions::default()).await.ok().filter(|out| out.code == Some(0))?;
+	let common = PathBuf::from(out.stdout.trim());
+	let name = common.parent()?.file_name()?.to_str()?.to_owned();
+	let dir = mise_config_dir_in(|var| base.get(var).filter(|value| !value.is_empty()).cloned());
+	dir.join(format!("config.{name}.toml")).is_file().then_some(name)
+}
+
+/// `base` with the project's `MISE_ENV` for a mise call in `cwd`.
+async fn jocasta_env(project_id: &str, cwd: &Path, base: &Env) -> Env {
+	let repo = repo_mise_name(cwd, base).await;
 	let mut env = base.clone();
-	env.insert("MISE_ENV".to_owned(), with_jocasta_env(project_id, base));
+	env.insert("MISE_ENV".to_owned(), with_jocasta_env(project_id, repo.as_deref(), base));
 	env
 }
 
@@ -194,7 +216,7 @@ pub async fn trust_copies(
 ) -> Vec<PathBuf> {
 	let Some(mise) = mise.argv() else { return Vec::new() };
 	let base = base.cloned().unwrap_or_else(process_env);
-	let env = jocasta_env(project_id, &base);
+	let env = jocasta_env(project_id, cwd, &base).await;
 	let (paranoid, here, there) = tokio::join!(
 		run_mise(&mise, &["settings", "get", "paranoid"], cwd, &env),
 		run_mise(&mise, &["trust", "--show"], cwd, &env),
@@ -249,7 +271,7 @@ pub async fn trust_copies(
 pub async fn mise_env(project_id: &str, cwd: &Path, base: Option<&Env>, mise: Mise<'_>) -> Env {
 	let Some(mise) = mise.argv() else { return Env::new() };
 	let base = base.cloned().unwrap_or_else(process_env);
-	let env = jocasta_env(project_id, &base);
+	let env = jocasta_env(project_id, cwd, &base).await;
 	let mise_env = env["MISE_ENV"].clone();
 	if distrust(&mise, cwd, &env).await.is_some() {
 		return Env::from([("MISE_ENV".to_owned(), mise_env)]);
@@ -308,7 +330,7 @@ async fn defined_tasks(
 	base: &Env,
 	mise: &[String],
 ) -> std::result::Result<HashSet<String>, String> {
-	let env = jocasta_env(project_id, base);
+	let env = jocasta_env(project_id, cwd, base).await;
 	if let Some(why) = distrust(mise, cwd, &env).await {
 		return Err(why);
 	}
@@ -422,7 +444,7 @@ pub async fn mise_run_task(
 	if let Found::Skipped(why) = found {
 		return Some(MiseTaskRun::Skipped(why));
 	}
-	let env = jocasta_env(project_id, &base);
+	let env = jocasta_env(project_id, cwd, &base).await;
 	let argv: Vec<&str> = mise.iter().map(String::as_str).chain(["run", name]).collect();
 	let run_options = RunOptions {
 		cwd: Some(cwd.to_path_buf()),
