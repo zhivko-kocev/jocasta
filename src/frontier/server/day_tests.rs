@@ -278,9 +278,21 @@ fn normal(source_id: &str, kind: &str, text: &str) -> NewEvent {
 	NewEvent { priority: EventPriority::Normal, ..urgent(source_id, kind, text) }
 }
 
-// `day.test.ts` "delivery (0299, 0405, 0554)": the `Day` half, without herdr's notifications or the boss's pane.
+fn toast_texts(s: &Stand) -> Vec<String> {
+	s.toasts()
+		.into_iter()
+		.filter_map(|m| match m {
+			ServerMessage::Toast { text, .. } => Some(text),
+			_ => None,
+		})
+		.collect()
+}
+
+// `day.test.ts` "delivery (0299, 0405, 0554)": the `Day` half, without herdr's notifications or the boss's pane. Since
+// 0695 a day event is a toast and a `today` row only: none of these gives the boss a line.
 #[tokio::test]
-async fn delivery_gives_each_event_an_alert_and_a_toast_one_reminder_after_30_minutes_and_quiet_hours_hold_normal() {
+async fn delivery_gives_each_event_a_toast_and_the_boss_no_line_one_reminder_after_30_minutes_and_quiet_hours_hold_normal()
+ {
 	let _j = temp_jocasta();
 	write_settings(r#"{"service":{"quietHours":"22:00-08:00"}}"#);
 	let s = Stand::new(at(2026, 10, 8, 10, 0));
@@ -289,20 +301,6 @@ async fn delivery_gives_each_event_an_alert_and_a_toast_one_reminder_after_30_mi
 	let mut pipeline = urgent("github:pipeline:acme/web#7", "pipeline", "Pipeline red — web on main");
 	pipeline.url = Some("https://example.test/run/1".to_owned());
 	day.raise(&pipeline).unwrap();
-	{
-		let alerts = s.shared.alerts.lock().unwrap();
-		// What a poller said is marked as outside words for the boss (SEC-2).
-		assert_eq!(alerts[0].0, "Pipeline red — web on main");
-		assert_eq!(
-			alerts[0].1,
-			AlertDetails {
-				priority: ToastPriority::Urgent,
-				url: Some("https://example.test/run/1".to_owned()),
-				reminder: false,
-				outside: vec!["web on main".to_owned()],
-			}
-		);
-	}
 	assert_eq!(
 		s.toasts(),
 		vec![ServerMessage::Toast {
@@ -318,27 +316,32 @@ async fn delivery_gives_each_event_an_alert_and_a_toast_one_reminder_after_30_mi
 	assert!(day.raise(&urgent("github:pipeline:acme/web#7", "pipeline", "x")).unwrap().is_none());
 
 	day.raise(&normal("github:review:acme/api#42", "review", "Review requested — Add export")).unwrap();
-	assert_eq!(s.alerts()[1], "Review requested — Add export");
-	assert_eq!(s.shared.alerts.lock().unwrap()[1].1.outside, vec!["Add export".to_owned()]);
+	day.raise(&normal("inbox:1", "reminder", "Reminder (10:00) — send the invoice")).unwrap();
 	// Low goes only to `today`.
 	let mut low = normal("x:low", "other", "fyi");
 	low.priority = EventPriority::Low;
 	day.raise(&low).unwrap();
-	assert_eq!(s.alerts().len(), 2);
+	assert_eq!(
+		toast_texts(&s),
+		["Pipeline red — web on main", "Review requested — Add export", "Reminder (10:00) — send the invoice"]
+	);
 
-	// 30 minutes later, both are still open: one reminder each, and only one.
+	// 30 minutes later, all are still open: one reminder each, and only one.
 	s.add(30 * 60_000);
 	day.tick().unwrap();
 	assert_eq!(
-		&s.alerts()[2..],
-		["Still open: Pipeline red — web on main", "Still open: Review requested — Add export"]
+		&toast_texts(&s)[3..],
+		[
+			"Still open: Pipeline red — web on main",
+			"Still open: Review requested — Add export",
+			"Still open: Reminder (10:00) — send the invoice",
+		]
 	);
-	assert!(s.shared.alerts.lock().unwrap()[2].1.reminder);
 	s.add(30 * 60_000);
 	day.tick().unwrap();
 	day.raise(&normal("test:sentinel", "other", "sentinel")).unwrap();
-	assert_eq!(s.alerts().len(), 5);
-	assert_eq!(s.alerts()[4], "sentinel");
+	assert_eq!(toast_texts(&s).len(), 7);
+	assert_eq!(toast_texts(&s)[6], "sentinel");
 
 	// Quiet hours: normal waits for the morning; urgent goes through.
 	s.set(at(2026, 10, 8, 22, 30));
@@ -346,8 +349,10 @@ async fn delivery_gives_each_event_an_alert_and_a_toast_one_reminder_after_30_mi
 	assert!(day.quiet());
 	day.raise(&normal("github:review:acme/api#43", "review", "late")).unwrap();
 	day.raise(&urgent("machine:test", "disk", "Disk almost full — 5% free")).unwrap();
-	assert_eq!(s.alerts().len(), 6);
-	assert_eq!(s.alerts()[5], "Disk almost full — 5% free");
+	assert_eq!(toast_texts(&s).len(), 8);
+	assert_eq!(toast_texts(&s)[7], "Disk almost full — 5% free");
+	// Not one of them woke the boss (0695).
+	assert!(s.alerts().is_empty());
 }
 
 #[tokio::test]
@@ -366,28 +371,23 @@ async fn disk_under_10_percent_free_is_urgent_once_and_resolved_when_space_is_ba
 	);
 	s.day.tick().unwrap();
 	s.day.tick().unwrap();
-	assert_eq!(s.alerts(), ["Disk almost full — 5% free"]);
+	assert_eq!(toast_texts(&s), ["Disk almost full — 5% free"]);
+	assert!(s.alerts().is_empty());
 	*free.lock().unwrap() = 0.5;
 	s.day.tick().unwrap();
 	assert!(s.day.queue(|q| q.by_source("machine:disk")).unwrap().unwrap().resolved_at.is_some());
 }
 
 #[tokio::test]
-async fn a_blocked_threads_question_stays_marked_as_outside_in_its_reminder_and_jocastas_own_tails_dont() {
+async fn a_blocked_threads_still_open_repeat_is_a_toast_and_never_a_boss_line_0695() {
 	let _j = temp_jocasta();
 	let s = Stand::new(at(2026, 10, 8, 10, 0));
 	s.day.thread_blocked("p1", "acme/x — Run rm -rf now?", None).unwrap();
 	s.day.thread_blocked("p2", "acme/y — awaiting you", None).unwrap();
 	s.add(30 * 60_000);
 	s.day.tick().unwrap();
-	let alerts = s.shared.alerts.lock().unwrap().clone();
-	assert_eq!(
-		alerts.iter().map(|(text, details)| (text.as_str(), details.outside.clone())).collect::<Vec<_>>(),
-		[
-			("Still open: acme/x — Run rm -rf now?", vec!["Run rm -rf now?".to_owned()]),
-			("Still open: acme/y — awaiting you", Vec::new()),
-		]
-	);
+	assert_eq!(toast_texts(&s), ["Still open: acme/x — Run rm -rf now?", "Still open: acme/y — awaiting you"]);
+	assert!(s.alerts().is_empty());
 	s.day.thread_unblocked("p1").unwrap();
 	assert!(s.day.queue(|q| q.by_source("thread:blocked:p1")).unwrap().unwrap().resolved_at.is_some());
 }
@@ -476,16 +476,14 @@ async fn today_has_the_calendar_with_links_awaiting_you_and_next_and_a_meeting_i
 	s.set(at(2026, 10, 8, 9, 56));
 	day.tick().unwrap();
 	let soon = "Meeting in 4 min — standup (client-a)";
-	{
-		let alerts = s.shared.alerts.lock().unwrap();
-		assert!(alerts.iter().any(|(text, details)| text == soon
-			&& details.url.as_deref() == Some("https://meet.google.com/abc-defg-hij")
-			&& details.outside == ["standup (client-a)"]));
-	}
+	// A toast with its link, and no boss line (0695).
+	assert!(s.toasts().iter().any(|m| matches!(m, ServerMessage::Toast { text, url, .. }
+		if text == soon && url.as_deref() == Some("https://meet.google.com/abc-defg-hij"))));
+	assert!(s.alerts().is_empty());
 	day.tick().unwrap();
 	s.set(at(2026, 10, 8, 10, 1));
 	day.tick().unwrap();
-	assert_eq!(s.alerts().iter().filter(|l| *l == soon).count(), 1);
+	assert_eq!(toast_texts(&s).iter().filter(|l| *l == soon).count(), 1);
 	assert!(!day.queue(|q| q.open()).unwrap().iter().any(|r| r.kind == "meeting-soon"));
 
 	// The boss's text form follows 0300's layout.
@@ -540,7 +538,9 @@ fn dashboard_answer(news_down: &AtomicBool, target: &str) -> (u16, String) {
 #[tokio::test]
 async fn the_dashboard_has_news_and_weather_a_news_failure_is_said_once_and_the_last_list_stays_and_todays_activity() {
 	let _j = temp_jocasta();
-	write_settings("{}");
+	// 0442's feeds, listed: without them there is no news (0695).
+	let feeds = r#""pollers":{"news":{"feeds":[{"source":"hn"},{"source":"lwn"},{"topic":"gaming","limit":10}]}}"#;
+	write_settings(&format!("{{{feeds}}}"));
 	let down = Arc::new(AtomicBool::new(false));
 	let seen = Arc::clone(&down);
 	let (base, _) = serve(move |target| dashboard_answer(&seen, target)).await;
@@ -572,7 +572,7 @@ async fn the_dashboard_has_news_and_weather_a_news_failure_is_said_once_and_the_
 	};
 	let mut gaming = heading("Gaming", "gaming", "https://example.test/gaming/10");
 	gaming.items[0].source = "pcgamer".to_owned();
-	// 0442's default feeds: every Hacker News and LWN item (no limit asked), the newest 10 gaming headlines.
+	// 0442's feeds: every Hacker News and LWN item (no limit asked), the newest 10 gaming headlines.
 	assert_eq!(
 		day.dashboard().news,
 		vec![
@@ -584,7 +584,7 @@ async fn the_dashboard_has_news_and_weather_a_news_failure_is_said_once_and_the_
 	// Weather stays hidden until dashboard.weather is set.
 	day.poll(PollerName::Weather).await;
 	assert!(day.dashboard().weather.is_none());
-	write_settings(r#"{"dashboard":{"weather":"Example City"}}"#);
+	write_settings(&format!(r#"{{"dashboard":{{"weather":"Example City"}},{feeds}}}"#));
 	day.poll(PollerName::Weather).await;
 	assert_eq!(
 		day.dashboard().weather,
@@ -681,7 +681,7 @@ async fn a_reminder_refuses_impossible_times_days_off_the_calendar_and_moments_p
 	let second = s.day.remind("send the invoice", "16:07", None).unwrap();
 	s.set(at(2026, 10, 8, 16, 7));
 	s.day.tick().unwrap();
-	assert_eq!(s.alerts(), ["Reminder (16:07) — send the invoice"]);
+	assert_eq!(toast_texts(&s), ["Reminder (16:07) — send the invoice"]);
 	assert!(s.day.today_text().unwrap().contains("16:07 send the invoice"));
 	assert!(s.day.done(second.id).unwrap());
 }

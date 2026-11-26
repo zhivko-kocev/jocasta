@@ -685,8 +685,9 @@ async fn setup_undo_names_what_setup_added_from_its_markers_only_a_step_without_
 #[test]
 fn the_shipped_config_yml_carries_the_decided_values_that_his_own_file_held_where_omp_defaults_differ() {
 	let config = yaml(&asset_text("omp/config.yml"));
-	// omp's default is off: without it the snapshot would turn his advisor off in every pane (0619, 0620).
-	assert_eq!(config["advisor"], json!({"enabled": true, "reviewInterval": 3}));
+	// omp's default is off: without it the snapshot would turn his advisor off in every pane (0619, 0620); it reviews at
+	// the agent's end and wakes it only for a blocker (0695).
+	assert_eq!(config["advisor"], json!({"enabled": true, "reviewMode": "agent-end", "continueSeverity": "blocker"}));
 	// His fallbacks (0590), dictation and speech kept on the machine (0556).
 	let chains = &config["retry"]["fallbackChains"];
 	assert_eq!(chains["plan"], json!(["anthropic/claude-opus-5-5:max", "anthropic/claude-opus-5:max"]));

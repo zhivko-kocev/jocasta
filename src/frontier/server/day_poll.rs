@@ -25,7 +25,7 @@ use crate::shared::pollers::weather::{
 };
 use crate::shared::process::aborted;
 use crate::shared::projects::Project;
-use crate::shared::settings::read_settings;
+use crate::shared::settings::{read_settings, read_weekly_projects};
 
 impl Day {
 	/// One round of a poller; an overlapping round is skipped, and none starts once the day stopped. News and weather
@@ -365,9 +365,10 @@ impl Day {
 		drop(finish);
 	}
 
-	/// The weekly big-picture review (0470): from Monday 10:00 on, outside quiet hours, once per project and week, each
-	/// project's review runs; one with merges in the past 7 days ends in a `weekly-review` event. The event's row in the
-	/// queue marks the week done across restarts; a result that came during quiet hours is delivered after them.
+	/// The weekly big-picture review (0470): from Monday 10:00 on, outside quiet hours, once per week for each project
+	/// listed in `weekly.projects` (0695; none by default), its review runs; one with merges in the past 7 days ends in a
+	/// `weekly-review` event. The event's row in the queue marks the week done across restarts; a result that came
+	/// during quiet hours is delivered after them.
 	pub(super) fn weekly_reviews(&self, quiet: bool) -> Result<()> {
 		if quiet {
 			return Ok(());
@@ -389,7 +390,11 @@ impl Day {
 		if self.st().weekly_done.insert(format!("{week}|brief")) {
 			self.build_weekly_brief(&week);
 		}
+		let listed = read_weekly_projects();
 		for project in self.inner.hooks.projects() {
+			if !listed.iter().any(|name| name.eq_ignore_ascii_case(&project.name)) {
+				continue;
+			}
 			let key = format!("{week}|{}", project.id);
 			let source_id = format!("weekly-review:{}:{week}", project.id);
 			if self.st().weekly_done.contains(&key) || self.queue(|queue| queue.by_source(&source_id))?.is_some() {

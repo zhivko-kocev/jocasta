@@ -321,7 +321,7 @@ fn local_ms(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> i64 {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn svc_9_a_thread_closed_in_quiet_hours_is_in_todays_activity_at_once_and_reaches_the_boss_once_they_end_0298() {
+async fn svc_9_a_thread_closed_in_quiet_hours_is_in_todays_activity_at_once_and_isnt_released_to_the_boss_0298_0695() {
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
 	write_settings(&config_dir(), &json!({ "service": { "quietHours": "22:00-08:00" } }));
@@ -345,13 +345,13 @@ async fn svc_9_a_thread_closed_in_quiet_hours_is_in_todays_activity_at_once_and_
 		until(|| day.dashboard().activity.events.iter().any(|e| e.text == what)).await;
 		boss_idle(&server);
 		assert_eq!(to_boss(), 0);
-		// Quiet hours over: the line that waited goes in, once.
+		// Quiet hours over: nothing waited for the boss (0695).
 		at.store(local_ms(2026, 10, 25, 8, 1), Ordering::SeqCst);
 		day.tick().unwrap();
-		until(|| to_boss() == 1).await;
 		boss_idle(&server);
 		server.service.refresh().await;
-		assert_eq!(to_boss(), 1);
+		server.service.context().events.settled().await;
+		assert_eq!(to_boss(), 0);
 	})
 	.await;
 }

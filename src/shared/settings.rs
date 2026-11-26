@@ -61,6 +61,7 @@ const CHECKS_DEFAULT: &str = "the check queue uses the default memory reserve";
 const COST_DEFAULT: &str = "using the default cost cap, $75 a thread";
 const RUNNING_DEFAULT: &str = "using the default running limit, 4 threads";
 const THREADS_DEFAULT: &str = "using the default cost cap and running limit";
+const WEEKLY_OFF: &str = "no project gets the weekly review";
 
 fn rule(reason: &str, instead: &'static str, map: bool) -> KeyRule {
 	KeyRule { reason: reason.to_owned(), instead, map }
@@ -147,6 +148,8 @@ fn rule_of(key: &str) -> Option<KeyRule> {
 			RUNNING_DEFAULT,
 			false,
 		),
+		"weekly" => rule("weekly must be a mapping", WEEKLY_OFF, true),
+		"weekly.projects" => rule("weekly.projects must be a list of project names", WEEKLY_OFF, false),
 		_ => return None,
 	})
 }
@@ -287,10 +290,29 @@ fn validate(settings: &Map<String, Value>) -> Vec<Fault> {
 			"ntfy" => check_ntfy(value, &mut faults),
 			"checks" => check_checks(value, &mut faults),
 			"threads" => check_threads(value, &mut faults),
+			"weekly" => check_weekly(value, &mut faults),
 			_ => faults.push(fault(&[], name, true)),
 		}
 	}
 	faults
+}
+
+/// `weekly.projects` (0695): the projects, by name, the minute tick runs the weekly big-picture review for.
+fn check_weekly(value: &Value, faults: &mut Vec<Fault>) {
+	let Some(map) = value.as_object() else { return faults.push(fault(&[], "weekly", false)) };
+	for (name, value) in map {
+		match name.as_str() {
+			"projects" => {
+				let names = value.as_array();
+				if !names
+					.is_some_and(|names| names.iter().all(|name| name.as_str().is_some_and(|n| !n.trim().is_empty())))
+				{
+					faults.push(fault(&["weekly"], name, false));
+				}
+			}
+			_ => faults.push(fault(&["weekly"], name, true)),
+		}
+	}
 }
 
 /// `ntfy.server` (0672): an `http://` or `https://` URL without whitespace.
@@ -604,6 +626,20 @@ pub fn read_max_running() -> u64 {
 		return DEFAULT;
 	}
 	settings.get("threads").and_then(|threads| threads.get("maxRunning")).and_then(Value::as_u64).unwrap_or(DEFAULT)
+}
+
+/// `weekly.projects` (0695): the project names the weekly big-picture review runs for; none when unset or bad.
+pub fn read_weekly_projects() -> Vec<String> {
+	let Ok(settings) = read_settings() else { return Vec::new() };
+	if check_settings(&settings, "weekly.projects").is_err() {
+		return Vec::new();
+	}
+	settings
+		.get("weekly")
+		.and_then(|weekly| weekly.get("projects"))
+		.and_then(Value::as_array)
+		.map(|names| names.iter().filter_map(Value::as_str).map(|name| name.trim().to_owned()).collect())
+		.unwrap_or_default()
 }
 
 /// `service.paneIdleMinutes` (0676): minutes a pane's omp idles before it sleeps; 15 when unset or bad, 0 = never.

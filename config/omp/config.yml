@@ -35,10 +35,12 @@ session:
   warnCost: 50
 
 # The advisor stays on in the boss, project panes and threads (0619, 0620; omp's default is off), on his `advisor`
-# role, and reviews every third update instead of every one; the updates it skipped go with its next review (0616).
+# role. It reviews once, when the agent ends its turn, and wakes the agent again only for a blocker (0695: its blocker
+# notes were all acted on, none of its nits; reviewing at the end cut its cost 27 %).
 advisor:
   enabled: true
-  reviewInterval: 3
+  reviewMode: agent-end
+  continueSeverity: blocker
 
 # Every read, write, edit, search or command in these folders asks him first, whatever the mode (0593). On Windows
 # setup adds Windows' own folders, %SystemRoot% and %ProgramFiles% (0594); on Linux ~/.local/share/keyrings, ~/.gnupg,

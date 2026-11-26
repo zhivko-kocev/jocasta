@@ -584,7 +584,7 @@ impl ThreadLifecycle {
 	}
 
 	/// omp's Plan Review is open: herdr reports idle, but the thread waits on him like a blocked one (0405, 0407). Said
-	/// as an urgent line, a toast and a sentence when `announce`; otherwise only counted (HUD, `today`, close question).
+	/// as a toast when `announce` (no boss turn, 0695); otherwise only counted (HUD, `today`, close question).
 	async fn plan_ready(&self, thread: &ThreadRef, plan: &str, announce: bool) -> Result<()> {
 		let ctx = self.link.ctx();
 		let path = thread.with(|t| t.session_path.clone());
@@ -603,10 +603,6 @@ impl ThreadLifecycle {
 		if !announce {
 			return Ok(());
 		}
-		// Dropped from the boss's queue once the plan no longer waits (beta day P8).
-		let (link, held) = (self.link.clone(), thread.clone());
-		let holds: Holds = Arc::new(move || link.ctx().lifecycle.plan_waits(&held));
-		ctx.events.thread(thread, "plan ready, awaiting you", ToastPriority::Urgent, Some(holds)).await;
 		ctx.events.send(ServerMessage::Toast {
 			reason: ToastReason::Blocked,
 			level: ToastLevel::Warning,
@@ -657,22 +653,7 @@ impl ThreadLifecycle {
 		})
 	}
 
-	/// Whether the thread's plan still waits on him: it is open and its session shows the proposal unanswered. For a hold
-	/// that can't wait for the index: while a read has it, the plan counts as waiting.
-	fn plan_waits(&self, thread: &ThreadRef) -> bool {
-		match self.plan_gate(thread) {
-			Waiting::No => false,
-			Waiting::Yes => true,
-			Waiting::Read(path) => self
-				.link
-				.ctx()
-				.sessions
-				.try_lock()
-				.map_or(true, |mut sessions| sessions.read(&path, true).plan_awaiting.is_some()),
-		}
-	}
-
-	/// [`plan_waits`](Self::plan_waits) for a caller that can wait for the index.
+	/// Whether the thread's plan still waits on him: it is open and its session shows the proposal unanswered.
 	async fn plan_waits_now(&self, thread: &ThreadRef) -> bool {
 		match self.plan_gate(thread) {
 			Waiting::No => false,

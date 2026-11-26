@@ -158,6 +158,14 @@ impl World {
 			})
 			.collect()
 	}
+
+	/// How many times the thread's plan was said ready: a toast (since 0695 never a boss line).
+	fn plan_ready_said(&self) -> usize {
+		let said =
+			self.toasts().iter().filter(|(_, text, _)| text == "demo/Readme line — plan ready, awaiting you").count();
+		assert_eq!(self.said("[event] demo/Readme line — plan ready"), 0, "a plan ready never wakes the boss (0695)");
+		said
+	}
 }
 
 fn now() -> i64 {
@@ -565,7 +573,6 @@ async fn a_thread_closed_in_herdr_says_its_worktree_and_branch_stay_and_a_blocke
 async fn b1_a_plan_omp_writes_after_herdrs_idle_event_is_still_plan_ready() {
 	// 0405, 0407: its proposal is in the file only 300 ms after herdr said idle.
 	let w = world(|options| options.plan_settle_ms = Some(600));
-	let plan_ready = "[event] demo/Readme line — plan ready, awaiting you";
 	let file = plan_mode_file(&w.t, &w.repo);
 	w.change_with(Working, Some(&file)).await;
 	let late = file.clone();
@@ -575,7 +582,7 @@ async fn b1_a_plan_omp_writes_after_herdrs_idle_event_is_still_plan_ready() {
 	});
 	w.change(Idle).await;
 	writer.await.unwrap();
-	assert_eq!(w.said(plan_ready), 1);
+	assert_eq!(w.plan_ready_said(), 1);
 	assert_eq!(w.said("[event] demo/Readme line — finished its turn"), 0);
 	assert!(w.awaits("p-1"));
 	assert_eq!(w.shown(), ThreadState::Blocked);
@@ -603,7 +610,7 @@ async fn b1_a_plan_omp_writes_after_herdrs_idle_event_is_still_plan_ready() {
 	// The plan the idle event missed now waits on him, and the boss hears it (`thread_send` asks `awaiting_him`).
 	assert_eq!(w.t.ctx.lifecycle.awaiting_him(&w.thread).await.unwrap(), Some(Awaiting::Plan));
 	w.boss_idle().await;
-	assert_eq!(w.said(plan_ready), 2);
+	assert_eq!(w.plan_ready_said(), 2);
 	assert!(w.awaits("p-1"));
 }
 
@@ -612,7 +619,6 @@ async fn b1_a_plan_found_while_a_state_change_of_its_pane_is_handled_is_said_onc
 	// The end-to-end B1 case under load (2026-11-16): `thread_send` found the plan while the turn's end, past its last
 	// read of the session, was still being handled; nothing said it until the next refresh.
 	let w = world(|options| options.plan_settle_ms = Some(0));
-	let plan_ready = "[event] demo/Readme line — plan ready, awaiting you";
 	let file = plan_mode_file(&w.t, &w.repo);
 	w.change_with(Working, Some(&file)).await;
 	w.change(Idle).await;
@@ -622,39 +628,12 @@ async fn b1_a_plan_found_while_a_state_change_of_its_pane_is_handled_is_said_onc
 	// A state change of its pane is being handled.
 	w.t.ctx.lifecycle.queues().by_pane.insert(w.pane(), VecDeque::new());
 	assert_eq!(w.t.ctx.lifecycle.awaiting_him(&w.thread).await.unwrap(), Some(Awaiting::Plan));
-	assert_eq!(w.said(plan_ready), 0);
+	assert_eq!(w.plan_ready_said(), 0);
 	// That change ends.
 	w.t.ctx.lifecycle.drain(&w.t.ctx, &w.pane()).await;
-	assert_eq!(w.said(plan_ready), 1);
+	assert_eq!(w.plan_ready_said(), 1);
 	assert!(w.awaits("p-1"));
 	assert_eq!(w.shown(), ThreadState::Blocked);
-}
-
-#[tokio::test]
-async fn p8_a_plan_ready_line_still_waiting_for_the_boss_is_dropped_once_he_approved_the_plan() {
-	let w = world(|options| options.plan_settle_ms = Some(100));
-	let file = proposed_plan_file(&w.t, &w.repo);
-	w.change_with(Working, Some(&file)).await;
-	w.change(Idle).await;
-	assert!(w.awaits("p-1"));
-	assert_eq!(w.said("[event] demo/Readme line — plan ready, awaiting you"), 1);
-	// herdr refuses lines into a boss that waits on his answer to its own question, so they wait; the test makes one wait
-	// because the boss works, with the hold `plan_ready` gives its line.
-	assert!(w.t.ctx.lifecycle.plan_waits(&w.thread));
-	let (ctx, thread) = (Arc::clone(&w.t.ctx), w.thread.clone());
-	let holds: Holds = Arc::new(move || ctx.lifecycle.plan_waits(&thread));
-	w.t.ctx.events.tell("[event] demo/Readme line — plan ready, awaiting you", NORMAL, Some(holds)).await;
-	assert_eq!(w.said("[event] demo/Readme line — plan ready, awaiting you"), 1);
-	// He approves in Plan Review: omp leaves plan mode and works.
-	append(&file, &[json!({"type": "mode_change", "id": "m4", "mode": "none"})]);
-	w.change(Working).await;
-	assert!(!w.awaits("p-1"));
-	assert!(!w.t.ctx.lifecycle.plan_waits(&w.thread));
-	w.boss_idle().await;
-	// A later line reaches the boss: any plan line still waiting would have gone with or before it.
-	w.change(Idle).await;
-	assert_eq!(w.said("[event] demo/Readme line — finished its turn"), 1);
-	assert_eq!(w.said("[event] demo/Readme line — plan ready, awaiting you"), 1);
 }
 
 #[tokio::test]
@@ -1118,11 +1097,11 @@ async fn awaiting_him_names_a_question_a_plan_or_nothing_and_finds_a_plan_the_se
 	let file = proposed_plan_file(&w.t, &w.repo);
 	w.t.herdr.set_state("p-1", Idle, file.to_str(), false);
 	assert_eq!(w.t.ctx.lifecycle.awaiting_him(&w.thread).await.unwrap(), Some(Awaiting::Plan));
-	assert_eq!(w.said("[event] demo/Readme line — plan ready, awaiting you"), 1);
+	assert_eq!(w.plan_ready_said(), 1);
 	assert!(w.awaits("p-1"));
 	// Counted from now on, with no second line.
 	assert_eq!(w.t.ctx.lifecycle.awaiting_him(&w.thread).await.unwrap(), Some(Awaiting::Plan));
-	assert_eq!(w.said("[event] demo/Readme line — plan ready, awaiting you"), 1);
+	assert_eq!(w.plan_ready_said(), 1);
 	// A thread blocked by its own state.
 	w.thread.with(|t| t.state = Blocked);
 	assert_eq!(w.t.ctx.lifecycle.awaiting_him(&w.thread).await.unwrap(), Some(Awaiting::Question));

@@ -135,22 +135,15 @@ pub struct SourceSeams {
 	pub jira_site: Option<String>,
 }
 
-/// How a delivered event reaches the boss pane (0299, 0405): urgent at once, normal when the boss is idle.
+/// How the weekly review's result reaches the boss pane (0299, 0405, 0695): urgent at once, normal when the boss is idle.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AlertDetails {
 	pub priority: ToastPriority,
 	pub url: Option<String>,
-	pub reminder: bool,
-	/// The parts of the text that came from outside (SEC-2): PR titles and repos, check and pipeline names, meeting
-	/// titles. The service marks them in the boss's line as information, never his instruction.
+	/// The parts of the text that came from outside (SEC-2): the drift agent's words. The service marks them in the
+	/// boss's line as information, never his instruction.
 	pub outside: Vec<String>,
 }
-
-/// The event kinds whose line after " — " is someone else's words (SEC-2): a blocked thread's question is its omp's
-/// (SE-2), but never Jocasta's own tails.
-const OUTSIDE_KINDS: [&str; 5] = ["review", "pipeline", "meeting-soon", "blocked", "weekly-review"];
-/// A blocked row's tails Jocasta wrote itself: never quoted.
-const OWN_TAILS: [&str; 2] = ["awaiting you", "plan ready"];
 
 /// A thread pane as `today` shows it (0409).
 #[derive(Debug, Clone, PartialEq)]
@@ -790,35 +783,13 @@ impl Day {
 		Ok(())
 	}
 
-	/// A thread's `[event]` line held in quiet hours (0298), kept as a queue row so a restart keeps it too; sent to the
-	/// boss pane once they end (`deliver_held`).
-	pub fn hold(&self, text: &str) -> Result<()> {
-		let at = iso(self.now_ms());
-		self.queue(|queue| {
-			queue.add(&event(
-				&format!("thread:held:{at}|{text}"),
-				crate::shared::events::queue::EventSource::Thread,
-				"held",
-				EventPriority::Normal,
-				text,
-			))
-		})?;
-		Ok(())
-	}
-
-	/// Outside quiet hours: the thread lines held during them go to the boss pane as `[event]` lines, oldest first (0405;
-	/// as 0470's weekly review waits for their end). Only the boss line: their toast showed when they happened, and
-	/// today's activity listed them then.
-	fn deliver_held(&self) -> Result<()> {
+	/// Thread lines are no longer held for the boss in quiet hours (0695); a `held` row an earlier version left open is
+	/// resolved, so it never comes back as a "Still open" repeat.
+	fn drop_held(&self) -> Result<()> {
 		for row in self.queue(|queue| queue.open())? {
-			if row.kind != "held" {
-				continue;
+			if row.kind == "held" {
+				self.queue(|queue| queue.resolve(&row.source_id))?;
 			}
-			self.inner.hooks.alert(
-				&row.text,
-				AlertDetails { priority: ToastPriority::Normal, url: None, reminder: false, outside: Vec::new() },
-			);
-			self.queue(|queue| queue.resolve(&row.source_id))?;
 		}
 		Ok(())
 	}
@@ -832,9 +803,11 @@ impl Day {
 		Ok(row)
 	}
 
-	/// Delivery (0299, 0405, 0407): each delivered event is an `[event]` line for the boss pane and a notification
-	/// (through herdr, 0554); low goes only to `today`. In quiet hours only urgent goes through; the rest waits for the
-	/// morning `today` (0298). The one reminder of an event still open (0303) reads `Still open: <line>` (UX-05).
+	/// Delivery (0299, 0405, 0407): each delivered event is a notification (through herdr, 0554) and a row in `today`;
+	/// low goes only to `today`. In quiet hours only urgent goes through; the rest waits for the morning `today` (0298).
+	/// The one reminder of an event still open (0303) reads `Still open: <line>` (UX-05). Only the weekly review's result
+	/// is also an `[event]` line for the boss pane (0695): reminders, meetings, disk, pipelines, review requests and the
+	/// repeats no longer give the boss a turn.
 	fn deliver(&self, row: &EventRow, reminder: bool) -> Result<()> {
 		if row.priority == EventPriority::Low || (row.priority == EventPriority::Normal && self.quiet()) {
 			return Ok(());
@@ -842,19 +815,11 @@ impl Day {
 		let priority =
 			if row.priority == EventPriority::Urgent { ToastPriority::Urgent } else { ToastPriority::Normal };
 		let text = if reminder { format!("Still open: {}", row.text) } else { row.text.clone() };
-		let dash = row.text.find(" — ");
-		// Poller and calendar lines are `<kind> — <what they said>`, a blocked thread's `<project>/<title> — <its
-		// question>`; reminders are his, disk is Jocasta's.
-		let tail = dash.map_or("", |at| &row.text[at + " — ".len()..]);
-		let outside = if OUTSIDE_KINDS.contains(&row.kind.as_str())
-			&& dash.is_some()
-			&& !(row.kind == "blocked" && OWN_TAILS.contains(&tail.trim()))
-		{
-			vec![tail.to_owned()]
-		} else {
-			Vec::new()
-		};
-		self.inner.hooks.alert(&text, AlertDetails { priority, url: row.url.clone(), reminder, outside });
+		if !reminder && row.kind == "weekly-review" {
+			// `Weekly review: <project> — <what the drift agent said>`: the tail is the agent's words (SEC-2).
+			let outside = row.text.split_once(" — ").map(|(_, tail)| vec![tail.to_owned()]).unwrap_or_default();
+			self.inner.hooks.alert(&text, AlertDetails { priority, url: row.url.clone(), outside });
+		}
 		self.inner.hooks.send(ServerMessage::Toast {
 			reason: ToastReason::Event,
 			level: if priority == ToastPriority::Urgent { ToastLevel::Warning } else { ToastLevel::Info },
@@ -892,8 +857,7 @@ impl Day {
 	}
 
 	/// Every minute: meetings starting in 5 minutes, due reminders, disk space, the one reminder of unresolved events
-	/// (0303), the thread lines held in quiet hours once they end, the day's-end worklog, today's activity, and the open
-	/// `today` view.
+	/// (0303), the day's-end worklog, today's activity, and the open `today` view.
 	pub fn tick(&self) -> Result<()> {
 		// A tick on a new day (the machine may have slept through the day's end): yesterday's worklog, if missing.
 		let day = local_day(self.now_ms());
@@ -919,14 +883,12 @@ impl Day {
 			self.raise(&reminder)?;
 		}
 		self.guard("disk", || self.check_disk());
+		self.guard("held lines", || self.drop_held());
 		for row in self.queue(|queue| queue.due_reminders(REMINDER_AFTER_MS))? {
 			if row.priority == EventPriority::Normal && quiet {
 				continue;
 			}
 			self.deliver(&row, true)?;
-		}
-		if !quiet {
-			self.guard("held lines", || self.deliver_held());
 		}
 		self.end_of_day(quiet);
 		self.guard("weekly review", || self.weekly_reviews(quiet));

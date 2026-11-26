@@ -305,7 +305,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0296](0296-speak-tool.md) | A speak tool | product | decided | 7/7.4 | 2026-10-08 | 0552, 0583 |
 | [0297](0297-phase-8-status.md) | Phase 8 slice status | product | decided | 8/opening | 2026-10-08 |  |
 | [0298](0298-event-queue.md) | Event queue and quiet hours | product | decided | 8/8.2 | 2026-10-08 |  |
-| [0299](0299-delivery.md) | Delivery | product | decided | 8/8.3 | 2026-10-08 |  |
+| [0299](0299-delivery.md) | Delivery | product | decided | 8/8.3 | 2026-10-08 | 0695 |
 | [0300](0300-today.md) | The today view | product | decided | 8/8.4 | 2026-10-08 |  |
 | [0301](0301-pollers.md) | Pollers | product | decided | 8/8.1 | 2026-10-08 | 0430 |
 | [0302](0302-worklog-and-inbox.md) | Worklog and inbox | product | decided | 8/8.5 | 2026-10-08 |  |
@@ -411,7 +411,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0402](0402-sidebar-rows.md) | Sidebar rows: state, model, cost | product | decided | program | 2026-10-13 |  |
 | [0403](0403-hud-in-tab-bar.md) | The HUD in herdr's tab bar | product | decided | program | 2026-10-13 | 0433, 0437, 0554, 0581 |
 | [0404](0404-boss-pane-pinned.md) | The boss pane: a pinned first workspace | product | decided | program | 2026-10-13 |  |
-| [0405](0405-events-to-boss-and-voice.md) | Events reach the boss and the voice | product | decided | program | 2026-10-13 | 0413, 0583 |
+| [0405](0405-events-to-boss-and-voice.md) | Events reach the boss and the voice | product | decided | program | 2026-10-13 | 0413, 0583, 0695 |
 | [0406](0406-review-beside-half-width.md) | hunk opens beside the thread | product | decided | program | 2026-10-13 |  |
 | [0407](0407-notifications-from-one-place.md) | Notifications from one place | product | decided | program | 2026-10-13 | 0519, 0552, 0554, 0699 |
 | [0408](0408-alt-digit-keys.md) | Keys: Alt digits for workspaces | product | decided | program | 2026-10-13 | 0554 |
@@ -448,7 +448,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0439](0439-dashboard-column-follows-mode.md) | The dashboard's column follows the window's mode | product | decided | program | 2026-10-15 | 0548, 0557 |
 | [0440](0440-polish-small-calls.md) | Polish round: small calls | product | decided | program | 2026-10-15 | 0466, 0467 |
 | [0441](0441-live-checks-own-herdr-session.md) | Live checks in their own herdr session | process | decided | program | 2026-10-15 |  |
-| [0442](0442-news-hacker-news-lwn-gaming.md) | News: Hacker News and LWN in full, gaming 10 | product | decided | program | 2026-10-15 | 0555, 0581, 0668 |
+| [0442](0442-news-hacker-news-lwn-gaming.md) | News: Hacker News and LWN in full, gaming 10 | product | decided | program | 2026-10-15 | 0555, 0581, 0668, 0695 |
 | [0443](0443-machine-services-every-10s.md) | Machine and services refresh every 10 s | product | decided | program | 2026-10-15 | 0555 |
 | [0444](0444-graphiti-on-demand-on-dashboard.md) | Graphiti on the dashboard says it runs on demand | product | decided | program | 2026-10-15 |  |
 | [0445](0445-thread-worktrees-beside-project.md) | Thread worktrees beside the project | product | decided | program | 2026-10-15 | 0455, 0457, 0581 |
@@ -476,7 +476,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0467](0467-setup-refresh-file.md) | `jarvis setup --refresh <file>` | product | decided | program | 2026-10-23 | 0584 |
 | [0468](0468-jarvis-uninstall.md) | `jarvis uninstall` | product | decided | program | 2026-10-23 | 0579, 0584, 0595, 0607 |
 | [0469](0469-four-test-rules.md) | Four test rules for every thread | product | decided | program | 2026-10-23 | 0577 |
-| [0470](0470-weekly-big-picture-review.md) | A weekly big-picture review per active project | product | decided | program | 2026-10-23 | 0577, 0583, 0616, 0619 |
+| [0470](0470-weekly-big-picture-review.md) | A weekly big-picture review per active project | product | decided | program | 2026-10-23 | 0577, 0583, 0616, 0619, 0695 |
 | [0471](0471-offer-lesson-after-hand-fix.md) | Jarvis offers to save a lesson after a hand-fix or a rejection | product | decided | program | 2026-10-23 | 0583 |
 | [0472](0472-jarvis-diagnose.md) | `jarvis diagnose` | product | decided | program | 2026-10-23 | 0583, 0614 |
 | [0473](0473-mise-in-project-threads.md) | mise in project threads | product | decided | program | 2026-10-23 | 0476, 0477, 0596 |
@@ -621,10 +621,10 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0613](0613-pushes-to-trunk-ask-once-per-repo.md) | A push to main, master or develop asks him once per repo | product, security | v1 | program | 2026-11-14 |  |
 | [0614](0614-quality-and-security-tools.md) | Quality and security tools: what enters the flow, what stays on demand | product, process | v1 | program | 2026-11-14 | 0624, 0627, 0639, 0645, 0648 |
 | [0615](0615-whiteboard-0-5-2-with-animations.md) | Whiteboard moves to v0.5.2 before the benchmarks, with animations on | product | v1 | program | 2026-11-14 | 0679 |
-| [0616](0616-tuning-program-small-calls-2.md) | Tuning program: four more small calls | product, process | v1 | program | 2026-11-14 |  |
+| [0616](0616-tuning-program-small-calls-2.md) | Tuning program: four more small calls | product, process | v1 | program | 2026-11-14 | 0695 |
 | [0617](0617-project-pane-check-through-omps-turn-end-event.md) | A failed check reaches a project pane's agent through omp's turn-end event | product | v1 | program | 2026-11-15 | 0675 |
 | [0618](0618-settings-decided-by-trials-builds-wait.md) | Settings are decided by trials; the builds wait until everything is settled | process | v1 | program | 2026-11-15 |  |
-| [0619](0619-omp-settings-decided-by-the-trials.md) | The omp settings the trials decided | product, benchmark | v1 | program | 2026-11-15 | 0651 |
+| [0619](0619-omp-settings-decided-by-the-trials.md) | The omp settings the trials decided | product, benchmark | v1 | program | 2026-11-15 | 0651, 0695 |
 | [0620](0620-advisor-stays-follow-up-study-gains-two-arms.md) | The advisor stays; the follow-up study gains an advisor arm and a thinking arm | product, benchmark | v1 | program | 2026-11-15 |  |
 | [0621](0621-finished-threads-record-their-close-and-commit.md) | A finished thread records when it closed and its commit; the weekly review gets production numbers | product | v1 | program | 2026-11-15 |  |
 | [0622](0622-tuning-program-small-calls-3.md) | Tuning program: two small calls from the factory view | process | v1 | program | 2026-11-15 |  |
@@ -697,6 +697,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0689](0689-sleeping-panes-in-process-and-footprint-count.md) | Sleeping panes drawn by the shell; the footprint counts Jocasta's own processes | product | v1 | lightweight program | 2026-11-25 |  |
 | [0690](0690-omp-19-2-0-pinned.md) | omp 19.2.0 is the pinned omp | product, benchmark | v1 | lightweight program | 2026-11-26 |  |
 | [0692](0692-unix-install-folder.md) | Unix install folder | product | v1 | ultron 0.3 iteration, J1 | 2026-11-26 |  |
+| [0695](0695-light-defaults.md) | Light defaults | product | v1 | ultron 0.3 iteration, J2 | 2026-11-26 |  |
 | [0699](0699-linux-notifications.md) | Linux notifications | product | v1 | ultron 0.3 iteration, J1 | 2026-11-26 |  |
 | [0701](0701-linux-guard-shapes-and-fenced-folders.md) | Linux guard shapes and fenced folders | product | v1 | ultron 0.3 iteration, J1 | 2026-11-26 |  |
 | [0702](0702-unix-runtime.md) | Unix runtime | product | v1 | ultron 0.3 iteration, J1 | 2026-11-26 |  |

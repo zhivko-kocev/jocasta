@@ -179,9 +179,9 @@ impl Events {
 	}
 
 	/// A thread's change as an `[event]` line for the boss (0405), in the one format (UX-21): `[event] <project>/<title> —
-	/// <what>`. In quiet hours only urgent ones go (0298); a normal one is held and goes when they end (0470's way). A
-	/// line that waits for the boss and has `holds` goes only if it still holds then (beta day P8: a plan approved
-	/// meanwhile isn't said as waiting).
+	/// <what>`. In quiet hours only urgent ones go (0298); a normal one goes only into today's activity, and nothing is
+	/// released when they end (0695). A line that waits for the boss and has `holds` goes only if it still holds then
+	/// (beta day P8: a plan approved meanwhile isn't said as waiting).
 	pub async fn thread(&self, thread: &ThreadRef, what: &str, priority: ToastPriority, holds: Option<Holds>) {
 		let ctx = self.link.ctx();
 		let said = format!("{} — {what}", thread.with(|thread| subject(thread)));
@@ -189,9 +189,6 @@ impl Events {
 		if priority == ToastPriority::Normal {
 			ctx.day.record_event(&said);
 			if ctx.day.quiet() {
-				if let Err(error) = ctx.day.hold(&said) {
-					ctx.warn(error);
-				}
 				return;
 			}
 		}

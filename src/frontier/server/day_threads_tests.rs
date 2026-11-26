@@ -178,33 +178,28 @@ async fn a_thread_merged_or_sent_as_a_pr_stays_in_landed_since_yesterday_saying_
 }
 
 #[tokio::test]
-async fn thread_lines_held_in_quiet_hours_wait_in_the_queue_across_a_restart_and_go_to_the_boss_oldest_first_once_they_end()
- {
+async fn a_held_line_an_earlier_version_left_is_resolved_at_the_next_tick_and_never_reaches_the_boss_0695() {
 	let _j = temp_jocasta();
-	write_settings(r#"{"service":{"quietHours":"22:00-08:00"}}"#);
-	let night = Stand::new(at(2026, 10, 24, 23, 0));
-	night
-		.day
-		.hold("client-a/Add farewell — he committed by hand on its branch (1 commit) · offer once to save a lesson")
+	let s = Stand::new(at(2026, 10, 25, 9, 0));
+	let source_id = "thread:held:2026-10-24T23:00:00Z|demo/Add divide — finished its turn";
+	s.day
+		.queue(|q| {
+			q.add(&event(
+				source_id,
+				EventSource::Thread,
+				"held",
+				EventPriority::Normal,
+				"demo/Add divide — finished its turn",
+			))
+		})
 		.unwrap();
-	night.set(at(2026, 10, 24, 23, 30));
-	night.day.hold("demo/Add divide — finished its turn").unwrap();
-	night.day.tick().unwrap();
-	assert!(night.alerts().is_empty());
-	// Restarted before morning: the queue kept them.
-	let morning = Stand::new(at(2026, 10, 25, 7, 59));
-	morning.day.tick().unwrap();
-	assert!(morning.alerts().is_empty());
-	morning.set(at(2026, 10, 25, 8, 0));
-	morning.day.tick().unwrap();
-	morning.day.tick().unwrap();
-	assert_eq!(
-		morning.alerts(),
-		[
-			"client-a/Add farewell — he committed by hand on its branch (1 commit) · offer once to save a lesson",
-			"demo/Add divide — finished its turn",
-		]
-	);
+	s.day.tick().unwrap();
+	assert!(s.day.queue(|q| q.by_source(source_id)).unwrap().unwrap().resolved_at.is_some());
+	// Not even as the one "Still open" repeat.
+	s.add(60 * 60_000);
+	s.day.tick().unwrap();
+	assert!(s.alerts().is_empty());
+	assert!(toast_texts(&s).is_empty());
 }
 
 /// A stand whose `omp usage --json` answers what the returned cell holds.
@@ -321,12 +316,16 @@ async fn leftover_worktrees_reach_the_dashboard_as_the_service_lists_them() {
 }
 
 #[tokio::test]
-async fn the_weekly_review_runs_from_monday_10_outside_quiet_hours_once_per_project_and_week_its_result_is_an_event() {
+async fn the_weekly_review_runs_from_monday_10_outside_quiet_hours_once_per_listed_project_and_week_its_result_is_an_event()
+ {
 	let _j = temp_jocasta();
+	// Only the projects `weekly.projects` names get the review (0695), by name in any case.
+	write_settings(r#"{"weekly":{"projects":["acme-api","Client-A"]}}"#);
 	let p1 = project("p1", "acme-api");
 	let p2 = project("p2", "client-a");
+	let p3 = project("p3", "demo");
 	// Monday 26 Oct 2026, 09:30.
-	let s = Stand::in_projects(at(2026, 10, 26, 9, 30), vec![p1.clone(), p2.clone()]);
+	let s = Stand::in_projects(at(2026, 10, 26, 9, 30), vec![p1.clone(), p2.clone(), p3]);
 	let review: Review = Arc::new(|p| (p.id == "p1").then(|| "Two modules now parse dates their own way.".to_owned()));
 	*s.shared.review.lock().unwrap() = Arc::clone(&review);
 	s.day.tick().unwrap();
@@ -336,6 +335,8 @@ async fn the_weekly_review_runs_from_monday_10_outside_quiet_hours_once_per_proj
 	settle().await;
 	assert_eq!(*s.shared.reviews.lock().unwrap(), ["acme-api", "client-a"]);
 	assert_eq!(s.alerts(), ["Weekly review: acme-api — Two modules now parse dates their own way."]);
+	// The drift agent's words are outside text for the boss (SEC-2).
+	assert_eq!(s.shared.alerts.lock().unwrap()[0].1.outside, ["Two modules now parse dates their own way."]);
 	// Delivered once: never reminded of, and not run again this week, even by a new Day (a restart).
 	s.set(at(2026, 10, 27, 11, 0));
 	s.day.tick().unwrap();

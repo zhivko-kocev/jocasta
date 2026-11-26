@@ -82,15 +82,6 @@ const DEFAULT_GMAIL_MINUTES: f64 = 5.0;
 const DEFAULT_JIRA_MINUTES: f64 = 10.0;
 const DEFAULT_AZURE_PORTAL_MINUTES: f64 = 15.0;
 
-/// 0442: every Hacker News and LWN link, the newest 10 gaming headlines.
-fn default_feeds() -> Vec<NewsFeed> {
-	vec![
-		NewsFeed::Source { source: "hn".to_owned(), limit: None },
-		NewsFeed::Source { source: "lwn".to_owned(), limit: None },
-		NewsFeed::Topic { topic: "gaming".to_owned(), limit: Some(10) },
-	]
-}
-
 /// One poller's settings, with the key it reads (`pollers.<NAME>`).
 pub trait PollerSettings: Sized {
 	/// The poller's key under `pollers`.
@@ -193,10 +184,12 @@ impl PollerSettings for NewsSettings {
 
 	fn from_pollers(pollers: &Map<String, Value>) -> Self {
 		let own = group(pollers, Self::NAME);
-		let feeds = match own.and_then(|map| map.get("feeds")).and_then(Value::as_array) {
-			Some(feeds) => feeds.iter().filter_map(feed_of).collect(),
-			None => default_feeds(),
-		};
+		// No feeds listed, no news (0695): there are no default feeds.
+		let feeds = own
+			.and_then(|map| map.get("feeds"))
+			.and_then(Value::as_array)
+			.map(|feeds| feeds.iter().filter_map(feed_of).collect())
+			.unwrap_or_default();
 		Self { feeds, every_minutes: minutes(own, DEFAULT_NEWS_MINUTES) }
 	}
 }
@@ -232,11 +225,11 @@ mod tests {
 	}
 
 	fn news_defaults() -> NewsSettings {
-		NewsSettings { feeds: default_feeds(), every_minutes: 15.0 }
+		NewsSettings { feeds: Vec::new(), every_minutes: 15.0 }
 	}
 
 	#[test]
-	fn poller_settings_defaults_of_0301_and_0442_a_malformed_value_names_its_key_and_turns_off_only_its_poller() {
+	fn poller_settings_defaults_of_0301_0442_and_0695_a_malformed_value_names_its_key_and_turns_off_only_its_poller() {
 		let empty = settings_of(json!({}));
 		assert_eq!(read_poller::<GithubSettings>(&empty).unwrap(), GithubSettings { every_minutes: 2.0 });
 		assert_eq!(
@@ -245,10 +238,6 @@ mod tests {
 		);
 		assert_eq!(read_poller::<CalendarSettings>(&empty).unwrap(), CalendarSettings { every_minutes: 10.0 });
 		assert_eq!(read_poller::<NewsSettings>(&empty).unwrap(), news_defaults());
-		assert_eq!(
-			serde_json::to_value(&news_defaults().feeds).unwrap(),
-			json!([{ "source": "hn" }, { "source": "lwn" }, { "topic": "gaming", "limit": 10 }])
-		);
 
 		let set = settings_of(json!({ "pollers": {
 			"azureDevOps": { "orgs": ["https://dev.azure.com/example-org"] },

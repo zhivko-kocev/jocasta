@@ -22,6 +22,8 @@ async fn a_bad_pollers_github_value_turns_off_github_only_azure_devops_the_calen
 			"    everyMinutes: 0",
 			"  azureDevOps:",
 			"    orgs: [https://dev.azure.com/example-org]",
+			"  news:",
+			"    feeds: [{source: hn}]",
 			"",
 		]
 		.join("\n"),

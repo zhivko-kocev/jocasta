@@ -74,6 +74,12 @@ fn said(server: &TestServer, line: &str) -> usize {
 	boss_lines(server).iter().filter(|l| l.starts_with(line)).count()
 }
 
+/// How many times the thread's plan was said ready: a notification, never a boss line (0695).
+fn plan_ready_noted(server: &TestServer) -> usize {
+	let note = json!({ "title": "demo/Readme line", "body": "plan ready, awaiting you", "sound": "request" });
+	server.herdr.of("notify").iter().filter(|args| args[0] == note).count()
+}
+
 fn count_prompts(herdr: &FakeSurface, pane_id: &str, text: &str) -> usize {
 	herdr.of("prompt").into_iter().filter(|args| args[0] == json!(pane_id) && args[1] == json!(text)).count()
 }
@@ -102,7 +108,7 @@ async fn b1_a_plan_omp_writes_after_herdrs_idle_event_is_still_plan_ready_and_th
 		server.herdr.set_state(&boss_pane(&server.herdr).unwrap(), AgentState::Idle, None, true);
 		let started = start_thread(&server, ThreadOptions::default()).await;
 		let (pane_id, path) = (started.pane_id, started.path);
-		let plan_ready = "[event] demo/Readme line — plan ready, awaiting you";
+		let plan_ready = "[event] demo/Readme line — plan ready";
 		let finished = "[event] demo/Readme line — finished its turn";
 
 		// The turn was read when it started; its proposal is in the file only 300 ms after herdr said idle.
@@ -112,7 +118,8 @@ async fn b1_a_plan_omp_writes_after_herdrs_idle_event_is_still_plan_ready_and_th
 		// The race itself: the proposal is written on the real clock after the idle event, as omp's writer did.
 		tokio::time::sleep(Duration::from_millis(300)).await;
 		append_proposal(&file);
-		until(|| said(&server, plan_ready) == 1).await;
+		until(|| plan_ready_noted(&server) == 1).await;
+		assert_eq!(said(&server, plan_ready), 0);
 		assert_eq!(said(&server, finished), 0);
 		assert_eq!(busy(&server), Busy { working: 0, awaiting: 1 });
 
@@ -146,9 +153,10 @@ async fn b1_a_plan_omp_writes_after_herdrs_idle_event_is_still_plan_ready_and_th
 		// The plan the idle event missed now waits on him, and the boss hears it.
 		until(|| {
 			boss_idle(&server);
-			said(&server, plan_ready) == 2
+			plan_ready_noted(&server) == 2
 		})
 		.await;
+		assert_eq!(said(&server, plan_ready), 0);
 		assert_eq!(busy(&server), Busy { working: 0, awaiting: 1 });
 	})
 	.await;

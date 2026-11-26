@@ -550,8 +550,8 @@ async fn e2e_0471_a_commit_by_hand_on_an_idle_thread_s_branch_and_a_plan_he_sent
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn e2e_0298_a_hand_commit_in_quiet_hours_is_held_not_lost_the_boss_gets_its_line_with_the_lesson_offer_once_they_end_0405_0470()
- {
+async fn e2e_0298_0695_a_hand_commit_in_quiet_hours_is_in_todays_activity_and_isnt_released_to_the_boss_when_they_end()
+{
 	let j = temp_jocasta();
 	demo_project(j.root(), "demo").await;
 	write_settings(&config_dir(), &json!({ "service": { "quietHours": "22:00-08:00" } }));
@@ -581,15 +581,15 @@ async fn e2e_0298_a_hand_commit_in_quiet_hours_is_held_not_lost_the_boss_gets_it
 		server.herdr.set_state(&boss, AgentState::Working, None, true);
 		server.herdr.set_state(&boss, AgentState::Idle, None, true);
 		assert_eq!(to_boss(what), 0);
-		// Quiet hours over: the next tick sends what waited, once.
+		// Quiet hours over: nothing waited for the boss (0695); today's activity had it.
 		at.store(local_ms(2026, 10, 25, 8, 1), Ordering::SeqCst);
 		day.tick().unwrap();
-		until(|| to_boss(&format!("[event] {what}")) == 1).await;
 		day.tick().unwrap();
 		server.herdr.set_state(&boss, AgentState::Working, None, true);
 		server.herdr.set_state(&boss, AgentState::Idle, None, true);
 		server.service.refresh().await;
-		assert_eq!(to_boss(what), 1);
+		server.service.context().events.settled().await;
+		assert_eq!(to_boss(what), 0);
 	})
 	.await;
 }

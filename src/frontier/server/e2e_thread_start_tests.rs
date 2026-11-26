@@ -471,12 +471,12 @@ async fn a_plan_waiting_in_omps_plan_review_herdr_says_idle_waits_on_him_like_a_
 		let file_text = path_text(&file);
 		server.herdr.set_state(&pane, AgentState::Working, Some(&file_text), true);
 		server.herdr.set_state(&pane, AgentState::Idle, Some(&file_text), true);
-		until(|| !prompts_to(&server, &boss).is_empty()).await;
-		assert_eq!(prompts_to(&server, &boss), ["[event] demo/Readme line — plan ready, awaiting you"]);
 		page.wait_for(
 			|m| matches!(m, ServerMessage::Toast { reason: ToastReason::Blocked, pane_id: Some(id), .. } if *id == pane),
 		)
 		.await;
+		// A plan ready is no boss line (0695).
+		assert!(prompts_to(&server, &boss).is_empty());
 		assert_eq!(server.service.hud(None).unwrap().blocked, 1);
 		assert_eq!(status(&server).await, "demo/Readme line [feature/readme-line] plan ready\n  spend $0.25");
 		assert_eq!(

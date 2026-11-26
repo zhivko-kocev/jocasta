@@ -97,7 +97,6 @@ async fn an_alert_flattens_whitespace_quotes_the_outside_parts_and_adds_only_a_p
 	let details = |priority, url: Option<&str>, outside: &[&str]| AlertDetails {
 		priority,
 		url: url.map(str::to_owned),
-		reminder: false,
 		outside: outside.iter().map(|part| (*part).to_owned()).collect(),
 	};
 	t.ctx
