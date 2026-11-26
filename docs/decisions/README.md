@@ -596,7 +596,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0587](0587-bench-refuses-omp-folder-mcp-servers.md) | The task benchmark refuses an omp folder that gives its omp arms MCP servers | benchmark | v1 | program | 2026-11-09 | 0652 |
 | [0588](0588-benchmark-scripts-run-once-first.md) | Each benchmark script runs once before the full runs | benchmark | v1 | program | 2026-11-09 |  |
 | [0589](0589-omp-18-18-6.md) | Jocasta moves to omp 18.18.6 | product, benchmark | v1 | program | 2026-11-10 | 0600 |
-| [0590](0590-models-per-role-after-fable-5-2.md) | Models per role after Fable 5.2: the boss on Fable, heavy threads on his slow role | product, benchmark | v1 | program | 2026-11-10 | 0655 |
+| [0590](0590-models-per-role-after-fable-5-2.md) | Models per role after Fable 5.2: the boss on Fable, heavy threads on his slow role | product, benchmark | v1 | program | 2026-11-10 | 0655, 0696 |
 | [0591](0591-subagents-on-sonnet-memory-and-graph-unchanged.md) | Subagents on Sonnet 5.5; memory notes and the graph unchanged | product | v1 | program | 2026-11-10 | 0603 |
 | [0592](0592-compaction-handoff-first.md) | Compaction: handoff first, shake and the image method last | product | v1 | program | 2026-11-10 | 0677 |
 | [0593](0593-his-settings-pass.md) | His /settings pass: the values in his config and in Jocasta's | product | v1 | program | 2026-11-10 | 0616, 0619 |
@@ -655,8 +655,8 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0647](0647-deny-ignores-chrono-unmaintained.md) | cargo-deny ignores chrono's two "unmaintained" notices by ID | process | v1 | program | 2026-11-18 |  |
 | [0648](0648-audit-ignores-picomatch-redos.md) | CI's `bun audit` ignores picomatch's ReDoS advisory by ID | process | v1 | program | 2026-11-18 |  |
 | [0649](0649-herdr-fork-one-binary-one-server.md) | The herdr fork: one binary, one server | product | v1 | fork build | 2026-11-18 | 0659, 0661, 0665, 0666, 0683 |
-| [0650](0650-omp-snapshot-replaces-his-omp-files.md) | The omp snapshot: setup writes Jocasta's omp files over his | product | v1 | fork build | 2026-11-18 |  |
-| [0651](0651-snapshot-settings-from-trials-on-omp-18-22-2.md) | The snapshot's settings come from trials on omp 18.22.2 | product, benchmark | v1 | fork build | 2026-11-19 | 0653 |
+| [0650](0650-omp-snapshot-replaces-his-omp-files.md) | The omp snapshot: setup writes Jocasta's omp files over his | product | v1 | fork build | 2026-11-18 | 0696 |
+| [0651](0651-snapshot-settings-from-trials-on-omp-18-22-2.md) | The snapshot's settings come from trials on omp 18.22.2 | product, benchmark | v1 | fork build | 2026-11-19 | 0653, 0696 |
 | [0652](0652-benchmarks-on-his-pc-vm-removed.md) | The benchmarks run on his PC on his own omp; the VM is removed | process | v1 | fork build | 2026-11-18 | 0657 |
 | [0653](0653-omp-19-1-0-pinned.md) | omp 19.1.0 is the pinned omp | product, benchmark | v1 | fork build | 2026-11-21 | 0663 |
 | [0654](0654-fork-build-review.md) | His review of the fork build: what stays as built | process, product | v1 | fork build | 2026-11-23 |  |
@@ -698,6 +698,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0690](0690-omp-19-2-0-pinned.md) | omp 19.2.0 is the pinned omp | product, benchmark | v1 | lightweight program | 2026-11-26 |  |
 | [0692](0692-unix-install-folder.md) | Unix install folder | product | v1 | ultron 0.3 iteration, J1 | 2026-11-26 |  |
 | [0695](0695-light-defaults.md) | Light defaults | product | v1 | ultron 0.3 iteration, J2 | 2026-11-26 |  |
+| [0696](0696-snapshot-local-commit-model-no-sleep-inhibitor-on-linux.md) | Snapshot: local commit model, no sleep inhibitor on Linux | product | v1 | ultron 0.3 iteration, J3 | 2026-11-26 |  |
 | [0699](0699-linux-notifications.md) | Linux notifications | product | v1 | ultron 0.3 iteration, J1 | 2026-11-26 |  |
 | [0701](0701-linux-guard-shapes-and-fenced-folders.md) | Linux guard shapes and fenced folders | product | v1 | ultron 0.3 iteration, J1 | 2026-11-26 |  |
 | [0702](0702-unix-runtime.md) | Unix runtime | product | v1 | ultron 0.3 iteration, J1 | 2026-11-26 |  |

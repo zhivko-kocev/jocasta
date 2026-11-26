@@ -110,6 +110,7 @@ impl Harness {
 			assets_dir: assets(),
 			terminal_fragments_dir: Some(base.join("Fragments")),
 			system_folders: None,
+			sleep_prevention_off: false,
 			mise_config_dir: base.join("mise"),
 			jocasta_command: vec![PathBuf::from("C:\\Jocasta\\jocasta.exe")],
 		};
@@ -695,6 +696,8 @@ fn the_shipped_config_yml_carries_the_decided_values_that_his_own_file_held_wher
 	assert_eq!(chains["dictation"], json!([]));
 	assert_eq!(chains["speech"], json!([]));
 	assert_eq!(config["modelRoles"]["default"], "anthropic/claude-opus-5-5:medium");
+	// Commit messages on the local model first, Haiku without it (0696).
+	assert_eq!(config["modelRoles"]["commit"], "ollama/qwen3:4b, anthropic/claude-haiku-5-5:low");
 }
 
 #[tokio::test]
@@ -720,6 +723,17 @@ async fn on_windows_the_shipped_fence_also_names_windows_own_folders_and_a_secon
 	let mut expected = fence(&shipped);
 	expected.extend([json!("C:\\WINDOWS"), json!("D:\\Program Files")]);
 	assert_eq!(fence(&read(&h.omp_config())), expected);
+	assert_eq!(h.setup(Some("y")).await.text, IN_PLACE);
+	assert!(yaml(&read(&h.omp_config())).get("power").is_none());
+}
+
+#[tokio::test]
+async fn on_linux_setup_writes_power_sleep_prevention_off_and_a_second_run_has_nothing_to_do_0696() {
+	let mut h = Harness::new();
+	h.paths.sleep_prevention_off = true;
+	let first = h.setup(Some("y")).await;
+	assert!(first.text.contains("sleepPrevention"), "{}", first.text);
+	assert_eq!(yaml(&read(&h.omp_config()))["power"], json!({ "sleepPrevention": "off" }));
 	assert_eq!(h.setup(Some("y")).await.text, IN_PLACE);
 }
 
@@ -1094,10 +1108,16 @@ async fn an_install_with_the_old_graph_while_docker_isnt_running_asks_nothing_mo
 	assert!(stopped.text.contains(LATER_COMMAND));
 }
 
-/// On Linux the fence also names the keyring, GnuPG, gh's token, `/etc` and `/boot` (0701); `/usr` stays out.
-#[cfg(target_os = "linux")]
+/// On Linux the fence also names the keyring, GnuPG, gh's token, `/etc` and `/boot` (0701); `/usr` stays out. omp's
+/// sleep inhibitor is off there (0696), and only there.
 #[test]
-fn on_linux_the_fence_also_names_the_keyring_gnupg_gh_etc_and_boot_0701() {
+fn the_os_values_linux_fences_five_folders_and_turns_the_sleep_inhibitor_off_0701_0696() {
 	let paths = default_setup_paths(Path::new(REPO), Vec::new());
-	assert_eq!(paths.system_folders.unwrap(), ["~/.local/share/keyrings", "~/.gnupg", "~/.config/gh", "/etc", "/boot"]);
+	assert_eq!(paths.sleep_prevention_off, cfg!(target_os = "linux"));
+	if cfg!(target_os = "linux") {
+		assert_eq!(
+			paths.system_folders.unwrap(),
+			["~/.local/share/keyrings", "~/.gnupg", "~/.config/gh", "/etc", "/boot"]
+		);
+	}
 }

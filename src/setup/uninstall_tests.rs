@@ -131,6 +131,7 @@ impl Machine {
 			assets_dir: Path::new(crate::shared::install::REPO).join("config"),
 			terminal_fragments_dir: Some(root.join("Fragments")),
 			system_folders: None,
+			sleep_prevention_off: false,
 			mise_config_dir: root.join("mise"),
 			jocasta_command: vec![PathBuf::from("C:\\Jocasta\\jocasta.exe")],
 		};

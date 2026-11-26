@@ -66,6 +66,9 @@ pub struct SetupPaths {
 	/// The OS's own folders omp fences besides the shipped ones: `%SystemRoot%` and `%ProgramFiles%` on Windows (0594),
 	/// [`LINUX_FENCE`] on Linux (0701); `None` on macOS.
 	pub system_folders: Option<Vec<String>>,
+	/// Whether the snapshot's `config.yml` sets `power.sleepPrevention: "off"`: on Linux, where omp's idle inhibitor
+	/// keeps swayidle's timeouts off while Jocasta runs (0696).
+	pub sleep_prevention_off: bool,
 	/// mise's global config dir, `~/.config/mise` (`MISE_CONFIG_DIR` overrides it, as in mise).
 	pub mise_config_dir: PathBuf,
 	/// How omp starts this Jocasta: `[jocasta.exe]`; in a source run the running executable.
@@ -255,6 +258,7 @@ pub fn default_setup_paths(assets_dir: &Path, jocasta_command: Vec<PathBuf>) -> 
 		} else {
 			None
 		},
+		sleep_prevention_off: cfg!(target_os = "linux"),
 		mise_config_dir: mise_config_dir(),
 		jocasta_command,
 	}

@@ -12,7 +12,7 @@ use super::migrations::{PlanContext, asset};
 use super::steps::{SetupChange, Step, read_text, shown, unchanged};
 use crate::setup::diff::line_diff;
 use crate::setup::markers::{Marker, Undo, fingerprint, markers_dir};
-use crate::setup::omp_settings::omp_settings_text;
+use crate::setup::omp_settings::{omp_settings_text, with_sleep_prevention_off};
 use crate::shared::errors::Result;
 use crate::shared::fsx::write_atomically;
 
@@ -29,8 +29,10 @@ fn snapshot_files(paths: &SetupPaths) -> Result<Vec<SnapshotFile>> {
 	let shipped = |relative: &str| asset(paths, &["omp", relative]);
 	let file =
 		|relative: &str, text: String| SnapshotFile { relative: relative.to_owned(), text, only_when_missing: false };
+	let config = omp_settings_text(&shipped("config.yml")?, paths.system_folders.as_deref())?;
+	let config = if paths.sleep_prevention_off { with_sleep_prevention_off(config) } else { config };
 	Ok(vec![
-		file("config.yml", omp_settings_text(&shipped("config.yml")?, paths.system_folders.as_deref())?),
+		file("config.yml", config),
 		file("keybindings.yml", shipped("keybindings.yml")?),
 		file("lsp.json", shipped("lsp.json")?),
 		file("WATCHDOG.md", shipped("WATCHDOG.md")?),

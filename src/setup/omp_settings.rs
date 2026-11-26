@@ -13,6 +13,25 @@ use crate::shared::errors::{Error, Result};
 static FENCE_LINE: LazyLock<Regex> =
 	LazyLock::new(|| Regex::new(r"(?mR)^(\s*restrictedFolders: \[)([^\r\n]*)\]$").expect("a valid pattern"));
 
+/// The settings' text with omp's sleep inhibitor turned off by a `power` block at the end, in the text's own line
+/// endings (Linux, 0696: omp's idle inhibitor keeps swayidle's timeouts off while a turn runs).
+pub fn with_sleep_prevention_off(mut text: String) -> String {
+	let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
+	if !text.is_empty() && !text.ends_with('\n') {
+		text.push_str(newline);
+	}
+	let lines = [
+		"# omp's idle inhibitor keeps swayidle's timeouts off while a turn runs: off on Linux (0696).",
+		"power:",
+		"  sleepPrevention: \"off\"",
+	];
+	for line in lines {
+		text.push_str(line);
+		text.push_str(newline);
+	}
+	text
+}
+
 /// The shipped settings' text with the OS's own folders added to the fence (Windows 0594, Linux 0701);
 /// `system_folders` is `None` on macOS, where the text is the shipped file's.
 pub fn omp_settings_text(shipped: &str, system_folders: Option<&[String]>) -> Result<String> {
@@ -82,6 +101,24 @@ mod tests {
 		);
 		let refused = omp_settings_text("tools: {}\n", Some(&["C:\\W".to_owned()])).unwrap_err();
 		assert!(refused.to_string().contains("no one-line tools.restrictedFolders list"));
+	}
+
+	#[test]
+	fn on_linux_the_snapshot_turns_omps_sleep_inhibitor_off_with_a_power_block_at_the_end_0696() {
+		let text = with_sleep_prevention_off("tools:\n  restrictedFolders: []\nother: 1\n".to_owned());
+		assert!(text.starts_with("tools:\n  restrictedFolders: []\nother: 1\n# "));
+		assert!(text.ends_with("\npower:\n  sleepPrevention: \"off\"\n"));
+		assert_eq!(parse_value(&text).unwrap()["power"]["sleepPrevention"], json!("off"));
+		// The text's own line endings, and a last line without one gets one first.
+		assert!(with_sleep_prevention_off("a: 1\r\n".to_owned()).ends_with("power:\r\n  sleepPrevention: \"off\"\r\n"));
+		assert!(with_sleep_prevention_off("a: 1".to_owned()).starts_with("a: 1\n# "));
+		// The shipped snapshot has no `power` key of its own, so the block is its only one.
+		let real = std::fs::read_to_string(shipped_config_dir(None).join("omp").join("config.yml")).unwrap();
+		assert!(parse_value(&real).unwrap().get("power").is_none());
+		assert_eq!(
+			parse_value(&with_sleep_prevention_off(real)).unwrap()["power"],
+			json!({ "sleepPrevention": "off" })
+		);
 	}
 
 	#[test]
