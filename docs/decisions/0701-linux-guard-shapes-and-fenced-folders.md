@@ -17,7 +17,7 @@ On Linux the guard denies none of the machine's or the session's ends (`shutdown
 ## Options
 | Option | Pros | Cons |
 |---|---|---|
-| Deny the shapes; fence the five folders on Linux | No silent ask under yolo; secrets behind a question | A few false denials (`dd … of=/dev/null`) |
+| Deny the shapes; fence the five folders on Linux | No silent ask under yolo; secrets behind a question | One rule per block-device name for `dd` |
 | Prompt instead of deny | Fewer refusals | A prompt is allowed under yolo (0450) |
 
 ## Recommendation
@@ -25,7 +25,7 @@ Deny and fence.
 
 ## Choice
 His answers of 2026-11-26 and the approved plan:
-- `config/guard.yml` denies `shutdown`, `shutdown *`, `poweroff`, `poweroff *`, `reboot`, `reboot *` (each also after `sudo`), `systemctl … poweroff|reboot|halt|suspend|hibernate`, `dd … of=/dev/…`, `mkfs*`, `wipefs`, `loginctl terminate-*|kill-*` and `pkill -KILL -u` (and `pkill -9 -u`). The bare commands are matched at a segment's start, so a commit message that names them still runs. 228 deny rules, then 55 prompt rules.
+- `config/guard.yml` denies `shutdown`, `shutdown *`, `poweroff`, `poweroff *`, `reboot`, `reboot *` (each also after `sudo`), `systemctl … poweroff|reboot|halt|suspend|hibernate`, `dd … of=/dev/<block device>` (`sd`, `nvme`, `vd`, `hd`, `xvd`, `mmcblk`, `loop`, `md`, `dm-`, `mapper/`, `disk/`), `mkfs*`, `wipefs`, `loginctl terminate-*|kill-*` and `pkill -KILL -u` (and `pkill -9 -u`). The bare commands are matched at a segment's start, so a commit message that names them still runs. 238 deny rules, then 55 prompt rules.
 - On Linux setup adds `~/.local/share/keyrings`, `~/.gnupg`, `~/.config/gh`, `/etc` and `/boot` to `tools.restrictedFolders`, shown in setup's diff like Windows' folders. `/usr` stays out (0594's reason).
 
 ## Reason
@@ -34,3 +34,6 @@ These end his machine or his session, and several need no root; the fenced folde
 ## Consequences
 - Each shape has a line in the guard's Rust and Bun tests, with safe neighbours that still run.
 - An existing Linux install sees the fence as a change to the omp snapshot in `jocasta setup`.
+
+## Note (2026-11-26)
+The first build denied `dd … of=/dev/*`, which also refused `dd … of=/dev/null` and `of=/dev/zero`, common in scripts and benchmarks. The guard matches with `*` only, so the rule became one rule per block-device prefix (the list above); `dd if=x of=/dev/null` runs, and each test corpus holds both.

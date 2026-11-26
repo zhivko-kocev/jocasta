@@ -236,7 +236,8 @@ bash:
     - { match: "*sudo rm *", approval: deny }
     # deny: Linux's ends of the machine and the session (0701): shutting down, rebooting or suspending, writing a raw
     # disk, making or wiping a file system, ending his login session or all his processes. The bare commands are
-    # matched at a segment's start, so a commit message that names them still runs; `dd … of=/dev/null` is denied too
+    # matched at a segment's start, so a commit message that names them still runs. `dd` is denied only onto a block
+    # device (`sd`, `nvme`, `vd`, `hd`, `xvd`, `mmcblk`, `loop`, `md`, `dm-`, `mapper/`, `disk/`), so `of=/dev/null` runs
     - { match: "shutdown", approval: deny }
     - { match: "shutdown *", approval: deny }
     - { match: "*sudo shutdown*", approval: deny }
@@ -251,7 +252,17 @@ bash:
     - { match: "*systemctl *halt*", approval: deny }
     - { match: "*systemctl *suspend*", approval: deny }
     - { match: "*systemctl *hibernate*", approval: deny }
-    - { match: "*dd *of=/dev/*", approval: deny }
+    - { match: "*dd *of=/dev/sd*", approval: deny }
+    - { match: "*dd *of=/dev/nvme*", approval: deny }
+    - { match: "*dd *of=/dev/vd*", approval: deny }
+    - { match: "*dd *of=/dev/hd*", approval: deny }
+    - { match: "*dd *of=/dev/xvd*", approval: deny }
+    - { match: "*dd *of=/dev/mmcblk*", approval: deny }
+    - { match: "*dd *of=/dev/loop*", approval: deny }
+    - { match: "*dd *of=/dev/md*", approval: deny }
+    - { match: "*dd *of=/dev/dm-*", approval: deny }
+    - { match: "*dd *of=/dev/mapper/*", approval: deny }
+    - { match: "*dd *of=/dev/disk/*", approval: deny }
     - { match: "*mkfs*", approval: deny }
     - { match: "*wipefs*", approval: deny }
     - { match: "*loginctl terminate-*", approval: deny }
