@@ -25,7 +25,7 @@ use crate::frontier::protocol::{
 };
 use crate::frontier::server::wording::money;
 use crate::frontier::today::view::{NewsBox, Pick, SAID_MS, Said, TodayState, not_answering, render};
-use crate::frontier::tui::{TOKYO_NIGHT, render_lines};
+use crate::frontier::tui::{palette, render_lines};
 use crate::shared::clock::now_ms;
 use crate::shared::service_file::NOT_RUNNING;
 
@@ -369,10 +369,10 @@ impl JocastaShell {
 	}
 
 	pub fn draw_dock(&mut self, buffer: &mut Buffer, area: Rect, focused: bool) {
-		let bar = if focused { TOKYO_NIGHT.blue } else { TOKYO_NIGHT.bg3 };
-		buffer.set_style(Rect { width: 1, ..area }, Style::new().fg(bar).bg(TOKYO_NIGHT.bg0));
+		let bar = if focused { palette().blue } else { palette().bg3 };
+		buffer.set_style(Rect { width: 1, ..area }, Style::new().fg(bar).bg(palette().bg0));
 		for y in area.y..area.y + area.height {
-			buffer.set_string(area.x, y, "▎", Style::new().fg(bar).bg(TOKYO_NIGHT.bg0));
+			buffer.set_string(area.x, y, "▎", Style::new().fg(bar).bg(palette().bg0));
 		}
 		let inner = Rect { x: area.x + 1, width: area.width.saturating_sub(1), ..area };
 		let (width, height) = (usize::from(inner.width), usize::from(inner.height));
@@ -461,9 +461,9 @@ impl JocastaShell {
 		Clear.render(outer, buffer);
 		Block::default()
 			.borders(Borders::ALL)
-			.border_style(Style::new().fg(TOKYO_NIGHT.blue))
+			.border_style(Style::new().fg(palette().blue))
 			.title(" Jocasta asks ")
-			.style(Style::new().bg(TOKYO_NIGHT.bg0))
+			.style(Style::new().bg(palette().bg0))
 			.render(outer, buffer);
 		let inner = Rect {
 			x: outer.x + 2,

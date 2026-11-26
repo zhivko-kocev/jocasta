@@ -10,7 +10,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use regex::Regex;
 
 use crate::frontier::protocol::{PopupAnswer, PopupForm, PopupView};
-use crate::frontier::tui::{Line, Palette, Segment, TOKYO_NIGHT, columns, fit, wrap};
+use crate::frontier::tui::{Line, Segment, columns, fit, palette, wrap};
 
 #[derive(Debug, Clone)]
 pub struct AskState {
@@ -266,8 +266,6 @@ pub fn paste(state: &mut AskState, text: &str) {
 	}
 }
 
-const P: Palette = TOKYO_NIGHT;
-
 /// Lines PgUp and PgDn move the question's text by.
 const PAGE: usize = 5;
 
@@ -276,9 +274,9 @@ fn hint(parts: &[String]) -> Line {
 	let mut line = Vec::new();
 	for (i, text) in parts.iter().enumerate() {
 		if i > 0 {
-			line.push(Segment::new(" · ", P.comment));
+			line.push(Segment::new(" · ", palette().comment));
 		}
-		line.push(Segment::new(text.as_str(), P.fg3));
+		line.push(Segment::new(text.as_str(), palette().fg3));
 	}
 	line
 }
@@ -290,10 +288,10 @@ fn strings(parts: &[&str]) -> Vec<String> {
 /// New thread's form block: the project, the brief (its tail, caret in the field the keys go to), the note and the hint.
 fn form_foot(state: &AskState, form: &PopupForm, width: usize, reading: &[&str]) -> Vec<Line> {
 	let project = form.projects.get(state.project).map_or("", String::as_str);
-	let on = |field: Field, segment: Segment| if state.field == field { segment.on(P.bg2) } else { segment };
+	let on = |field: Field, segment: Segment| if state.field == field { segment.on(palette().bg2) } else { segment };
 	let mut lines: Vec<Line> = vec![vec![
-		Segment::new("Project  ", P.fg3),
-		on(Field::Project, Segment::new(format!("‹ {project} ›"), P.cyan).bold()),
+		Segment::new("Project  ", palette().fg3),
+		on(Field::Project, Segment::new(format!("‹ {project} ›"), palette().cyan).bold()),
 	]];
 	// The brief's tail, so the caret's end shows; the caret only in the field the keys go to (UX-15).
 	let caret = if state.field == Field::Brief { "▏" } else { "" };
@@ -309,9 +307,12 @@ fn form_foot(state: &AskState, form: &PopupForm, width: usize, reading: &[&str])
 		shortened = format!("…{brief}");
 		brief = &shortened;
 	}
-	lines.push(vec![Segment::new("Brief    ", P.fg3), on(Field::Brief, Segment::new(format!("{brief}{caret}"), P.fg))]);
+	lines.push(vec![
+		Segment::new("Brief    ", palette().fg3),
+		on(Field::Brief, Segment::new(format!("{brief}{caret}"), palette().fg)),
+	]);
 	lines.push(Vec::new());
-	lines.extend(state.note.iter().map(|n| vec![Segment::new(n.as_str(), P.red)]));
+	lines.extend(state.note.iter().map(|n| vec![Segment::new(n.as_str(), palette().red)]));
 	let mut parts = if state.field == Field::Brief {
 		strings(&["Tab project", "Enter start"])
 	} else {
@@ -327,7 +328,7 @@ fn form_foot(state: &AskState, form: &PopupForm, width: usize, reading: &[&str])
 /// and the letters typed, the note, and the key hint (`read` when the question's text scrolls).
 fn foot(state: &AskState, width: usize, read: bool) -> Vec<Line> {
 	let view = &state.view;
-	let note: Vec<Line> = state.note.iter().map(|n| vec![Segment::new(n.as_str(), P.red)]).collect();
+	let note: Vec<Line> = state.note.iter().map(|n| vec![Segment::new(n.as_str(), palette().red)]).collect();
 	let reading: &[&str] = if read { &["PgUp/PgDn read"] } else { &[] };
 	if let Some(form) = &view.form {
 		return form_foot(state, form, width, reading);
@@ -338,9 +339,9 @@ fn foot(state: &AskState, width: usize, read: bool) -> Vec<Line> {
 			buttons.push(Segment::plain("  "));
 		}
 		buttons.push(if index == state.picked {
-			Segment::new(format!(" {choice} "), P.bg0).on(P.blue).bold()
+			Segment::new(format!(" {choice} "), palette().bg0).on(palette().blue).bold()
 		} else {
-			Segment::new(format!(" {choice} "), P.fg).on(P.bg2)
+			Segment::new(format!(" {choice} "), palette().fg).on(palette().bg2)
 		});
 	}
 	let mut lines: Vec<Line> = vec![buttons, Vec::new()];
@@ -349,12 +350,12 @@ fn foot(state: &AskState, width: usize, read: bool) -> Vec<Line> {
 	match &view.code {
 		Some(code) if coded(state) => {
 			lines.push(vec![
-				Segment::new("Type ", P.fg),
-				Segment::new(code.as_str(), P.yellow).bold(),
-				Segment::new(format!(" for {picked}"), P.fg),
+				Segment::new("Type ", palette().fg),
+				Segment::new(code.as_str(), palette().yellow).bold(),
+				Segment::new(format!(" for {picked}"), palette().fg),
 			]);
 			let echo = format!("{:_<width$}", state.typed, width = code.chars().count());
-			lines.push(vec![Segment::new("> ", P.fg3), Segment::new(echo, P.yellow).bold()]);
+			lines.push(vec![Segment::new("> ", palette().fg3), Segment::new(echo, palette().yellow).bold()]);
 			lines.extend(note);
 			lines.push(Vec::new());
 		}
@@ -377,12 +378,13 @@ fn foot(state: &AskState, width: usize, read: bool) -> Vec<Line> {
 /// reads on`; long words are split, never cut.
 pub fn ask_lines(state: &mut AskState, width: usize, height: usize) -> Vec<Line> {
 	let view = &state.view;
-	let mut text: Vec<Line> = wrap(&view.message, width).into_iter().map(|l| vec![Segment::new(l, P.fg)]).collect();
+	let mut text: Vec<Line> =
+		wrap(&view.message, width).into_iter().map(|l| vec![Segment::new(l, palette().fg)]).collect();
 	if let Some(detail) = view.detail.as_deref().filter(|d| !d.is_empty()) {
 		text.push(Vec::new());
-		text.extend(wrap(detail, width).into_iter().map(|l| vec![Segment::new(l, P.fg2)]));
+		text.extend(wrap(detail, width).into_iter().map(|l| vec![Segment::new(l, palette().fg2)]));
 	}
-	let head: Vec<Line> = vec![fit(&[Segment::new(view.title.as_str(), P.blue).bold()], width), Vec::new()];
+	let head: Vec<Line> = vec![fit(&[Segment::new(view.title.as_str(), palette().blue).bold()], width), Vec::new()];
 	let mut bottom = foot(state, width, false);
 	// The rows for the text: everything but the title, its blank line, the blank line above the foot and the foot.
 	let rows_for = |bottom: &[Line]| height as i64 - head.len() as i64 - 1 - bottom.len() as i64;
@@ -403,9 +405,9 @@ pub fn ask_lines(state: &mut AskState, width: usize, height: usize) -> Vec<Line>
 			shown = text.iter().skip(state.scroll).take(rows).cloned().collect();
 			shown.push(fit(
 				&[
-					Segment::new(format!("… {more} more {}", if more == 1 { "line" } else { "lines" }), P.fg3),
-					Segment::new(" · ", P.comment),
-					Segment::new("PgDn reads on", P.fg3),
+					Segment::new(format!("… {more} more {}", if more == 1 { "line" } else { "lines" }), palette().fg3),
+					Segment::new(" · ", palette().comment),
+					Segment::new("PgDn reads on", palette().fg3),
 				],
 				width,
 			));

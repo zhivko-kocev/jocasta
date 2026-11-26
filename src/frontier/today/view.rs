@@ -14,7 +14,7 @@ use crate::frontier::protocol::{
 	Dashboard, Hud, NeedsYouKind, PrCi, PrivateSection, QuotaAccount, QuotaCapacity, QuotaSpan, QuotaWindow,
 	ServiceState, ThreadState, Today, js_number_text, quota_high, quota_percent, wait_label,
 };
-use crate::frontier::tui::{Line, Segment, TOKYO_NIGHT, columns, cut, fit, line_columns, wrap};
+use crate::frontier::tui::{Line, Segment, columns, cut, fit, line_columns, palette, wrap};
 use crate::shared::day::{DayRef, day_label, hhmm, weekday};
 use crate::shared::private::HumanView;
 
@@ -81,8 +81,6 @@ pub struct Frame {
 	pub news: Option<NewsBox>,
 }
 
-const P: crate::frontier::tui::Palette = TOKYO_NIGHT;
-
 /// The NEWS box's items (0668).
 pub const NEWS_LINES: usize = 5;
 
@@ -148,8 +146,8 @@ fn hint(parts: &[&str]) -> Line {
 		.iter()
 		.enumerate()
 		.flat_map(|(i, text)| {
-			let separator = (i > 0).then(|| Segment::new(" · ", P.comment));
-			separator.into_iter().chain([Segment::new(*text, P.fg3)])
+			let separator = (i > 0).then(|| Segment::new(" · ", palette().comment));
+			separator.into_iter().chain([Segment::new(*text, palette().fg3)])
 		})
 		.collect()
 }
@@ -199,7 +197,7 @@ fn flow(parts: &[&Line], width: usize) -> Vec<Line> {
 			used = 0;
 		}
 		if used > 0 {
-			line.push(Segment::new(" · ", P.comment));
+			line.push(Segment::new(" · ", palette().comment));
 			used += 3;
 		}
 		line.extend(part.iter().cloned());
@@ -247,9 +245,10 @@ fn part(text: String, fg: ratatui::style::Color) -> Part {
 /// The weather, then CPU and memory, give way when the header would pass two rows.
 fn header(state: &TodayState, now: i64, width: usize) -> Vec<Line> {
 	let date = day_label(DayRef::Time(now), false);
-	let mut parts = vec![Part { line: vec![Segment::new(format!("{date} {}", hhmm(now)), P.fg).bold()], yields: None }];
+	let mut parts =
+		vec![Part { line: vec![Segment::new(format!("{date} {}", hhmm(now)), palette().fg).bold()], yields: None }];
 	if state.hud.as_ref().and_then(|h| h.quiet) == Some(true) {
-		parts.push(part("quiet".to_string(), P.fg3));
+		parts.push(part("quiet".to_string(), palette().fg3));
 	}
 	let dashboard = state.dashboard.as_ref();
 	for service in dashboard.iter().flat_map(|d| d.services.iter()) {
@@ -258,11 +257,11 @@ fn header(state: &TodayState, now: i64, width: usize) -> Vec<Line> {
 		}
 		let name = format!("{:?}", service.name).to_lowercase();
 		let note = service.note.as_deref().filter(|n| !n.is_empty()).map(|n| format!(" ({n})")).unwrap_or_default();
-		parts.push(part(format!("{name} down{note}"), P.red));
+		parts.push(part(format!("{name} down{note}"), palette().red));
 	}
 	if let Some(weather) = dashboard.and_then(|d| d.weather.as_ref()) {
 		let text = format!("{}° {}", js_round(weather.temp_c), weather.summary);
-		parts.push(Part { yields: Some(1), ..part(text, P.cyan) });
+		parts.push(Part { yields: Some(1), ..part(text, palette().cyan) });
 	}
 	if let Some(machine) = dashboard.and_then(|d| d.machine.as_ref()) {
 		let mem = if machine.ram.total > 0 {
@@ -271,7 +270,7 @@ fn header(state: &TodayState, now: i64, width: usize) -> Vec<Line> {
 			0.0
 		};
 		let text = format!("cpu {}% · mem {mem}%", js_round(machine.cpu * 100.0));
-		parts.push(Part { yields: Some(2), ..part(text, P.fg2) });
+		parts.push(Part { yields: Some(2), ..part(text, palette().fg2) });
 	}
 	for q in state.hud.iter().flat_map(|h| h.quota.iter()) {
 		let high = quota_high(q);
@@ -284,22 +283,25 @@ fn header(state: &TodayState, now: i64, width: usize) -> Vec<Line> {
 			QuotaSpan::FiveHours => "5h",
 			QuotaSpan::SevenDays => "7d",
 		};
-		parts.push(part(format!("{window} {}%{reset}", quota_percent(q)), if high { P.red } else { P.fg2 }));
+		parts.push(part(
+			format!("{window} {}%{reset}", quota_percent(q)),
+			if high { palette().red } else { palette().fg2 },
+		));
 	}
 	let hud = state.hud.as_ref();
 	let spend = hud.and_then(|h| h.spend_today);
-	parts.push(part(spend.map_or_else(|| "… today".to_string(), |s| format!("{} today", money(s))), P.green));
+	parts.push(part(spend.map_or_else(|| "… today".to_string(), |s| format!("{} today", money(s))), palette().green));
 	if let Some(avg) = hud.and_then(|h| h.spend_avg_7d) {
-		parts.push(Part { yields: Some(2), ..part(format!("avg {}", money(avg)), P.fg2) });
+		parts.push(Part { yields: Some(2), ..part(format!("avg {}", money(avg)), palette().fg2) });
 	}
 	if let Some(top) = hud.and_then(|h| h.top_thread.as_ref()) {
 		let text = format!("top {} {}", cut(&top.title, 20), money(top.cost));
-		parts.push(Part { yields: Some(1), ..part(text, P.fg2) });
+		parts.push(Part { yields: Some(1), ..part(text, palette().fg2) });
 	}
 	if let Some(load) = hud.and_then(|h| h.checks.as_ref()) {
 		parts.push(Part {
 			yields: Some(2),
-			..part(format!("checks: {} running · {} waiting", load.running, load.waiting), P.yellow)
+			..part(format!("checks: {} running · {} waiting", load.running, load.waiting), palette().yellow)
 		});
 	}
 	let all: Vec<&Line> = parts.iter().map(|p| &p.line).collect();
@@ -323,21 +325,21 @@ pub fn not_answering(since: Option<i64>) -> String {
 /// The header's place while the feed isn't up (UX-17): connecting at first, then the time and since when it is down.
 fn offline(state: &TodayState, now: i64, width: usize) -> Line {
 	if !state.seen {
-		return fit(&[Segment::new("Connecting to Jocasta…", P.fg3)], width);
+		return fit(&[Segment::new("Connecting to Jocasta…", palette().fg3)], width);
 	}
 	let since = state.down_since;
 	fit(
 		&[
-			Segment::new(hhmm(now), P.fg).bold(),
-			Segment::new(" · ", P.comment),
-			Segment::new(format!("{}; trying again…", not_answering(since)), P.yellow),
+			Segment::new(hhmm(now), palette().fg).bold(),
+			Segment::new(" · ", palette().comment),
+			Segment::new(format!("{}; trying again…", not_answering(since)), palette().yellow),
 		],
 		width,
 	)
 }
 
 fn heading(text: &str, width: usize) -> Line {
-	fit(&[Segment::new(text, P.blue).bold()], width)
+	fit(&[Segment::new(text, palette().blue).bold()], width)
 }
 
 /// An empty section's line, in quiet text.
@@ -362,14 +364,14 @@ impl Row {
 /// A pickable row: the picked one carries the marker and the selection colour across the pane.
 fn row(line: &[Segment], pick: Option<Pick>, state: &TodayState, width: usize) -> Row {
 	let picked = pick.as_ref().is_some_and(|p| Some(&p.key) == state.selected.as_ref());
-	let mut with_marker = vec![Segment::new(if picked { "› " } else { "  " }, P.blue)];
+	let mut with_marker = vec![Segment::new(if picked { "› " } else { "  " }, palette().blue)];
 	with_marker.extend(line.iter().cloned());
 	let mut line = fit(&with_marker, width);
 	if picked {
 		let fill = width.saturating_sub(line_columns(&line));
 		line.push(Segment::plain(" ".repeat(fill)));
 		for segment in &mut line {
-			segment.bg = Some(P.bg2);
+			segment.bg = Some(palette().bg2);
 		}
 	}
 	Row { line, pick }
@@ -377,7 +379,7 @@ fn row(line: &[Segment], pick: Option<Pick>, state: &TodayState, width: usize) -
 
 /// What a row with a link shows after its text (0581, UX-7): Enter opens it.
 fn link() -> Segment {
-	Segment::new(" ↗", P.blue)
+	Segment::new(" ↗", palette().blue)
 }
 
 /// A NEEDS YOU row's kind (0581, UX-4): `?` a question or plan, `✓` reviewed, `↗` a review request, `!` red.
@@ -420,9 +422,9 @@ fn needs_you_rows(state: &TodayState, today: &Today, now: i64, width: usize) -> 
 	}
 	for n in &today.needs_you {
 		let colour = match n.kind {
-			NeedsYouKind::Blocked => P.red,
-			NeedsYouKind::Reviewed => P.orange,
-			_ => P.yellow,
+			NeedsYouKind::Blocked => palette().red,
+			NeedsYouKind::Reviewed => palette().orange,
+			_ => palette().yellow,
 		};
 		// A reminder keeps its time where the others have their kind's glyph.
 		let lead = n.time.as_deref().unwrap_or_else(|| glyph(n.kind));
@@ -437,7 +439,7 @@ fn needs_you_rows(state: &TodayState, today: &Today, now: i64, width: usize) -> 
 			.as_deref()
 			.filter(|s| !s.is_empty())
 			.and_then(parse_time)
-			.map(|at| Segment::new(wait_label(now - at), P.fg3))
+			.map(|at| Segment::new(wait_label(now - at), palette().fg3))
 			.into_iter()
 			.collect();
 		let pick = pick_of(n.pane_id.as_deref(), n.url.as_deref()).map(|p| Pick { kind: Some(n.kind), ..p });
@@ -467,24 +469,27 @@ fn underway_rows(state: &TodayState, today: &Today, now: i64, width: usize) -> V
 	for u in &today.underway {
 		// Kept in this order as the row narrows, the last dropping first: the state last of all (0581, UX-4, 0668).
 		let (label, colour) = if let Some(why) = &u.halted {
-			(why.as_str(), P.red)
+			(why.as_str(), palette().red)
 		} else if u.stuck_for.is_some() {
-			("stuck", P.red)
+			("stuck", palette().red)
 		} else {
-			let colour = if u.state == Some(ThreadState::Idle) { P.fg3 } else { P.green };
+			let colour = if u.state == Some(ThreadState::Idle) { palette().fg3 } else { palette().green };
 			(state_label(u.state.unwrap_or(ThreadState::Working)), colour)
 		};
 		let mut facts = vec![Segment::new(label, colour)];
 		if let Some(passed) = u.check {
-			facts.push(Segment::new(if passed { "  ✓" } else { "  ✗" }, if passed { P.green } else { P.red }));
+			facts.push(Segment::new(
+				if passed { "  ✓" } else { "  ✗" },
+				if passed { palette().green } else { palette().red },
+			));
 		}
 		if let Some(diff) = &u.diff {
-			facts.push(Segment::new(format!("  +{}", diff.added), P.green));
-			facts.push(Segment::new(format!(" −{}", diff.removed), P.red));
+			facts.push(Segment::new(format!("  +{}", diff.added), palette().green));
+			facts.push(Segment::new(format!(" −{}", diff.removed), palette().red));
 		}
 		facts.push(Segment::new(
 			u.since.filter(|s| *s != 0).map(|s| format!("  {}", wait_label(now - s))).unwrap_or_default(),
-			P.fg2,
+			palette().fg2,
 		));
 		// With a cost cap the cost reads `$spent/$budget` (0686).
 		let spent = match (u.cost, u.budget) {
@@ -492,14 +497,14 @@ fn underway_rows(state: &TodayState, today: &Today, now: i64, width: usize) -> V
 			(Some(spent), None) => Some(money(spent)),
 			(None, None) => None,
 		};
-		facts.push(Segment::new(spent.map(|spent| format!("  {spent}")).unwrap_or_default(), P.fg2));
-		facts.push(Segment::new(u.context.map(|c| format!("  {}", tokens(c))).unwrap_or_default(), P.purple));
+		facts.push(Segment::new(spent.map(|spent| format!("  {spent}")).unwrap_or_default(), palette().fg2));
+		facts.push(Segment::new(u.context.map(|c| format!("  {}", tokens(c))).unwrap_or_default(), palette().purple));
 		let project = u.project.as_deref().filter(|p| !p.is_empty()).map(|p| format!("{p}/")).unwrap_or_default();
 		let name = format!("{project}{}", u.title);
-		let mut left = vec![Segment::new(name, P.fg)];
+		let mut left = vec![Segment::new(name, palette().fg)];
 		// The todo count and the context use, after the title (0677): `4/9 · 62%`.
 		if let Some(progress) = &u.progress {
-			left.push(Segment::new(format!("  {progress}"), P.fg3));
+			left.push(Segment::new(format!("  {progress}"), palette().fg3));
 		}
 		out.push(row(
 			&spread(&left, &facts, width.saturating_sub(2), None),
@@ -510,7 +515,7 @@ fn underway_rows(state: &TodayState, today: &Today, now: i64, width: usize) -> V
 	}
 	// Starts that wait for other threads or for room (0687), after the threads at work.
 	for line in &today.queued {
-		let colour = if line.starts_with("blocked:") { P.red } else { P.fg3 };
+		let colour = if line.starts_with("blocked:") { palette().red } else { palette().fg3 };
 		out.push(row(&[Segment::new(line.as_str(), colour)], None, state, width));
 	}
 	out
@@ -527,18 +532,19 @@ fn landed_rows(state: &TodayState, today: &Today, width: usize) -> Vec<Row> {
 		let project = l.project.as_deref().filter(|p| !p.is_empty()).map(|p| format!("{p}/")).unwrap_or_default();
 		let line = if has_pane { String::new() } else { format!(" ({})", l.line) };
 		let text = format!("{project}{}{line}", l.title);
-		let colour = if has_pane { P.fg } else { P.fg2 };
+		let colour = if has_pane { palette().fg } else { palette().fg2 };
 		let left = [Segment::new(text, colour)];
 		let shown = match &l.pr {
 			Some(pr) => {
 				let (word, ci) = match pr.ci {
-					PrCi::Pending => ("pending", P.yellow),
-					PrCi::Passing => ("passing", P.green),
-					PrCi::Failing => ("failing", P.red),
-					PrCi::Merged => ("merged", P.purple),
-					PrCi::Closed => ("closed", P.fg3),
+					PrCi::Pending => ("pending", palette().yellow),
+					PrCi::Passing => ("passing", palette().green),
+					PrCi::Failing => ("failing", palette().red),
+					PrCi::Merged => ("merged", palette().purple),
+					PrCi::Closed => ("closed", palette().fg3),
 				};
-				let facts = [Segment::new(format!("PR #{}", pr.number), P.fg2), Segment::new(format!(" {word}"), ci)];
+				let facts =
+					[Segment::new(format!("PR #{}", pr.number), palette().fg2), Segment::new(format!(" {word}"), ci)];
 				spread(&left, &facts, width.saturating_sub(2), None)
 			}
 			None => left.to_vec(),
@@ -569,7 +575,7 @@ fn calendar_rows(state: &TodayState, today: &Today, now: i64, width: usize) -> V
 			c.time.clone()
 		};
 		let pick = pick_of(None, c.url.as_deref());
-		let line = [Segment::new(format!("{when} "), P.cyan), Segment::new(c.title.clone(), P.fg)];
+		let line = [Segment::new(format!("{when} "), palette().cyan), Segment::new(c.title.clone(), palette().fg)];
 		let tail = pick.is_some().then(link);
 		out.push(row(&spread(&line, &[], width.saturating_sub(2), tail), pick, state, width));
 	}
@@ -590,7 +596,7 @@ fn private_rows(
 	let view = HumanView::for_his_eyes();
 	let mut out = vec![Row::plain(heading(heading_text, width))];
 	if let Some(error) = &section.error {
-		out.push(Row::plain(fit(&[Segment::plain("  "), Segment::new(error.as_str(), P.yellow)], width)));
+		out.push(Row::plain(fit(&[Segment::plain("  "), Segment::new(error.as_str(), palette().yellow)], width)));
 	}
 	if section.rows.is_empty() && section.error.is_none() {
 		out.push(Row::plain(quiet(&[nothing], width)));
@@ -599,7 +605,7 @@ fn private_rows(
 		let url = item.url.as_ref().map(|url| url.reveal(&view).as_str());
 		let pick = pick_of(None, url);
 		let tail = pick.is_some().then(link);
-		let line = [Segment::new(item.text.reveal(&view).as_str(), P.fg)];
+		let line = [Segment::new(item.text.reveal(&view).as_str(), palette().fg)];
 		out.push(row(&spread(&line, &[], width.saturating_sub(2), tail), pick, state, width));
 	}
 	out
@@ -613,7 +619,7 @@ fn brief_rows(state: &TodayState, today: &Today, width: usize) -> Vec<Row> {
 	}
 	let mut out = vec![Row::plain(heading("BRIEFS", width))];
 	for brief in &today.briefs {
-		let line = [Segment::new(brief.label.as_str(), P.fg)];
+		let line = [Segment::new(brief.label.as_str(), palette().fg)];
 		let pick = pick_of(None, Some(&brief.url));
 		out.push(row(&spread(&line, &[], width.saturating_sub(2), Some(link())), pick, state, width));
 	}
@@ -632,22 +638,25 @@ fn account_line(account: &QuotaAccount, now: i64, width: usize) -> Line {
 		.into_iter()
 		.filter_map(|(label, w)| w.map(|w| (label, w)))
 		.collect();
-	let mut line = vec![Segment::plain("  "), Segment::new(account.name.clone(), P.fg)];
+	let mut line = vec![Segment::plain("  "), Segment::new(account.name.clone(), palette().fg)];
 	let mut first = true;
 	let separate = |line: &mut Line, first: &mut bool| {
-		line.push(if *first { Segment::plain(" ") } else { Segment::new(" · ", P.comment) });
+		line.push(if *first { Segment::plain(" ") } else { Segment::new(" · ", palette().comment) });
 		*first = false;
 	};
 	for (label, w) in &windows {
 		separate(&mut line, &mut first);
-		line.push(Segment::new(format!("{label} {}%", quota_percent(w)), if quota_high(w) { P.red } else { P.fg2 }));
+		line.push(Segment::new(
+			format!("{label} {}%", quota_percent(w)),
+			if quota_high(w) { palette().red } else { palette().fg2 },
+		));
 	}
 	let reset =
 		windows.iter().filter_map(|(_, w)| w.resets_at.as_deref().and_then(parse_time)).filter(|at| *at > now).min();
 	if let Some(at) = reset {
 		separate(&mut line, &mut first);
 		let when = if at - now <= 86_400_000 { hhmm(at) } else { format!("{} {}", weekday(at), hhmm(at)) };
-		line.push(Segment::new(format!("resets {when}"), P.fg3));
+		line.push(Segment::new(format!("resets {when}"), palette().fg3));
 	}
 	fit(&line, width)
 }
@@ -659,7 +668,7 @@ fn capacity_line(capacity: &QuotaCapacity, width: usize) -> Line {
 		QuotaSpan::SevenDays => "7d",
 	};
 	let text = format!("  left {window}: {} of {}", capacity.remaining, accounts_of(capacity.accounts));
-	fit(&[Segment::new(text, P.fg3)], width)
+	fit(&[Segment::new(text, palette().fg3)], width)
 }
 
 /// QUOTA (0669): a line per logged-in account; none while no account is known.
@@ -688,7 +697,7 @@ fn leftover_rows(state: &TodayState, width: usize) -> Vec<Row> {
 		let folder = l.folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
 		let key = l.folder.to_string_lossy().into_owned();
 		let pick = Pick { key: key.clone(), pane_id: None, url: None, news: false, leftover: Some(key), kind: None };
-		out.push(row(&[Segment::new(format!("{}/{folder}", l.project), P.fg2)], Some(pick), state, width));
+		out.push(row(&[Segment::new(format!("{}/{folder}", l.project), palette().fg2)], Some(pick), state, width));
 	}
 	out
 }
@@ -721,7 +730,7 @@ fn said(state: &TodayState, now: i64, width: usize) -> Vec<Line> {
 	if now - outcome.at >= SAID_MS {
 		return Vec::new();
 	}
-	let colour = if outcome.is_error { P.red } else { P.green };
+	let colour = if outcome.is_error { palette().red } else { palette().green };
 	let lines = wrap(&outcome.text, width);
 	let shown = if lines.len() > 2 { vec![lines[0].clone(), cut(&lines[1..].join(" "), width)] } else { lines };
 	shown.iter().map(|text| fit(&[Segment::new(text.as_str(), colour)], width)).collect()
@@ -795,7 +804,7 @@ pub fn render(state: &TodayState, now: i64, width: usize, height: usize) -> Fram
 			format!("{project}{} (#{})", n.text, n.id)
 		});
 		for text in due.chain(jotted).take((next_room - 1) as usize) {
-			lines.push(fit(&[Segment::new(format!("  {text}"), P.fg)], width));
+			lines.push(fit(&[Segment::new(format!("  {text}"), palette().fg)], width));
 		}
 	}
 	let mut news_box = None;
@@ -807,7 +816,8 @@ pub fn render(state: &TodayState, now: i64, width: usize, height: usize) -> Fram
 		let start = lines.len();
 		for (feed, item) in news.iter().skip(first).take(shown) {
 			let pick = pick_of(None, Some(&item.url)).map(|p| Pick { news: true, ..p });
-			let line = [Segment::new(format!("{feed}: "), P.fg3), Segment::new(item.title.clone(), P.fg2)];
+			let line =
+				[Segment::new(format!("{feed}: "), palette().fg3), Segment::new(item.title.clone(), palette().fg2)];
 			let tail = pick.is_some().then(link);
 			lines.push(row(&spread(&line, &[], width.saturating_sub(2), tail), pick.clone(), state, width).line);
 			if let Some(pick) = &pick {

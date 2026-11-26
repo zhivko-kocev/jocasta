@@ -35,7 +35,7 @@ use super::tabs::{Front, Hub};
 use super::{JocastaShell, Reply, keys, sidebar, term};
 use crate::frontier::protocol::{PluginAction, SHELL_ACTION, ShellAction};
 use crate::frontier::server::native::Native;
-use crate::frontier::tui::TOKYO_NIGHT;
+use crate::frontier::tui::palette;
 use crate::shared::clock::now_ms;
 
 /// The sidebar's width, and the narrowest terminal that has one.
@@ -173,7 +173,7 @@ impl App {
 		let shell = &mut self.shell;
 		terminal.draw(|frame| {
 			let buf = frame.buffer_mut();
-			buf.set_style(area, Style::new().fg(TOKYO_NIGHT.fg).bg(TOKYO_NIGHT.bg0));
+			buf.set_style(area, Style::new().fg(palette().fg).bg(palette().bg0));
 			if laid.sidebar.width > 0 {
 				sidebar::draw(buf, laid.sidebar, &rows);
 			}
@@ -189,7 +189,7 @@ impl App {
 						laid.pane.y + 1,
 						"Starting…",
 						usize::from(laid.pane.width.saturating_sub(2)),
-						Style::new().fg(TOKYO_NIGHT.comment),
+						Style::new().fg(palette().comment),
 					);
 				}
 			}
@@ -210,13 +210,13 @@ impl App {
 				Some(typed) => format!("goto: {typed}▏  ·  {hint}"),
 				None => format!("{hud}  ·  {hint}"),
 			};
-			buf.set_style(laid.status, Style::new().fg(TOKYO_NIGHT.fg3).bg(TOKYO_NIGHT.bg1));
+			buf.set_style(laid.status, Style::new().fg(palette().fg3).bg(palette().bg1));
 			buf.set_stringn(
 				laid.status.x + 1,
 				laid.status.y,
 				line,
 				usize::from(laid.status.width.saturating_sub(1)),
-				Style::new().fg(TOKYO_NIGHT.fg3).bg(TOKYO_NIGHT.bg1).remove_modifier(Modifier::BOLD),
+				Style::new().fg(palette().fg3).bg(palette().bg1).remove_modifier(Modifier::BOLD),
 			);
 			let question = shell.asking().then(|| shell.draw_question(buf, area));
 			match (question, dock_focus, cursor) {

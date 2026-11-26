@@ -8,32 +8,32 @@ use ratatui::style::{Color, Modifier, Style};
 
 use super::tabs::Row;
 use crate::frontier::server::surface::AgentState;
-use crate::frontier::tui::TOKYO_NIGHT;
+use crate::frontier::tui::palette;
 
 /// Rows a tab takes.
 const ROW_LINES: u16 = 2;
 
 fn glyph(state: AgentState, text: &str) -> (&'static str, Color) {
 	match state {
-		AgentState::Blocked => ("◆", TOKYO_NIGHT.red),
-		AgentState::Working => ("●", TOKYO_NIGHT.yellow),
-		AgentState::Done => ("✓", TOKYO_NIGHT.green),
-		AgentState::Idle if text != "idle" => ("✓", TOKYO_NIGHT.green),
-		AgentState::Idle => ("○", TOKYO_NIGHT.green),
-		AgentState::Unknown => ("·", TOKYO_NIGHT.comment),
+		AgentState::Blocked => ("◆", palette().red),
+		AgentState::Working => ("●", palette().yellow),
+		AgentState::Done => ("✓", palette().green),
+		AgentState::Idle if text != "idle" => ("✓", palette().green),
+		AgentState::Idle => ("○", palette().green),
+		AgentState::Unknown => ("·", palette().comment),
 	}
 }
 
 /// Draws the list into `area`.
 pub fn draw(buf: &mut Buffer, area: Rect, rows: &[Row]) {
-	buf.set_style(area, Style::new().fg(TOKYO_NIGHT.fg).bg(TOKYO_NIGHT.bg1));
+	buf.set_style(area, Style::new().fg(palette().fg).bg(palette().bg1));
 	let width = usize::from(area.width);
 	buf.set_stringn(
 		area.x + 1,
 		area.y,
 		"AGENTS",
 		width.saturating_sub(1),
-		Style::new().fg(TOKYO_NIGHT.comment).bg(TOKYO_NIGHT.bg1).add_modifier(Modifier::BOLD),
+		Style::new().fg(palette().comment).bg(palette().bg1).add_modifier(Modifier::BOLD),
 	);
 	for (index, row) in rows.iter().enumerate() {
 		let Ok(offset) = u16::try_from(index) else { break };
@@ -41,12 +41,12 @@ pub fn draw(buf: &mut Buffer, area: Rect, rows: &[Row]) {
 		if y + 1 >= area.y + area.height {
 			break;
 		}
-		let background = if row.front { TOKYO_NIGHT.bg3 } else { TOKYO_NIGHT.bg1 };
-		let fill = Style::new().fg(TOKYO_NIGHT.fg).bg(background);
+		let background = if row.front { palette().bg3 } else { palette().bg1 };
+		let fill = Style::new().fg(palette().fg).bg(background);
 		buf.set_style(Rect { x: area.x, y, width: area.width, height: ROW_LINES }, fill);
 		let (mark, color) = glyph(row.state, &row.text);
 		buf.set_stringn(area.x + 1, y, mark, 1, Style::new().fg(color).bg(background));
-		let title = if row.pinned { Style::new().fg(TOKYO_NIGHT.blue).bg(background) } else { fill };
+		let title = if row.pinned { Style::new().fg(palette().blue).bg(background) } else { fill };
 		// Row 1: the state icon, the workspace, its short model and cost (0402); row 2: the state words alone, with the
 		// full width, so a question or "review ready" isn't cut by them (UX-04).
 		let mut first = row.label.clone();
@@ -60,7 +60,7 @@ pub fn draw(buf: &mut Buffer, area: Rect, rows: &[Row]) {
 			second.push_str(" · ");
 			second.push_str(running);
 		}
-		let dim = Style::new().fg(TOKYO_NIGHT.fg3).bg(background);
+		let dim = Style::new().fg(palette().fg3).bg(background);
 		buf.set_stringn(area.x + 3, y + 1, second, width.saturating_sub(4), dim);
 	}
 }

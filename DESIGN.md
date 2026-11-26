@@ -138,7 +138,7 @@ components:
 
 ## Overview
 
-Jocasta has no window of its own (0552). What it draws is three surfaces, all on one Tokyo Night palette:
+Jocasta has no window of its own (0552). What it draws is three surfaces, all on one palette, Tokyo Night unless the desktop names its own (0698):
 
 - **the `today` dock**, beside the boss in the shell's workspace "Jocasta", drawn with ratatui (0551, 0553, 0555, 0634, 0683);
 - **the question box**, the shell's own box in front of whatever he is on, also ratatui, for his questions (0553, 0558, 0568, 0683);
@@ -150,7 +150,9 @@ The two terminal surfaces are coloured text only: ratatui draws plain lines of c
 
 ## Colors
 
-The palette is Tokyo Night as the shell draws it (the same as herdr 0.9.5's, 0554). The brief pages' `:root` in `src/frontier/brief/page/brief.css` holds its hex values for the browser (0678); the terminal surfaces and the Windows Terminal scheme `jocasta setup` writes take theirs from `src/frontier/today/view.rs` and setup. The front matter above mirrors it.
+The palette is Tokyo Night as the shell draws it (the same as herdr 0.9.5's, 0554). The brief pages' `:root` in `src/frontier/brief/page/brief.css` holds its hex values for the browser (0678); the terminal surfaces take theirs from `TOKYO_NIGHT` in `src/frontier/tui.rs`, which the Windows Terminal scheme `jocasta setup` writes also uses. The front matter above mirrors it.
+
+The desktop may replace it (0698): an optional `~/.jocasta/agent/palette.json` (ultron writes it from its theme) names colours by the names below (`bg-0` … `orange`, each `#rrggbb`). Read once at start, each valid one replaces the built-in colour of that name on the terminal surfaces and the shell's chrome, and the brief pages get them as a `:root` block after `brief.css`. Anything else in the file is ignored; without it the look is Tokyo Night. The Windows Terminal scheme stays Tokyo Night.
 
 ### Grounds
 - **BG 0** (bg-0): the `today` pane's and the `ask` popup's ground, a brief page's first paint, and the terminal scheme's background.
@@ -227,4 +229,4 @@ Nodes fade in layer by layer, each edge draws itself, an active node pulses, and
 - **Don't** add a greeting or the Presence to `today` (0555).
 - **Don't** let Enter take a coded choice in `ask`: Allow, Merge, PR and Stop everything take their typed code (0558, 0568).
 - **Don't** fill a button on a brief page; the only solid blue ground is the picked choice in `ask`.
-- **Don't** add a theme setting; there is one look.
+- **Don't** add a theme setting; the only other look is the desktop's, through the palette file (0698).

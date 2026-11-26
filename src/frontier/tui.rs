@@ -2,12 +2,17 @@
 //! coloured runs into herdr's client buffer. This module owns the line model and its column math (display columns, so
 //! wide characters count twice), the lines drawn into a ratatui buffer, and pasted text stripped of escape sequences.
 
+use std::path::Path;
+use std::sync::OnceLock;
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
+use serde_json::Value;
 
-/// Tokyo Night as herdr draws it, as terminal colours.
+/// Tokyo Night as herdr draws it, as terminal colours; the palette file may replace them (0698).
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Palette {
 	pub bg0: Color,
 	pub bg1: Color,
@@ -48,6 +53,106 @@ pub const TOKYO_NIGHT: Palette = Palette {
 	purple: Color::Rgb(0xbb, 0x9a, 0xf7),
 	orange: Color::Rgb(0xff, 0x9e, 0x64),
 };
+
+/// The palette this run draws with and the `:root` block the brief pages get after `brief.css` (0698). Set once by
+/// `load_palette` at start, so tests, which never call it, draw with Tokyo Night whatever file the machine holds.
+static ACTIVE: OnceLock<(Palette, String)> = OnceLock::new();
+
+/// Reads the palette file at `path` once, at start (0698): each valid `colors` entry replaces the built-in colour of
+/// its name; an unknown name, a value that isn't `#rrggbb`, a malformed file or no file keeps the built-in values.
+pub fn load_palette(path: &Path) {
+	let colours = std::fs::read_to_string(path)
+		.ok()
+		.and_then(|text| serde_json::from_str::<Value>(&text).ok())
+		.map(|file| palette_colours(&file))
+		.unwrap_or_default();
+	let _ = ACTIVE.set(apply_colours(&colours));
+}
+
+/// The palette this run draws with: Tokyo Night unless the palette file named other colours.
+pub fn palette() -> &'static Palette {
+	ACTIVE.get().map_or(&TOKYO_NIGHT, |(palette, _)| palette)
+}
+
+/// The `:root{…}` block appended to the brief pages' `brief.css`; empty without a palette file.
+pub fn palette_css() -> &'static str {
+	ACTIVE.get().map_or("", |(_, css)| css.as_str())
+}
+
+/// The names the palette file may set.
+const PALETTE_NAMES: [&str; 15] = [
+	"bg-0", "bg-1", "bg-2", "bg-3", "fg", "fg-2", "fg-3", "comment", "blue", "cyan", "yellow", "red", "green",
+	"purple", "orange",
+];
+
+/// The valid `colors` entries of a palette file, by name.
+fn palette_colours(file: &Value) -> Vec<(&'static str, [u8; 3])> {
+	let Some(colors) = file.get("colors").and_then(Value::as_object) else {
+		return Vec::new();
+	};
+	PALETTE_NAMES
+		.iter()
+		.filter_map(|name| colors.get(*name).and_then(Value::as_str).and_then(hex_colour).map(|rgb| (*name, rgb)))
+		.collect()
+}
+
+/// `#rrggbb` as its three bytes.
+fn hex_colour(text: &str) -> Option<[u8; 3]> {
+	let digits = text.strip_prefix('#')?;
+	if digits.len() != 6 || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+		return None;
+	}
+	let n = u32::from_str_radix(digits, 16).ok()?;
+	Some([(n >> 16) as u8, (n >> 8) as u8, n as u8])
+}
+
+/// Tokyo Night with `colours` in place, and the brief pages' `:root` block for them.
+fn apply_colours(colours: &[(&'static str, [u8; 3])]) -> (Palette, String) {
+	let mut palette = TOKYO_NIGHT;
+	let mut css = String::new();
+	for &(name, [r, g, b]) in colours {
+		let slot = match name {
+			"bg-0" => &mut palette.bg0,
+			"bg-1" => &mut palette.bg1,
+			"bg-2" => &mut palette.bg2,
+			"bg-3" => &mut palette.bg3,
+			"fg" => &mut palette.fg,
+			"fg-2" => &mut palette.fg2,
+			"fg-3" => &mut palette.fg3,
+			"comment" => &mut palette.comment,
+			"blue" => &mut palette.blue,
+			"cyan" => &mut palette.cyan,
+			"yellow" => &mut palette.yellow,
+			"red" => &mut palette.red,
+			"green" => &mut palette.green,
+			"purple" => &mut palette.purple,
+			_ => &mut palette.orange,
+		};
+		*slot = Color::Rgb(r, g, b);
+		let property = match name {
+			"bg-0" => "--bg",
+			"bg-2" => "--panel",
+			"bg-3" => "--line",
+			"fg" => "--fg",
+			"fg-3" => "--mut",
+			"blue" => "--blue",
+			"green" => "--green",
+			"yellow" => "--yellow",
+			"red" => "--red",
+			"purple" => "--purple",
+			_ => continue,
+		};
+		css.push_str(&format!("{property}:#{r:02x}{g:02x}{b:02x};"));
+		// Rec. 709 luma over half the range: a light ground, so the browser's own controls turn light too.
+		if name == "bg-0" && 2126 * u32::from(r) + 7152 * u32::from(g) + 722 * u32::from(b) > 1_275_000 {
+			css.insert_str(0, "color-scheme:light;");
+		}
+	}
+	if !css.is_empty() {
+		css = format!("\n:root{{{css}}}\n");
+	}
+	(palette, css)
+}
 
 /// A run of text in one colour.
 #[derive(Debug, Clone, PartialEq, Default)]

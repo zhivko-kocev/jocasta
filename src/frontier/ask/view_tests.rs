@@ -5,8 +5,8 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::*;
-use crate::frontier::tui::line_columns;
 use crate::frontier::tui::tests::draw_rows;
+use crate::frontier::tui::{TOKYO_NIGHT, line_columns};
 
 fn key(name: &str) -> Key {
 	Key::new(name, if name.chars().count() == 1 { name } else { "" })

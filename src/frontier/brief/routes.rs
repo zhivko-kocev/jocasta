@@ -1,6 +1,7 @@
 //! The brief routes (0678): the page, its data, its two assets and its actions, answered among the browser's pages
 //! (after the cookie check of `page_routes.rs`). `GET /brief/<id>` is the page, `GET /brief/<id>.json` its brief,
-//! `GET /brief/assets/brief.js|brief.css` the embedded page files and `POST /brief/<id>/act` an action whose answer is
+//! `GET /brief/assets/brief.js|brief.css` the embedded page files (the CSS followed by the palette file's `:root`
+//! block, 0698) and `POST /brief/<id>/act` an action whose answer is
 //! the whole updated brief. Every request needs this server's own `Host`; a `POST` also its own `Origin` and
 //! `content-type: application/json`.
 
@@ -14,6 +15,7 @@ use serde_json::{Value, json};
 
 use crate::frontier::brief::store;
 use crate::frontier::server::routes::{BoxFuture, host_allowed, json_response, text_response};
+use crate::frontier::tui::palette_css;
 use crate::shared::errors::{Error, Result};
 
 #[cfg(test)]
@@ -50,8 +52,8 @@ fn forbidden() -> Response {
 	text_response(StatusCode::FORBIDDEN, "Forbidden")
 }
 
-fn asset(text: &'static str, content_type: &'static str) -> Response {
-	let mut response = Response::new(Body::from(text));
+fn asset(text: impl Into<Body>, content_type: &'static str) -> Response {
+	let mut response = Response::new(text.into());
 	let headers = response.headers_mut();
 	headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
 	headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
@@ -85,7 +87,9 @@ impl BriefRoutes {
 		let rest = path.strip_prefix("/brief/").unwrap_or_default();
 		match (request.method().clone(), rest) {
 			(Method::GET, "assets/brief.js") => asset(PAGE_JS, "text/javascript; charset=utf-8"),
-			(Method::GET, "assets/brief.css") => asset(PAGE_CSS, "text/css; charset=utf-8"),
+			(Method::GET, "assets/brief.css") => {
+				asset(format!("{PAGE_CSS}{}", palette_css()), "text/css; charset=utf-8")
+			}
 			(Method::GET, _) => Self::read(rest),
 			(Method::POST, _) => match rest.strip_suffix("/act") {
 				Some(id) => self.act(request, id, host.as_deref().unwrap_or_default()).await,

@@ -8,9 +8,12 @@ use crate::frontier::protocol::{
 	NextItem, PrFacts, PrivateRow, PrivateSection, RailItem, Ram, ScheduledItem, ServiceHealth, ServiceName,
 	ThreadDiff, TopThread, Weather,
 };
-use crate::frontier::tui::render_lines;
 use crate::frontier::tui::tests::draw_rows;
+use crate::frontier::tui::{Palette, TOKYO_NIGHT, render_lines};
 use crate::shared::private::Private;
+
+/// Tests never load a palette file, so the views draw Tokyo Night.
+const P: Palette = TOKYO_NIGHT;
 
 fn at(y: i32, month: u32, d: u32, h: u32, m: u32) -> i64 {
 	Local.with_ymd_and_hms(y, month, d, h, m, 0).single().expect("a real local time").timestamp_millis()

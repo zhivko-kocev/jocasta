@@ -20,10 +20,11 @@ use crate::frontier::server::own_surface::OwnSurface;
 use crate::frontier::server::ptt::start_push_to_talk;
 use crate::frontier::server::server::{ServerOptions, start_server};
 use crate::frontier::shell::{AgentInfo, Hub, JocastaShell, Parts, Ui, run};
+use crate::frontier::tui::load_palette;
 use crate::shared::clock::now_ms;
 use crate::shared::errors::{Error, Result};
 use crate::shared::log::{LogLevel, log};
-use crate::shared::paths::data_dir;
+use crate::shared::paths::{config_dir, data_dir};
 use crate::shared::proctree::end_processes;
 use crate::shared::service_file::read_service_file;
 
@@ -109,6 +110,7 @@ async fn serve(native: Arc<Native>, surface: Arc<OwnSurface>, bridge: Bridge, ui
 /// Runs Jocasta: the service on a runtime of its own and the shell here, until the window closes or the service
 /// stops. The caller took the secrets out of the environment before any thread started.
 pub fn run_embedded() -> Result<()> {
+	load_palette(&config_dir().join("palette.json"));
 	let runtime = tokio::runtime::Builder::new_multi_thread()
 		.worker_threads(2)
 		.enable_all()

@@ -119,6 +119,33 @@ fn the_palette_matches_the_brief_pages_colours() {
 }
 
 #[test]
+fn the_palette_file_replaces_valid_colours_by_name_and_keeps_the_rest() {
+	let file = serde_json::json!({
+		"ompTheme": "dark-terminal",
+		"colors": {"bg-0": "#2e3440", "red": "#BF616A", "orange": "#d08770", "blue": "nope", "green": "#a3be8", "pink": "#ff00ff"}
+	});
+	let (palette, css) = apply_colours(&palette_colours(&file));
+	assert_eq!(palette.bg0, Color::Rgb(0x2e, 0x34, 0x40));
+	assert_eq!(palette.red, Color::Rgb(0xbf, 0x61, 0x6a));
+	assert_eq!(palette.orange, Color::Rgb(0xd0, 0x87, 0x70));
+	assert_eq!(palette.blue, TOKYO_NIGHT.blue);
+	assert_eq!(palette.green, TOKYO_NIGHT.green);
+	assert_eq!(palette.fg, TOKYO_NIGHT.fg);
+	assert_eq!(css, "\n:root{--bg:#2e3440;--red:#bf616a;}\n");
+}
+
+#[test]
+fn a_light_ground_turns_the_pages_light_and_no_colours_mean_tokyo_night() {
+	let light = serde_json::json!({"colors": {"bg-0": "#eff1f5", "fg": "#4c4f69"}});
+	assert_eq!(apply_colours(&palette_colours(&light)).1, "\n:root{color-scheme:light;--bg:#eff1f5;--fg:#4c4f69;}\n");
+	for file in [serde_json::json!([1]), serde_json::json!({"colors": "x"}), serde_json::json!({})] {
+		assert_eq!(apply_colours(&palette_colours(&file)), (TOKYO_NIGHT, String::new()));
+	}
+	assert_eq!(palette(), &TOKYO_NIGHT);
+	assert_eq!(palette_css(), "");
+}
+
+#[test]
 fn strip_ansi_removes_colour_codes_and_title_sequences_but_keeps_text() {
 	assert_eq!(strip_ansi("a\u{1b}[31mred\u{1b}[0m b"), "ared b");
 	assert_eq!(strip_ansi("x\u{1b}]0;title\u{7}y\u{1b}]8;;u\u{1b}\\z"), "xyz");
