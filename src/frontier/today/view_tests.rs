@@ -152,7 +152,18 @@ fn hud() -> Hud {
 		accounts: Vec::new(),
 		capacity: Vec::new(),
 		checks: None,
+		problems: Vec::new(),
 	}
+}
+
+#[test]
+fn the_first_run_problems_follow_the_header_wrapped_to_the_width() {
+	let problems = vec!["omp isn't signed in: type /login in the boss pane".to_owned()];
+	let state = up(None, Some(Hud { problems, ..hud() }), None);
+	let shown = lines(&state, 30, 8);
+	let at = shown.iter().position(|l| l == "omp isn't signed in: type").expect("the problem's first row");
+	assert_eq!(shown[at + 1], "/login in the boss pane");
+	assert!(lines(&up(None, Some(hud()), None), 30, 8).iter().all(|l| !l.contains("signed in")));
 }
 
 fn headline(title: &str, url: &str) -> Headline {

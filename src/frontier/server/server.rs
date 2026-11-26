@@ -96,6 +96,9 @@ pub struct ServerOptions {
 	pub weekly_reviews: Option<bool>,
 	/// `Some(false)`: the tick builds no morning or weekly brief by itself (0680).
 	pub auto_briefs: Option<bool>,
+	/// `Some(keys)`: the first-run checks run once after the start (0703), `keys` being whether his terminal reports Alt
+	/// and Shift; `None` (tests) runs none.
+	pub first_run: Option<bool>,
 	/// Asks him Allow or Deny (0484); his question through this server's question API by default.
 	pub confirm: Option<Confirm>,
 	/// How long an ask waits for his answer.
@@ -147,6 +150,7 @@ impl ServerOptions {
 		service.scorecard_ms = self.scorecard_ms;
 		service.weekly_reviews = self.weekly_reviews;
 		service.auto_briefs = self.auto_briefs;
+		service.first_run = self.first_run;
 		service.confirm_wait_ms = self.confirm_wait_ms;
 		service.boss_key = self.boss_key.take();
 		service.bridge = self.bridge.clone();

@@ -57,18 +57,13 @@ fn failed(why: &str, ui: &Sender<Ui>) {
 	let _ = ui.send(Ui::Quit);
 }
 
-/// Runs the service until it stops or `closed` is notified (the window closed), then stops everything at once.
-async fn serve(native: Arc<Native>, surface: Arc<OwnSurface>, bridge: Bridge, ui: Sender<Ui>, closed: Arc<Notify>) {
+/// Runs the service with `options` until it stops or `closed` is notified (the window closed), then stops everything
+/// at once.
+async fn serve(native: Arc<Native>, options: ServerOptions, ui: Sender<Ui>, closed: Arc<Notify>) {
 	let instance = match take_lock().await {
 		Ok(Some(instance)) => instance,
 		Ok(None) => return failed("another Jocasta service is running; close it first", &ui),
 		Err(error) => return failed(&error.to_string(), &ui),
-	};
-	let options = ServerOptions {
-		herdr: Some(surface),
-		shell: Some(Arc::clone(&native)),
-		bridge: Some(bridge),
-		..ServerOptions::default()
 	};
 	let server = match start_server(options).await {
 		Ok(server) => server,
@@ -111,6 +106,9 @@ async fn serve(native: Arc<Native>, surface: Arc<OwnSurface>, bridge: Bridge, ui
 /// stops. The caller took the secrets out of the environment before any thread started.
 pub fn run_embedded() -> Result<()> {
 	load_palette(&config_dir().join("palette.json"));
+	// Asked once, before the shell or the service reads the console: the shell asks for the keys with it, and the
+	// first-run checks say when the terminal can't (0703).
+	let enhanced = ratatui::crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
 	let runtime = tokio::runtime::Builder::new_multi_thread()
 		.worker_threads(2)
 		.enable_all()
@@ -137,9 +135,15 @@ pub fn run_embedded() -> Result<()> {
 		hub.changed(),
 	);
 	let native = Native::new(host, runtime.handle().clone());
-	let surface = OwnSurface::new(Arc::clone(&hub));
+	let options = ServerOptions {
+		herdr: Some(OwnSurface::new(Arc::clone(&hub))),
+		shell: Some(Arc::clone(&native)),
+		bridge: Some(bridge),
+		first_run: Some(enhanced),
+		..ServerOptions::default()
+	};
 	let closed = Arc::new(Notify::new());
-	let service = runtime.spawn(serve(Arc::clone(&native), surface, bridge, tx.clone(), Arc::clone(&closed)));
+	let service = runtime.spawn(serve(Arc::clone(&native), options, tx.clone(), Arc::clone(&closed)));
 	// A closed window hangs up its terminal on Linux and macOS, and the default for that signal ends the process on
 	// the spot, the service file and every pane left behind; it and a plain terminate are the word to leave, as the
 	// console's close event is on Windows.
@@ -158,7 +162,7 @@ pub fn run_embedded() -> Result<()> {
 			});
 		}
 	}
-	let parts = Parts { hub, shell: JocastaShell::new(now_ms), native, tx, rx };
+	let parts = Parts { hub, shell: JocastaShell::new(now_ms), native, tx, rx, enhanced };
 	crate::shared::log::set_stderr(false);
 	let ran = run(parts);
 	crate::shared::log::set_stderr(true);

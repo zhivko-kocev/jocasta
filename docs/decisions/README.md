@@ -706,4 +706,5 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0700](0700-jocasta-status-json.md) | `jocasta status --json` | product | v1 | ultron 0.3 iteration, J5 | 2026-11-26 |  |
 | [0701](0701-linux-guard-shapes-and-fenced-folders.md) | Linux guard shapes and fenced folders | product | v1 | ultron 0.3 iteration, J1 | 2026-11-26 |  |
 | [0702](0702-unix-runtime.md) | Unix runtime | product | v1 | ultron 0.3 iteration, J1 | 2026-11-26 |  |
+| [0703](0703-first-run-checks.md) | First-run checks | product | v1 | ultron 0.3 iteration, J8 | 2026-11-26 |  |
 | [0704](0704-project-named-mise-file.md) | Project-named mise file | product | v1 | ultron 0.3 iteration, J9 | 2026-11-26 |  |

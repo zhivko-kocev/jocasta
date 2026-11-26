@@ -242,7 +242,8 @@ fn part(text: String, fg: ratatui::style::Color) -> Part {
 
 /// The header (0555, 0581): date and time, `quiet` during quiet hours, each broken service in red with its note, the
 /// weather, CPU and memory, the quota windows (a high one with its reset when that is within a day) and today's spend.
-/// The weather, then CPU and memory, give way when the header would pass two rows.
+/// The weather, then CPU and memory, give way when the header would pass two rows. Below them, each first-run problem
+/// (0703) in red, wrapped to the width.
 fn header(state: &TodayState, now: i64, width: usize) -> Vec<Line> {
 	let date = day_label(DayRef::Time(now), false);
 	let mut parts =
@@ -312,6 +313,9 @@ fn header(state: &TodayState, now: i64, width: usize) -> Vec<Line> {
 		}
 		let kept: Vec<&Line> = parts.iter().filter(|p| p.yields.is_none_or(|y| y > level)).map(|p| &p.line).collect();
 		lines = flow(&kept, width);
+	}
+	for problem in hud.iter().flat_map(|h| h.problems.iter()) {
+		lines.extend(wrap(problem, width).into_iter().map(|l| vec![Segment::new(l, palette().red)]));
 	}
 	lines
 }

@@ -25,7 +25,7 @@ use ratatui::crossterm::event::{
 };
 use ratatui::crossterm::terminal::{
 	BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen, SetTitle,
-	disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement,
+	disable_raw_mode, enable_raw_mode,
 };
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -64,6 +64,9 @@ pub struct Parts {
 	pub native: Arc<Native>,
 	pub tx: Sender<Ui>,
 	pub rx: Receiver<Ui>,
+	/// Whether his terminal answered the kitty keyboard protocol's query, asked once before anything read the console;
+	/// the first-run checks use the same answer (0703).
+	pub enhanced: bool,
 }
 
 fn base64(data: &[u8]) -> String {
@@ -506,7 +509,7 @@ fn copy(text: &str) {
 /// Runs the shell until his window closes (the console input ends), the service says to stop (`Ui::Quit`), or the
 /// terminal fails. The terminal is put back as it was.
 pub fn run(parts: Parts) -> io::Result<()> {
-	let Parts { hub, shell, native, tx, rx } = parts;
+	let Parts { hub, shell, native, tx, rx, enhanced } = parts;
 	let (width, height) = ratatui::crossterm::terminal::size()?;
 	// crossterm honours NO_COLOR by dropping every colour command; a terminal that hosts other programs must not.
 	crossterm::style::force_color_output(true);
@@ -514,7 +517,6 @@ pub fn run(parts: Parts) -> io::Result<()> {
 	let mut stdout = io::stdout();
 	crossterm::execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
 	let _ = crossterm::execute!(stdout, EnableBracketedPaste, EnableFocusChange);
-	let enhanced = supports_keyboard_enhancement().unwrap_or(false);
 	if enhanced {
 		crossterm::execute!(stdout, PushKeyboardEnhancementFlags(keys::KEYBOARD_FLAGS))?;
 	}

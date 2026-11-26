@@ -38,14 +38,19 @@ While threads work, you keep talking to the boss. It tells you when one needs yo
 
 ## Requirements
 
-- **Windows 11.** Linux (x64) and macOS (Apple silicon) builds exist but are untested in daily use.
+- **Windows 11, Linux (x64) or macOS (Apple silicon).** Windows 11 is in daily use; the Linux and macOS builds pass the test suite in CI.
 - **[omp](https://github.com/can1357/oh-my-pi)** on your PATH and signed in to a model provider: run `omp`, then `/login`. This release is checked against omp 19.2.0. Jocasta names no model: the boss and threads use your omp model roles, and a `--heavy` thread uses your `slow` role.
 - The terminal shell needs no install: it is built into `jocasta`.
 - **git**, version 2.54 or newer for the push check.
 - **[mise](https://mise.jdx.dev)** (optional). With it, setup pins gh, and each project can have its own check and test tasks.
 - A browser, for the briefs.
+- **On Linux and macOS:** a terminal that sends Alt and Shift keys through the kitty keyboard protocol: foot, kitty, WezTerm or Ghostty. **On Linux** also `notify-send` (libnotify) for notifications and `xdg-open` (xdg-utils) to open briefs and links.
+
+When something here is missing, Jocasta says so once at start, in a notification and in red at the top of `today`.
 
 ## Install
+
+### Windows
 
 In PowerShell:
 
@@ -53,22 +58,33 @@ In PowerShell:
 irm https://raw.githubusercontent.com/zhivko-kocev/jocasta/main/scripts/install.ps1 | iex
 ```
 
-This installs to `%LOCALAPPDATA%\Programs\jocasta\` and adds that folder to your user PATH. The download is checked against a checksum committed in this repository. To upgrade, run the same command again, then close Jocasta and open it again. On Linux and macOS, use `scripts/install.sh`, which installs to `~/.local/lib/jocasta/`; an upgrade keeps a running Jocasta on the old build until you close it and open it again.
+This installs to `%LOCALAPPDATA%\Programs\jocasta\` and adds that folder to your user PATH. The download is checked against a checksum committed in this repository. To upgrade, run the same command again, then close Jocasta and open it again.
+
+### Linux and macOS
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/zhivko-kocev/jocasta/main/scripts/install.sh | sh
+```
+
+This installs to `~/.local/lib/jocasta/` (set `JOCASTA_INSTALL_DIR` for another folder) and adds it to your PATH in your shell's rc file, so open a new terminal afterwards. The download is checked against a checksum committed in this repository. To upgrade, run the same command again; a running Jocasta keeps the old build until you close it and open it again.
+
+To install a build of your own instead, run `mise run build` in this repository, then `JOCASTA_INSTALL_FROM="$PWD/dist" sh scripts/install.sh`.
 
 ## First run
 
 **1. Set up.** Open a new terminal, then run:
 
-```powershell
+```sh
 jocasta setup
 ```
 
-Setup connects Jocasta to omp. It writes Jocasta's tuned omp files (settings, keys, language servers, a skill and Jocasta's MCP server) over yours in `~/.omp/agent`, keeping a copy of each file it replaces; your logins, sessions and memory aren't touched. It also adds a Windows Terminal colour scheme. **Each change is shown as a diff and written only after you type `y`.** Run it again after each upgrade. Anything it writes, `jocasta uninstall` takes back out, and your own files come back.
+Setup connects Jocasta to omp. It writes Jocasta's tuned omp files (settings, keys, language servers and a skill) over yours in `~/.omp/agent`, keeping a copy of each file it replaces; your logins, sessions and memory aren't touched. On Windows it also adds a Windows Terminal colour scheme. **Each change is shown as a diff and written only after you type `y`.** Run it again after each upgrade. Anything it writes, `jocasta uninstall` takes back out, and your own files come back.
 
 **2. Add your projects.** A project is a git repository. Add one at a time:
 
-```powershell
-jocasta project add C:\code\acme-api
+```sh
+jocasta project add ~/code/acme-api        # Linux and macOS
+jocasta project add C:\code\acme-api       # Windows
 ```
 
 You can also have Jocasta watch a folder in `~/.jocasta/agent/projects.yaml`. It then picks up every repository in that folder:
@@ -76,20 +92,20 @@ You can also have Jocasta watch a folder in `~/.jocasta/agent/projects.yaml`. It
 ```yaml
 version: 1
 roots:
-  - path: C:/code
-    depth: 1          # how many folder levels to look into
-    ignore: [archive] # optional
+  - path: /home/you/code   # on Windows: C:/code
+    depth: 1               # how many folder levels to look into
+    ignore: [archive]      # optional
 ```
 
 To check what Jocasta found, run `jocasta project list`.
 
 **3. Open Jocasta.**
 
-```powershell
+```sh
 jocasta
 ```
 
-This opens Jocasta's session. The boss is on the left, and `today` is docked on the right. Each project and each thread gets its own workspace (Alt+1…9 switch between them).
+This opens Jocasta's session. The boss is on the left, and `today` is docked on the right. Each project and each thread gets its own workspace (Alt+1…9 switch between them). If omp isn't signed in yet, type `/login` in the boss pane; a red line at the top of `today` names anything else that is missing and how to fix it.
 
 **4. Start a thread.** Tell the boss what you want, for example "in acme-api, add retries to the HTTP client". You can also press **Ctrl+B, then Alt+N**, pick the project and write a brief. Either way:
 
@@ -119,7 +135,7 @@ Questions that need your permission appear in front of whatever you're doing, dr
 | Command | What it does |
 |---|---|
 | `jocasta` | Open the work surface, starting Jocasta's server if needed |
-| `jocasta setup` | Show and apply Jocasta's changes to omp, Windows Terminal and mise |
+| `jocasta setup` | Show and apply Jocasta's changes to omp, mise and (on Windows) Windows Terminal |
 | `jocasta setup --yes` | Apply them without asking (for install scripts); the list is still printed |
 | `jocasta setup --refresh <file>` | Put `jocasta.json` or `mcp.json` back to the shipped version, keeping a backup |
 | `jocasta project list \| add <path> \| remove <name or id>` | Manage projects |
@@ -139,7 +155,7 @@ The [manual](https://github.com/zhivko-kocev/jocasta/blob/main/docs/manual.md#co
 |---|---|
 | `~/.jocasta/agent/jocasta.yaml` | Jocasta's settings: port, quiet hours, weather, GitHub, Azure DevOps, calendar and news |
 | `~/.jocasta/agent/projects.yaml` | Your projects and watched folders |
-| `%LOCALAPPDATA%\jocasta\data` | Data and logs (`logs\jocasta-YYYY-MM-DD.log`, kept for 7 days) |
+| `%LOCALAPPDATA%\jocasta\data` (Windows), `~/.local/share/jocasta/data` (Linux), `~/Library/Application Support/jocasta/data` (macOS) | Data and logs (`logs/jocasta-YYYY-MM-DD.log`, kept for 7 days) |
 | `~/.omp/agent/` | omp's own config, which setup edits only with your `y` |
 | `AGENTS.local.md` in a project | Private notes that every agent in that project reads (keep it gitignored) |
 | `~/.jocasta/agent/boss.yml`, `pane.yml` | Your own omp settings for the boss and for every project and thread pane (optional) |
@@ -173,7 +189,7 @@ mise run check                              # lint, type checks and every test
 mise run build                              # release build into dist/
 ```
 
-Jocasta is written in Rust. The brief pages' script is plain JavaScript, checked with Bun. To install your own build, set `JOCASTA_INSTALL_FROM` to the `dist` folder and run `scripts/install.ps1`. Read [CONTRIBUTING.md](CONTRIBUTING.md) for how changes are made here, and the [manual's development section](https://github.com/zhivko-kocev/jocasta/blob/main/docs/manual.md#development) for the details.
+Jocasta is written in Rust. The brief pages' script is plain JavaScript, checked with Bun. To install your own build, set `JOCASTA_INSTALL_FROM` to the `dist` folder and run `scripts/install.ps1` (Windows) or `scripts/install.sh` (Linux and macOS). Read [CONTRIBUTING.md](CONTRIBUTING.md) for how changes are made here, and the [manual's development section](https://github.com/zhivko-kocev/jocasta/blob/main/docs/manual.md#development) for the details.
 
 ## Credits
 

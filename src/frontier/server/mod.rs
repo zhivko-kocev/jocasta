@@ -42,6 +42,7 @@ pub mod embedded;
 pub mod events;
 pub mod feed;
 pub mod finish;
+pub mod first_run;
 pub mod health_route;
 #[cfg(test)]
 #[allow(dead_code, reason = "the later waves' service tests build on these helpers")]

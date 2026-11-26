@@ -522,6 +522,15 @@ async fn apply_in_order(paths: &SetupPaths, changes: Vec<PlannedChange>, io: &dy
 /// every pane through its environment, in silence, so pushes to main, master and develop would go unasked. `None`
 /// when git is new enough.
 fn git_version_note(output: Option<&str>) -> Option<String> {
+	let has = git_too_old(output)?;
+	Some(format!(
+		"{has}: Jocasta's check of pushes to main, master and develop needs git 2.54 or newer, so a pane's pushes there go unasked until you update git."
+	))
+}
+
+/// What is wrong with the git `git --version` printed (`output`; `None` when git can't run): `git 2.43 is older than
+/// 2.54` or `git isn't installed`; `None` when it is 2.54 or newer. Setup's note and the first-run check (0703) say it.
+pub fn git_too_old(output: Option<&str>) -> Option<String> {
 	static VERSION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\d+)\.(\d+)").expect("a fixed pattern"));
 	let found = output.and_then(|output| VERSION.captures(output));
 	let number = |at: usize| found.as_ref().and_then(|f| f[at].parse::<f64>().ok());
@@ -530,13 +539,10 @@ fn git_version_note(output: Option<&str>) -> Option<String> {
 	{
 		return None;
 	}
-	let has = match &found {
+	Some(match &found {
 		Some(found) => format!("git {} is older than 2.54", &found[0]),
 		None => "git isn't installed".to_owned(),
-	};
-	Some(format!(
-		"{has}: Jocasta's check of pushes to main, master and develop needs git 2.54 or newer, so a pane's pushes there go unasked until you update git."
-	))
+	})
 }
 
 /// Whether setup asks before it writes (0694): `jocasta setup` asks once; `--yes` never asks, and skips the secret

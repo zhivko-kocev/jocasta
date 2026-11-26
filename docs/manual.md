@@ -12,11 +12,15 @@ Jocasta is a work surface around your daily omp, in three parts (0386, 0392, 055
 
 ## Prerequisites
 
-- Windows 11 (Linux and macOS builds exist; the test suite passes there, the builds themselves are untested; see below).
+- Windows 11, Linux (x64) or macOS (Apple silicon). Windows 11 is in daily use; the Linux and macOS builds pass the test suite in CI (see "Linux and macOS" below).
 - omp on PATH, signed in (`omp`, then `/login`; 0386). This build is checked against omp 19.2.0 (0535, 0623, 0663, 0690; the fork build moved the pin). Dictation is omp's own: omp downloads its speech model on first use or with `omp setup speech` (0556).
 - [mise](https://mise.jdx.dev), optional: with it, setup pins gh (0476, 0542).
+- git 2.54 or newer: the question about pushes to main, master and develop needs it (0613).
+- Linux and macOS: a terminal that speaks the kitty keyboard protocol, so Alt and Shift combinations reach Jocasta: foot, kitty, WezTerm or Ghostty. Linux also: `notify-send` (libnotify) for notifications and `xdg-open` (xdg-utils) for briefs and links.
 
 ## Install
+
+### Windows
 
 ```powershell
 irm https://raw.githubusercontent.com/zhivko-kocev/jocasta/main/scripts/install.ps1 | iex
@@ -30,28 +34,51 @@ To install a local build instead, point `JOCASTA_INSTALL_FROM` at a folder holdi
 $env:JOCASTA_INSTALL_FROM = "$PWD\dist"; .\scripts\install.ps1   # from the repo, after `mise run build`
 ```
 
-`scripts/install.sh` takes `JOCASTA_INSTALL_FROM` the same way, with `jocasta-<target>.tar.gz`.
+### Linux and macOS
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/zhivko-kocev/jocasta/main/scripts/install.sh | sh
+```
+
+Installs to `~/.local/lib/jocasta/` (or `JOCASTA_INSTALL_DIR`; 0692) and appends the folder to PATH in your shell's rc file (`~/.zshrc`, `~/.bashrc` or `~/.profile`), so open a new terminal afterwards. The folder rules, the checksum check and `install.json` are as on Windows. A local build installs with `JOCASTA_INSTALL_FROM="$PWD/dist" sh scripts/install.sh` after `mise run build` (`jocasta-<target>.tar.gz` and its `.sha256`).
 
 ## First run
 
-```powershell
+```sh
 jocasta setup
 ```
 
 Setup's changes are numbered migrations (0466). Each one shows its diff and is written only after `y`; it runs once per shipped version, with a marker in `~/.jocasta/agent/setup/`, so a file you edit afterwards is left alone until Jocasta ships something new for it. The first failure stops the rest and says why (exit 1). When changes are waiting, the service says so once at start, in a system notification: "jocasta setup has N changes waiting: run `jocasta setup` to see them."
 
 - Jocasta's omp snapshot over your omp files in `~/.omp/agent` (0650), one change with one `y`: `config.yml`, `keybindings.yml`, `lsp.json`, `WATCHDOG.md` and the mise skill from `config/omp/`; and `secrets.yml` only when missing. Each file it replaces is kept first in `~/.jocasta/agent/setup/omp-backup/<UTC time>/`; a later snapshot keeps the first backup as the one uninstall puts back. Logins, sessions, memory and history are never touched;
-- the Windows Terminal scheme Tokyo Night, from Jocasta's palette (0401, 0474);
+- on Windows, the Windows Terminal scheme Tokyo Night, from Jocasta's palette (0401, 0474);
 - with mise on PATH, mise's machine file `~/.config/mise/conf.d/jocasta.toml` (pinned gh; your own `config.toml` wins; 0476, 0562);
 - from an install that still has the old graph (`~/.jocasta/agent/compose.yaml`), Graphiti's and FalkorDB's containers taken down when Docker runs, with one question whether their images and volume go too, and the compose file and `containers\` removed (migration 16, 0603); whatever stays is named with the one command that removes it;
 - the old `jocasta` herdr plugin's folder `~/.jocasta/agent/herdr-plugin/` and its marker removed (migration 18, 0649), and herdr's leftovers removed (migration 22 `herdr-gone`, 0683): `<omp agent>/extensions/herdr-omp-agent-state.ts` and `~/.jocasta/agent/herdr.toml`; a herdr installed apart from Jocasta keeps the link setup made before, until `herdr plugin unlink jocasta` there;
 - a note when git is older than 2.54 or missing: the question about pushes to main, master and develop needs it, and a pane's pushes there go unasked until you update git (0613);
-- the calendar's secret address from `JOCASTA_CALENDAR_ICAL_SECRET` into Windows Credential Manager (0430);
+- on Windows, the calendar's secret address from `JOCASTA_CALENDAR_ICAL_SECRET` into Windows Credential Manager (0430; on Linux and macOS the variable is read at each start);
 - the Gmail app password (`jocasta/gmail-app-password`, or `JOCASTA_GMAIL_APP_PASSWORD`) and the Jira API token (`jocasta/jira-token`, or `JOCASTA_JIRA_TOKEN`): asked for, hidden, only when `pollers.gmail.address` or `pollers.jira.site` and `email` are set in `jocasta.yaml` and the secret isn't stored yet (0680).
 
 To put one file back to the shipped version, run `jocasta setup --refresh jocasta.json` (the Terminal scheme), by name or full path: it shows the diff, asks "Refresh? [y/N]" and keeps the old file as `<file>.bak.<YYYYMMDD-HHMMSS>` beside it (0467).
 
 After upgrading, run `jocasta setup` once: this build writes the omp snapshot and removes the `jocasta` MCP entry from the `mcp.json` files (your other entries stay; 0675). Jocasta's tools now reach omp through one extension each pane loads over a local pipe; a tool that may wait for your Allow, a check or a commit (`thread_start`, `thread_finish`, `worktree_remove`, `lesson`, `check`) says to call it with the bash tool's timeout set to 3600 s, since omp runs a mounted tool inside its bash call (default limit 5 minutes).
+
+Then add a project and open Jocasta, for example on Linux or macOS:
+
+```sh
+jocasta project add ~/code/acme-api
+jocasta
+```
+
+First-run checks (0703): once the service has started, Jocasta checks in the background for what it needs and says each missing piece once as a notification and, for the rest of the run, in red under `today`'s header:
+
+- `omp isn't on PATH: install omp, run omp, then /login`;
+- `omp isn't signed in: type /login in the boss pane` (read from `omp usage` failing for want of a login);
+- `git 2.43 is older than 2.54: install git 2.54 or newer, or pushes to main, master and develop go unasked` (or `git isn't installed: …`);
+- Linux only: `notify-send isn't installed: install libnotify, or Jocasta's notifications stay off` and `xdg-open isn't installed: install xdg-utils, or briefs and links won't open`;
+- Linux and macOS: `this terminal doesn't send Alt and Shift keys Jocasta needs; use foot, kitty, WezTerm or Ghostty`.
+
+Fix it and start Jocasta again; the line goes once the check passes.
 
 ## Daily use
 

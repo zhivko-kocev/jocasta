@@ -133,6 +133,9 @@ pub struct ServiceOptions {
 	/// `Some(false)` (test seam): the refresh tick builds no morning brief and the due weekly review no weekly brief
 	/// (0680); his `b` key still builds the morning brief.
 	pub auto_briefs: Option<bool>,
+	/// `Some(keys)`: the first-run checks run once after the start (0703), `keys` being whether his terminal reports Alt
+	/// and Shift; `None` (tests) runs none, so no test runs `omp usage`.
+	pub first_run: Option<bool>,
 	/// Asks him Allow or Deny (0484): a question through the service's question API (0519, 0552), with how it ended
 	/// (0578: his answer, three wrong codes, the popup closed, another reader). The signal aborts once the answer isn't
 	/// wanted any more (the wait ran out, the service is stopping) and the question goes. Without it every ask counts as
@@ -190,6 +193,7 @@ impl ServiceOptions {
 			scorecard_ms: None,
 			weekly_reviews: None,
 			auto_briefs: None,
+			first_run: None,
 			confirm: None,
 			confirm_wait_ms: None,
 			boss_key: None,
@@ -477,6 +481,9 @@ impl JocastaService {
 		c.day.start();
 		self.start_spend_backfill().await;
 		self.start_setup_notice();
+		if let Some(keys) = c.options.first_run {
+			tokio::spawn(crate::frontier::server::first_run::check(Arc::downgrade(c), keys));
+		}
 		self.start_watcher().await;
 		self.refresh().await;
 		self.start_timers(&me);

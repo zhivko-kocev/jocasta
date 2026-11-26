@@ -148,6 +148,8 @@ struct State {
 	workspaces: Vec<WorkspaceInfo>,
 	/// `jocasta setup`'s pending changes, said once as a notification (0466).
 	setup_notice: Option<String>,
+	/// The first-run checks' problems (0703), in `today`'s header for the rest of the run.
+	problems: Vec<String>,
 	/// Sidebar tokens last reported, per pane and per project workspace, in the order first reported.
 	reported: Vec<(String, Reported)>,
 	/// The HUD's figures as last pushed to the page (FE-4): sent whenever they change, the quota's included.
@@ -260,6 +262,11 @@ impl StatusViews {
 	/// `jocasta setup`'s pending changes, said once as a notification on the next `report` (0466).
 	pub fn set_setup_notice(&self, text: String) {
 		self.st().setup_notice = Some(text);
+	}
+
+	/// The first-run checks' problems (0703): the HUD carries them to `today`'s header from the next refresh on.
+	pub fn set_problems(&self, problems: Vec<String>) {
+		self.st().problems = problems;
 	}
 
 	/// Forgets what was read of a closed or finished thread.
@@ -603,6 +610,7 @@ impl StatusViews {
 			checks: Some(c.checks.load()).filter(|load| load.running + load.waiting > 0),
 			// today's header says quiet hours (0581).
 			quiet: Some(c.day.quiet()),
+			problems: self.st().problems.clone(),
 		}
 	}
 

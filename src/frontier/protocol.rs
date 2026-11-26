@@ -719,6 +719,9 @@ pub struct Hud {
 	/// The check queue (0671); present only while a check runs or waits.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub checks: Option<ChecksLoad>,
+	/// What the first-run checks found missing (0703): `today`'s header says each, in red.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub problems: Vec<String>,
 }
 
 /// Why a notification was raised.
@@ -881,6 +884,7 @@ mod tests {
 					QuotaWindow { window: QuotaSpan::SevenDays, used: 1.0, resets_at: None },
 				],
 				quiet: Some(true),
+				problems: Vec::new(),
 				spend_avg_7d: Some(4.5),
 				top_thread: Some(TopThread { title: "Fix login".to_owned(), cost: 2.0 }),
 				accounts: vec![QuotaAccount {
