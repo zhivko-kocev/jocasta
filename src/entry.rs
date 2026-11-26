@@ -17,8 +17,8 @@ use crate::frontier::server::launch::{service_health, service_state};
 use crate::frontier::server::pane_launch::pane_omp_program;
 use crate::setup::diagnose::{DiagnoseDeps, ServiceInfo, run_diagnose};
 use crate::setup::setup::{
-	RunOutput, RunProgram, SetupDeps, SetupIo, default_calendar_store, default_secret_store, default_setup_paths,
-	mise_config_dir, refresh_setup, run_setup, setup_check, setup_undo,
+	Asking, RunOutput, RunProgram, SetupDeps, SetupIo, default_calendar_store, default_secret_store,
+	default_setup_paths, mise_config_dir, refresh_setup, run_setup, setup_check, setup_undo,
 };
 use crate::setup::uninstall::{
 	UninstallDeps, UninstallPaths, processes_under, read_install_record, remove_after_exit, remove_run_value_for,
@@ -131,7 +131,7 @@ impl SetupIo for ConsoleIo {
 	}
 }
 
-async fn run_setup_route(refresh: Option<String>, calendar_env: Option<String>) -> Result<i32> {
+async fn run_setup_route(refresh: Option<String>, asking: Asking, calendar_env: Option<String>) -> Result<i32> {
 	let paths = default_setup_paths(&shipped_config_dir(None), self_command(None));
 	let mut deps = SetupDeps::new();
 	deps.mise = on_path("mise", None);
@@ -146,7 +146,7 @@ async fn run_setup_route(refresh: Option<String>, calendar_env: Option<String>) 
 	deps.docker = Some(run_program_dep());
 	let io = ConsoleIo::new();
 	match refresh {
-		None => run_setup(&paths, &deps, &io).await,
+		None => run_setup(&paths, &deps, &io, asking).await,
 		Some(file) => refresh_setup(&paths, &deps, &io, &file, None).await,
 	}
 }
@@ -355,7 +355,9 @@ async fn run_route(target: Route, calendar_env: Option<String>) -> Result<i32> {
 		Route::Thread { args } => run_service_cli(CliWord::Thread, &args).await,
 		Route::Worktree { args } => run_service_cli(CliWord::Worktree, &args).await,
 		Route::PushHook { args } => run_push_hook_route(&args).await,
-		Route::Setup { refresh } => run_setup_route(refresh, calendar_env).await,
+		Route::Setup { refresh, yes } => {
+			run_setup_route(refresh, if yes { Asking::Never } else { Asking::Ask }, calendar_env).await
+		}
 		Route::Uninstall => run_uninstall_route().await,
 		Route::Diagnose => run_diagnose_route().await,
 		Route::Surface => unreachable!("`main` runs this before Jocasta's runtime exists"),

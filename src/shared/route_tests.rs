@@ -24,10 +24,15 @@ fn help() -> String {
 }
 
 #[test]
-fn the_jocasta_commands_words_0387_0467_0468_0472_0544_anything_else_is_a_usage_error() {
+fn the_jocasta_commands_words_0387_0467_0468_0472_0544_0694_anything_else_is_a_usage_error() {
 	assert_eq!(go(&[]), Route::Surface);
-	assert_eq!(go(&["setup"]), Route::Setup { refresh: None });
-	assert_eq!(go(&["setup", "--refresh", "herdr.toml"]), Route::Setup { refresh: Some("herdr.toml".to_owned()) });
+	assert_eq!(go(&["setup"]), Route::Setup { refresh: None, yes: false });
+	assert_eq!(
+		go(&["setup", "--refresh", "herdr.toml"]),
+		Route::Setup { refresh: Some("herdr.toml".to_owned()), yes: false }
+	);
+	assert_eq!(go(&["setup", "--yes"]), Route::Setup { refresh: None, yes: true });
+	assert_eq!(go(&["setup", "-y"]), Route::Setup { refresh: None, yes: true });
 	assert_eq!(go(&["uninstall"]), Route::Uninstall);
 	assert_eq!(go(&["diagnose"]), Route::Diagnose);
 	assert_eq!(go(&["project", "list"]), Route::Project { args: words(&["list"]) });
@@ -47,6 +52,7 @@ fn the_jocasta_commands_words_0387_0467_0468_0472_0544_anything_else_is_a_usage_
 		&["setup", "now"][..],
 		&["setup", "--refresh"],
 		&["setup", "--refresh", ""],
+		&["setup", "--yes", "--refresh", "jocasta.json"],
 		&["uninstall", "--yes"],
 		&["diagnose", "now"],
 		&["service"],

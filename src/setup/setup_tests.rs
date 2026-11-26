@@ -126,7 +126,7 @@ impl Harness {
 
 	async fn setup_with(&self, answer: Option<&str>) -> Result<Out> {
 		let io = TestIo::new(&[answer]);
-		let code = run_setup(&self.paths, &self.deps(), &io).await?;
+		let code = run_setup(&self.paths, &self.deps(), &io, Asking::Ask).await?;
 		Ok(Out { code, text: io.text(), asked: io.asked() })
 	}
 
@@ -300,6 +300,29 @@ async fn a_fresh_machine_the_diff_names_every_file_and_n_writes_nothing() {
 	assert!(!h.fragment().exists());
 	// End of input is a no too.
 	assert!(h.setup(None).await.text.ends_with("Nothing written."));
+}
+
+#[tokio::test]
+async fn yes_writes_every_change_without_a_question_and_prints_the_same_list_0694() {
+	let h = Harness::new();
+	let shown = h.setup(Some("n")).await.text;
+	let calendar = Calendar::new(None);
+	let io = TestIo::new(&[]);
+	let mut deps = h.deps();
+	deps.calendar = Some(calendar.clone());
+	let code = run_setup(&h.paths, &deps, &io, Asking::Never).await.unwrap();
+	assert_eq!(code, 0);
+	// Nothing asked, the calendar's address included; the list is the one the question would follow.
+	assert!(io.asked().is_empty());
+	assert!(io.secrets.lock().unwrap().is_empty());
+	let text = io.text();
+	assert!(text.starts_with(shown.trim_end_matches("Nothing written.")), "{text}");
+	assert!(text.ends_with("Done: run `jocasta` to open Jocasta."));
+	assert!(h.fragment().exists());
+	for path in h.snapshot_paths() {
+		assert!(path.exists(), "{}", s(&path));
+	}
+	assert!(h.setup(None).await.text.contains(IN_PLACE));
 }
 
 #[tokio::test]
@@ -577,7 +600,7 @@ async fn a_failed_migration_stops_the_rest_and_says_why_the_ones_before_it_are_m
 	// The scheme's file appears while the diff that named it new waits for his answer.
 	let fragment = h.fragment();
 	io.on_ask = Some(Box::new(move || put(&fragment, "his own\n")));
-	let code = run_setup(&h.paths, &h.deps(), &io).await.unwrap();
+	let code = run_setup(&h.paths, &h.deps(), &io, Asking::Ask).await.unwrap();
 	assert_eq!(code, 1);
 	let text = io.text();
 	assert!(
@@ -798,7 +821,7 @@ async fn a_snapshot_file_changed_after_the_diff_is_refused_and_no_file_of_the_sn
 	// omp saves a setting while the diff waits for his answer.
 	let config = h.omp_config();
 	io.on_ask = Some(Box::new(move || put(&config, "modelRoles:\n  default: anthropic/model-b\n")));
-	let code = run_setup(&h.paths, &h.deps(), &io).await.unwrap();
+	let code = run_setup(&h.paths, &h.deps(), &io, Asking::Ask).await.unwrap();
 	assert_eq!(code, 1);
 	let failed =
 		io.out.lock().unwrap().iter().find(|l| l.starts_with("jocasta setup: 0019-omp-snapshot")).cloned().unwrap();
@@ -847,7 +870,7 @@ async fn setup_with_calendar(h: &Harness, calendar: &Arc<Calendar>, answers: &[O
 	let io = TestIo::new(answers);
 	let mut deps = SetupDeps::new();
 	deps.calendar = Some(calendar.clone());
-	run_setup(&h.paths, &deps, &io).await.unwrap();
+	run_setup(&h.paths, &deps, &io, Asking::Ask).await.unwrap();
 	(io.text(), io.asked())
 }
 
@@ -875,7 +898,7 @@ async fn the_calendars_secret_address_is_asked_for_as_a_secret_off_the_screen_wh
 	io.secret_answer = Some("https://calendar.example/secret.ics".to_owned());
 	let mut deps = SetupDeps::new();
 	deps.calendar = Some(calendar.clone());
-	run_setup(&h.paths, &deps, &io).await.unwrap();
+	run_setup(&h.paths, &deps, &io, Asking::Ask).await.unwrap();
 	assert_eq!(
 		*io.secrets.lock().unwrap(),
 		["Your calendar's secret iCal address, for today's meetings (Enter to skip): "]
@@ -936,7 +959,7 @@ async fn setup_asks_for_the_mail_and_jira_secrets_only_where_their_pollers_are_s
 		io.secret_answer = Some(secret.to_owned());
 		let mut deps = SetupDeps::new();
 		deps.secrets = Some(store.clone());
-		run_setup(&h.paths, &deps, &io).await.unwrap();
+		run_setup(&h.paths, &deps, &io, Asking::Ask).await.unwrap();
 		(io.text(), io.secrets.lock().unwrap().clone())
 	};
 	// Neither source is set up: nothing is asked.
@@ -1054,7 +1077,7 @@ async fn setup_with_graph(engine_runs: bool, answers: &[Option<&str>]) -> (Harne
 		Box::pin(async move { Ok(RunOutput { code, output: String::new() }) })
 	}));
 	let io = TestIo::new(answers);
-	let code = run_setup(&h.paths, &deps, &io).await.unwrap();
+	let code = run_setup(&h.paths, &deps, &io, Asking::Ask).await.unwrap();
 	let docker = calls.lock().unwrap().clone();
 	(h, GraphRun { code, text: io.text(), asked: io.asked(), docker, compose })
 }

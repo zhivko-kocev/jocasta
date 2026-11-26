@@ -11,7 +11,7 @@ use serde_json::json;
 
 use super::*;
 use crate::setup::markers::markers_dir;
-use crate::setup::setup::{CalendarStore, SetupDeps, SetupPaths, run_setup, setup_undo};
+use crate::setup::setup::{Asking, CalendarStore, SetupDeps, SetupPaths, run_setup, setup_undo};
 use crate::shared::credentials::CALENDAR_CREDENTIAL;
 use crate::shared::testing::{TempDir, TempJocasta, temp_dir, temp_jocasta};
 
@@ -114,6 +114,7 @@ async fn setup_run(paths: &SetupPaths, mise: Option<&str>, calendar: bool) {
 		paths,
 		&deps,
 		&Io::new(&["y", "y", "y", "y", "y", "y", "y", "y", "y", "y", "y", "y", "y", "y", "y", "y"]),
+		Asking::Ask,
 	)
 	.await
 	.unwrap();

@@ -120,6 +120,7 @@ Questions that need your permission appear in front of whatever you're doing, dr
 |---|---|
 | `jocasta` | Open the work surface, starting Jocasta's server if needed |
 | `jocasta setup` | Show and apply Jocasta's changes to omp, Windows Terminal and mise |
+| `jocasta setup --yes` | Apply them without asking (for install scripts); the list is still printed |
 | `jocasta setup --refresh <file>` | Put `jocasta.json` or `mcp.json` back to the shipped version, keeping a backup |
 | `jocasta project list \| add <path> \| remove <name or id>` | Manage projects |
 | `jocasta thread new <project> "<brief>" [--done-when "<cmd>"] [--heavy]` | Start a thread from the command line |

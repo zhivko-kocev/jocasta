@@ -472,7 +472,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0463](0463-graphiti-via-omp-auth-gateway.md) | Graphiti's model calls through omp's auth gateway | product | decided | program | 2026-10-23 | 0582, 0603 |
 | [0464](0464-session-files-stay-the-source.md) | Session files stay the source of thread events | product | decided | program | 2026-10-23 |  |
 | [0465](0465-boss-procedures-as-skills.md) | Rare boss procedures become skills | product | decided | program | 2026-10-23 | 0583 |
-| [0466](0466-setup-updates-as-diff.md) | Setup brings updates as a diff, applied after his y | product | decided | program | 2026-10-23 | 0476, 0479, 0584, 0594 |
+| [0466](0466-setup-updates-as-diff.md) | Setup brings updates as a diff, applied after his y | product | decided | program | 2026-10-23 | 0476, 0479, 0584, 0594, 0694 |
 | [0467](0467-setup-refresh-file.md) | `jarvis setup --refresh <file>` | product | decided | program | 2026-10-23 | 0584 |
 | [0468](0468-jarvis-uninstall.md) | `jarvis uninstall` | product | decided | program | 2026-10-23 | 0579, 0584, 0595, 0607 |
 | [0469](0469-four-test-rules.md) | Four test rules for every thread | product | decided | program | 2026-10-23 | 0577 |
@@ -697,6 +697,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0689](0689-sleeping-panes-in-process-and-footprint-count.md) | Sleeping panes drawn by the shell; the footprint counts Jocasta's own processes | product | v1 | lightweight program | 2026-11-25 |  |
 | [0690](0690-omp-19-2-0-pinned.md) | omp 19.2.0 is the pinned omp | product, benchmark | v1 | lightweight program | 2026-11-26 |  |
 | [0692](0692-unix-install-folder.md) | Unix install folder | product | v1 | ultron 0.3 iteration, J1 | 2026-11-26 |  |
+| [0694](0694-jocasta-setup-yes.md) | `jocasta setup --yes` | product | v1 | ultron 0.3 iteration, J6 | 2026-11-26 |  |
 | [0695](0695-light-defaults.md) | Light defaults | product | v1 | ultron 0.3 iteration, J2 | 2026-11-26 |  |
 | [0696](0696-snapshot-local-commit-model-no-sleep-inhibitor-on-linux.md) | Snapshot: local commit model, no sleep inhibitor on Linux | product | v1 | ultron 0.3 iteration, J3 | 2026-11-26 |  |
 | [0697](0697-personal-overlays.md) | Personal overlays | product | v1 | ultron 0.3 iteration, J4 | 2026-11-26 |  |

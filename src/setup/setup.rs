@@ -534,8 +534,17 @@ fn git_version_note(output: Option<&str>) -> Option<String> {
 	))
 }
 
-/// Shows the plan, asks once, and writes everything only after `y`; then asks for a missing calendar address.
-pub async fn run_setup(paths: &SetupPaths, deps: &SetupDeps, io: &dyn SetupIo) -> Result<i32> {
+/// Whether setup asks before it writes (0694): `jocasta setup` asks once; `--yes` never asks, and skips the secret
+/// questions after the changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Asking {
+	Ask,
+	Never,
+}
+
+/// Shows the plan, asks once, and writes everything only after `y`; then asks for a missing calendar address. With
+/// [`Asking::Never`] it writes without the question and asks nothing afterwards.
+pub async fn run_setup(paths: &SetupPaths, deps: &SetupDeps, io: &dyn SetupIo, asking: Asking) -> Result<i32> {
 	let SetupPlan { changes, settled } = plan_setup(paths, deps)?;
 	if let Some(git) = &deps.git_version
 		&& let Some(note) = git_version_note(git().await.as_deref())
@@ -555,7 +564,7 @@ pub async fn run_setup(paths: &SetupPaths, deps: &SetupDeps, io: &dyn SetupIo) -
 			}
 		}
 		io.print("");
-		if !answered_yes(io.ask("Write these changes? [y/N] ").await.as_deref()) {
+		if asking == Asking::Ask && !answered_yes(io.ask("Write these changes? [y/N] ").await.as_deref()) {
 			io.print("Nothing written.");
 			return Ok(0);
 		}
@@ -566,6 +575,9 @@ pub async fn run_setup(paths: &SetupPaths, deps: &SetupDeps, io: &dyn SetupIo) -
 			mark(paths, planned)?;
 		}
 		io.print("Done: run `jocasta` to open Jocasta.");
+	}
+	if asking == Asking::Never {
+		return Ok(0);
 	}
 	ask_calendar(paths, deps.calendar.as_deref(), io).await?;
 	ask_sources(paths, deps.secrets.as_deref(), io).await?;
