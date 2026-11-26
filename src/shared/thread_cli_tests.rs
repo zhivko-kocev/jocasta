@@ -225,3 +225,21 @@ async fn a_command_goes_over_the_bridge_with_the_token_exit_0_done_1_refused_3_w
 	assert_eq!(run_cli_command(&worktrees, &deps).await, EXIT.refused);
 	assert_eq!(*deps.err.borrow(), ["jocasta: Jocasta's service failed: the bridge refused the hello"]);
 }
+
+#[tokio::test]
+async fn status_json_prints_the_services_line_and_running_false_with_exit_3_when_jocasta_isnt_running_0700() {
+	let line =
+		r#"{"running":true,"version":"0.1.0","needsYou":0,"blocked":0,"underway":0,"spendToday":0.0,"threads":[]}"#;
+	let (port, calls) = fake_service(json!({ "ok": true, "text": line })).await;
+	let deps = at(port);
+	assert_eq!(run_status_json(&deps).await, EXIT.done);
+	assert_eq!(calls.lock().unwrap()[1], json!({ "t": "cli", "id": "1", "command": "status json", "args": {} }));
+	assert_eq!(*deps.out.borrow(), [line]);
+	assert!(deps.err.borrow().is_empty());
+	// No service file, or a service file whose bridge nothing serves: JSON on stdout, nothing on stderr.
+	for deps in [Deps::default(), at(crate::shared::fsx::free_port().unwrap())] {
+		assert_eq!(run_status_json(&deps).await, EXIT.not_running);
+		assert_eq!(*deps.out.borrow(), [r#"{"running":false}"#]);
+		assert!(deps.err.borrow().is_empty());
+	}
+}

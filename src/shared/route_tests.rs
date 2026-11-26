@@ -35,6 +35,7 @@ fn the_jocasta_commands_words_0387_0467_0468_0472_0544_0694_anything_else_is_a_u
 	assert_eq!(go(&["setup", "-y"]), Route::Setup { refresh: None, yes: true });
 	assert_eq!(go(&["uninstall"]), Route::Uninstall);
 	assert_eq!(go(&["diagnose"]), Route::Diagnose);
+	assert_eq!(go(&["status", "--json"]), Route::Status);
 	assert_eq!(go(&["project", "list"]), Route::Project { args: words(&["list"]) });
 	assert_eq!(go(&["thread", "list"]), Route::Thread { args: words(&["list"]) });
 	assert_eq!(go(&["worktree", "remove", "x"]), Route::Worktree { args: words(&["remove", "x"]) });
@@ -55,6 +56,7 @@ fn the_jocasta_commands_words_0387_0467_0468_0472_0544_0694_anything_else_is_a_u
 		&["setup", "--yes", "--refresh", "jocasta.json"],
 		&["uninstall", "--yes"],
 		&["diagnose", "now"],
+		&["status"],
 		&["service"],
 		&["--version", "setup"],
 		&["--version", "now"],
@@ -73,10 +75,12 @@ fn help_is_clap_text_that_lists_the_words_and_exits_0_to_stdout() {
 	assert_eq!(error.exit_code(), 0);
 	let text = help();
 	assert!(text.contains("Usage: jocasta"), "{text}");
-	for word in ["setup", "uninstall", "diagnose", "project", "thread", "worktree", "--version", "--help"] {
+	for word in ["setup", "uninstall", "diagnose", "status", "project", "thread", "worktree", "--version", "--help"] {
 		assert!(text.contains(word), "{word} missing from {text}");
 	}
 	assert!(refused(&["setup", "--help"]).to_string().contains("--refresh <FILE>"));
+	assert!(refused(&["setup", "--help"]).to_string().contains("--yes"));
+	assert!(refused(&["status", "--help"]).to_string().contains("--json"));
 }
 
 #[test]

@@ -702,5 +702,6 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0696](0696-snapshot-local-commit-model-no-sleep-inhibitor-on-linux.md) | Snapshot: local commit model, no sleep inhibitor on Linux | product | v1 | ultron 0.3 iteration, J3 | 2026-11-26 |  |
 | [0697](0697-personal-overlays.md) | Personal overlays | product | v1 | ultron 0.3 iteration, J4 | 2026-11-26 |  |
 | [0699](0699-linux-notifications.md) | Linux notifications | product | v1 | ultron 0.3 iteration, J1 | 2026-11-26 |  |
+| [0700](0700-jocasta-status-json.md) | `jocasta status --json` | product | v1 | ultron 0.3 iteration, J5 | 2026-11-26 |  |
 | [0701](0701-linux-guard-shapes-and-fenced-folders.md) | Linux guard shapes and fenced folders | product | v1 | ultron 0.3 iteration, J1 | 2026-11-26 |  |
 | [0702](0702-unix-runtime.md) | Unix runtime | product | v1 | ultron 0.3 iteration, J1 | 2026-11-26 |  |

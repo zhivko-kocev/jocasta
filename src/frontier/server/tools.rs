@@ -541,6 +541,8 @@ impl Tools {
 		let args = Args::new(args, format!("jocasta {command}"));
 		match command {
 			"ping" => Ok("ok".to_owned()),
+			// `jocasta status --json` (0700): what the service holds, for a status bar.
+			"status json" => c.status.status_json(),
 			// A sleeping pane's key was pressed (0676): its sleeper asks for its omp back. Internal, no Allow.
 			"wake" => c.sleep.wake_by_key(&args.text("key")?).await,
 			// The pane's visible grid as text (0683): the benchmark and live checks read panes through the pipe.

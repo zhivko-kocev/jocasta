@@ -36,6 +36,7 @@ use serde_json::{Value, json};
 use super::*;
 use crate::frontier::brief::model::Section;
 use crate::frontier::brief::store;
+use crate::frontier::protocol::ThreadState;
 use crate::frontier::server::allow::{Answer, Confirm};
 use crate::frontier::server::context::{TestContext, test_context};
 use crate::frontier::server::popups::PopupEnd;
@@ -714,6 +715,25 @@ async fn thread_stop_from_the_cli_asks_first_and_the_boss_door_just_stops() {
 		}
 	);
 	assert_eq!(asked(&log).len(), 2);
+}
+
+#[tokio::test]
+async fn status_json_gives_the_counts_todays_spend_and_every_open_thread_0700() {
+	let w = World::with(|_| {}).await;
+	let thread = w.t.with_thread("t-1", "Readme line");
+	thread.with(|t| t.shown = ThreadState::Blocked);
+	let status: Value = serde_json::from_str(&w.tools.cli("status json", &Map::new()).await.unwrap()).unwrap();
+	assert_eq!(status["running"], true);
+	assert_eq!(status["version"], env!("CARGO_PKG_VERSION"));
+	assert_eq!(status["blocked"], 1);
+	assert!(status["needsYou"].is_u64() && status["underway"].is_u64() && status["spendToday"].is_number());
+	assert_eq!(status["threads"].as_array().unwrap().len(), 1);
+	let row = &status["threads"][0];
+	assert_eq!(
+		(&row["project"], &row["title"], &row["state"]),
+		(&json!("demo"), &json!("Readme line"), &json!("blocked"))
+	);
+	assert!(row["needsYou"].is_boolean());
 }
 
 // ---- service-keys.test.ts ----

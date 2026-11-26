@@ -1,6 +1,7 @@
 //! `jocasta thread …` and `jocasta worktree …` (0544): doors to the running service's own thread functions (the ones the
 //! boss's tools use) that need no model, over its bridge pipe with its token (0675). The changes (`thread
-//! send|stop|finish`, `worktree remove`) wait for his Allow, asked in his terminal; the rest run at once.
+//! send|stop|finish`, `worktree remove`) wait for his Allow, asked in his terminal; the rest run at once. `jocasta
+//! status --json` (0700) goes the same way.
 
 use serde_json::{Map, Value, json};
 
@@ -172,8 +173,19 @@ pub trait CliDeps {
 /// (`EXIT`). There is no time limit: his Allow waits 2 minutes and a merge's hooks may take 10; the service bounds every
 /// step itself.
 pub async fn run_cli_command(request: &CliRequest, deps: &impl CliDeps) -> i32 {
+	run_request(request, deps, || deps.print_error(&format!("jocasta: {NOT_RUNNING}"))).await
+}
+
+/// `jocasta status --json` (0700): the service's own JSON line as it answered it; `{"running":false}` on stdout and
+/// exit 3 when Jocasta isn't running.
+pub async fn run_status_json(deps: &impl CliDeps) -> i32 {
+	run_request(&request("status json", json!({}), false), deps, || deps.print(r#"{"running":false}"#)).await
+}
+
+/// [`run_cli_command`]'s steps; `not_running` says that Jocasta isn't running.
+async fn run_request(request: &CliRequest, deps: &impl CliDeps, not_running: impl Fn()) -> i32 {
 	let Some((port, token)) = deps.service() else {
-		deps.print_error(&format!("jocasta: {NOT_RUNNING}"));
+		not_running();
 		return EXIT.not_running;
 	};
 	if request.asks {
@@ -188,7 +200,7 @@ pub async fn run_cli_command(request: &CliRequest, deps: &impl CliDeps) -> i32 {
 		Ok(answer) => answer,
 		Err(error) => {
 			if unreachable(&error) {
-				deps.print_error(&format!("jocasta: {NOT_RUNNING}"));
+				not_running();
 				return EXIT.not_running;
 			}
 			// Anything but a missing pipe is unexpected: it goes to the log before the one-line reply (DUP-12).

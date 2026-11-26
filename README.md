@@ -127,6 +127,7 @@ Questions that need your permission appear in front of whatever you're doing, dr
 | `jocasta thread list \| status \| send \| stop \| finish` | Inspect and steer threads (`send`, `stop` and `finish` ask for your permission) |
 | `jocasta worktree leftover \| remove <path>` | List or remove leftover worktrees |
 | `jocasta diagnose` | Collect state and logs, and open a read-only omp to find what's wrong |
+| `jocasta status --json` | Print whether Jocasta runs, what needs you, today's spend and the open threads as one JSON line (for status bars) |
 | `jocasta uninstall` | Remove everything install and setup added, after one confirmation |
 | `jocasta --version` | Print Jocasta's and omp's versions |
 

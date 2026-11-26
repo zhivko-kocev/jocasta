@@ -197,13 +197,15 @@ async fn delivery_0299_0405_0554_0695_each_event_is_a_notification_through_herdr
 		day.raise(&github("x:low", "other", EventPriority::Low, "fyi")).unwrap();
 		assert_eq!(notes(&server).len(), 2);
 
-		// 30 minutes later, both are still open: one reminder each, and only one.
+		// 30 minutes later, both are still open: one reminder each, and only one (sent side by side, in either order).
 		time.add(30 * 60_000);
 		day.tick().unwrap();
 		server.service.context().events.settled().await;
 		until(|| notes(&server).len() == 4).await;
+		let mut reminders = notes(&server)[2..].to_vec();
+		reminders.sort_by_key(|note| note["title"].to_string());
 		assert_eq!(
-			notes(&server)[2..],
+			reminders,
 			[
 				json!({ "title": "Still open: Pipeline red", "body": "web on main", "sound": "request" }),
 				json!({ "title": "Still open: Review requested", "body": "Add export", "sound": "none" }),

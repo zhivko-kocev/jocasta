@@ -4,9 +4,9 @@
 
 use clap::{Parser, Subcommand};
 
-/// The `jocasta` command's words (0387, 0467, 0468, 0472, 0544, 0694): open the work surface,
-/// `setup [--refresh <file> | --yes]`, `uninstall`, `diagnose`, `project …`, `thread …`, `worktree leftover|remove <path>`,
-/// `--version`;
+/// The `jocasta` command's words (0387, 0467, 0468, 0472, 0544, 0694, 0700): open the work surface,
+/// `setup [--refresh <file> | --yes]`, `uninstall`, `diagnose`, `status --json`, `project …`, `thread …`,
+/// `worktree leftover|remove <path>`, `--version`;
 /// and, not listed in the help, `push-hook <remote> <address>`, the `pre-push` hook git runs in every Jocasta pane
 /// (0613). `--help` and a word that is no command are not routes: [`route`] returns clap's error for them. The shell is
 /// Jocasta's own (0683), so herdr's words are gone; a sleeping pane is drawn by the shell (0689), so no role runs it.
@@ -16,6 +16,7 @@ pub enum Route {
 	Setup { refresh: Option<String>, yes: bool },
 	Uninstall,
 	Diagnose,
+	Status,
 	Project { args: Vec<String> },
 	Thread { args: Vec<String> },
 	Worktree { args: Vec<String> },
@@ -55,6 +56,12 @@ enum Word {
 	Uninstall,
 	/// A read-only pane that explains what went wrong from Jocasta's log
 	Diagnose,
+	/// The running service's counts, today's spend and open threads as one JSON line; exit 3 when it isn't running
+	Status {
+		/// Print JSON (the only form)
+		#[arg(long, required = true)]
+		json: bool,
+	},
 	/// list | add <path> | remove <name|id>
 	#[command(disable_help_flag = true)]
 	Project {
@@ -92,6 +99,7 @@ impl From<Word> for Route {
 			Word::Setup { refresh, yes } => Self::Setup { refresh, yes },
 			Word::Uninstall => Self::Uninstall,
 			Word::Diagnose => Self::Diagnose,
+			Word::Status { .. } => Self::Status,
 			Word::Project { args } => Self::Project { args },
 			Word::Thread { args } => Self::Thread { args },
 			Word::Worktree { args } => Self::Worktree { args },

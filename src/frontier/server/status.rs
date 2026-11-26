@@ -539,6 +539,41 @@ impl StatusViews {
 		Ok(self.hud_for(&self.link.ctx().day.today()?))
 	}
 
+	/// `jocasta status --json` (0700): the HUD's counts, today's spend as last counted (0 until today's sessions were
+	/// read) and every open thread, from what the service already holds: nothing is read from disk but the day's queue,
+	/// so the bar that asks every few seconds gets its answer at once.
+	pub fn status_json(&self) -> Result<String> {
+		let c = self.link.ctx();
+		let today = c.day.today()?;
+		let awaited: HashSet<&str> = today.needs_you.iter().filter_map(|row| row.pane_id.as_deref()).collect();
+		let threads: Vec<_> = c
+			.threads
+			.all()
+			.iter()
+			.map(|thread| {
+				thread.with(|t| {
+					json!({
+						"project": t.project.name,
+						"title": t.title,
+						"state": t.shown,
+						"needsYou": awaited.contains(t.pane_id.as_str()),
+					})
+				})
+			})
+			.collect();
+		let blocked = threads.iter().filter(|thread| thread["state"] == "blocked").count();
+		Ok(json!({
+			"running": true,
+			"version": env!("CARGO_PKG_VERSION"),
+			"needsYou": today.needs_you.len(),
+			"blocked": blocked,
+			"underway": today.underway.len(),
+			"spendToday": self.st().last_spend.unwrap_or(0.0),
+			"threads": threads,
+		})
+		.to_string())
+	}
+
 	/// The HUD over a `today` the caller built (CO-15).
 	pub fn hud_for(&self, today: &Today) -> Hud {
 		let c = self.link.ctx();

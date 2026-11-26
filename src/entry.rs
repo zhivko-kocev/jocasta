@@ -37,7 +37,7 @@ use crate::shared::push_hook::{PushHookDeps, PushReply, PushRequest, run_push_ho
 use crate::shared::route::{Route, route};
 use crate::shared::service_file::{read_service_file, running_service};
 use crate::shared::surface::{SurfaceDeps, after_surface, before_surface, last_logged_error};
-use crate::shared::thread_cli::{CliDeps, CliWord, cli_request, run_cli_command};
+use crate::shared::thread_cli::{CliDeps, CliWord, cli_request, run_cli_command, run_status_json};
 
 /// `<program> --version`'s version (`omp/18.10.3`), or "not found".
 fn version_of(program: Option<PathBuf>) -> String {
@@ -360,6 +360,7 @@ async fn run_route(target: Route, calendar_env: Option<String>) -> Result<i32> {
 		}
 		Route::Uninstall => run_uninstall_route().await,
 		Route::Diagnose => run_diagnose_route().await,
+		Route::Status => Ok(run_status_json(&ServiceCli).await),
 		Route::Surface => unreachable!("`main` runs this before Jocasta's runtime exists"),
 	}
 }
