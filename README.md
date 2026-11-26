@@ -140,6 +140,9 @@ The [manual](https://github.com/zhivko-kocev/jocasta/blob/main/docs/manual.md#co
 | `%LOCALAPPDATA%\jocasta\data` | Data and logs (`logs\jocasta-YYYY-MM-DD.log`, kept for 7 days) |
 | `~/.omp/agent/` | omp's own config, which setup edits only with your `y` |
 | `AGENTS.local.md` in a project | Private notes that every agent in that project reads (keep it gitignored) |
+| `~/.jocasta/agent/boss.yml`, `pane.yml` | Your own omp settings for the boss and for every project and thread pane (optional) |
+
+The omp settings setup installs carry the author's model roles, all Anthropic models. With another provider omp falls back to your default model. To choose your own models (or any other omp setting) durably, put them in `~/.jocasta/agent/boss.yml` for the boss and `~/.jocasta/agent/pane.yml` for every project and thread pane, for example `modelRoles: {default: openai/gpt-5.5}`. Jocasta loads them after its own settings and before the guard, so `jocasta setup` never overwrites them and the guard still has the last word.
 
 ## Safety: what to know
 

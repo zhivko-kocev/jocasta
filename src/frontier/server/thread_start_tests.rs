@@ -62,8 +62,8 @@ fn shipped(file: &str) -> String {
 	shipped_config_dir(None).join(file).display().to_string()
 }
 
-fn guard() -> Vec<String> {
-	strings(&["--config", &shipped("guard.yml"), "-e", &shipped(BRIDGE_EXTENSION)])
+fn bridge() -> Vec<String> {
+	strings(&["-e", &shipped(BRIDGE_EXTENSION)])
 }
 
 /// His Allow: every question is kept and answered by `allow`.
@@ -160,7 +160,7 @@ impl World {
 	fn thread_command(&self, project: &str, title: &str, extra: &[&str]) -> Vec<String> {
 		let prompt = self.task_dir_of(project, title).join("prompt.md").display().to_string();
 		let mut command = strings(&["omp", "--append-system-prompt", &prompt]);
-		command.extend(guard());
+		command.extend(bridge());
 		command.extend(["--config".to_owned(), overlay_file(&self.project_id(project)).display().to_string()]);
 		command.extend(strings(extra));
 		// A thread's cost cap, `threads.maxCostUsd` (75); a heavy thread's extra names its own (0686).
@@ -168,6 +168,8 @@ impl World {
 			command.extend(strings(&["--max-cost", "75"]));
 		}
 		command.extend(strings(&["--warn-cost", "50"]));
+		// The guard last (0697).
+		command.extend(strings(&["--config", &shipped("guard.yml")]));
 		command
 	}
 }
@@ -322,7 +324,10 @@ async fn a_budget_is_recorded_on_the_task_and_is_the_threads_max_cost_0686() {
 	let command = w.worktrees()[0]["command"].clone();
 	assert_eq!(command, json!(w.thread_command("demo", "Readme line", &["--max-cost", "5"])));
 	let argv = command.as_array().unwrap();
-	assert_eq!(argv[argv.len() - 4..], [json!("--max-cost"), json!("5"), json!("--warn-cost"), json!("50")]);
+	assert_eq!(
+		argv[argv.len() - 6..argv.len() - 2],
+		[json!("--max-cost"), json!("5"), json!("--warn-cost"), json!("50")]
+	);
 }
 
 #[test]

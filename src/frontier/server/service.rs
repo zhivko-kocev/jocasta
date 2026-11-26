@@ -95,8 +95,8 @@ pub struct ServiceOptions {
 	pub day: Option<DayOptions>,
 	/// How omp starts: `["omp"]` by default (test and smoke seam).
 	pub omp: Option<Vec<String>>,
-	/// The boss pane's argv; `omp --continue --config <config>/boss.yml --config <config>/guard.yml` by default (0424,
-	/// 0450).
+	/// The boss pane's argv; `omp --continue --config <config>/boss.yml [--config ~/.jocasta/agent/boss.yml] --config
+	/// <config>/guard.yml -e <bridge>` by default (0424, 0450, 0697).
 	pub boss_command: Option<Vec<String>>,
 	/// A prompt file every project and thread pane appends with `--append-system-prompt`: the shipped
 	/// `<config>/ponytail.md` when it exists (0421, 0427) when `None`; `Some(None)` appends nothing (test seam).

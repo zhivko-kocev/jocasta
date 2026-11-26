@@ -331,11 +331,11 @@ async fn thread_starts_brief_and_done_when_go_into_the_task_file_and_every_launc
 		let prompt = dir.join("prompt.md");
 		let mut expected = words(&["omp", "--append-system-prompt"]);
 		expected.push(prompt.display().to_string());
-		expected.extend(guard());
 		expected.extend(bridge_flags());
 		expected.extend(words(&["--config"]));
 		expected.push(overlay_file(&project.id).display().to_string());
 		expected.extend(words(&["--max-cost", "75", "--warn-cost", "50"]));
+		expected.extend(guard());
 		assert_eq!(server.herdr.of("createWorktree")[0][1]["command"], json!(expected));
 		// Then how to finish (0577, PRM-7).
 		assert_eq!(

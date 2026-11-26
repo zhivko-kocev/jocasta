@@ -375,7 +375,7 @@ where
 
 // ---- omp and the threads ----
 
-/// The guard every pane loads before its own settings (0450).
+/// The guard every pane loads last (0450, 0697).
 pub(crate) fn guard() -> Vec<String> {
 	vec!["--config".to_owned(), shipped_config_dir(None).join("guard.yml").display().to_string()]
 }
@@ -402,11 +402,11 @@ pub(crate) fn thread_omp(project_id: &str, title: &str) -> Vec<String> {
 	let prompt = task_dir_of(project_id, title).join("prompt.md");
 	let mut argv = strings(&["omp", "--continue", "--append-system-prompt"]);
 	argv.push(prompt.display().to_string());
-	argv.extend(guard());
 	argv.extend(bridge_flags());
 	argv.extend(strings(&["--warn-cost", "50", "--config"]));
 	argv.push(overlay_file(project_id).display().to_string());
 	argv.extend(strings(&["--max-cost", "75"]));
+	argv.extend(guard());
 	argv
 }
 

@@ -45,9 +45,14 @@ fn strings(words: &[&str]) -> Vec<String> {
 	words.iter().map(|word| (*word).to_owned()).collect()
 }
 
-/// The guard's `--config` and the bridge extension: what every pane's omp starts with after `--continue` (0450, 0675).
+/// The bridge extension: what every pane's omp starts with after `--continue` and its prompt (0675).
+fn bridge() -> Vec<String> {
+	strings(&["-e", &shipped(BRIDGE_EXTENSION)])
+}
+
+/// The guard's `--config`: what every pane's omp loads last (0450, 0697).
 fn guard() -> Vec<String> {
-	strings(&["--config", &shipped("guard.yml"), "-e", &shipped(BRIDGE_EXTENSION)])
+	strings(&["--config", &shipped("guard.yml")])
 }
 
 fn overlay_args() -> Vec<String> {
@@ -141,10 +146,11 @@ async fn a_heavy_threads_omp_starts_again_with_heavy_yml_after_the_overlay_resum
 		resuming.command,
 		join(&[
 			&strings(&["omp", "--continue", "--append-system-prompt", &prompt]),
-			&guard(),
+			&bridge(),
 			&flags,
 			&overlay_args(),
 			&heavy,
+			&guard(),
 		])
 	);
 	let session = t.ctx.options.sessions_dir.clone().unwrap().join("s.jsonl");
@@ -155,11 +161,12 @@ async fn a_heavy_threads_omp_starts_again_with_heavy_yml_after_the_overlay_resum
 		restoring.command,
 		join(&[
 			&strings(&["omp", "--append-system-prompt", &prompt]),
-			&guard(),
+			&bridge(),
 			&flags,
 			&strings(&["--restore", &session.display().to_string()]),
 			&overlay_args(),
 			&heavy,
+			&guard(),
 		])
 	);
 	let light = thread_of(Some(migrate(None)));
@@ -173,7 +180,7 @@ async fn every_panes_omp_starts_again_with_the_bridge_extension_a_threads_with_i
 	let t = world();
 	let cwd = t.ctx.options.sessions_dir.clone().unwrap().join("demo");
 	let project = respawned(&t, plain(&cwd, Some(Vec::new()))).await;
-	assert_eq!(project.command, join(&[&strings(&["omp", "--continue"]), &guard(), &overlay_args()]));
+	assert_eq!(project.command, join(&[&strings(&["omp", "--continue"]), &bridge(), &overlay_args(), &guard()]));
 	assert!(env_of(&project.env, PANE_KEY_ENV).is_some());
 	let session = cwd.join("s.jsonl");
 	let restored = respawned(&t, Respawn { restore: Some(&session), ..plain(&cwd, Some(Vec::new())) }).await;
@@ -181,17 +188,36 @@ async fn every_panes_omp_starts_again_with_the_bridge_extension_a_threads_with_i
 		restored.command,
 		join(&[
 			&strings(&["omp"]),
-			&guard(),
+			&bridge(),
 			&strings(&["--restore", &session.display().to_string()]),
 			&overlay_args(),
+			&guard(),
 		])
 	);
 	let thread = thread_of(None);
 	let given = respawned(&t, Respawn { thread: Some(&thread), ..plain(&cwd, Some(Vec::new())) }).await;
 	assert_eq!(
 		given.command,
-		join(&[&strings(&["omp", "--continue"]), &guard(), &strings(&THREAD_FLAGS), &overlay_args()])
+		join(&[&strings(&["omp", "--continue"]), &bridge(), &strings(&THREAD_FLAGS), &overlay_args(), &guard()])
 	);
+	// His own `pane.yml` (0697): after every overlay, immediately before the guard; read at each launch.
+	let personal = config_dir().join("pane.yml");
+	std::fs::create_dir_all(config_dir()).unwrap();
+	std::fs::write(&personal, "modelRoles:\n  default: example/model\n").unwrap();
+	let mine = respawned(&t, plain(&cwd, Some(Vec::new()))).await;
+	assert_eq!(
+		mine.command,
+		join(&[
+			&strings(&["omp", "--continue"]),
+			&bridge(),
+			&overlay_args(),
+			&strings(&["--config", &personal.display().to_string()]),
+			&guard(),
+		])
+	);
+	assert_eq!(pane_tail(), join(&[&strings(&["--config", &personal.display().to_string()]), &guard()]));
+	std::fs::remove_file(&personal).unwrap();
+	assert_eq!(pane_tail(), guard());
 }
 
 fn hook_command() -> String {
@@ -303,11 +329,11 @@ fn mises_env_loses_herdrs_jocastas_and_omps_keys_in_any_case() {
 }
 
 #[tokio::test]
-async fn the_panes_omp_is_omp_resuming_with_the_guard_and_the_options_say_how_omp_and_the_boss_key_are() {
+async fn the_panes_omp_is_omp_resuming_with_the_bridge_and_the_options_say_how_omp_and_the_boss_key_are() {
 	let t = world();
 	let panes = &t.ctx.panes;
 	assert_eq!(panes.omp(), ["omp"]);
-	assert_eq!(panes.pane_omp(), join(&[&strings(&["omp", "--continue"]), &guard()]));
+	assert_eq!(panes.pane_omp(), join(&[&strings(&["omp", "--continue"]), &bridge()]));
 	assert_eq!(panes.boss_key(), "boss-key-of-this-run");
 	let names: Vec<&str> = panes.pane_env().iter().map(|(name, _)| name.as_str()).collect();
 	assert_eq!(
@@ -346,7 +372,7 @@ async fn the_panes_prompt_is_appended_without_its_leading_comment_as_a_copy_in_d
 	let copy = data_dir().join("ponytail.md");
 	assert_eq!(
 		t.ctx.panes.pane_omp(),
-		join(&[&strings(&["omp", "--continue", "--append-system-prompt"]), &[copy.display().to_string()], &guard()])
+		join(&[&strings(&["omp", "--continue", "--append-system-prompt"]), &[copy.display().to_string()], &bridge()])
 	);
 	assert_eq!(std::fs::read_to_string(&copy).unwrap(), "Be brief.\n");
 	// No comment: the file itself; unreadable: the file itself.
@@ -434,13 +460,13 @@ async fn a_task_with_a_brief_gives_its_thread_pane_the_launch_prompt_in_the_ship
 	let blank = TaskRecord { brief: " \n".to_owned(), ..task.clone() };
 	assert_eq!(panes.task_prompted(&command, Some(&blank)).unwrap(), command);
 	let prompt = task_dir(&task.project_id, &task.id).join("prompt.md");
-	// No prompt in the argv yet: it goes in before the guard's `--config`.
+	// No prompt in the argv yet: it goes in before the bridge's `-e`.
 	let put = panes.task_prompted(&command, Some(&task)).unwrap();
 	assert_eq!(
 		put,
 		join(&[
 			&strings(&["omp", "--continue", "--append-system-prompt", &prompt.display().to_string()]),
-			&guard(),
+			&bridge(),
 			&strings(&THREAD_FLAGS)
 		])
 	);
@@ -453,7 +479,7 @@ async fn a_task_with_a_brief_gives_its_thread_pane_the_launch_prompt_in_the_ship
 		panes.task_prompted(&with, Some(&task)).unwrap(),
 		strings(&["omp", "--append-system-prompt", &prompt.display().to_string(), "--config", "g.yml"])
 	);
-	// No `--config` either: `slice(0, -1)` puts it before the last word.
+	// Neither `-e` nor `--config`: `slice(0, -1)` puts it before the last word.
 	assert_eq!(
 		panes.task_prompted(&strings(&["omp", "x"]), Some(&task)).unwrap(),
 		strings(&["omp", "--append-system-prompt", &prompt.display().to_string(), "x"])

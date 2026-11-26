@@ -14,7 +14,7 @@ use crate::frontier::server::bridge::Deliver;
 use crate::frontier::server::context::{Link, Shared};
 use crate::frontier::server::day::ScheduleStart;
 use crate::frontier::server::overlay::ensure_overlay;
-use crate::frontier::server::pane_launch::{THREAD_FLAGS, after_overlay, thread_budget};
+use crate::frontier::server::pane_launch::{THREAD_FLAGS, after_overlay, pane_tail, thread_budget};
 use crate::frontier::server::pending::{After, PendingArgs, door_name, running_threads};
 use crate::frontier::server::pr_review::{self, PrTarget};
 use crate::frontier::server::surface::{AgentState, Env, PaneInfo, Prepare, WorktreeOptions};
@@ -398,10 +398,12 @@ impl ThreadStarts {
 			None,
 		);
 		// A new thread never resumes a session saved for a reused folder (0455); a reopened one still does (0399). It
-		// warns at $50 (0541); a heavy one loads `heavy.yml` after the overlay (0590), as `PaneLauncher::respawn` does.
+		// warns at $50 (0541); a heavy one loads `heavy.yml` after the overlay (0590), then his `pane.yml` and the guard
+		// (0697), as `PaneLauncher::respawn` does.
 		let mut fresh: Vec<String> = command.iter().filter(|arg| *arg != "--continue").cloned().collect();
 		fresh.extend(after_overlay(Some(&task)));
 		fresh.extend(THREAD_FLAGS.map(str::to_owned));
+		fresh.extend(pane_tail());
 		// The project pane and the thread pane load the same overlays; the worktree is trunk's checkout of the project,
 		// so its own `.omp/config.yml` is the main checkout's (0561). Asked before anything is made.
 		let main_env = c.panes.with_mise(&project.id, &project.main_path, c.panes.pane_env()).await;

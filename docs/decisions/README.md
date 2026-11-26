@@ -430,7 +430,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0421](0421-ponytail-eval-variant.md) | Ponytail as an eval variant, kept by the rule | process | decided | program | 2026-10-14 |  |
 | [0422](0422-no-prompt-diet.md) | No prompt diet: omp's defaults | product | decided | program | 2026-10-14 |  |
 | [0423](0423-terminal-bench-after-v1.md) | Terminal-Bench after v1 | process | decided | program | 2026-10-14 |  |
-| [0424](0424-boss-pane-config.md) | The boss pane's own omp config | product | decided | program | 2026-10-14 |  |
+| [0424](0424-boss-pane-config.md) | The boss pane's own omp config | product | decided | program | 2026-10-14 | 0697 |
 | [0425](0425-tests-in-review-step.md) | Tests run in the review step | product | decided | program | 2026-10-14 | 0453, 0460, 0484 |
 | [0426](0426-thread-finish.md) | thread_finish: merge or PR on his word | product | decided | program | 2026-10-14 | 0453, 0454 |
 | [0427](0427-ponytail-kept.md) | Ponytail kept, easy to remove | product | decided | program | 2026-10-14 | 0469, 0577, 0612 |
@@ -456,7 +456,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0447](0447-project-memory-own-file.md) | Each project's memory in its own file, set by the pane settings | product | decided | program | 2026-10-23 | 0478, 0606 |
 | [0448](0448-compaction-at-300k-tokens.md) | Compaction in the pane settings, at 300,000 tokens | product | decided | program | 2026-10-23 | 0592 |
 | [0449](0449-private-notes-agents-local.md) | Private project notes through AGENTS.local.md | product | decided | program | 2026-10-23 |  |
-| [0450](0450-guard-yml-in-every-pane.md) | The guard in every pane: config/guard.yml | product | decided | program | 2026-10-23 | 0476, 0485, 0580, 0598, 0701 |
+| [0450](0450-guard-yml-in-every-pane.md) | The guard in every pane: config/guard.yml | product | decided | program | 2026-10-23 | 0476, 0485, 0580, 0598, 0697, 0701 |
 | [0451](0451-more-omp-settings.md) | More omp settings for his /settings pass | product | decided | program | 2026-10-23 | 0478, 0479, 0593, 0594 |
 | [0452](0452-spend-counts-every-model-call.md) | The day's spend counts every model call | product | decided | program | 2026-10-23 | 0582 |
 | [0453](0453-proof-before-done.md) | Proof before done | product | decided | program | 2026-10-23 | 0473, 0513, 0583, 0610, 0611 |
@@ -655,7 +655,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0647](0647-deny-ignores-chrono-unmaintained.md) | cargo-deny ignores chrono's two "unmaintained" notices by ID | process | v1 | program | 2026-11-18 |  |
 | [0648](0648-audit-ignores-picomatch-redos.md) | CI's `bun audit` ignores picomatch's ReDoS advisory by ID | process | v1 | program | 2026-11-18 |  |
 | [0649](0649-herdr-fork-one-binary-one-server.md) | The herdr fork: one binary, one server | product | v1 | fork build | 2026-11-18 | 0659, 0661, 0665, 0666, 0683 |
-| [0650](0650-omp-snapshot-replaces-his-omp-files.md) | The omp snapshot: setup writes Jocasta's omp files over his | product | v1 | fork build | 2026-11-18 | 0696 |
+| [0650](0650-omp-snapshot-replaces-his-omp-files.md) | The omp snapshot: setup writes Jocasta's omp files over his | product | v1 | fork build | 2026-11-18 | 0696, 0697 |
 | [0651](0651-snapshot-settings-from-trials-on-omp-18-22-2.md) | The snapshot's settings come from trials on omp 18.22.2 | product, benchmark | v1 | fork build | 2026-11-19 | 0653, 0696 |
 | [0652](0652-benchmarks-on-his-pc-vm-removed.md) | The benchmarks run on his PC on his own omp; the VM is removed | process | v1 | fork build | 2026-11-18 | 0657 |
 | [0653](0653-omp-19-1-0-pinned.md) | omp 19.1.0 is the pinned omp | product, benchmark | v1 | fork build | 2026-11-21 | 0663 |
@@ -699,6 +699,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0692](0692-unix-install-folder.md) | Unix install folder | product | v1 | ultron 0.3 iteration, J1 | 2026-11-26 |  |
 | [0695](0695-light-defaults.md) | Light defaults | product | v1 | ultron 0.3 iteration, J2 | 2026-11-26 |  |
 | [0696](0696-snapshot-local-commit-model-no-sleep-inhibitor-on-linux.md) | Snapshot: local commit model, no sleep inhibitor on Linux | product | v1 | ultron 0.3 iteration, J3 | 2026-11-26 |  |
+| [0697](0697-personal-overlays.md) | Personal overlays | product | v1 | ultron 0.3 iteration, J4 | 2026-11-26 |  |
 | [0699](0699-linux-notifications.md) | Linux notifications | product | v1 | ultron 0.3 iteration, J1 | 2026-11-26 |  |
 | [0701](0701-linux-guard-shapes-and-fenced-folders.md) | Linux guard shapes and fenced folders | product | v1 | ultron 0.3 iteration, J1 | 2026-11-26 |  |
 | [0702](0702-unix-runtime.md) | Unix runtime | product | v1 | ultron 0.3 iteration, J1 | 2026-11-26 |  |

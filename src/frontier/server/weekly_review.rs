@@ -157,6 +157,9 @@ impl WeeklyReviews {
 			.chain(["--config".to_owned(), overlay.to_string_lossy().into_owned(), "--config".to_owned()])
 			.chain([
 				shipped_config_dir(None).join("headless.yml").to_string_lossy().into_owned(),
+				// The guard last, as in every pane (0697).
+				"--config".to_owned(),
+				shipped_config_dir(None).join("guard.yml").to_string_lossy().into_owned(),
 				"--max-cost".to_owned(),
 				WEEKLY_REVIEW_MAX_COST_USD.to_string(),
 				"-p".to_owned(),

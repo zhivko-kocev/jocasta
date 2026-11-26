@@ -210,6 +210,32 @@ fn a_heavy_threads_heavy_yml_makes_its_default_role_his_slow_role_and_sets_nothi
 }
 
 #[test]
+fn the_boss_loads_his_own_boss_yml_between_the_shipped_one_and_the_guard_when_it_exists_0697() {
+	let _j = temp_jocasta();
+	let shipped = |name: &str| shipped_config_dir(None).join(name).display().to_string();
+	let bridge = shipped(BRIDGE_EXTENSION);
+	let config = |file: &str| ["--config".to_owned(), file.to_owned()];
+	let without: Vec<String> = ["omp".to_owned(), "--continue".to_owned()]
+		.into_iter()
+		.chain(config(&shipped("boss.yml")))
+		.chain(config(&shipped("guard.yml")))
+		.chain(["-e".to_owned(), bridge.clone()])
+		.collect();
+	assert_eq!(command(), without);
+	let personal = crate::shared::paths::config_dir().join("boss.yml");
+	fs::create_dir_all(personal.parent().unwrap()).unwrap();
+	fs::write(&personal, "modelRoles:\n  default: example/model\n").unwrap();
+	let with: Vec<String> = ["omp".to_owned(), "--continue".to_owned()]
+		.into_iter()
+		.chain(config(&shipped("boss.yml")))
+		.chain(config(&personal.display().to_string()))
+		.chain(config(&shipped("guard.yml")))
+		.chain(["-e".to_owned(), bridge])
+		.collect();
+	assert_eq!(command(), with);
+}
+
+#[test]
 fn the_boss_session_has_no_collab_relay_and_its_share_stays_on_a_dead_loopback_port() {
 	let settings = shipped_yaml("boss.yml");
 	assert!(settings.get("collab").is_none(), "{settings}");

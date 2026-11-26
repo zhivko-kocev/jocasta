@@ -1,6 +1,6 @@
-# The boss pane's omp settings (0424): a calm pane. The service starts the boss with
-# `omp --continue --config <this file> --config <config>/guard.yml` (0450), over his ~/.omp/agent/config.yml. Keys
-# checked against omp 19.2.0's source (0663, 0690).
+# The boss pane's omp settings (0424): a calm pane. The service starts the boss with `omp --continue --config <this
+# file> [--config ~/.jocasta/agent/boss.yml] --config <config>/guard.yml` (0450, 0697), over his
+# ~/.omp/agent/config.yml. Keys checked against omp 19.2.0's source (0663, 0690).
 
 # Memory off (0606): omp recalls and retains nothing here; the boss searches past work with `history_search` (0603).
 # The boss keeps omp's job widgets (0602): only project and thread panes turn them off. Keys checked against omp

@@ -31,7 +31,7 @@ use crate::shared::install::{self_command, shipped_config_dir};
 use crate::shared::layer::LAYER_ENV;
 use crate::shared::log::{LogLevel, log};
 use crate::shared::pathkey::{path_key, real_path};
-use crate::shared::paths::data_dir;
+use crate::shared::paths::{config_dir, data_dir};
 #[cfg(windows)]
 use crate::shared::process::on_path;
 
@@ -60,6 +60,19 @@ const OMP_AGAIN_RESET_MS: i64 = 10 * 60_000;
 /// The shipped config folder's `file`, as the argv spells it.
 fn shipped(file: &str) -> String {
 	shipped_config_dir(None).join(file).display().to_string()
+}
+
+/// What every project and thread pane loads last (0697): his own `~/.jocasta/agent/pane.yml` when it exists, then the
+/// guard (0450). omp lets a later `--config` override an earlier one and puts a later one's `bash.patterns` first, so
+/// the guard, loaded last, decides over the overlays and his file. Read at each launch.
+pub fn pane_tail() -> Vec<String> {
+	let mut argv = Vec::new();
+	let personal = config_dir().join("pane.yml");
+	if personal.is_file() {
+		argv.extend(["--config".to_owned(), personal.display().to_string()]);
+	}
+	argv.extend(["--config".to_owned(), shipped("guard.yml")]);
+	argv
 }
 
 /// What `String.prototype.trim` strips from the start: white space and the byte order mark.
@@ -213,14 +226,12 @@ impl Config {
 			Some(prompt) => prompt.clone(),
 			None => ponytail.exists().then_some(ponytail),
 		};
-		// The guard (0450) rides on every pane, before the project's overlay; the appended prompt without its leading
-		// comment (0577, PRM-6).
+		// The appended prompt without its leading comment (0577, PRM-6); the overlays and the guard come after (0697).
 		let mut pane_omp = omp.clone();
 		pane_omp.push("--continue".to_owned());
 		if let Some(prompt) = &pane_prompt {
 			pane_omp.extend(["--append-system-prompt".to_owned(), stripped_prompt(prompt).display().to_string()]);
 		}
-		pane_omp.extend(["--config".to_owned(), shipped("guard.yml")]);
 		// The one extension every pane loads (0675); `-e` adds to the extensions his own settings list.
 		pane_omp.extend(["-e".to_owned(), shipped(BRIDGE_EXTENSION)]);
 		let hook_env = hook_env();
@@ -395,6 +406,7 @@ impl PaneLauncher {
 		let mut started = omp;
 		started.extend(["--config".to_owned(), overlay.display().to_string()]);
 		started.extend(after_overlay(task.as_ref()));
+		started.extend(pane_tail());
 		let command = started;
 		let key = new_pane_key();
 		let mut own = match env {
@@ -438,8 +450,8 @@ impl PaneLauncher {
 
 	/// A thread pane's omp argv with its task's launch prompt (0540): `prompt.md` (the panes' shipped prompt, then the
 	/// task file's Brief, Done-when and When you finish sections; the Brief alone with the layer off, 0576) as the one
-	/// `--append-system-prompt` omp takes, in the shipped prompt's place (before the guard's `--config`). Unchanged
-	/// without a recorded brief.
+	/// `--append-system-prompt` omp takes, in the shipped prompt's place (before the bridge's `-e`, else before the first
+	/// `--config`). Unchanged without a recorded brief.
 	pub fn task_prompted(&self, command: &[String], task: Option<&TaskRecord>) -> Result<Vec<String>> {
 		let Some(task) = task.filter(|task| !js_trim_start(&task.brief).is_empty()) else {
 			return Ok(command.to_vec());
@@ -455,11 +467,12 @@ impl PaneLauncher {
 				.map(|(i, arg)| if i == at + 1 { file.clone() } else { arg.clone() })
 				.collect());
 		}
-		// `indexOf` gives -1 without a `--config`, and `slice(0, -1)` then cuts before the last word.
-		let guard = command.iter().position(|arg| arg == "--config").unwrap_or(command.len().saturating_sub(1));
-		let mut argv = command[..guard].to_vec();
+		// `indexOf` gives -1 without either, and `slice(0, -1)` then cuts before the last word.
+		let at = command.iter().position(|arg| arg == "-e" || arg == "--config");
+		let at = at.unwrap_or(command.len().saturating_sub(1));
+		let mut argv = command[..at].to_vec();
 		argv.extend(["--append-system-prompt".to_owned(), file]);
-		argv.extend_from_slice(&command[guard..]);
+		argv.extend_from_slice(&command[at..]);
 		Ok(argv)
 	}
 

@@ -168,11 +168,11 @@ fn check_first_start(
 	let prompt = task_dir_of(&project.id, "Readme line").join("prompt.md");
 	let mut thread_command = strings(&["omp", "--append-system-prompt"]);
 	thread_command.push(path_text(&prompt));
-	thread_command.extend(guard());
 	thread_command.extend(bridge_flags());
 	thread_command.extend(["--config".to_owned(), path_text(&overlay)]);
 	// Every thread warns at $50 (0541) and appends its task's brief and done-when (0540).
 	thread_command.extend(strings(&["--max-cost", "75", "--warn-cost", "50"]));
+	thread_command.extend(guard());
 	assert_eq!(
 		recorded,
 		json!({
@@ -291,11 +291,11 @@ async fn a_heavy_thread_start_0590_is_recorded_on_its_task_and_loads_heavy_yml_a
 		assert_eq!(record["heavy"], json!(true));
 		let mut command = strings(&["omp", "--append-system-prompt"]);
 		command.push(path_text(&task_dir_of(&project.id, "Readme line").join("prompt.md")));
-		command.extend(guard());
 		command.extend(bridge_flags());
 		command.extend(["--config".to_owned(), path_text(&overlay_file(&project.id))]);
 		command.extend(heavy.clone());
 		command.extend(strings(&["--warn-cost", "50"]));
+		command.extend(guard());
 		assert_eq!(server.herdr.of("createWorktree")[0][1]["command"], json!(command));
 
 		// herdr restores its pane as a shell: omp starts again, still heavy, heavy.yml after the overlay.
@@ -311,10 +311,12 @@ async fn a_heavy_thread_start_0590_is_recorded_on_its_task_and_loads_heavy_yml_a
 				.find(|o| path_key(Path::new(o["cwd"].as_str().unwrap())) == path_key(dir))
 				.map(|o| o["command"].clone())
 		};
-		// heavy.yml comes after the overlay and carries the heavy cap, twice the setting, in place of the plain one.
+		// heavy.yml comes after the overlay and carries the heavy cap, twice the setting, in place of the plain one; the
+		// guard stays last (0697).
 		let mut again = thread_omp(&project.id, "Readme line");
-		again.truncate(again.len() - 2);
+		again.truncate(again.len() - 4);
 		again.extend(heavy.clone());
+		again.extend(guard());
 		assert_eq!(command_in(&started.path), Some(json!(again)));
 		// The project pane is never heavy.
 		let project_command = command_in(&project.main_path).expect("the project pane respawned");
@@ -372,9 +374,9 @@ async fn project_panes_append_the_shipped_ponytail_prompt_thread_panes_append_it
 		assert_eq!(fs::read_to_string(&stripped).unwrap(), without_leading_comment(&shipped).trim_start());
 		let mut command = strings(&["omp", "--continue", "--append-system-prompt"]);
 		command.push(path_text(&stripped));
-		command.extend(guard());
 		command.extend(bridge_flags());
 		command.extend(["--config".to_owned(), path_text(&overlay_file(&project.id))]);
+		command.extend(guard());
 		let ensured = server.herdr.of("ensureWorkspace");
 		// The project pane opens as the sleeper (0676); a key starts its omp with Ponytail and the overlay.
 		let sleeper = server.service.context().panes.sleeper_command("demo · press any key to start");
@@ -389,10 +391,10 @@ async fn project_panes_append_the_shipped_ponytail_prompt_thread_panes_append_it
 		let prompt = task_dir_of(&project.id, "Readme line").join("prompt.md");
 		let mut thread_command = strings(&["omp", "--append-system-prompt"]);
 		thread_command.push(path_text(&prompt));
-		thread_command.extend(guard());
 		thread_command.extend(bridge_flags());
 		thread_command.extend(["--config".to_owned(), path_text(&overlay_file(&project.id))]);
 		thread_command.extend(strings(&["--max-cost", "75", "--warn-cost", "50"]));
+		thread_command.extend(guard());
 		assert_eq!(server.herdr.of("createWorktree")[0][1]["command"], json!(thread_command));
 		// Then the task's sections, ending with how to finish (0577, PRM-7).
 		let tail = WHEN_YOU_FINISH.join("\n");

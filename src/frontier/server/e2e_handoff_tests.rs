@@ -120,9 +120,9 @@ fn same_path(left: &str, right: &Path) -> bool {
 
 fn overlay_command(project: &Project) -> Vec<String> {
 	let mut command = vec!["omp".to_owned(), "--continue".to_owned()];
-	command.extend(guard());
 	command.extend(bridge_flags());
 	command.extend(["--config".to_owned(), overlay_file(&project.id).display().to_string()]);
+	command.extend(guard());
 	command
 }
 

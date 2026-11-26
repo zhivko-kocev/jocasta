@@ -19,7 +19,7 @@ use crate::shared::errors::{Error, Result};
 use crate::shared::fsx::{read_json_object, same_token, write_atomically};
 use crate::shared::install::shipped_config_dir;
 use crate::shared::pathkey::same_dir;
-use crate::shared::paths::data_dir;
+use crate::shared::paths::{config_dir as jocasta_config_dir, data_dir};
 
 /// The boss's workspace label (0392, 0404).
 pub const BOSS_WORKSPACE: &str = "Jocasta";
@@ -34,12 +34,17 @@ pub fn boss_home() -> PathBuf {
 	data_dir().join("home")
 }
 
-/// The boss pane's command: omp resuming its session line with the boss's own settings (0424) and the guard (0450).
-/// `config_dir` is the shipped config folder (the install's, or the repo's in a source run, by default).
+/// The boss pane's command: omp resuming its session line with the boss's own settings (0424), his own
+/// `~/.jocasta/agent/boss.yml` when it exists (0697), and the guard last (0450). `config_dir` is the shipped config
+/// folder (the install's, or the repo's in a source run, by default).
 pub fn boss_command(omp: &[String], config_dir: Option<&Path>) -> Vec<String> {
 	let config_dir = config_dir.map_or_else(|| shipped_config_dir(None), Path::to_path_buf);
 	let mut command = omp.to_vec();
 	command.extend(["--continue".to_owned(), "--config".to_owned(), config_dir.join("boss.yml").display().to_string()]);
+	let personal = jocasta_config_dir().join("boss.yml");
+	if personal.is_file() {
+		command.extend(["--config".to_owned(), personal.display().to_string()]);
+	}
 	command.extend(["--config".to_owned(), config_dir.join("guard.yml").display().to_string()]);
 	// The bridge extension (0675): the boss's tools, and its state for the service.
 	command.extend(["-e".to_owned(), config_dir.join(BRIDGE_EXTENSION).display().to_string()]);
