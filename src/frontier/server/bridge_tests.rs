@@ -634,3 +634,27 @@ async fn an_omp_that_starts_again_takes_the_place_of_the_one_before_it() {
 	new.send(&json!({ "t": "ack", "id": id_of(&prompt) })).await;
 	sent.await.unwrap().unwrap();
 }
+
+/// The bridge's folder is its own, 0700 and the user's; sockets nothing listens on are removed, live ones and other
+/// files kept (0702, #15).
+#[cfg(unix)]
+#[test]
+fn the_socket_folder_is_private_and_cleared_of_dead_sockets_0702() {
+	use std::os::unix::fs::{MetadataExt, PermissionsExt};
+	// A socket's path must fit 108 bytes, so the folder is a short one under /tmp, removed at the end.
+	let dir = std::path::PathBuf::from(format!("/tmp/jocasta-test-{}", uuid::Uuid::new_v4().simple()));
+	std::fs::create_dir_all(&dir).unwrap();
+	drop(std::os::unix::net::UnixListener::bind(dir.join("bridge-1.sock")).unwrap());
+	let live = std::os::unix::net::UnixListener::bind(dir.join("bridge-2.sock")).unwrap();
+	std::fs::write(dir.join("notes.txt"), "").unwrap();
+	let uid = std::fs::metadata(&dir).unwrap().uid();
+	prepare_socket_dir(&dir, uid).unwrap();
+	assert!(!dir.join("bridge-1.sock").exists(), "a dead socket is removed");
+	assert!(dir.join("bridge-2.sock").exists(), "a live one stays");
+	assert!(dir.join("notes.txt").exists());
+	assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+	drop(live);
+	let refused = prepare_socket_dir(&dir, uid + 1).unwrap_err().to_string();
+	assert!(refused.contains("belongs to another user"), "{refused}");
+	std::fs::remove_dir_all(&dir).unwrap();
+}

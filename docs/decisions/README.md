@@ -55,7 +55,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0046](0046-builtin-mcp-codemode-toolsearch.md) | Built-in MCP, Codemode and tool_search | feature | v1 | 0/0.2 | 2026-10-04 |  |
 | [0047](0047-share-command.md) | /share to a GitHub gist | feature | v1 | 0/0.2 | 2026-10-04 |  |
 | [0048](0048-telemetry.md) | Telemetry | product | decided | 0/0.2 | 2026-10-04 |  |
-| [0049](0049-install-scripts.md) | Install scripts | product | decided | 0/0.2 | 2026-10-04 | 0579 |
+| [0049](0049-install-scripts.md) | Install scripts | product | decided | 0/0.2 | 2026-10-04 | 0579, 0692 |
 | [0050](0050-self-upgrade.md) | Self-upgrade command | feature | after v1 | 0/0.2 | 2026-10-04 |  |
 | [0051](0051-releases.md) | Releases | product | decided | 0/0.2 | 2026-10-04 |  |
 | [0052](0052-version-output.md) | --version output | product | decided | 0/0.2 | 2026-10-04 |  |
@@ -413,7 +413,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0404](0404-boss-pane-pinned.md) | The boss pane: a pinned first workspace | product | decided | program | 2026-10-13 |  |
 | [0405](0405-events-to-boss-and-voice.md) | Events reach the boss and the voice | product | decided | program | 2026-10-13 | 0413, 0583 |
 | [0406](0406-review-beside-half-width.md) | hunk opens beside the thread | product | decided | program | 2026-10-13 |  |
-| [0407](0407-notifications-from-one-place.md) | Notifications from one place | product | decided | program | 2026-10-13 | 0519, 0552, 0554 |
+| [0407](0407-notifications-from-one-place.md) | Notifications from one place | product | decided | program | 2026-10-13 | 0519, 0552, 0554, 0699 |
 | [0408](0408-alt-digit-keys.md) | Keys: Alt digits for workspaces | product | decided | program | 2026-10-13 | 0554 |
 | [0409](0409-companion-rail-and-canvas.md) | The companion: a rail and the canvas | product | decided | program | 2026-10-13 | 0416, 0419, 0428, 0548 |
 | [0410](0410-ui-suggestions-triage.md) | Triage of his UI suggestions | process | decided | program | 2026-10-13 |  |
@@ -456,7 +456,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0447](0447-project-memory-own-file.md) | Each project's memory in its own file, set by the pane settings | product | decided | program | 2026-10-23 | 0478, 0606 |
 | [0448](0448-compaction-at-300k-tokens.md) | Compaction in the pane settings, at 300,000 tokens | product | decided | program | 2026-10-23 | 0592 |
 | [0449](0449-private-notes-agents-local.md) | Private project notes through AGENTS.local.md | product | decided | program | 2026-10-23 |  |
-| [0450](0450-guard-yml-in-every-pane.md) | The guard in every pane: config/guard.yml | product | decided | program | 2026-10-23 | 0476, 0485, 0580, 0598 |
+| [0450](0450-guard-yml-in-every-pane.md) | The guard in every pane: config/guard.yml | product | decided | program | 2026-10-23 | 0476, 0485, 0580, 0598, 0701 |
 | [0451](0451-more-omp-settings.md) | More omp settings for his /settings pass | product | decided | program | 2026-10-23 | 0478, 0479, 0593, 0594 |
 | [0452](0452-spend-counts-every-model-call.md) | The day's spend counts every model call | product | decided | program | 2026-10-23 | 0582 |
 | [0453](0453-proof-before-done.md) | Proof before done | product | decided | program | 2026-10-23 | 0473, 0513, 0583, 0610, 0611 |
@@ -555,7 +555,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0546](0546-peak-context-and-gate-replies.md) | The ledger shows peak context, and checks answer as gates with a rerun command | product | v1 | program | 2026-11-08 | 0577, 0582, 0583 |
 | [0547](0547-thread-state-from-omp-first.md) | A thread's state comes from omp first, and the unused thread_runtime table is dropped | product | v1 | program | 2026-11-08 |  |
 | [0548](0548-herdr-is-the-whole-surface-companion-is-the-canvas.md) | herdr becomes the whole work surface: the rail moves into a herdr pane, the companion window becomes the canvas, one screen each | product | v1 | program | 2026-11-08 | 0552, 0555, 0581 |
-| [0549](0549-nothing-runs-without-jocasta.md) | Nothing runs without Jocasta: no Keep in the background, autostart off by default, paused work resumes on the next start | product | v1 | program | 2026-11-08 | 0552, 0557, 0563 |
+| [0549](0549-nothing-runs-without-jocasta.md) | Nothing runs without Jocasta: no Keep in the background, autostart off by default, paused work resumes on the next start | product | v1 | program | 2026-11-08 | 0552, 0557, 0563, 0702 |
 | [0550](0550-omp-updates-off-and-setup-files-now.md) | omp stops updating itself until the benchmarks end, and setup's omp files are written on his PC now | process | decided | program | 2026-11-08 |  |
 | [0551](0551-jocasta-pane-drawn-with-opentui.md) | The `jocasta` pane is drawn with OpenTUI and holds today, the thread keys and his answers | product | v1 | program | 2026-11-09 | 0581, 0625, 0634 |
 | [0552](0552-no-companion-app.md) | No companion app: the service is a plain Bun process, diagrams open in the browser, dictation stays without spoken replies, and questions are answered in herdr | product | v1 | program | 2026-11-09 | 0553, 0556, 0563, 0578, 0583, 0584, 0649, 0672 |
@@ -584,9 +584,9 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0575](0575-follow-up-drops-f-keepalive.md) | The follow-up drops f-keepalive; A6's layer builds its code index before the trial's clock | benchmark | v1 | program | 2026-11-09 | 0586 |
 | [0576](0576-live-benchmarks-on-the-harness-os-build.md) | The live benchmarks on the harness-OS build | benchmark | v1 | program | 2026-11-09 | 0585 |
 | [0577](0577-thread-prompts-and-tool-time-limits.md) | Thread prompts and the tools' time limits | product | v1 | program | 2026-11-09 | 0662 |
-| [0578](0578-allow-popup-and-local-api.md) | The Allow popup and the service's local API | product, security | v1 | program | 2026-11-09 |  |
+| [0578](0578-allow-popup-and-local-api.md) | The Allow popup and the service's local API | product, security | v1 | program | 2026-11-09 | 0699 |
 | [0579](0579-install-folder-is-jocastas-alone.md) | The install folder is Jocasta's alone | product | v1 | program | 2026-11-09 |  |
-| [0580](0580-guard-covers-more-shapes.md) | The guard covers more shapes, and done_when goes through it | product, security | v1 | program | 2026-11-09 | 0613 |
+| [0580](0580-guard-covers-more-shapes.md) | The guard covers more shapes, and done_when goes through it | product, security | v1 | program | 2026-11-09 | 0613, 0701 |
 | [0581](0581-today-keys-wording-and-canvas.md) | today, the keys, the wording and the canvas | product, ux | v1 | program | 2026-11-09 | 0660, 0662, 0670 |
 | [0582](0582-starting-recovering-and-counting-cost.md) | Starting, recovering and counting cost | product | v1 | program | 2026-11-09 | 0649 |
 | [0583](0583-boss-manual-and-shipped-prompt-texts.md) | The boss manual and shipped prompt texts | product, prompts | v1 | program | 2026-11-09 | 0608, 0611, 0616, 0619, 0621 |
@@ -600,7 +600,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0591](0591-subagents-on-sonnet-memory-and-graph-unchanged.md) | Subagents on Sonnet 5.5; memory notes and the graph unchanged | product | v1 | program | 2026-11-10 | 0603 |
 | [0592](0592-compaction-handoff-first.md) | Compaction: handoff first, shake and the image method last | product | v1 | program | 2026-11-10 | 0677 |
 | [0593](0593-his-settings-pass.md) | His /settings pass: the values in his config and in Jocasta's | product | v1 | program | 2026-11-10 | 0616, 0619 |
-| [0594](0594-setup-fences-folders-and-writes-secrets.md) | Setup fences the key folders and Windows' own, and writes an empty secrets.yml | product | v1 | program | 2026-11-10 |  |
+| [0594](0594-setup-fences-folders-and-writes-secrets.md) | Setup fences the key folders and Windows' own, and writes an empty secrets.yml | product | v1 | program | 2026-11-10 | 0701 |
 | [0595](0595-cutover-now.md) | The cutover now: Jarvis is Jocasta, everything from Jarvis is deleted | process | v1 | program | 2026-11-10 |  |
 | [0596](0596-worktrees-trust-unchanged-mise-copy.md) | A thread's worktree trusts an unchanged copy of a trusted mise config | product | v1 | program | 2026-11-10 |  |
 | [0598](0598-git-guard-off-until-omp-fixes-windows-git.md) | The git guard is off until omp's git builtin runs git on Windows | product | v1 | program | 2026-11-10 | 0600 |
@@ -680,15 +680,15 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0672](0672-phone-check-in-through-ntfy.md) | Phone check-in through ntfy, with Allow from the phone | product | v1 | HUD round | 2026-11-23 |  |
 | [0673](0673-scheduled-threads.md) | Scheduled threads | product | v1 | HUD round | 2026-11-23 |  |
 | [0674](0674-the-lightweight-program-and-its-order.md) | The lightweight program, its order and its footprint budget | product, process | v1 | lightweight program | 2026-11-24 | 0689 |
-| [0675](0675-the-bridge-one-extension-one-pipe.md) | The bridge: one omp extension and one local pipe | product | v1 | lightweight program | 2026-11-24 | 0683 |
+| [0675](0675-the-bridge-one-extension-one-pipe.md) | The bridge: one omp extension and one local pipe | product | v1 | lightweight program | 2026-11-24 | 0683, 0702 |
 | [0676](0676-process-diet.md) | Process diet: panes start on demand and sleep; a footprint that only goes down | product | v1 | lightweight program | 2026-11-24 | 0689 |
 | [0677](0677-deterministic-loops.md) | Deterministic validation loops | product | v1 | lightweight program | 2026-11-24 |  |
-| [0678](0678-briefs-as-html-pages.md) | Briefs: animated HTML pages served on loopback | product | v1 | lightweight program | 2026-11-24 |  |
+| [0678](0678-briefs-as-html-pages.md) | Briefs: animated HTML pages served on loopback | product | v1 | lightweight program | 2026-11-24 | 0699 |
 | [0679](0679-whiteboard-and-hunk-removed.md) | Whiteboard and hunk removed; `show` draws a brief | product | v1 | lightweight program | 2026-11-24 |  |
 | [0680](0680-day-flows-and-new-sources.md) | Day flows and three new read-only sources | product | v1 | lightweight program | 2026-11-24 |  |
 | [0681](0681-privacy-boundary.md) | Privacy boundary: one door to the model | product | v1 | lightweight program | 2026-11-24 |  |
 | [0682](0682-validation-environment-mise-tasks.md) | Validation environment: the project's own mise tasks | process | v1 | lightweight program | 2026-11-24 |  |
-| [0683](0683-own-shell-on-alacritty-terminal.md) | Own shell on `alacritty_terminal`, gated by a spike | product | v1 | lightweight program | 2026-11-24 |  |
+| [0683](0683-own-shell-on-alacritty-terminal.md) | Own shell on `alacritty_terminal`, gated by a spike | product | v1 | lightweight program | 2026-11-24 | 0702 |
 | [0684](0684-harness-contract-and-omp2-preparation.md) | Harness contract: omp's own screen, capabilities, no adapter layer | product | v1 | lightweight program | 2026-11-24 |  |
 | [0685](0685-stage-setting-facts-and-precheck.md) | Stage setting: a facts block by code and the full check ahead of time | product | v1 | lightweight program | 2026-11-24 |  |
 | [0686](0686-circuit-breakers.md) | Circuit breakers: loop cap, cost cap, pressure sleep, stop-all | product | v1 | lightweight program | 2026-11-24 |  |
@@ -696,3 +696,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0688](0688-the-journal.md) | The journal: one append-only file of events | product | v1 | lightweight program | 2026-11-24 |  |
 | [0689](0689-sleeping-panes-in-process-and-footprint-count.md) | Sleeping panes drawn by the shell; the footprint counts Jocasta's own processes | product | v1 | lightweight program | 2026-11-25 |  |
 | [0690](0690-omp-19-2-0-pinned.md) | omp 19.2.0 is the pinned omp | product, benchmark | v1 | lightweight program | 2026-11-26 |  |
+| [0692](0692-unix-install-folder.md) | Unix install folder | product | v1 | ultron 0.3 iteration, J1 | 2026-11-26 |  |
+| [0699](0699-linux-notifications.md) | Linux notifications | product | v1 | ultron 0.3 iteration, J1 | 2026-11-26 |  |
+| [0701](0701-linux-guard-shapes-and-fenced-folders.md) | Linux guard shapes and fenced folders | product | v1 | ultron 0.3 iteration, J1 | 2026-11-26 |  |
+| [0702](0702-unix-runtime.md) | Unix runtime | product | v1 | ultron 0.3 iteration, J1 | 2026-11-26 |  |

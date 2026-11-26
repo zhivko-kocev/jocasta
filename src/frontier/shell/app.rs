@@ -20,8 +20,8 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm;
 use ratatui::crossterm::event::{
 	DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste, EnableFocusChange,
-	EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, MouseButton,
-	MouseEvent, MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+	EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+	PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::terminal::{
 	BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen, SetTitle,
@@ -516,14 +516,7 @@ pub fn run(parts: Parts) -> io::Result<()> {
 	let _ = crossterm::execute!(stdout, EnableBracketedPaste, EnableFocusChange);
 	let enhanced = supports_keyboard_enhancement().unwrap_or(false);
 	if enhanced {
-		crossterm::execute!(
-			stdout,
-			PushKeyboardEnhancementFlags(
-				KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-					| KeyboardEnhancementFlags::REPORT_EVENT_TYPES
-					| KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
-			)
-		)?;
+		crossterm::execute!(stdout, PushKeyboardEnhancementFlags(keys::KEYBOARD_FLAGS))?;
 	}
 	let mut terminal = Terminal::new(CrosstermBackend::new(io::BufWriter::with_capacity(1 << 16, io::stdout())))?;
 	let input_tx = tx.clone();

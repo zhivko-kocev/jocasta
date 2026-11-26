@@ -53,7 +53,7 @@ In PowerShell:
 irm https://raw.githubusercontent.com/zhivko-kocev/jocasta/main/scripts/install.ps1 | iex
 ```
 
-This installs to `%LOCALAPPDATA%\Programs\jocasta\` and adds that folder to your user PATH. The download is checked against a checksum committed in this repository. To upgrade, run the same command again, then close Jocasta and open it again. On Linux and macOS, use `scripts/install.sh`, which installs to `~/.local/share/jocasta/`; on Linux an upgrade hands a running Jocasta to the new build without closing its panes.
+This installs to `%LOCALAPPDATA%\Programs\jocasta\` and adds that folder to your user PATH. The download is checked against a checksum committed in this repository. To upgrade, run the same command again, then close Jocasta and open it again. On Linux and macOS, use `scripts/install.sh`, which installs to `~/.local/lib/jocasta/`; an upgrade keeps a running Jocasta on the old build until you close it and open it again.
 
 ## First run
 

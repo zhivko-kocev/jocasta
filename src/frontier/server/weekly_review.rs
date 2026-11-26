@@ -175,20 +175,24 @@ impl WeeklyReviews {
 			.collect();
 		base.extend(c.panes.pane_env().iter().cloned());
 		let env: Env = c.panes.with_mise(&project.id, main, &base).await.into_iter().collect();
+		// It ends when Jocasta stops, and on Linux even when Jocasta is killed (0702, #7).
 		let run = run_program(
 			&argv,
 			RunOptions {
 				cwd: Some(dir.clone()),
 				env: Some(env),
 				timeout_ms: Some(c.options.weekly_review_ms.unwrap_or(WEEKLY_REVIEW_MS)),
+				signal: Some(c.stop_signal.subscribe()),
+				end_with_jocasta: true,
 				..RunOptions::default()
 			},
 		)
-		.await?;
+		.await;
 		// Workers omp started (a memory embedding server, the tiny model) can outlive print mode and keep this folder
 		// busy, as panes' did (0486); whatever still works in this run's own folder is this run's.
 		let found: Vec<_> = processes_in(&dir).into_iter().filter_map(|found| process_id_of(found.pid)).collect();
 		end_processes(&found, &[]).await;
+		let run = run?;
 		let Some(drift) = drift_of(&run.stdout) else {
 			let why = if run.timed_out || run.signal.is_some() {
 				"it ran out of time".to_owned()

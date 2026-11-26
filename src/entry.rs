@@ -383,6 +383,7 @@ fn fail(error: &Error) -> u8 {
 
 /// The `jocasta` command: routes argv, runs the route and returns the process's exit code.
 pub fn main() -> ExitCode {
+	crate::shared::install::resolve_at_start();
 	let args: Vec<String> = std::env::args_os().skip(1).map(|arg| arg.to_string_lossy().into_owned()).collect();
 	let target = match route(&args) {
 		Ok(target) => target,

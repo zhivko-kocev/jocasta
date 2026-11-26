@@ -1,6 +1,7 @@
 #!/bin/sh
 # Installs or upgrades the latest Jocasta release for linux-x64 or darwin-arm64 (0049).
-# Folder: $JOCASTA_INSTALL_DIR, else ~/.local/share/jocasta; appended to PATH in the shell rc file. The folder is
+# Folder: $JOCASTA_INSTALL_DIR, else ~/.local/lib/jocasta (0692: outside the data folder, which sits under
+# ~/.local/share/jocasta on Linux); appended to PATH in the shell rc file. The folder is
 # Jocasta's alone (0579): the file system's root, or a folder holding files when no install.json there names that
 # same folder, is refused.
 # Source: the latest GitHub release. Its archive must match the SHA-256 in the repository at the release's tag (0484):
@@ -16,7 +17,7 @@
 set -eu
 
 repo="zhivko-kocev/jocasta"
-dir="${JOCASTA_INSTALL_DIR:-$HOME/.local/share/jocasta}"
+dir="${JOCASTA_INSTALL_DIR:-$HOME/.local/lib/jocasta}"
 source_dir="${JOCASTA_INSTALL_FROM:-}"
 
 case "$(uname -s)-$(uname -m)" in

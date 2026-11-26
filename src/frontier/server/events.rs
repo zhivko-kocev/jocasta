@@ -16,9 +16,10 @@ use serde_json::{Value, json};
 
 use crate::frontier::protocol::{ServerMessage, ToastLevel, ToastPriority, ToastReason};
 use crate::frontier::server::bridge::Deliver;
+use crate::frontier::server::brief_actions::brief_of_link;
 use crate::frontier::server::context::{BossRef, Calls, Link};
 use crate::frontier::server::day::AlertDetails;
-use crate::frontier::server::surface::{AgentState, Note, NotificationResult, Sound, pane_text};
+use crate::frontier::server::surface::{AgentState, Note, NoteLink, NotificationResult, Sound, pane_text};
 use crate::frontier::server::thread::{ThreadRef, is_idle, settled, subject};
 use crate::frontier::server::wording::{cut, quoted};
 use crate::shared::clock::now_ms;
@@ -323,6 +324,7 @@ impl Events {
 				title: title.clone(),
 				body: Some(body.clone()),
 				sound: if urgent { Sound::Request } else { Sound::None },
+				link: self.brief_link(toast),
 			};
 			match ctx.herdr.notify(&note).await {
 				Ok(result) => result,
@@ -335,6 +337,16 @@ impl Events {
 			return self.after_notify(toast, "repeat", &title, &body);
 		};
 		self.after_notify(toast, result_name(result), &title, &body);
+	}
+
+	/// A Done toast's brief as the notification's link (0699, #13): clicked, it opens the page with a fresh launch code,
+	/// as the dock's Enter does.
+	fn brief_link(&self, toast: &Toast) -> Option<NoteLink> {
+		let ctx = self.link.ctx();
+		let url = toast.url.as_deref().filter(|_| toast.reason == ToastReason::Done)?;
+		let id = brief_of_link(&ctx, url)?;
+		let briefs = Arc::clone(ctx.options.briefs.as_ref()?);
+		Some(NoteLink { url: url.to_owned(), open: Arc::new(move || briefs.open(&id)) })
 	}
 
 	fn after_notify(&self, toast: &Toast, result: &str, title: &str, body: &str) {

@@ -162,12 +162,24 @@ async fn show(note: &Note) -> NotificationResult {
 				.to_owned(),
 		]
 	} else {
-		// notify-send takes its words as arguments.
 		if on_path("notify-send", None).is_none() {
 			return NotificationResult::Disabled;
 		}
-		let body = note.body.clone().unwrap_or_default();
-		vec!["notify-send".to_owned(), "--app-name=Jocasta".to_owned(), "--".to_owned(), note.title.clone(), body]
+		let argv = notify_send_argv(note);
+		if let Some(link) = note.link.clone() {
+			// It waits for his click (0699, #13), so it runs on its own, outside the 10 s bound, as long as the daemon
+			// keeps the notification.
+			let options = RunOptions { env: Some(env), timeout_ms: Some(LINK_WAIT_MS), ..RunOptions::default() };
+			tokio::spawn(async move {
+				if let Ok(run) = run_program(&argv, options).await
+					&& run.stdout.trim() == "default"
+				{
+					(link.open)();
+				}
+			});
+			return NotificationResult::Shown;
+		}
+		argv
 	};
 	match run_program(&argv, RunOptions { env: Some(env), timeout_ms: Some(10_000), ..RunOptions::default() }).await {
 		Ok(run) if run.code == Some(0) => NotificationResult::Shown,
@@ -185,6 +197,24 @@ async fn show(note: &Note) -> NotificationResult {
 			NotificationResult::Disabled
 		}
 	}
+}
+
+/// How long a notification with a link waits for his click before its `notify-send` is ended.
+const LINK_WAIT_MS: i64 = 60 * 60_000;
+
+/// `notify-send`'s argv (it takes its words as arguments). One that needs him (0699, #5) is critical, so the daemon
+/// keeps it on screen, and asks for the freedesktop sound of a new message; one with a link (#13) offers the click as
+/// its default action and waits for it.
+fn notify_send_argv(note: &Note) -> Vec<String> {
+	let mut argv = vec!["notify-send".to_owned(), "--app-name=Jocasta".to_owned()];
+	if note.sound == Sound::Request {
+		argv.extend(["-u", "critical", "--hint=string:sound-name:message-new-instant"].map(str::to_owned));
+	}
+	if note.link.is_some() {
+		argv.extend(["-A", "default=Open", "--wait"].map(str::to_owned));
+	}
+	argv.extend(["--".to_owned(), note.title.clone(), note.body.clone().unwrap_or_default()]);
+	argv
 }
 
 impl Surface for OwnSurface {
@@ -391,3 +421,7 @@ impl Surface for OwnSurface {
 
 	fn close(&self) {}
 }
+
+#[cfg(test)]
+#[path = "own_surface_tests.rs"]
+mod tests;

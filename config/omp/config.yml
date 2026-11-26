@@ -41,7 +41,8 @@ advisor:
   reviewInterval: 3
 
 # Every read, write, edit, search or command in these folders asks him first, whatever the mode (0593). On Windows
-# setup adds Windows' own folders, %SystemRoot% and %ProgramFiles% (0594): keep the list on one line.
+# setup adds Windows' own folders, %SystemRoot% and %ProgramFiles% (0594); on Linux ~/.local/share/keyrings, ~/.gnupg,
+# ~/.config/gh, /etc and /boot (0701): keep the list on one line.
 tools:
   restrictedFolders: ["~/.ssh", "~/.aws", "~/.azure", "~/.docker"]
 

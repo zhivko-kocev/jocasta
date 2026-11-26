@@ -205,6 +205,8 @@ pub struct ServiceContext {
 	pub rediscover: AtomicBool,
 	finishing: Mutex<HashMap<String, Finishing>>,
 	stopping: AtomicBool,
+	/// Aborts once the service stops: a program run with `stop_signal.subscribe()` ends with Jocasta (0702, #7).
+	pub stop_signal: tokio::sync::watch::Sender<Option<String>>,
 	warmed: AtomicBool,
 	boss: Mutex<Option<BossRef>>,
 	pub day: Day,
@@ -264,6 +266,7 @@ impl ServiceContext {
 			rediscover: AtomicBool::new(false),
 			finishing: Mutex::new(HashMap::new()),
 			stopping: AtomicBool::new(false),
+			stop_signal: tokio::sync::watch::Sender::new(None),
 			warmed: AtomicBool::new(false),
 			boss: Mutex::new(None),
 			events: Events::new(link.clone(), options.broadcast.clone()),
@@ -308,6 +311,7 @@ impl ServiceContext {
 
 	pub fn set_stopping(&self) {
 		self.stopping.store(true, Ordering::SeqCst);
+		self.stop_signal.send_replace(Some("Jocasta stopped".to_owned()));
 	}
 
 	/// Today's sessions were read once (`SessionIndex::warm`): until then nothing reads a whole session on a tick.

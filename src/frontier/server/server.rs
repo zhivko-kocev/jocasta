@@ -24,6 +24,7 @@ use crate::frontier::server::asker::{Ask, Show, asker};
 use crate::frontier::server::bridge::{Bridge, BridgeService, Secrets};
 use crate::frontier::server::close::{CloseFlow, CloseHow, CloseOutcome, CloseParts, CloseService, close_flow};
 use crate::frontier::server::day::{DayOptions, SharedCatalog};
+use crate::frontier::server::events::Toast;
 use crate::frontier::server::feed::{FeedService, Guard, Reply, feed_route, feed_socket, publish};
 use crate::frontier::server::health_route::health_route;
 use crate::frontier::server::native::{Native, NativeServer};
@@ -35,7 +36,7 @@ use crate::frontier::server::service::{Changed, Heal, JocastaService, ServiceOpt
 use crate::frontier::server::stop_sequence::{
 	StopBounds, StopParts, StopRun, StopService, StopStep, StopWhen, Stopper, stop_steps, stopper, undo_start,
 };
-use crate::frontier::server::surface::{Note, Surface};
+use crate::frontier::server::surface::Surface;
 use crate::frontier::server::thread_keys::{ActionService, KeyParts, ThreadKeys};
 use crate::shared::credentials::{calendar_secret, gmail_secret, jira_secret, take_calendar_env, take_source_envs};
 use crate::shared::errors::Result;
@@ -179,7 +180,6 @@ struct Inner {
 	question: Ask,
 	popups: Arc<Popups>,
 	keys: Arc<ThreadKeys>,
-	herdr: Arc<dyn Surface>,
 }
 
 impl JocastaServer {
@@ -258,14 +258,9 @@ impl NativeServer for JocastaServer {
 		async move { FeedService::handle(&*service, message, reply).await }.boxed()
 	}
 
-	fn notify(&self, note: Note) -> BoxFuture<'static, ()> {
-		let herdr = Arc::clone(&self.inner.herdr);
-		async move {
-			if let Err(error) = herdr.notify(&note).await {
-				log(LogLevel::Warn, "question", &format!("the question's notification failed: {error}"), None);
-			}
-		}
-		.boxed()
+	fn notify(&self, toast: Toast) -> BoxFuture<'static, ()> {
+		let service = Arc::clone(&self.service);
+		async move { service.notify(&toast, None).await }.boxed()
 	}
 }
 
@@ -726,7 +721,7 @@ async fn start_rest(
 		token: tokens.api,
 		bridge,
 		service,
-		inner: Arc::new(Inner { codes, stops, close, question: asking.question, popups: asking.popups, keys, herdr }),
+		inner: Arc::new(Inner { codes, stops, close, question: asking.question, popups: asking.popups, keys }),
 	})
 }
 

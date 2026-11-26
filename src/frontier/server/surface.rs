@@ -189,6 +189,21 @@ pub struct Note {
 	pub title: String,
 	pub body: Option<String>,
 	pub sound: Sound,
+	/// What clicking it opens (0699, #13): a finished thread's brief. Only Linux's `notify-send` offers the click.
+	pub link: Option<NoteLink>,
+}
+
+/// A notification's link: the page's address and how to open it, with a fresh launch code, once he clicks.
+#[derive(Clone)]
+pub struct NoteLink {
+	pub url: String,
+	pub open: std::sync::Arc<dyn Fn() + Send + Sync>,
+}
+
+impl std::fmt::Debug for NoteLink {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("NoteLink").field("url", &self.url).finish_non_exhaustive()
+	}
 }
 
 /// What `report_pane_metadata` reports.

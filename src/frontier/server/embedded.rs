@@ -28,8 +28,9 @@ use crate::shared::proctree::end_processes;
 use crate::shared::service_file::read_service_file;
 
 /// How long the process waits for the service to end once the window closed: every stop step is bounded, so this only
-/// guards against a hang.
-const STOP_WAIT: Duration = Duration::from_secs(60);
+/// guards against a hang. 50 s, inside the 60 s a closing terminal (foot and others) gives its process group before
+/// SIGKILL (0702, #6).
+const STOP_WAIT: Duration = Duration::from_secs(50);
 
 /// Takes the single-instance lock: the lock this service holds, or `None` when another service holds it and answers.
 async fn take_lock() -> Result<Option<Instance>> {

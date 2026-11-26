@@ -45,8 +45,9 @@ impl NativeServer for Arc<Fake> {
 		Box::pin(async move { reply(ServerMessage::Action { text: "handled".to_owned(), is_error: false }) })
 	}
 
-	fn notify(&self, note: Note) -> BoxFuture<'static, ()> {
-		locked(&self.notes).push(note.body.unwrap_or_default());
+	fn notify(&self, toast: Toast) -> BoxFuture<'static, ()> {
+		assert_eq!(toast.reason, crate::frontier::protocol::ToastReason::Blocked, "a question is a blocked toast");
+		locked(&self.notes).push(toast.text.strip_prefix("Jocasta asks — ").unwrap_or_default().to_owned());
 		Box::pin(async {})
 	}
 }

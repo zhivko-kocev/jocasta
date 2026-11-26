@@ -1092,3 +1092,11 @@ async fn an_install_with_the_old_graph_while_docker_isnt_running_asks_nothing_mo
 	assert!(graph_gone(&h, &stopped));
 	assert!(stopped.text.contains(LATER_COMMAND));
 }
+
+/// On Linux the fence also names the keyring, GnuPG, gh's token, `/etc` and `/boot` (0701); `/usr` stays out.
+#[cfg(target_os = "linux")]
+#[test]
+fn on_linux_the_fence_also_names_the_keyring_gnupg_gh_etc_and_boot_0701() {
+	let paths = default_setup_paths(Path::new(REPO), Vec::new());
+	assert_eq!(paths.system_folders.unwrap(), ["~/.local/share/keyrings", "~/.gnupg", "~/.config/gh", "/etc", "/boot"]);
+}

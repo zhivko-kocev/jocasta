@@ -104,6 +104,9 @@ pub struct RunOptions {
 	/// cmd.exe's command line as given (a `.cmd` quoted by the caller): the arguments after the program are passed
 	/// as written. Windows only.
 	pub windows_verbatim_arguments: bool,
+	/// Linux: the program gets SIGTERM when the thread that started it ends, so a Jocasta that was killed still takes
+	/// it down (0702, #7). Start it from a runtime task: tokio's worker threads live as long as the runtime.
+	pub end_with_jocasta: bool,
 }
 
 /// What a run left.
@@ -277,6 +280,29 @@ enum First {
 	TimedOut,
 }
 
+/// Linux's `PR_SET_PDEATHSIG` with SIGTERM on the child, set between fork and exec (0702, #7).
+#[cfg(target_os = "linux")]
+fn end_with_parent(command: &mut tokio::process::Command) {
+	use std::ffi::{c_int, c_ulong};
+	unsafe extern "C" {
+		fn prctl(option: c_int, ...) -> c_int;
+	}
+	const PR_SET_PDEATHSIG: c_int = 1;
+	const SIGTERM: c_ulong = 15;
+	let hook = || {
+		// SAFETY: `prctl` with an option and an integer is async-signal-safe and changes only this process's own
+		// death signal.
+		if unsafe { prctl(PR_SET_PDEATHSIG, SIGTERM) } == -1 {
+			return Err(std::io::Error::last_os_error());
+		}
+		Ok(())
+	};
+	// SAFETY: the hook runs in the child between fork and exec and calls nothing but `prctl`.
+	unsafe {
+		command.pre_exec(hook);
+	}
+}
+
 /// Runs `argv` to its end and resolves its exit code and output. A program that can't be started (not found) is an
 /// `Error::Io`, so each caller keeps its own text for it. An aborted signal fails the run with its reason.
 pub async fn run_program(argv: &[impl AsRef<OsStr>], mut options: RunOptions) -> Result<RunResult> {
@@ -289,6 +315,10 @@ pub async fn run_program(argv: &[impl AsRef<OsStr>], mut options: RunOptions) ->
 		.stdin(if options.stdin.is_some() { Stdio::piped() } else { Stdio::null() })
 		.stdout(Stdio::piped())
 		.stderr(Stdio::piped());
+	#[cfg(target_os = "linux")]
+	if options.end_with_jocasta {
+		end_with_parent(&mut command);
+	}
 	let mut child =
 		wrap_async(command, CREATE_NO_WINDOW).spawn().map_err(|error| spawn_failed(error, &argv[0], false))?;
 	if let (Some(input), Some(mut stdin)) = (options.stdin.take(), child.stdin().take()) {
@@ -564,6 +594,36 @@ mod tests {
 			.expect("the grandchild's pid");
 		assert!(grandchild > 0);
 		assert!(settles(|| !pid_alive(grandchild)).await);
+	}
+
+	/// Linux: a program run with `end_with_jocasta` gets SIGTERM once the thread that started it ends, as when Jocasta
+	/// is killed (0702, #7).
+	#[cfg(target_os = "linux")]
+	#[tokio::test]
+	async fn a_program_that_ends_with_jocasta_ends_when_its_starter_is_gone_0702() {
+		let dir = crate::shared::testing::temp_dir("pdeathsig");
+		let pid_file = dir.path().join("pid");
+		let script = format!("echo $$ > '{}'; exec sleep 60", pid_file.display());
+		let watched = pid_file.clone();
+		std::thread::spawn(move || {
+			let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+			runtime.block_on(async {
+				let argv = ["sh".to_owned(), "-c".to_owned(), script];
+				let options = RunOptions { end_with_jocasta: true, ..RunOptions::default() };
+				let run = tokio::spawn(async move { run_program(&argv, options).await });
+				assert!(settles(|| watched.exists()).await, "the program started");
+				run.abort();
+			});
+		})
+		.join()
+		.unwrap();
+		let pid: u32 = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
+		// Gone, or a zombie nobody waits for.
+		let ended = || {
+			std::fs::read_to_string(format!("/proc/{pid}/stat"))
+				.map_or(true, |stat| stat.rsplit_once(") ").is_some_and(|(_, rest)| rest.starts_with('Z')))
+		};
+		assert!(settles(ended).await, "the program ended with its starter");
 	}
 
 	/// The pid a stand-in printed as `pid=<n>`.

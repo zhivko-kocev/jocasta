@@ -416,6 +416,9 @@ impl Surface for FakeSurface {
 		if let (Some(body), Value::Object(map)) = (&note.body, &mut recorded) {
 			map.insert("body".to_owned(), json!(body));
 		}
+		if let (Some(link), Value::Object(map)) = (&note.link, &mut recorded) {
+			map.insert("link".to_owned(), json!(link.url));
+		}
 		self.record("notify", vec![recorded]);
 		let result = self.state().notify_result;
 		Box::pin(std::future::ready(Ok(result)))

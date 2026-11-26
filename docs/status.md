@@ -116,5 +116,7 @@ omp 19.2.0 (2026-11-26, record 0690): he runs omp 19.2.0 and said "i want that d
 
 Before the move to his Arch PC (2026-11-26): CI on Ubuntu and macOS had failed since Phase 6 on one test, closing the window. On Linux a closed window's hang-up ended Jocasta on the spot, leaving its service file and panes behind; it now quits cleanly, as on Windows (checked in WSL Ubuntu: the test fails without the fix and passes with it). On Linux Right Ctrl dictation is not there, and the calendar, Gmail and Jira secrets come from `JOCASTA_CALENDAR_ICAL_SECRET`, `JOCASTA_GMAIL_APP_PASSWORD` and `JOCASTA_JIRA_TOKEN` (no Credential Manager).
 
+The ultron 0.3 iteration (2026-11-26, the approved plan's M1-J; records 0691–0705 decided by his answers of that day): Jocasta 0.1.0 for his Linux PC. J1, the Linux bugs from the VM review (issues #1–#7, #10, #11, #13, #15; records 0692, 0699, 0701, 0702), is built: Shift in foot, the Unix install folder `~/.local/lib/jocasta`, the install folder fixed at start, questions logged as `blocked`, critical Linux notifications with a sound and Open on a finished thread's, a 50 s stop, weekly reviews that die with Jocasta, the Linux fence and guard shapes, and the bridge's own socket folder. Next: J2 (light defaults, 0695), J3 (0696), J4 (0697), J6 (0694); then J5, J7–J10.
+
 Update this file when a slice's records are written, when its build lands, and when a grilling session stops (name the next slice); keep `AGENTS.md`'s one current-state line in step.
 

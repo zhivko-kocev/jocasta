@@ -44,15 +44,20 @@ pub fn bridge_address(port: u16) -> String {
 	bridge_dir().join(format!("bridge-{port}.sock")).display().to_string()
 }
 
-/// `${XDG_RUNTIME_DIR:-/tmp/jocasta-<uid>}`; the uid is that of the user's home folder, which they own.
+/// `$XDG_RUNTIME_DIR/jocasta`, else `/tmp/jocasta-<uid>`: a folder of Jocasta's own (0702, #15).
 #[cfg(unix)]
 pub fn bridge_dir() -> std::path::PathBuf {
-	use std::os::unix::fs::MetadataExt;
-	if let Some(dir) = crate::shared::env::var_nonempty("XDG_RUNTIME_DIR") {
-		return std::path::PathBuf::from(dir);
+	match crate::shared::env::var_nonempty("XDG_RUNTIME_DIR") {
+		Some(dir) => std::path::PathBuf::from(dir).join("jocasta"),
+		None => std::path::PathBuf::from(format!("/tmp/jocasta-{}", own_uid())),
 	}
-	let uid = std::env::home_dir().and_then(|home| std::fs::metadata(home).ok()).map_or(0, |meta| meta.uid());
-	std::path::PathBuf::from(format!("/tmp/jocasta-{uid}"))
+}
+
+/// The user's uid: that of their home folder, which they own.
+#[cfg(unix)]
+pub fn own_uid() -> u32 {
+	use std::os::unix::fs::MetadataExt;
+	std::env::home_dir().and_then(|home| std::fs::metadata(home).ok()).map_or(0, |meta| meta.uid())
 }
 
 /// Connects to the bridge at `address`, retrying a busy pipe for a moment.

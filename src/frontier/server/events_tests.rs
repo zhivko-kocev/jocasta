@@ -197,3 +197,57 @@ async fn a_warning_is_a_log_line_and_a_warning_toast() {
 		}]
 	);
 }
+
+/// The page server's stand-in: links by id, and the ids opened.
+struct OpenedBriefs(std::sync::Mutex<Vec<String>>);
+
+impl crate::frontier::brief::BriefLinks for OpenedBriefs {
+	fn url(&self, id: &str) -> String {
+		format!("http://127.0.0.1:1/brief/{id}")
+	}
+	fn open(&self, id: &str) {
+		self.0.lock().unwrap().push(id.to_owned());
+	}
+}
+
+#[tokio::test]
+async fn a_question_is_raised_with_its_sound_and_logged_as_blocked_0699() {
+	let t = test_context(|_| {});
+	let question = Toast::new(ToastReason::Blocked, ToastLevel::Warning, "Jocasta asks — Allow?");
+	t.ctx.events.notify(&question, true).await;
+	assert_eq!(t.herdr.of("notify")[0][0], json!({"title": "Jocasta asks", "sound": "request", "body": "Allow?"}));
+	let line = notifications().pop().unwrap();
+	assert_eq!(line["reason"], "blocked");
+	assert_eq!(line["title"], "Jocasta asks");
+	assert_eq!(line["body"], "Allow?");
+	assert_eq!(line["result"], "shown");
+}
+
+#[tokio::test]
+async fn a_done_notification_links_its_brief_and_a_click_opens_it_0699() {
+	let links = Arc::new(OpenedBriefs(std::sync::Mutex::new(Vec::new())));
+	let page: Arc<dyn crate::frontier::brief::BriefLinks> = links.clone();
+	let t = test_context(move |options| options.briefs = Some(Arc::clone(&page)));
+	let brief = crate::frontier::brief::model::Brief {
+		id: "thread-t1".to_owned(),
+		kind: "thread".to_owned(),
+		title: "t".to_owned(),
+		subtitle: String::new(),
+		generated_at_ms: 0,
+		sections: Vec::new(),
+	};
+	crate::frontier::brief::store::save(&brief).unwrap();
+	let url = "http://127.0.0.1:1/brief/thread-t1".to_owned();
+	let mut done = Toast::new(ToastReason::Done, ToastLevel::Info, "demo/t — done and reviewed");
+	done.url = Some(url.clone());
+	let mut event = Toast::new(ToastReason::Event, ToastLevel::Info, "demo/t — a link that isn't a Done");
+	event.url = Some(url.clone());
+	let note = |toast: &Toast| t.ctx.events.brief_link(toast);
+	let link = note(&done).expect("a Done toast with its brief links it");
+	assert_eq!(link.url, url);
+	assert!(note(&event).is_none());
+	(link.open)();
+	assert_eq!(*links.0.lock().unwrap(), ["thread-t1"]);
+	t.ctx.events.notify(&done, true).await;
+	assert_eq!(t.herdr.of("notify")[0][0]["link"], json!(url));
+}

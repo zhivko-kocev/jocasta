@@ -3,6 +3,7 @@
 //! every caller: bare `jocasta`, the service it starts, setup and a source run.
 
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 /// The repo root in a source run (the package's own folder).
 pub const REPO: &str = env!("CARGO_MANIFEST_DIR");
@@ -12,16 +13,32 @@ const JOCASTA_EXE: &str = if cfg!(windows) { "jocasta.exe" } else { "jocasta" };
 /// The installer's marker in the install dir: the folder it installed into.
 pub const INSTALL_MARKER: &str = "install.json";
 
+/// This process's executable as it was at start. An upgrade moves the running install aside and removes it, after
+/// which the OS names the old path with ` (deleted)` (#3); `entry::main` calls [`resolve_at_start`] first so every
+/// later caller gets the folder Jocasta started from.
+static STARTED_AS: LazyLock<PathBuf> = LazyLock::new(|| std::env::current_exe().unwrap_or_default());
+static INSTALL: LazyLock<Option<PathBuf>> = LazyLock::new(|| install_dir_of(&STARTED_AS));
+
 fn running_exe(exec_path: Option<&Path>) -> PathBuf {
-	exec_path.map(Path::to_path_buf).or_else(|| std::env::current_exe().ok()).unwrap_or_default()
+	exec_path.map_or_else(|| STARTED_AS.clone(), Path::to_path_buf)
+}
+
+/// Resolves the running executable and its install folder once, before anything can swap the install (#3).
+pub fn resolve_at_start() {
+	LazyLock::force(&INSTALL);
+}
+
+fn install_dir_of(exe: &Path) -> Option<PathBuf> {
+	let exe_dir = exe.parent()?.to_path_buf();
+	(exe_dir.join(JOCASTA_EXE).exists() && exe_dir.join("config").is_dir()).then_some(exe_dir)
 }
 
 /// The folder holding `jocasta.exe` and the shipped `config/` beside it: the running executable's own (`exec_path`,
-/// else this process's); `None` in a source run. A cargo build's `target/<profile>/` holds the exe but never
-/// `config/`, so a source run tells itself from an install as the TypeScript did by Bun's own exec path.
+/// else this process's, resolved once at start); `None` in a source run. A cargo build's `target/<profile>/` holds
+/// the exe but never `config/`, so a source run tells itself from an install as the TypeScript did by Bun's own exec
+/// path.
 pub fn install_dir(exec_path: Option<&Path>) -> Option<PathBuf> {
-	let exe_dir = running_exe(exec_path).parent()?.to_path_buf();
-	(exe_dir.join(JOCASTA_EXE).exists() && exe_dir.join("config").is_dir()).then_some(exe_dir)
+	exec_path.map_or_else(|| INSTALL.clone(), install_dir_of)
 }
 
 /// The shipped `config/` (boss manual, boss.yml, templates): the install's, or the repo's in a source run.

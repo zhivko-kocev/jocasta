@@ -2,8 +2,16 @@
 
 use alacritty_terminal::term::TermMode;
 use ratatui::crossterm::event::{
-	KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+	KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, MouseButton, MouseEvent, MouseEventKind,
 };
+
+/// The kitty keyboard flags the shell asks his terminal for. `REPORT_ALTERNATE_KEYS` makes a terminal that reports
+/// every key as an escape code (foot, kitty) also send the shifted key, so crossterm hands over `A` for Shift+a, not
+/// `a` with a Shift modifier (#1).
+pub const KEYBOARD_FLAGS: KeyboardEnhancementFlags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+	.union(KeyboardEnhancementFlags::REPORT_EVENT_TYPES)
+	.union(KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES)
+	.union(KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS);
 
 fn mod_field(m: KeyModifiers) -> u8 {
 	let mut bits = 0;
@@ -314,3 +322,7 @@ pub fn bytes_for_names(names: &[String], mode: TermMode) -> Result<Vec<u8>, Stri
 	}
 	Ok(out)
 }
+
+#[cfg(test)]
+#[path = "keys_tests.rs"]
+mod tests;

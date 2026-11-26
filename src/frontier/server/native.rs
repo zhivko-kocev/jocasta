@@ -15,12 +15,14 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::runtime::Handle;
 
+use super::events::Toast;
 use super::feed::Reply;
 use super::popups::{AnswerTaken, Popup, PopupEnd};
-use super::surface::{Note, Sound, SurfaceSnapshot};
+use super::surface::SurfaceSnapshot;
 use crate::frontier::protocol::{
 	AnswerReply, ClientMessage, PLUGIN_ACTIONS, PluginAction, SHELL_ACTION, SHELL_ANSWER, SHELL_ANSWERED, SHELL_BOSS,
 	SHELL_FEED, SHELL_GONE, SHELL_QUESTION, ServerMessage, ShellAction, ShellAnswer, ShellAnswered, ShellQuestion,
+	ToastLevel, ToastReason,
 };
 use crate::shared::log::{LogLevel, log};
 use crate::shared::proctree::descends_from;
@@ -105,8 +107,8 @@ pub trait NativeServer: Send + Sync {
 	fn snapshot(&self) -> Option<ServerMessage>;
 	/// One message of a shell's, `reply` answering that shell only.
 	fn handle(&self, message: ClientMessage, reply: Reply) -> BoxFuture<'static, ()>;
-	/// Raises a notification.
-	fn notify(&self, note: Note) -> BoxFuture<'static, ()>;
+	/// Raises a question's notification: a blocked toast, so it is logged in `notifications.jsonl` like one (0699).
+	fn notify(&self, toast: Toast) -> BoxFuture<'static, ()>;
 }
 
 /// The question shown now, and the client that got it.
@@ -245,12 +247,8 @@ impl Native {
 
 	fn notify(&self, popup: &Popup) {
 		let Some(server) = self.server.get() else { return };
-		let note = Note {
-			title: "Jocasta asks".to_owned(),
-			body: Some(note_body(&popup.view().message)),
-			sound: Sound::Request,
-		};
-		self.runtime.spawn(server.notify(note));
+		let text = format!("Jocasta asks — {}", note_body(&popup.view().message));
+		self.runtime.spawn(server.notify(Toast::new(ToastReason::Blocked, ToastLevel::Warning, text)));
 	}
 
 	fn ended(self: &Arc<Self>, popup: &Popup) {

@@ -724,8 +724,7 @@ fn listener(bridge: &Bridge, address: &str) -> Result<JoinHandle<()>> {
 	use std::os::unix::fs::PermissionsExt;
 	let path = std::path::Path::new(address);
 	if let Some(dir) = path.parent() {
-		std::fs::create_dir_all(dir)?;
-		std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+		prepare_socket_dir(dir, crate::shared::bridge_wire::own_uid())?;
 	}
 	let _ = std::fs::remove_file(path);
 	let socket = tokio::net::UnixListener::bind(path)?;
@@ -739,6 +738,35 @@ fn listener(bridge: &Bridge, address: &str) -> Result<JoinHandle<()>> {
 			locked(bridge_tasks(&bridge)).push(task);
 		}
 	}))
+}
+
+/// The bridge's own folder (0702, #15): made with mode 0700, refused when someone other than `uid` owns it (a
+/// `/tmp/jocasta-<uid>` another user made first), and cleared of `bridge-*.sock` files nothing listens on any more
+/// (runs that were killed).
+#[cfg(unix)]
+fn prepare_socket_dir(dir: &std::path::Path, uid: u32) -> Result<()> {
+	use std::os::unix::fs::{MetadataExt, PermissionsExt};
+	std::fs::create_dir_all(dir)?;
+	let owner = std::fs::metadata(dir)?.uid();
+	if owner != uid {
+		return Err(Error::user(format!(
+			"The bridge's folder {} belongs to another user (uid {owner}); remove it or set XDG_RUNTIME_DIR.",
+			dir.display()
+		)));
+	}
+	std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+	for entry in std::fs::read_dir(dir)?.flatten() {
+		let name = entry.file_name();
+		let name = name.to_string_lossy();
+		if name.starts_with("bridge-")
+			&& name.ends_with(".sock")
+			&& std::os::unix::net::UnixStream::connect(entry.path())
+				.is_err_and(|error| error.kind() == std::io::ErrorKind::ConnectionRefused)
+		{
+			let _ = std::fs::remove_file(entry.path());
+		}
+	}
+	Ok(())
 }
 
 /// What a connection turned out to be after its hello.

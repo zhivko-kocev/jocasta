@@ -3,8 +3,9 @@
 //! own `bash.patterns` matching: whitespace runs collapse, `*` is the only wildcard, anchored and case-sensitive; a rule
 //! fires on the whole command or on any one segment of its raw text split at `&&`, `||`, `;` and `|`. omp splits with
 //! its quote-aware tokenizer instead (quotes removed; also `&`, subshells and newlines), since 18.20.1 also tries each
-//! segment without its leading `NAME=value` words (only `config/guard.yml`'s four `ri` rules don't start with `*`, so
-//! only they differ), and adds its git guard and critical patterns (0501); H1's `omp-verdicts.ts` asks omp itself.
+//! segment without its leading `NAME=value` words (only `config/guard.yml`'s four `ri` rules and its bare Linux
+//! `shutdown`, `poweroff` and `reboot` rules don't start with `*`, so only they differ), and adds its git guard and
+//! critical patterns (0501); H1's `omp-verdicts.ts` asks omp itself.
 
 use std::sync::LazyLock;
 
@@ -428,6 +429,50 @@ mod tests {
 				"git config hook.other.enabled false",
 				"git config core.hooksPath .husky",
 				"git hook run pre-commit",
+			],
+		);
+	}
+
+	#[test]
+	fn linux_shutdowns_disk_wipes_and_session_kills_are_refused_and_their_neighbours_run_0701() {
+		expect_verdicts(
+			&[
+				"shutdown",
+				"shutdown now",
+				"shutdown -h now",
+				"sudo shutdown -r +5",
+				"cd /tmp && shutdown now",
+				"poweroff",
+				"poweroff -f",
+				"sudo poweroff",
+				"reboot",
+				"reboot now",
+				"sudo reboot",
+				"systemctl poweroff",
+				"systemctl reboot",
+				"sudo systemctl halt",
+				"systemctl suspend",
+				"systemctl -i hibernate",
+				"sudo dd if=disk.img of=/dev/sda bs=4M",
+				"dd if=/dev/zero of=/dev/nvme0n1",
+				"sudo mkfs.ext4 /dev/sdb1",
+				"mkfs -t vfat /dev/sdc1",
+				"sudo wipefs -a /dev/sda",
+				"loginctl terminate-user me",
+				"loginctl terminate-session 2",
+				"loginctl kill-user me",
+				"pkill -KILL -u me",
+				"pkill -9 -u me",
+			],
+			&[],
+			&[
+				"git commit -m 'graceful shutdown on SIGTERM'",
+				"grep -rn reboot src",
+				"systemctl --user status foot",
+				"systemctl list-timers",
+				"dd if=a.img of=b.img",
+				"loginctl list-sessions",
+				"pkill -u me node",
 			],
 		);
 	}

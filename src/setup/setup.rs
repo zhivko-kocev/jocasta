@@ -63,7 +63,8 @@ pub struct SetupPaths {
 	pub assets_dir: PathBuf,
 	/// `%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments`; `None` off Windows.
 	pub terminal_fragments_dir: Option<PathBuf>,
-	/// Windows' own folders omp fences (0594): `%SystemRoot%` and `%ProgramFiles%`; `None` off Windows.
+	/// The OS's own folders omp fences besides the shipped ones: `%SystemRoot%` and `%ProgramFiles%` on Windows (0594),
+	/// [`LINUX_FENCE`] on Linux (0701); `None` on macOS.
 	pub system_folders: Option<Vec<String>>,
 	/// mise's global config dir, `~/.config/mise` (`MISE_CONFIG_DIR` overrides it, as in mise).
 	pub mise_config_dir: PathBuf,
@@ -229,6 +230,10 @@ pub fn mise_config_dir() -> PathBuf {
 	env::var_nonempty("XDG_CONFIG_HOME").map_or_else(|| homedir().join(".config"), PathBuf::from).join("mise")
 }
 
+/// Linux's own folders omp fences (0701, #10): the keyring's unencrypted store, GnuPG's keys, gh's token, the system's
+/// settings and its boot files. `/usr` stays out (0594): every read of a system header would ask.
+pub const LINUX_FENCE: [&str; 5] = ["~/.local/share/keyrings", "~/.gnupg", "~/.config/gh", "/etc", "/boot"];
+
 /// The real paths on this machine.
 pub fn default_setup_paths(assets_dir: &Path, jocasta_command: Vec<PathBuf>) -> SetupPaths {
 	let local =
@@ -240,12 +245,16 @@ pub fn default_setup_paths(assets_dir: &Path, jocasta_command: Vec<PathBuf>) -> 
 		assets_dir: assets_dir.to_path_buf(),
 		terminal_fragments_dir: cfg!(windows)
 			.then(|| local.join("Microsoft").join("Windows Terminal").join("Fragments")),
-		system_folders: cfg!(windows).then(|| {
-			vec![
+		system_folders: if cfg!(windows) {
+			Some(vec![
 				env::var_nonempty("SystemRoot").unwrap_or_else(|| "C:\\Windows".to_owned()),
 				env::var_nonempty("ProgramFiles").unwrap_or_else(|| "C:\\Program Files".to_owned()),
-			]
-		}),
+			])
+		} else if cfg!(target_os = "linux") {
+			Some(LINUX_FENCE.map(str::to_owned).to_vec())
+		} else {
+			None
+		},
 		mise_config_dir: mise_config_dir(),
 		jocasta_command,
 	}

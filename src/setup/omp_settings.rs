@@ -13,8 +13,8 @@ use crate::shared::errors::{Error, Result};
 static FENCE_LINE: LazyLock<Regex> =
 	LazyLock::new(|| Regex::new(r"(?mR)^(\s*restrictedFolders: \[)([^\r\n]*)\]$").expect("a valid pattern"));
 
-/// The shipped settings' text with Windows' own folders added to the fence (0594); `system_folders` is `None` off
-/// Windows, where the text is the shipped file's.
+/// The shipped settings' text with the OS's own folders added to the fence (Windows 0594, Linux 0701);
+/// `system_folders` is `None` on macOS, where the text is the shipped file's.
 pub fn omp_settings_text(shipped: &str, system_folders: Option<&[String]>) -> Result<String> {
 	let Some(folders) = system_folders.filter(|folders| !folders.is_empty()) else { return Ok(shipped.to_owned()) };
 	if !FENCE_LINE.is_match(shipped) {

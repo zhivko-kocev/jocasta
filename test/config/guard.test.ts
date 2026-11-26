@@ -270,6 +270,48 @@ both(
 		}),
 );
 
+both("Linux's shutdowns, disk wipes and session kills are refused; their neighbours still run (0701)", (resolve) =>
+	expectVerdicts(resolve, {
+		deny: [
+			"shutdown",
+			"shutdown now",
+			"shutdown -h now",
+			"sudo shutdown -r +5",
+			"cd /tmp && shutdown now",
+			"poweroff",
+			"poweroff -f",
+			"sudo poweroff",
+			"reboot",
+			"reboot now",
+			"sudo reboot",
+			"systemctl poweroff",
+			"systemctl reboot",
+			"sudo systemctl halt",
+			"systemctl suspend",
+			"systemctl -i hibernate",
+			"sudo dd if=disk.img of=/dev/sda bs=4M",
+			"dd if=/dev/zero of=/dev/nvme0n1",
+			"sudo mkfs.ext4 /dev/sdb1",
+			"mkfs -t vfat /dev/sdc1",
+			"sudo wipefs -a /dev/sda",
+			"loginctl terminate-user me",
+			"loginctl terminate-session 2",
+			"loginctl kill-user me",
+			"pkill -KILL -u me",
+			"pkill -9 -u me",
+		],
+		allow: [
+			"git commit -m 'graceful shutdown on SIGTERM'",
+			"grep -rn reboot src",
+			"systemctl --user status foot",
+			"systemctl list-timers",
+			"dd if=a.img of=b.img",
+			"loginctl list-sessions",
+			"pkill -u me node",
+		],
+	}),
+);
+
 /** One command per `*git*` deny rule, each the first rule it meets (0580's case copies are checked against these). */
 const GIT_DENIED = [
 	"git push --force",
