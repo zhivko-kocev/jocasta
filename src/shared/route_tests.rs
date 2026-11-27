@@ -43,6 +43,9 @@ fn the_jocasta_commands_words_0387_0467_0468_0472_0544_0694_anything_else_is_a_u
 	assert_eq!(go(&["brief", "open", "plan.json"]), Route::BriefOpen { spec: "plan.json".to_owned() });
 	assert_eq!(refused(&["brief", "open"]).kind(), ErrorKind::MissingRequiredArgument);
 	assert_eq!(refused(&["brief", "render", "-"]).kind(), ErrorKind::InvalidSubcommand);
+	assert_eq!(go(&["board"]), Route::Board { window: false });
+	assert_eq!(go(&["board", "--window"]), Route::Board { window: true });
+	assert!(!refused(&["board", "--help"]).to_string().contains("--window"), "the window's own flag is hidden");
 	assert_eq!(go(&["--version"]), Route::Version);
 	assert_eq!(go(&["-v"]), Route::Version);
 	assert_eq!(refused(&["--help"]).kind(), ErrorKind::DisplayHelp);

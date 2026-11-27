@@ -648,6 +648,14 @@ fn view_shots() {
 	pr.add_file = "src/billing/invoice_reconciliation/handlers.rs".to_owned();
 	pr.add_line = "142".to_owned();
 	shoot(&pr, "pr", Size::new(1040.0, 3000.0));
+	// break-ui: a narrow window, where the long word of the right-to-left card stays inside its box.
+	let mut narrow_pr = settled_window(pr_brief());
+	narrow_pr.width = 460.0;
+	shoot(&narrow_pr, "pr-narrow", Size::new(460.0, 3600.0));
+	// The review's thread is gone: the page is its record, no live buttons.
+	let mut record = settled_window(pr_brief());
+	record.live = Some(false);
+	shoot(&record, "pr-record", Size::new(1040.0, 2400.0));
 	// The summary typed, unsaved, with To English's suggestion; then submitted.
 	let mut summary = settled_window(pr_brief());
 	summary.summary = text_editor::Content::with_text("Работи; два коментари за границата.");
@@ -671,6 +679,8 @@ fn view_shots() {
 	let _ = morning.update(Message::Walk(2, Walk::Next));
 	let _ = morning.update(Message::Walk(2, Walk::Next));
 	shoot(&morning, "morning-walk", Size::new(1040.0, 1600.0));
+	let _ = morning.update(Message::Walk(2, Walk::Prev));
+	shoot(&morning, "morning-prev", Size::new(1040.0, 1600.0));
 	// break-ui: long words, right to left, a five-layer flow, empty sections, a 1-line file beside a 600-line one.
 	shoot(&settled_window(edge_brief()), "edges", Size::new(1040.0, 2200.0));
 	let mut narrow = settled_window(edge_brief());

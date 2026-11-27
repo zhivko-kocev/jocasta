@@ -365,7 +365,7 @@ async fn run_route(target: Route, calendar_env: Option<String>) -> Result<i32> {
 			out(&crate::frontier::view::open_spec(&spec).await?);
 			Ok(0)
 		}
-		Route::Surface | Route::View { .. } | Route::Board => {
+		Route::Surface | Route::View { .. } | Route::Board { .. } => {
 			unreachable!("`main` runs these before Jocasta's runtime exists")
 		}
 	}
@@ -412,9 +412,10 @@ pub fn main() -> ExitCode {
 	if let Route::View { id } = &target {
 		return crate::frontier::view::run(id);
 	}
-	// The board's window (0718), the same way.
-	if target == Route::Board {
-		return crate::frontier::view::board::run();
+	// The board (0718): `jocasta board` starts the window on its own and returns at once; `--window` is that window,
+	// iced on this thread like a brief's.
+	if let Route::Board { window } = target {
+		return if window { crate::frontier::view::board::run() } else { crate::frontier::view::board::open() };
 	}
 	let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
 		Ok(runtime) => runtime,

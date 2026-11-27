@@ -13,17 +13,35 @@ use clap::{Parser, Subcommand};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Route {
 	Surface,
-	Setup { refresh: Option<String>, yes: bool },
+	Setup {
+		refresh: Option<String>,
+		yes: bool,
+	},
 	Uninstall,
 	Diagnose,
 	Status,
-	Project { args: Vec<String> },
-	Thread { args: Vec<String> },
-	Worktree { args: Vec<String> },
-	PushHook { args: Vec<String> },
-	View { id: String },
-	BriefOpen { spec: String },
-	Board,
+	Project {
+		args: Vec<String>,
+	},
+	Thread {
+		args: Vec<String>,
+	},
+	Worktree {
+		args: Vec<String>,
+	},
+	PushHook {
+		args: Vec<String>,
+	},
+	View {
+		id: String,
+	},
+	BriefOpen {
+		spec: String,
+	},
+	/// `jocasta board` starts the window on its own and returns; `--window` (hidden) is that window's process.
+	Board {
+		window: bool,
+	},
 	Version,
 }
 
@@ -71,8 +89,12 @@ enum Word {
 		#[arg(value_name = "BRIEF-ID")]
 		id: String,
 	},
-	/// Open the board: the open threads, live, in their own window (one at a time)
-	Board,
+	/// Open the board: the open threads, live, in their own window (one at a time); returns at once
+	Board {
+		/// Run the board window in this process (what `jocasta board` starts on its own)
+		#[arg(long, hide = true)]
+		window: bool,
+	},
 	/// Briefs: open <spec.json | -> checks a `show` spec and opens it in its own window
 	Brief {
 		#[command(subcommand)]
@@ -131,7 +153,7 @@ impl From<Word> for Route {
 			Word::Worktree { args } => Self::Worktree { args },
 			Word::PushHook { args } => Self::PushHook { args },
 			Word::View { id } => Self::View { id },
-			Word::Board => Self::Board,
+			Word::Board { window } => Self::Board { window },
 			Word::Brief { word: BriefWord::Open { spec } } => Self::BriefOpen { spec },
 		}
 	}

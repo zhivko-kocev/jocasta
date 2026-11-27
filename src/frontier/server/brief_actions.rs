@@ -8,11 +8,11 @@ use serde_json::Value;
 
 use crate::frontier::brief::store;
 use crate::frontier::server::context::ServiceContext;
-use crate::frontier::server::pr_actions;
 use crate::frontier::server::thread::ThreadRef;
 use crate::frontier::server::thread_brief::{BriefExtras, refresh};
 use crate::frontier::server::tools::Tools;
 use crate::frontier::server::wording::Door;
+use crate::frontier::server::{pr_actions, pr_review};
 use crate::shared::errors::{Error, Result};
 
 /// The open thread whose brief is `thread-<task id>`.
@@ -59,9 +59,18 @@ pub async fn act(c: &Arc<ServiceContext>, tools: &Tools, id: &str, action: &Valu
 	serde_json::to_value(brief).map_err(|error| Error::other(error.to_string()))
 }
 
-/// Whether the brief `id`'s buttons act on something (0721): a pull request's always, a thread's while it is open.
+/// Whether the brief `id`'s buttons act on something (0721): a thread's while it is open, a pull request's while its
+/// review thread is open; otherwise the page is its record.
 pub fn live(c: &Arc<ServiceContext>, id: &str) -> bool {
-	id.starts_with("pr-") || thread_of(c, id).is_ok()
+	if id.starts_with("pr-") {
+		let wanted = Some(id);
+		return c
+			.threads
+			.all()
+			.into_iter()
+			.any(|thread| thread.with(|t| t.task.as_ref().and_then(pr_review::brief_id).as_deref() == wanted));
+	}
+	thread_of(c, id).is_ok()
 }
 
 /// The id of the stored brief a link is (`jocasta:brief/<id>`, as the Done toast and `today`'s BRIEFS rows carry), when

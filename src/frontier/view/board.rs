@@ -40,7 +40,34 @@ const ALREADY_OPEN: &str = "The board is already open.";
 /// No open thread.
 const NOTHING: &str = "No thread is open.";
 
-/// `jocasta board`: the window until he closes it; a board already open is exit 0 with a line saying so.
+/// `jocasta board`: starts the board's window on its own (`jocasta board --window`, detached like a brief's) and returns
+/// at once, so his terminal is his again; a board already open is exit 0 with a line saying so. The window takes the
+/// lock itself and keeps it while it is open.
+pub fn open() -> ExitCode {
+	match hold(&data_dir()) {
+		Ok(Some(lock)) => drop(lock),
+		Ok(None) => {
+			println!("{ALREADY_OPEN}");
+			return ExitCode::SUCCESS;
+		}
+		Err(error) => {
+			eprintln!("jocasta: the board's lock didn't open: {error}");
+			return ExitCode::from(1);
+		}
+	}
+	match super::spawn(WINDOW) {
+		Ok(()) => ExitCode::SUCCESS,
+		Err(error) => {
+			eprintln!("jocasta: the board didn't open: {error}");
+			ExitCode::from(1)
+		}
+	}
+}
+
+/// What starts the board's window process.
+pub const WINDOW: &[&str] = &["board", "--window"];
+
+/// `jocasta board --window`: the window until he closes it; a board already open is exit 0 with a line saying so.
 pub fn run() -> ExitCode {
 	let _lock = match hold(&data_dir()) {
 		Ok(Some(lock)) => lock,

@@ -228,7 +228,7 @@ The board (`src/frontier/view/board.rs`, 0718) is one more window in the brief w
 - **Do** keep the terminal surfaces to coloured text on bg-0, as ratatui lines.
 - **Do** separate a brief's regions with spacing, hairlines and one ground step; no box inside a box inside a box.
 - **Do** honour reduced motion: opacity only.
-- **Do** let every text of a brief window wrap anywhere and shape by its own direction (iced's `Shaping::Auto`, `Alignment::Default`): long identifiers, URLs and right-to-left text must never push the page sideways.
+- **Do** let every text of a brief window, text boxes included, wrap anywhere and shape by its own direction (iced's `Shaping::Auto`, `Alignment::Default`): long identifiers, URLs and right-to-left text must never push the page sideways or out of their box. On a flow's canvas, where text can't be clipped, a node's two lines are cut with `…` to what fits instead, and edge labels stay inside the drawing (0713).
 
 ### Don't:
 - **Don't** add a greeting or the Presence to `today` (0555).

@@ -108,7 +108,7 @@ impl BriefLinks for BriefWindows {
 	}
 
 	fn open_board(&self) {
-		if let Err(error) = spawn(&["board"]) {
+		if let Err(error) = spawn(board::WINDOW) {
 			log(LogLevel::Warn, "view", &format!("couldn't open the board: {error}"), None);
 		}
 	}

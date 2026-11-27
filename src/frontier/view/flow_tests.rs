@@ -63,5 +63,29 @@ fn drawing_part_of_an_edge_follows_its_curve_and_long_text_is_cut_to_one_line() 
 	assert_eq!(split(curve, 0.5)[3], at(curve, 0.5));
 	assert_eq!(fit("short", 160.0, 13.0), "short");
 	let cut = fit("A node label far longer than one line of its box", 160.0, 13.0);
-	assert!(cut.ends_with('\u{2026}') && cut.chars().count() == 24, "{cut}");
+	assert!(cut.ends_with('\u{2026}') && cut.chars().count() == 20, "{cut}");
+	// A monospace glyph is 0.6 em: what is kept fits the room, so it never wraps onto the line under it.
+	let label = fit("Stream invoices from Postgres", NODE_W - 24.0, style::LABEL);
+	assert!(label.chars().count() as f32 * style::LABEL * 0.6 <= NODE_W - 24.0, "{label}");
+	assert!(label.starts_with("Stream invoices from") && label.ends_with('\u{2026}'), "{label}");
+}
+
+#[test]
+fn an_edge_label_stays_inside_the_drawing() {
+	let nodes = [node("a", 0, 0), node("b", 1, 0)];
+	let long = |from: &str, to: &str| FlowEdge {
+		from: from.to_owned(),
+		to: to.to_owned(),
+		label: Some("retries until it gives up".to_owned()),
+	};
+	// Left to right an edge back loops over the boxes: its label sits above the loop, inside the top.
+	let across = shape(&nodes, &[long("b", "a")], Direction::Across);
+	let back = &across.curves[0];
+	assert!(back.label_at.y - style::META * 1.4 >= 0.0, "{back:?}");
+	// Top down a label sits beside its curve: the drawing is wide enough for it.
+	let down = shape(&nodes, &[long("a", "b"), long("b", "a")], Direction::Down);
+	for curve in &down.curves {
+		let right = curve.label_at.x + 25.0 * style::META * 0.6;
+		assert!(right <= down.size.width, "{curve:?} in {:?}", down.size);
+	}
 }

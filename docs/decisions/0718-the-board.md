@@ -1,6 +1,6 @@
 # 0718 The board
 
-- Status: v1 (built 2026-11-27)
+- Status: v1 (built 2026-11-27; amended 2026-11-27 after the VM check: `jocasta board` returns at once)
 - Kind: product
 - Phase/slice: ultron 0.3 iteration, M3 W1
 - Date: 2026-11-27
@@ -34,6 +34,7 @@ His answers of 2026-11-26, the approved plan and his 2026-11-27 amendment ("nati
 - Motion (0713's tokens): only the first open has an entrance (rows fade in and rise 4 px over `fast` 180 ms, 25 ms later per row up to the fifth); afterwards a new row fades in over 180 ms and a row whose phase changed lights its phase and fades the light out over `base` 220 ms. Nothing moves on a poll that changed nothing; `JOCASTA_REDUCED_MOTION=1` keeps opacity only.
 - Phase lines: when an open thread's phase changes, the service appends to `<data>/notifications.jsonl` `{"at", "paneId", "reason": "phase", "title": "<project>/<title>: <phase> · $<spent>", "body": "", "result": "logged"}` and shows no notification. One line per change, checked on each refresh tick; the same phase again writes nothing; a thread first seen (a new start, or one found at the service's start) writes nothing until its phase changes. ultron turns the line into a phone push.
 - The key line's always-keys become `n New · b Brief · w Board · X Stop all` (amends 0717).
+- Amended 2026-11-27 (VM finding: `jocasta board` held his terminal, the CLI process being the window): `jocasta board` starts the window as its own process, `jocasta board --window` (a hidden flag), detached the way a brief's window is (own process group, no console window on Windows, output to null) and exits 0 at once. The lock stays in the window process; `jocasta board` looks at it first, so a second one still prints `The board is already open.` and exits 0. The dock's `w` starts `jocasta board --window` directly.
 
 ## Reason
 His amendment of 2026-11-27: no HTML anywhere; the remote view is a push of each phase change, not a page.

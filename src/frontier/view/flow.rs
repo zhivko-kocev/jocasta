@@ -117,7 +117,7 @@ pub fn shape(nodes: &[FlowNode], edges: &[FlowEdge], direction: Direction) -> Sh
 	let length = PAD * 2.0 + layers as f32 * (along + LAYER_GAP) - LAYER_GAP;
 	let breadth = PAD * 2.0 + room.max(0.0);
 	// Top down, the edges that go back loop out on the right: room for them.
-	let size = match direction {
+	let mut size = match direction {
 		Direction::Down => Size::new(breadth + LOOP, length),
 		Direction::Across => Size::new(length, breadth),
 	};
@@ -126,10 +126,33 @@ pub fn shape(nodes: &[FlowNode], edges: &[FlowEdge], direction: Direction) -> Sh
 		.iter()
 		.filter_map(|edge| {
 			let (a, b) = (*index.get(edge.from.as_str())?, *index.get(edge.to.as_str())?);
-			Some(curve(boxes[a], boxes[b], nodes[b].layer > nodes[a].layer, direction, edge.label.clone()))
+			let mut curve = curve(boxes[a], boxes[b], nodes[b].layer > nodes[a].layer, direction, edge.label.clone());
+			hold_label(&mut curve, &mut size);
+			Some(curve)
 		})
 		.collect();
 	Shape { size, boxes, curves }
+}
+
+/// An edge label's height on the canvas.
+const LABEL_H: f32 = style::META * 1.4;
+
+/// Keeps `curve`'s label inside the drawing: moved in from the top and the left, the drawing grown to the right and
+/// the bottom (a label past the canvas is clipped, and its leftovers stay on screen when the window scrolls).
+fn hold_label(curve: &mut Curve, size: &mut Size) {
+	let Some(label) = &curve.label else { return };
+	let width = label.chars().count() as f32 * style::META * GLYPH;
+	let at = &mut curve.label_at;
+	let (left, top) = if curve.beside {
+		at.y = at.y.max(LABEL_H / 2.0 + 2.0);
+		(at.x, at.y - LABEL_H / 2.0)
+	} else {
+		at.x = at.x.max(width / 2.0 + 2.0);
+		at.y = at.y.max(LABEL_H + 2.0);
+		(at.x - width / 2.0, at.y - LABEL_H)
+	};
+	size.width = size.width.max(left + width + 4.0);
+	size.height = size.height.max(top + LABEL_H + 4.0);
 }
 
 /// How far an edge that goes back loops out of the boxes, top down.
@@ -167,10 +190,13 @@ fn curve(a: Rectangle, b: Rectangle, forward: bool, direction: Direction, label:
 	Curve { from, c1, c2, to, label, label_at, beside: down }
 }
 
-/// `text` cut to what fits one line of `room` px at `size` px (an average glyph is about half an em), with `…` when
-/// cut.
+/// The widest a glyph is on average, in ems: a monospace font's (ultron's font is monospace; a sans is narrower).
+const GLYPH: f32 = 0.6;
+
+/// `text` cut to what fits one line of `room` px at `size` px, with `…` when cut: a node's label and the line under
+/// it never wrap onto each other.
 pub fn fit(text: &str, room: f32, size: f32) -> String {
-	let most = (room / (size * 0.5)).floor().max(1.0) as usize;
+	let most = (room / (size * GLYPH)).floor().max(1.0) as usize;
 	if text.chars().count() <= most {
 		return text.to_owned();
 	}
@@ -353,6 +379,10 @@ impl<M> canvas::Program<M> for FlowCanvas<'_, M> {
 	) -> Vec<Geometry> {
 		let c = style::colours();
 		let mut frame = Frame::new(renderer, bounds.size());
+		// The software renderer repaints only what changed, by each shape's own outline: a ring's outer edge or an
+		// edge label left of its anchor would be left behind after Prev / Next or a scroll. A clear fill over the
+		// whole canvas makes every redraw of the flow repaint all of it.
+		frame.fill_rectangle(Point::ORIGIN, bounds.size(), iced::Color::TRANSPARENT);
 		self.draw_edges(&mut frame, &c);
 		for index in 0..self.nodes.len().min(self.shape.boxes.len()) {
 			self.draw_node(&mut frame, &c, index, *hovered == Some(index));

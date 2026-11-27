@@ -1221,3 +1221,34 @@ async fn a_brief_refuses_an_unknown_op_a_brief_with_no_actions_and_a_closed_thre
 		"That thread isn't open any more; its brief is a record, not a control."
 	);
 }
+
+#[tokio::test]
+async fn a_pull_requests_page_is_live_while_its_review_thread_is_open_and_then_a_record() {
+	let w = World::new().await;
+	let thread = review_world_thread(&w);
+	assert!(brief_actions::live(&w.t.ctx, "thread-task-1"));
+	assert!(!brief_actions::live(&w.t.ctx, "pr-p-7"), "no open thread reviews it");
+	thread.with(|t| {
+		let task = t.task.as_mut().unwrap();
+		task.project_id = "p".to_owned();
+		task.pr = Some(crate::frontier::server::pr_review::PrTarget {
+			platform: crate::frontier::server::pr_review::Platform::Github,
+			url: "https://github.com/acme/app/pull/7".to_owned(),
+			number: 7,
+			repo: "acme/app".to_owned(),
+			org_url: None,
+			project: None,
+			title: "Add a thing".to_owned(),
+			author: "jo".to_owned(),
+			base_branch: "main".to_owned(),
+			head_sha: "1".repeat(40),
+			base_sha: "2".repeat(40),
+			ci: "passing".to_owned(),
+			threads: 0,
+		});
+	});
+	assert!(brief_actions::live(&w.t.ctx, "pr-p-7"));
+	assert!(!brief_actions::live(&w.t.ctx, "pr-p-8"), "another pull request's page");
+	w.t.ctx.threads.drop_pane("t-1");
+	assert!(!brief_actions::live(&w.t.ctx, "pr-p-7"), "its review thread is gone: the page is its record");
+}

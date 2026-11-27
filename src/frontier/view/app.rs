@@ -453,6 +453,10 @@ impl Window {
 		if self.brief.kind == "thread" {
 			page = page.push(self.thread_buttons());
 		}
+		// A pull request's page whose review thread is gone is its record: the same line as a closed thread's (0712).
+		if self.brief.kind == "pr" && self.live == Some(false) {
+			page = page.push(text(CLOSED).size(BODY).color(c.muted));
+		}
 		for (index, section) in self.brief.sections.iter().enumerate() {
 			page = page.push(self.section(index, section));
 		}
@@ -522,6 +526,7 @@ impl Window {
 				.height(Length::Fixed(88.0))
 				.padding(10)
 				.size(BODY)
+				.wrapping(text::Wrapping::WordOrGlyph)
 				.style(style::editor),
 			self.act_button("Send back", Tone::Plain, send),
 		]
@@ -773,20 +778,23 @@ impl Window {
 					})
 					.collect();
 				let lit = hovered.is_some_and(|on| on == item.id || others.contains(&on));
+				// The file's name has the whole row (a name squeezed beside the bars broke mid-word), the bars and
+				// counts the line under it.
 				let mut entry = column![
+					text(&item.label)
+						.size(LABEL)
+						.font(mono_font())
+						.color(c.fg)
+						.wrapping(text::Wrapping::WordOrGlyph)
+						.width(Fill),
 					row![
-						text(&item.label)
-							.size(LABEL)
-							.font(mono_font())
-							.color(c.fg)
-							.wrapping(text::Wrapping::WordOrGlyph)
-							.width(Fill),
 						bars(item.added, item.removed, most),
 						text(format!("+{} \u{2212}{}", item.added, item.removed)).size(META).color(c.muted),
 					]
 					.spacing(8)
 					.align_y(Alignment::Center)
-				];
+				]
+				.spacing(2);
 				if !others.is_empty() {
 					let named: Vec<String> = others.iter().map(|id| label_of(id)).collect();
 					entry = entry.push(
@@ -930,6 +938,7 @@ impl Window {
 					.height(Length::Fixed(88.0))
 					.padding(10)
 					.size(BODY)
+					.wrapping(text::Wrapping::WordOrGlyph)
 					.style(style::editor),
 			);
 			controls = controls.push(self.helpers(&id, &words, changed.then_some(save)));
@@ -1014,6 +1023,7 @@ impl Window {
 				.height(Length::Fixed(88.0))
 				.padding(10)
 				.size(BODY)
+				.wrapping(text::Wrapping::WordOrGlyph)
 				.style(style::editor),
 			row![
 				text_input("File (optional), as in the diff", &self.add_file)
@@ -1079,6 +1089,7 @@ impl Window {
 				.height(Length::Fixed(88.0))
 				.padding(10)
 				.size(BODY)
+				.wrapping(text::Wrapping::WordOrGlyph)
 				.style(style::editor),
 			self.helpers(SUMMARY, &words, save),
 		]

@@ -69,6 +69,12 @@ fn one_board_at_a_time_a_second_hold_gets_none_until_the_first_lets_go() {
 }
 
 #[test]
+fn jocasta_board_starts_the_window_process_with_the_window_flag() {
+	let args: Vec<String> = WINDOW.iter().map(|word| (*word).to_owned()).collect();
+	assert_eq!(crate::shared::route::route(&args).unwrap(), crate::shared::route::Route::Board { window: true });
+}
+
+#[test]
 fn a_rows_facts_say_its_age_cost_of_budget_context_check_and_its_prs_ci() {
 	let rows = board().rows;
 	assert_eq!(facts(&rows[0], NOW), "25 min · $1.20 of $5.00 · 62k context · check passed");
