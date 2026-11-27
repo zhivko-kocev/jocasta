@@ -33,7 +33,7 @@ pub struct Palette {
 	pub orange: Color,
 }
 
-/// Tokyo Night; a test keeps these equal to `src/frontier/brief/page/brief.css` (the colours it names).
+/// Tokyo Night, the built-in palette of the terminal surfaces and the brief windows (0698, 0721).
 pub const TOKYO_NIGHT: Palette = Palette {
 	bg0: Color::Rgb(0x1a, 0x1b, 0x26),
 	bg1: Color::Rgb(0x23, 0x26, 0x36),
@@ -54,19 +54,17 @@ pub const TOKYO_NIGHT: Palette = Palette {
 	orange: Color::Rgb(0xff, 0x9e, 0x64),
 };
 
-/// The palette this run draws with and the `:root` block the brief pages get after `brief.css` (0698). Set once by
+/// The palette this run draws with and the font family the palette file names (0698, 0721). Set once by
 /// `load_palette` at start, so tests, which never call it, draw with Tokyo Night whatever file the machine holds.
-static ACTIVE: OnceLock<(Palette, String)> = OnceLock::new();
+static ACTIVE: OnceLock<(Palette, Option<String>)> = OnceLock::new();
 
 /// Reads the palette file at `path` once, at start (0698): each valid `colors` entry replaces the built-in colour of
-/// its name; an unknown name, a value that isn't `#rrggbb`, a malformed file or no file keeps the built-in values.
+/// its name; an unknown name, a value that isn't `#rrggbb`, a malformed file or no file keeps the built-in values. Its
+/// `font`, a family name of at most 100 characters, is what the brief windows write in (0721).
 pub fn load_palette(path: &Path) {
-	let colours = std::fs::read_to_string(path)
-		.ok()
-		.and_then(|text| serde_json::from_str::<Value>(&text).ok())
-		.map(|file| palette_colours(&file))
-		.unwrap_or_default();
-	let _ = ACTIVE.set(apply_colours(&colours));
+	let file = std::fs::read_to_string(path).ok().and_then(|text| serde_json::from_str::<Value>(&text).ok());
+	let colours = file.as_ref().map(palette_colours).unwrap_or_default();
+	let _ = ACTIVE.set((apply_colours(&colours), file.as_ref().and_then(palette_font)));
 }
 
 /// The palette this run draws with: Tokyo Night unless the palette file named other colours.
@@ -74,9 +72,15 @@ pub fn palette() -> &'static Palette {
 	ACTIVE.get().map_or(&TOKYO_NIGHT, |(palette, _)| palette)
 }
 
-/// The `:root{…}` block appended to the brief pages' `brief.css`; empty without a palette file.
-pub fn palette_css() -> &'static str {
-	ACTIVE.get().map_or("", |(_, css)| css.as_str())
+/// The font family the palette file names, if any (0721).
+pub fn font_family() -> Option<&'static str> {
+	ACTIVE.get().and_then(|(_, font)| font.as_deref())
+}
+
+/// A palette file's `font`: a family name, trimmed, of 1 to 100 characters and no control characters.
+fn palette_font(file: &Value) -> Option<String> {
+	let name = file.get("font")?.as_str()?.trim();
+	(!name.is_empty() && name.chars().count() <= 100 && !name.chars().any(char::is_control)).then(|| name.to_owned())
 }
 
 /// The names the palette file may set.
@@ -106,10 +110,9 @@ fn hex_colour(text: &str) -> Option<[u8; 3]> {
 	Some([(n >> 16) as u8, (n >> 8) as u8, n as u8])
 }
 
-/// Tokyo Night with `colours` in place, and the brief pages' `:root` block for them.
-fn apply_colours(colours: &[(&'static str, [u8; 3])]) -> (Palette, String) {
+/// Tokyo Night with `colours` in place.
+fn apply_colours(colours: &[(&'static str, [u8; 3])]) -> Palette {
 	let mut palette = TOKYO_NIGHT;
-	let mut css = String::new();
 	for &(name, [r, g, b]) in colours {
 		let slot = match name {
 			"bg-0" => &mut palette.bg0,
@@ -129,29 +132,8 @@ fn apply_colours(colours: &[(&'static str, [u8; 3])]) -> (Palette, String) {
 			_ => &mut palette.orange,
 		};
 		*slot = Color::Rgb(r, g, b);
-		let property = match name {
-			"bg-0" => "--bg",
-			"bg-2" => "--panel",
-			"bg-3" => "--line",
-			"fg" => "--fg",
-			"fg-3" => "--mut",
-			"blue" => "--blue",
-			"green" => "--green",
-			"yellow" => "--yellow",
-			"red" => "--red",
-			"purple" => "--purple",
-			_ => continue,
-		};
-		css.push_str(&format!("{property}:#{r:02x}{g:02x}{b:02x};"));
-		// Rec. 709 luma over half the range: a light ground, so the browser's own controls turn light too.
-		if name == "bg-0" && 2126 * u32::from(r) + 7152 * u32::from(g) + 722 * u32::from(b) > 1_275_000 {
-			css.insert_str(0, "color-scheme:light;");
-		}
 	}
-	if !css.is_empty() {
-		css = format!("\n:root{{{css}}}\n");
-	}
-	(palette, css)
+	palette
 }
 
 /// A run of text in one colour.

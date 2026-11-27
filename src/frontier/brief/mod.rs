@@ -1,18 +1,16 @@
-//! Briefs (0678): HTML pages the service serves on loopback, built by code from a typed model. `model.rs` is the
-//! model, `layout.rs` validates a brief and lays out its flows, `store.rs` keeps them under `<data>/briefs`, `routes.rs`
-//! serves them with the hardening of 0678, and `page/` is the page itself, embedded.
+//! Briefs (0678, 0721): what Jocasta shows him beside his work, built by code from a typed model and drawn as native
+//! windows (`frontier::view`). `model.rs` is the model, `layout.rs` validates a brief and lays out its flows,
+//! `store.rs` keeps them under `<data>/briefs`, `morning.rs` builds the morning brief.
 
 pub mod layout;
 pub mod model;
 pub mod morning;
-pub mod routes;
 pub mod store;
 
-/// How a brief reaches his browser (0678): its URL as the toast carries it, and opening it with a fresh launch code
-/// (`http://127.0.0.1:<port>/brief/<id>?t=<code>`).
+/// How a brief reaches him (0721): its link as a toast and `today` carry it, and opening its window.
 pub trait BriefLinks: Send + Sync {
-	/// The brief's page URL without a launch code, `http://127.0.0.1:<port>/brief/<id>`.
+	/// The brief's link, `jocasta:brief/<id>`.
 	fn url(&self, id: &str) -> String;
-	/// Opens the brief in his browser.
+	/// Opens the brief in its own window.
 	fn open(&self, id: &str);
 }

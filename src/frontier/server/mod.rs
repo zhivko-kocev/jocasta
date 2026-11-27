@@ -61,7 +61,6 @@ pub mod native;
 pub mod omp_processes;
 pub mod overlay;
 pub mod own_surface;
-pub mod page_routes;
 pub mod pane_launch;
 pub mod pending;
 pub mod phone;

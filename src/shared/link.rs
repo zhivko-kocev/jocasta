@@ -1,5 +1,6 @@
-//! Links from outside, and opening one in the browser.
+//! Links from outside, and opening one in the browser (or a file in its viewer).
 
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 use url::Url;
@@ -22,7 +23,8 @@ pub fn web_link(url: Option<&str>) -> Option<String> {
 	(href.len() <= MAX_LINK).then(|| href.to_owned())
 }
 
-/// Opens `url` in his default browser, without waiting (Windows' URL handler; `open`; `xdg-open`).
+/// Opens `url` in his default browser, without waiting (Windows' URL handler; `open`; `xdg-open`). The same handlers
+/// open a file path in its default viewer.
 pub fn open_in_browser(url: &str) -> Result<()> {
 	let mut command = if cfg!(windows) {
 		let mut command = Command::new("rundll32.exe");
@@ -41,6 +43,11 @@ pub fn open_in_browser(url: &str) -> Result<()> {
 	// Reaped in the background, so the child never lingers as a zombie.
 	std::thread::spawn(move || child.wait());
 	Ok(())
+}
+
+/// Opens the file at `path` in its default viewer (a screenshot in his image viewer, 0721), without waiting.
+pub fn open_file(path: &Path) -> Result<()> {
+	open_in_browser(&path.to_string_lossy())
 }
 
 #[cfg(test)]

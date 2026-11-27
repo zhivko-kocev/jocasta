@@ -19,9 +19,6 @@ use crate::shared::log::{LogLevel, log};
 /// Answers one client only: a message sent down its socket.
 pub type Reply = Arc<dyn Fn(ServerMessage) + Send + Sync>;
 
-/// Adds the page's headers to a refusal, with the server's port (`guard`).
-pub type Guard = Arc<dyn Fn(Response, u16) -> Response + Send + Sync>;
-
 /// What the state feed needs of the service: its snapshot and its handling of a client's message.
 pub trait FeedService: Send + Sync {
 	/// The snapshot every client gets first; an `Err` is the TypeScript's throw, which fails that client's open.
@@ -123,17 +120,15 @@ impl FeedSocket {
 	}
 }
 
-/// The state feed's route (`/ws`): the bearer only, no browser page opens it (SEC-NET-4), and no other origin; its
-/// refusals carry the page's headers (`guard`).
+/// The state feed's route (`/ws`): the bearer only, and no other origin (SEC-NET-4).
 pub struct FeedRoute {
 	token: String,
-	guard: Guard,
 	socket: FeedSocket,
 }
 
 /// The state feed's route: see [`FeedRoute`]. `socket` is what runs once a client has upgraded.
-pub fn feed_route(token: &str, guard: Guard, socket: FeedSocket) -> FeedRoute {
-	FeedRoute { token: token.to_owned(), guard, socket }
+pub fn feed_route(token: &str, socket: FeedSocket) -> FeedRoute {
+	FeedRoute { token: token.to_owned(), socket }
 }
 
 impl Route for FeedRoute {
@@ -143,8 +138,7 @@ impl Route for FeedRoute {
 
 	fn handle(&self, request: Request, _url: Url, server: ServerHandle) -> BoxFuture<Response> {
 		let at = server.port();
-		let guard = self.guard.clone();
-		let forbidden = move || guard(text_response(StatusCode::FORBIDDEN, "Forbidden"), at);
+		let forbidden = || text_response(StatusCode::FORBIDDEN, "Forbidden");
 		if !has_bearer(&request, &self.token) {
 			let refused = forbidden();
 			return Box::pin(async move { refused });
@@ -154,12 +148,11 @@ impl Route for FeedRoute {
 			let refused = forbidden();
 			return Box::pin(async move { refused });
 		}
-		let guard = self.guard.clone();
 		let socket = self.socket.clone();
 		Box::pin(async move {
 			match WebSocketUpgrade::from_request(request, &()).await {
 				Ok(upgrade) => upgrade.on_upgrade(move |ws| async move { socket.serve(ws, server).await }),
-				Err(_) => guard(text_response(StatusCode::BAD_REQUEST, "Upgrade failed"), at),
+				Err(_) => text_response(StatusCode::BAD_REQUEST, "Upgrade failed"),
 			}
 		})
 	}

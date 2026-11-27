@@ -1,5 +1,6 @@
-//! What a brief's buttons do (0678): the thread brief's `finish` and `send` run through the same code paths, and the
-//! same Allow gate, as the boss's `thread_finish` and `thread_send`; the answer is the whole updated brief.
+//! What a brief's buttons do (0678, 0721): the thread brief's `finish` and `send` run through the same code paths, and
+//! the same Allow gate, as the boss's `thread_finish` and `thread_send`; the answer is the whole updated brief. The brief
+//! windows reach them over the bridge pipe (`brief act`, `brief live`).
 
 use std::sync::Arc;
 
@@ -58,10 +59,15 @@ pub async fn act(c: &Arc<ServiceContext>, tools: &Tools, id: &str, action: &Valu
 	serde_json::to_value(brief).map_err(|error| Error::other(error.to_string()))
 }
 
-/// The id of the stored brief a link is (`http://127.0.0.1:<port>/brief/<id>`, as the Done toast carries), when it is
-/// one: opening it mints a fresh launch code.
+/// Whether the brief `id`'s buttons act on something (0721): a pull request's always, a thread's while it is open.
+pub fn live(c: &Arc<ServiceContext>, id: &str) -> bool {
+	id.starts_with("pr-") || thread_of(c, id).is_ok()
+}
+
+/// The id of the stored brief a link is (`jocasta:brief/<id>`, as the Done toast and `today`'s BRIEFS rows carry), when
+/// it is one: opening it starts its window.
 pub fn brief_of_link(c: &Arc<ServiceContext>, url: &str) -> Option<String> {
 	let briefs = c.options.briefs.as_ref()?;
-	let id = url.rsplit_once("/brief/")?.1;
-	(briefs.url(id) == url && store::load(id).is_some()).then(|| id.to_owned())
+	let id = url.rsplit_once("brief/")?.1;
+	(briefs.url(id) == url && store::exists(id)).then(|| id.to_owned())
 }

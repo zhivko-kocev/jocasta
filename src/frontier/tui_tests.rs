@@ -1,5 +1,5 @@
 //! `tui`'s tests: the column math and wrapping the TypeScript's `ask/view.test.ts` checked, the lines drawn into a
-//! ratatui buffer, and the palette against the brief page's colours.
+//! ratatui buffer, and the palette file.
 
 use super::*;
 
@@ -93,56 +93,33 @@ fn render_lines_draws_each_line_a_row_in_its_colours_and_clips_at_the_edge() {
 }
 
 #[test]
-fn the_palette_matches_the_brief_pages_colours() {
-	let css = include_str!("brief/page/brief.css");
-	let hex = |property: &str| {
-		let at = css.find(&format!("{property}:")).unwrap_or_else(|| panic!("brief.css has no {property}"));
-		let rest = css[at + property.len() + 1..].trim_start();
-		let digits = rest.strip_prefix('#').unwrap_or_else(|| panic!("{property} is not a hex colour"));
-		let n = u32::from_str_radix(&digits[..6], 16).unwrap_or(0);
-		Color::Rgb((n >> 16) as u8, (n >> 8) as u8, n as u8)
-	};
-	let p = TOKYO_NIGHT;
-	let table = [
-		("--bg", p.bg0),
-		("--panel", p.bg2),
-		("--fg", p.fg),
-		("--blue", p.blue),
-		("--yellow", p.yellow),
-		("--red", p.red),
-		("--green", p.green),
-		("--purple", p.purple),
-	];
-	for (property, colour) in table {
-		assert_eq!(hex(property), colour, "{property}");
-	}
-}
-
-#[test]
 fn the_palette_file_replaces_valid_colours_by_name_and_keeps_the_rest() {
 	let file = serde_json::json!({
 		"ompTheme": "dark-terminal",
 		"colors": {"bg-0": "#2e3440", "red": "#BF616A", "orange": "#d08770", "blue": "nope", "green": "#a3be8", "pink": "#ff00ff"}
 	});
-	let (palette, css) = apply_colours(&palette_colours(&file));
+	let palette = apply_colours(&palette_colours(&file));
 	assert_eq!(palette.bg0, Color::Rgb(0x2e, 0x34, 0x40));
 	assert_eq!(palette.red, Color::Rgb(0xbf, 0x61, 0x6a));
 	assert_eq!(palette.orange, Color::Rgb(0xd0, 0x87, 0x70));
 	assert_eq!(palette.blue, TOKYO_NIGHT.blue);
 	assert_eq!(palette.green, TOKYO_NIGHT.green);
 	assert_eq!(palette.fg, TOKYO_NIGHT.fg);
-	assert_eq!(css, "\n:root{--bg:#2e3440;--red:#bf616a;}\n");
 }
 
 #[test]
-fn a_light_ground_turns_the_pages_light_and_no_colours_mean_tokyo_night() {
-	let light = serde_json::json!({"colors": {"bg-0": "#eff1f5", "fg": "#4c4f69"}});
-	assert_eq!(apply_colours(&palette_colours(&light)).1, "\n:root{color-scheme:light;--bg:#eff1f5;--fg:#4c4f69;}\n");
+fn no_colours_mean_tokyo_night_and_the_font_is_a_plain_family_name() {
 	for file in [serde_json::json!([1]), serde_json::json!({"colors": "x"}), serde_json::json!({})] {
-		assert_eq!(apply_colours(&palette_colours(&file)), (TOKYO_NIGHT, String::new()));
+		assert_eq!(apply_colours(&palette_colours(&file)), TOKYO_NIGHT);
+		assert_eq!(palette_font(&file), None);
 	}
 	assert_eq!(palette(), &TOKYO_NIGHT);
-	assert_eq!(palette_css(), "");
+	assert_eq!(font_family(), None);
+	let font = |name: &str| palette_font(&serde_json::json!({ "font": name }));
+	assert_eq!(font(" JetBrainsMono Nerd Font ").as_deref(), Some("JetBrainsMono Nerd Font"));
+	for bad in ["", "  ", "a\nb", &"x".repeat(101)] {
+		assert_eq!(font(bad), None, "{bad:?}");
+	}
 }
 
 #[test]

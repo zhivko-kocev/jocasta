@@ -17,6 +17,7 @@ use crate::frontier::brief::store;
 use crate::frontier::protocol::ToastPriority;
 use crate::frontier::server::allow::Confirmation;
 use crate::frontier::server::bridge::Deliver;
+use crate::frontier::server::brief_actions;
 use crate::frontier::server::context::ServiceContext;
 use crate::frontier::server::history::{HISTORY_SEARCH, HistoryEntry, add_history, history_answer, search_history};
 use crate::frontier::server::lessons::ensure_lessons_skill;
@@ -571,7 +572,7 @@ impl Tools {
 		Ok(format!("Started {}'s big-picture review; its result comes as an [event].", project.name))
 	}
 
-	/// One `jocasta thread|worktree` command (0544).
+	/// One `jocasta thread|worktree` command (0544), or a brief window's (0721).
 	pub async fn cli(&self, command: &str, args: &Map<String, Value>) -> Result<String> {
 		let c = &self.c;
 		let args = Args::new(args, format!("jocasta {command}"));
@@ -581,6 +582,13 @@ impl Tools {
 			"status json" => c.status.status_json(),
 			// A sleeping pane's key was pressed (0676): its sleeper asks for its omp back. Internal, no Allow.
 			"wake" => c.sleep.wake_by_key(&args.text("key")?).await,
+			// A brief window's button (0721): the brief's action through the same gate; the brief after it as JSON.
+			"brief act" => {
+				let action = args.values.get("action").cloned().unwrap_or(Value::Null);
+				Ok(brief_actions::act(c, self, &args.text("id")?, &action).await?.to_string())
+			}
+			// Whether a brief window's buttons have a live thread behind them (0721).
+			"brief live" => Ok(brief_actions::live(c, &args.text("id")?).to_string()),
 			// The pane's visible grid as text (0683): the benchmark and live checks read panes through the pipe.
 			"pane_text" => Ok(c.herdr.screen(&args.text("pane")?).await.map_err(Error::from)?),
 			// The panes as JSON text (0683): the benchmark and live checks list the shell's panes through the pipe.

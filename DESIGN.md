@@ -1,6 +1,6 @@
 ---
 name: Jocasta
-description: "Tokyo Night everywhere Jocasta draws: the `today` dock and the question box in Jocasta's shell, drawn with ratatui, and the brief pages in his browser."
+description: "Tokyo Night everywhere Jocasta draws: the `today` dock and the question box in Jocasta's shell, drawn with ratatui, and the brief windows, drawn with iced."
 colors:
   bg-0: "#1a1b26"
   bg-1: "#232636"
@@ -138,11 +138,11 @@ components:
 
 ## Overview
 
-Jocasta has no window of its own (0552). What it draws is three surfaces, all on one palette, Tokyo Night unless the desktop names its own (0698):
+Jocasta's work surface is its shell (0552, 0683); the only windows of its own are the brief windows (0721). What it draws is three surfaces, all on one palette, Tokyo Night unless the desktop names its own (0698):
 
 - **the `today` dock**, beside the boss in the shell's workspace "Jocasta", drawn with ratatui (0551, 0553, 0555, 0634, 0683);
 - **the question box**, the shell's own box in front of whatever he is on, also ratatui, for his questions (0553, 0558, 0568, 0683);
-- **the brief pages**, plain-DOM pages the service serves to his browser: the thread brief, the boss's `show` and the later briefs (0678, 0679).
+- **the brief windows**, native windows drawn with iced (tiny-skia, on the CPU), one per brief: the thread and pull-request briefs, the boss's `show`, the morning and weekly briefs (0678, 0679, 0721).
 
 The shell draws everything else with its `tokyo-night` theme (0554, 0683); omp's panes use omp's `dark-tokyo-night` (0401). The terminals inherit the Windows Terminal scheme `jocasta setup` writes from the same palette.
 
@@ -150,35 +150,35 @@ The two terminal surfaces are coloured text only: ratatui draws plain lines of c
 
 ## Colors
 
-The palette is Tokyo Night as the shell draws it (the same as herdr 0.9.5's, 0554). The brief pages' `:root` in `src/frontier/brief/page/brief.css` holds its hex values for the browser (0678); the terminal surfaces take theirs from `TOKYO_NIGHT` in `src/frontier/tui.rs`, which the Windows Terminal scheme `jocasta setup` writes also uses. The front matter above mirrors it.
+The palette is Tokyo Night as the shell draws it (the same as herdr 0.9.5's, 0554): `TOKYO_NIGHT` in `src/frontier/tui.rs`, which the terminal surfaces, the brief windows (`src/frontier/view/style.rs`) and the Windows Terminal scheme `jocasta setup` writes all use. The front matter above mirrors it.
 
-The desktop may replace it (0698): an optional `~/.jocasta/agent/palette.json` (ultron writes it from its theme) names colours by the names below (`bg-0` … `orange`, each `#rrggbb`). Read once at start, each valid one replaces the built-in colour of that name on the terminal surfaces and the shell's chrome, and the brief pages get them as a `:root` block after `brief.css`. Anything else in the file is ignored; without it the look is Tokyo Night. The Windows Terminal scheme stays Tokyo Night.
+The desktop may replace it (0698, 0721): an optional `~/.jocasta/agent/palette.json` (ultron writes it from its theme) names colours by the names below (`bg-0` … `orange`, each `#rrggbb`) and may name a `font` family. Read once at start, each valid colour replaces the built-in colour of that name on the terminal surfaces, the shell's chrome and the brief windows, and the font is what the brief windows write in. Anything else in the file is ignored; without it the look is Tokyo Night in the system's sans and monospace. The Windows Terminal scheme stays Tokyo Night.
 
 ### Grounds
-- **BG 0** (bg-0): the `today` pane's and the `ask` popup's ground, a brief page's first paint, and the terminal scheme's background.
-- **BG 1** (bg-1): a brief page's panels and a diff file's head.
+- **BG 0** (bg-0): the `today` pane's and the `ask` popup's ground, a brief window's ground and its code and output blocks, and the terminal scheme's background.
+- **BG 1** (bg-1): a brief window's panels (cards, flow nodes) and a button's hover.
 - **BG 2** (bg-2): the picked thread row in `today`, the active field and the unpicked choices in `ask`, the terminal scheme's black.
-- **BG 3** (bg-3): the terminal scheme's selection.
+- **BG 3** (bg-3): the terminal scheme's selection; a brief window's hairlines and a button's press.
 
 ### Text
 - **FG** (fg): primary text everywhere: the date and time in `today`'s header, thread names, a question's message, a brief's titles.
 - **FG 2** (fg-2): secondary text: CPU and memory, quota below 80%, a thread's time and cost, LANDED TODAY rows without a pane, headlines, a question's detail.
 - **FG 3** (fg-3): quiet text: in the terminal surfaces "nothing waits on you", "no thread at work", wait times, an idle thread's state, news feed names, `quiet` in `today`'s header, "Connecting to Jocasta…", the key lines and hints, the popup's "… N more lines" line and the form's labels (0581). Lifted from herdr's overlay1 so it reaches 4.5:1 on bg-0 to bg-2 (0432).
-- **Comment** (comment): the " · " separators in the terminal surfaces (0581), and the colour a brief's hairlines are made from.
+- **Comment** (comment): the " · " separators in the terminal surfaces (0581).
 - **Bright Black** (bright-black): the terminal scheme's bright black only.
 
 ### Accents
-- **Blue**: headings in `today` (NEEDS YOU, UNDERWAY, LANDED TODAY, CALENDAR, NEXT, NEWS), the picked row's `›`, a link row's `↗`, the `ask` popup's title and the picked choice's ground; on a brief page links, focus outlines and an active flow node.
+- **Blue**: headings in `today` (NEEDS YOU, UNDERWAY, LANDED TODAY, CALENDAR, NEXT, NEWS), the picked row's `›`, a link row's `↗`, the `ask` popup's title and the picked choice's ground; in a brief window links, the primary button's outline, a field's focus border and the active flow node's ring.
 - **Cyan**: the weather in `today`'s header, a calendar entry's time (or `now`), New thread's project.
 - **Yellow**: a NEEDS YOU row that isn't blocked or reviewed, the code to type in `ask` and the letters typed so far, "Jocasta isn't answering (since 18:03); trying again…", a popup with no question.
 - **Orange**: a reviewed thread in NEEDS YOU.
-- **Red**: a blocked thread in NEEDS YOU, a quota window at 80% or more, a broken service in `today`'s header, a key that failed or an error reply in `today`, a note under a question (a wrong code, "Write the brief first.", "Wrong code three times; Deny was taken."); on a brief page a failed node, a failed check and deleted lines in diffs.
-- **Green**: today's spend, a working thread's state, a key that worked in `today`; added lines in diffs.
+- **Red**: a blocked thread in NEEDS YOU, a quota window at 80% or more, a broken service in `today`'s header, a key that failed or an error reply in `today`, a note under a question (a wrong code, "Write the brief first.", "Wrong code three times; Deny was taken."); in a brief window a failed node, a failed check or works row, a P0 card, a refusal and deleted lines.
+- **Green**: today's spend, a working thread's state, a key that worked in `today`; in a brief window a done node, a passed check, `✓ proven` and added lines.
+- **Yellow** and **Purple** in a brief window: a P1 card; a card's kind.
 - **Purple**: a thread's context size in UNDERWAY.
 
-### Translucent
-- **Line 1 / 2 / 3** (comment at 22%, 40%, 65%): line 1 under a diff file's head; line 2 around a diff file and the page's thin scrollbars; line 3 a button's resting border, so it reads against the ground (0432).
-- **Blue Wash** (10%): a focused flow node. **Blue Select** (24%): text selection in Jocasta's own parts. **Blue Hover** (6%) and **Blue Press** (5%): a button's hover. **Blue Line** (40%): a link's underline.
+### Faint grounds
+A brief window's badges and diff lines sit on their accent at 10–14% over the ground; the selection in its fields is blue at 35%. Control borders are mark-3 (`#697196`), so they read against the ground (0432).
 
 ### Windows Terminal
 The scheme "Tokyo Night" `jocasta setup` writes (0401, 0474): background bg-0, foreground and cursor fg, selection bg-3; black bg-2, white fg-2, bright black bright-black, bright white fg; red, green, yellow, blue, purple and cyan, each the same in its bright form.
@@ -207,26 +207,26 @@ The box (0553, 0683) is the shell's: 70% wide and 18 rows high (the plugin manif
 
 Hints are fg-3 with " · " separators in comment.
 
-## The brief pages
+## The brief windows
 
-A brief (`src/frontier/brief/`, 0678) opens in his browser at the service's address, `/brief/<id>`, from the Done toast or the boss's `show`. Its ground is bg, panels sit one step lighter, and text is fg with muted text in mut; the page has one script and one stylesheet, and no font, image or script from outside. Sections run top to bottom: a `flow` is a grid by layer with drawn edges; a `map` is columns with bars for added and removed lines; a diff shows red and green lines; a card shows its severity, the quoted code and whether the quote was found in the committed file.
+A brief (`src/frontier/view/`, 0721) opens as its own window, `jocasta view <id>`, from the Done notification, the dock (`b`, Enter on a BRIEFS row) or the boss's `show`; Linux app ids `jocasta-review`, `jocasta-show`, `jocasta-brief` let the desktop place it. Its ground is bg-0, cards and nodes sit one step lighter with 6 px corners, code and output sit on the ground under a hairline, and there is no other chrome. The page is one column at most 920 px wide (prose at 640), 32 px between sections, 16 inside them, 8 between rows. Sections run top to bottom: `facts` a label column and values; `works` its rows (state badge, label, duration or `not timed`, output tail, screenshots that open in his image viewer); a `flow` on a canvas, layer by layer left to right (top down with 4 or more layers or under 720 px), curved edges with their labels, the active node ringed; a `map` columns of files with bars for added and removed lines; `cards` with severity, kind, verdict and check badges, the place, the quoted code and `✓ proven` behind a disclosure; a `diff` closed behind `Show code (<n> files, +a −b)`. An empty section says `Nothing here.`; a closed thread says `This thread is closed; this page is its record.` instead of its buttons.
 
 ### Type
-The system UI font at 15px on a 1.55 line, monospace for code, paths and diffs.
+The palette file's font, else the system's sans, on the scale 12 (meta) / 13 (labels, badges, code) / 15 (prose) / 18 (section headings) / 26 (title); monospace for code, paths and diffs. Long words, paths and URLs wrap anywhere rather than overflow.
 
 ### Motion
-Nodes fade in layer by layer, each edge draws itself, an active node pulses, and Play, Prev and Next walk the nodes in order. All of it is CSS transitions and one animation; under `prefers-reduced-motion: reduce` every animation and transition ends at once and nodes and edges show in their final state.
+One curve, `cubic-bezier(0.23, 1, 0.32, 1)`, and two durations, 180 ms (reveals) and 220 ms (edges). Only the first open moves: nodes fade in and rise 4 px over 180 ms, 25 ms later per layer up to the fifth, edges draw over 220 ms from 80 ms, all settled by 305 ms; a disclosure (`✓ proven`, `Show code`) fades open over 180 ms. A press answers at once (iced has no widget scale) and nothing replays after one: an answer patches its card. `JOCASTA_REDUCED_MOTION=1` keeps opacity only. An idle window asks for no frames.
 
 ## Do's and Don'ts
 
 ### Do:
-- **Do** take the brief pages' colours from the `:root` of `brief.css`; no rule writes a hex value of its own.
+- **Do** take the brief windows' colours from the palette (`style::colours()`); no widget writes a colour of its own.
 - **Do** keep the terminal surfaces to coloured text on bg-0, as ratatui lines.
-- **Do** separate a brief's regions with hairlines and adjacent ground steps.
-- **Do** honour reduced motion by ending every motion at once.
+- **Do** separate a brief's regions with spacing, hairlines and one ground step; no box inside a box inside a box.
+- **Do** honour reduced motion: opacity only.
 
 ### Don't:
 - **Don't** add a greeting or the Presence to `today` (0555).
 - **Don't** let Enter take a coded choice in `ask`: Allow, Merge, PR and Stop everything take their typed code (0558, 0568).
-- **Don't** fill a button on a brief page; the only solid blue ground is the picked choice in `ask`.
+- **Don't** fill a button in a brief window; buttons are outlined, the primary one in blue. The only solid blue ground is the picked choice in `ask`.
 - **Don't** add a theme setting; the only other look is the desktop's, through the palette file (0698).

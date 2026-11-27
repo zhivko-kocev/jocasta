@@ -1,46 +1,41 @@
 //! The Jocasta service's server (the Rust port of `server.ts`; 4.1, 0392, 0552): 127.0.0.1 on `service.port` (0358), or
 //! a free port for this run when that one is busy; `<data>/jocasta-service.json` with `port`, `token` and `pid`. Every
-//! API call carries the token as a bearer (`jocasta mcp`, bare `jocasta`, the benchmark's clients); the browser's pages carry
-//! a separate page token as a per-port cookie, set from a one-time launch code (`/?t=<code>`, SEC-NET-4, SEC-LOC-11). It
-//! serves the bridge's pipe, the state feed, his questions and the briefs (0678), and runs the herdr-backed
-//! service. A start that fails stops what it had started, its bridge included (SRV-A-2).
+//! API call carries the token as a bearer (`jocasta mcp`, bare `jocasta`, the benchmark's clients). It serves the
+//! bridge's pipe, the state feed and `/health`, and runs the herdr-backed service; briefs are native windows (0721), no
+//! pages. A start that fails stops what it had started, its bridge included (SRV-A-2).
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use axum::http::{HeaderName, HeaderValue};
-use axum::response::Response;
+use axum::http::StatusCode;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use serde_json::Value;
 
 use crate::frontier::brief::BriefLinks;
-use crate::frontier::brief::routes::{BriefActions, BriefRoutes, CONTENT_POLICY};
-use crate::frontier::protocol::{ClientMessage, PluginAction, PopupView, ServerMessage, TOKEN_QUERY};
+use crate::frontier::protocol::{ClientMessage, PluginAction, PopupView, ServerMessage};
 use crate::frontier::server::allow::{Answer, CONFIRM_WAIT_MS, Confirm, Confirmation};
 use crate::frontier::server::asker::{Ask, Show, asker};
 use crate::frontier::server::bridge::{Bridge, BridgeService, Secrets};
 use crate::frontier::server::close::{CloseFlow, CloseHow, CloseOutcome, CloseParts, CloseService, close_flow};
 use crate::frontier::server::day::{DayOptions, SharedCatalog};
 use crate::frontier::server::events::Toast;
-use crate::frontier::server::feed::{FeedService, Guard, Reply, feed_route, feed_socket, publish};
+use crate::frontier::server::feed::{FeedService, Reply, feed_route, feed_socket, publish};
 use crate::frontier::server::health_route::health_route;
 use crate::frontier::server::native::{Native, NativeServer};
-use crate::frontier::server::page_routes::{LaunchCodes, PageParts, PageResponder, page_responder};
 use crate::frontier::server::phone::{Phone, PhoneOptions, Timing, topics};
 use crate::frontier::server::popups::{ALLOW, AnswerTaken, Popup, Popups, allow_question};
-use crate::frontier::server::routes::{Route, Served, ServerHandle, listen};
+use crate::frontier::server::routes::{PageRoute, Route, Served, ServerHandle, listen, text_response};
 use crate::frontier::server::service::{Changed, Heal, JocastaService, ServiceOptions};
 use crate::frontier::server::stop_sequence::{
 	StopBounds, StopParts, StopRun, StopService, StopStep, StopWhen, Stopper, stop_steps, stopper, undo_start,
 };
 use crate::frontier::server::surface::Surface;
 use crate::frontier::server::thread_keys::{ActionService, KeyParts, ThreadKeys};
+use crate::frontier::view::BriefWindows;
 use crate::shared::credentials::{calendar_secret, gmail_secret, jira_secret, take_calendar_env, take_source_envs};
 use crate::shared::errors::Result;
-use crate::shared::link::open_in_browser;
 use crate::shared::log::{LogLevel, log};
 use crate::shared::paths::data_dir;
 use crate::shared::process::AbortSignal;
@@ -123,7 +118,7 @@ pub struct ServerOptions {
 	pub day: Option<DayOptions>,
 	/// The port to try first (test seam): `service.port`, else 47400 (0358).
 	pub port: Option<u16>,
-	/// How a brief reaches his browser (test seam): a page of this server opened with a fresh launch code by default.
+	/// How a brief reaches him (test seam): its own window (`jocasta view <id>`, 0721) by default.
 	pub briefs: Option<Arc<dyn BriefLinks>>,
 	/// Shows a question to him (test seam): it gets the question's one-time code, and the shell shows none.
 	pub on_question: Option<OnQuestion>,
@@ -181,7 +176,6 @@ pub struct JocastaServer {
 }
 
 struct Inner {
-	codes: Arc<LaunchCodes>,
 	stops: Arc<Stopper>,
 	close: CloseFlow,
 	question: Ask,
@@ -190,12 +184,6 @@ struct Inner {
 }
 
 impl JocastaServer {
-	/// A page of this server by its path, `http://127.0.0.1:<port><path>?t=<code>`, with a fresh one-time launch code
-	/// each time it is read (SEC-LOC-11): used once within a minute, it becomes the page cookie and shows the page.
-	pub fn page_url(&self, path: &str) -> String {
-		page_url(self.port, &self.inner.codes, path)
-	}
-
 	/// The service closes and `jocasta-service.json` goes away; herdr and every pane keep running (a failed start).
 	pub async fn stop(&self) {
 		self.inner.stops.stop(false).await;
@@ -271,11 +259,6 @@ impl NativeServer for JocastaServer {
 	}
 }
 
-/// A page URL with a fresh launch code (`http://127.0.0.1:<port><path>?t=<code>`).
-fn page_url(port: u16, codes: &LaunchCodes, path: &str) -> String {
-	format!("http://127.0.0.1:{port}{path}?{TOKEN_QUERY}={}", codes.mint())
-}
-
 /// 256 random bits as hex.
 fn random_hex() -> String {
 	let mut bytes = [0_u8; 32];
@@ -311,28 +294,12 @@ fn allow_box(question: Ask) -> Confirm {
 	})
 }
 
-fn set_header(response: &mut Response, name: &'static str, value: &str) {
-	if let Ok(value) = HeaderValue::from_str(value) {
-		response.headers_mut().insert(HeaderName::from_static(name), value);
-	}
-}
-
-/// Every page response carries the briefs' content policy (0678): scripts and styles come only from this server and
-/// nothing is framed or posted elsewhere.
-pub fn guarded(mut response: Response) -> Response {
-	set_header(&mut response, "content-security-policy", CONTENT_POLICY);
-	set_header(&mut response, "x-content-type-options", "nosniff");
-	set_header(&mut response, "referrer-policy", "no-referrer");
-	response
-}
-
 /// What a failed start undoes, each registered as its resource starts, run newest first (SRV-A-2).
 type Undo = Vec<StopStep>;
 
-/// The server's two tokens: the API's and the browser's own (SEC-NET-4).
+/// The server's token: the API's bearer (SEC-NET-4).
 struct Tokens {
 	api: String,
-	page: String,
 }
 
 /// What asks his questions.
@@ -346,7 +313,7 @@ pub async fn start_server(mut options: ServerOptions) -> Result<JocastaServer> {
 	// The calendar's secret leaves this process's environment before anything is spawned (SEC-5, 0430).
 	take_calendar_env();
 	take_source_envs();
-	let tokens = Tokens { api: random_hex(), page: random_hex() };
+	let tokens = Tokens { api: random_hex() };
 	let bridge = options.bridge.get_or_insert_with(Bridge::new).clone();
 	bridge.set_secrets(secrets_of(&tokens));
 	let mut undo: Undo = vec![StopStep::new("the bridge", bridge_stop(&bridge))];
@@ -371,7 +338,6 @@ fn secrets_of(tokens: &Tokens) -> Secrets {
 			gmail_secret(),
 			jira_secret(),
 			Some(tokens.api.clone()),
-			Some(tokens.page.clone()),
 			ntfy.server,
 			ntfy.token,
 			topics.as_ref().map(|topics| topics.main.clone()),
@@ -435,7 +401,6 @@ fn build_service(
 	options: &mut ServerOptions,
 	herdr: &Arc<dyn Surface>,
 	broadcast: &Broadcast,
-	briefs: Arc<dyn BriefLinks>,
 ) -> Result<(Arc<JocastaService>, Questions)> {
 	let shell = options.shell.clone();
 	let asking = questions(options, shell.as_ref());
@@ -447,7 +412,7 @@ fn build_service(
 	service.herdr_changed = shell.map(changes_of);
 	service.confirm = Some(confirm.unwrap_or_else(|| allow_box(Arc::clone(&asking.question))));
 	service.ask = Some(Arc::clone(&asking.question));
-	service.briefs = Some(given.unwrap_or(briefs));
+	service.briefs = Some(given.unwrap_or_else(|| Arc::new(BriefWindows)));
 	let catalog: SharedCatalog = Arc::new(Mutex::new(open_catalog()?));
 	Ok((JocastaService::new(catalog, service)?, asking))
 }
@@ -576,32 +541,15 @@ fn undo_herdr(herdr: &Arc<dyn Surface>) -> StopStep {
 	})
 }
 
-/// How a brief reaches his browser (0678): its page on this server, opened with a fresh launch code.
-struct ServerBriefs {
-	port: Arc<AtomicU16>,
-	codes: Arc<LaunchCodes>,
-}
-
-impl BriefLinks for ServerBriefs {
-	fn url(&self, id: &str) -> String {
-		format!("http://127.0.0.1:{}/brief/{id}", self.port.load(Ordering::SeqCst))
-	}
-
-	fn open(&self, id: &str) {
-		let url = page_url(self.port.load(Ordering::SeqCst), &self.codes, &format!("/brief/{id}"));
-		if let Err(error) = open_in_browser(&url) {
-			log(LogLevel::Warn, "server", &format!("couldn't open the brief: {error}"), None);
-		}
-	}
-}
-
-/// What listens: the API's routes, then every page with the content policy on it.
-fn served(routes: Vec<Box<dyn Route>>, pages: PageResponder) -> Served {
+/// What listens: the API's routes, then `/health` (the bearer's); anything else is not found.
+fn served(routes: Vec<Box<dyn Route>>, health: impl PageRoute + 'static) -> Served {
 	Served {
 		routes,
 		page: Box::new(move |request, url, _at| {
-			let pages = Arc::clone(&pages);
-			Box::pin(async move { guarded(pages(request, url).await) })
+			if health.matches(url.path()) {
+				return health.handle(request, url);
+			}
+			Box::pin(async { text_response(StatusCode::NOT_FOUND, "Not found") })
 		}),
 	}
 }
@@ -637,24 +585,6 @@ fn undo_server(handle: &ServerHandle) -> StopStep {
 	)
 }
 
-/// The page responder: the bearer's `/health`, and the browser's pages.
-fn pages_of(
-	tokens: &Tokens,
-	parts: (&Arc<LaunchCodes>, &Arc<AtomicU16>),
-	briefs: BriefRoutes,
-	health: Box<dyn Fn() -> bool + Send + Sync>,
-) -> PageResponder {
-	let (codes, port) = (Arc::clone(parts.0), Arc::clone(parts.1));
-	page_responder(PageParts {
-		token: tokens.api.clone(),
-		page_token: tokens.page.clone(),
-		codes,
-		port: Arc::new(move || port.load(Ordering::SeqCst)),
-		briefs,
-		bearer_routes: vec![Box::new(health_route(&tokens.api, health))],
-	})
-}
-
 async fn start_rest(
 	options: &mut ServerOptions,
 	bridge: Bridge,
@@ -674,11 +604,8 @@ async fn start_rest(
 		return Err(crate::shared::errors::Error::other("the server was started without a surface"));
 	};
 	undo.push(undo_herdr(&herdr));
-	let briefs_of_server =
-		Arc::new(ServerBriefs { port: Arc::new(AtomicU16::new(0)), codes: Arc::new(LaunchCodes::default()) });
-	let (port, codes) = (Arc::clone(&briefs_of_server.port), Arc::clone(&briefs_of_server.codes));
 	let waiting_ms = options.confirm_wait_ms.unwrap_or(CONFIRM_WAIT_MS);
-	let (service, asking) = build_service(options, &herdr, &broadcast, briefs_of_server)?;
+	let (service, asking) = build_service(options, &herdr, &broadcast)?;
 	// Its stop closes what it opened (the catalog, the day's stores) and herdr's connection.
 	undo.push(undo_service(&service));
 	let phone = start_phone(&service, &asking.popups);
@@ -690,22 +617,12 @@ async fn start_rest(
 	let close = close_of(&rig, &stops);
 	let mut routes: Vec<Box<dyn Route>> = Vec::new();
 	let closing = Arc::clone(&stops);
-	let actions = Arc::clone(&service) as Arc<dyn BriefActions>;
-	let brief_routes = BriefRoutes::new(
-		Arc::new({
-			let port = Arc::clone(&port);
-			move || port.load(Ordering::SeqCst)
-		}),
-		actions,
-	);
-	let pages = pages_of(&tokens, (&codes, &port), brief_routes, Box::new(move || closing.stopping()));
-	let guard: Guard = Arc::new(|response, _port| guarded(response));
+	let health = health_route(&tokens.api, move || closing.stopping());
 	let feed = feed_socket(Arc::clone(&service) as Arc<dyn FeedService>);
-	routes.push(Box::new(feed_route(&tokens.api, guard, feed)));
-	let handle = listen(options.port.unwrap_or_else(configured_port), served(routes, pages))?;
+	routes.push(Box::new(feed_route(&tokens.api, feed)));
+	let handle = listen(options.port.unwrap_or_else(configured_port), served(routes, health))?;
 	*locked(&listening) = Some(handle.clone());
 	undo.push(undo_server(&handle));
-	port.store(handle.port(), Ordering::SeqCst);
 	// The panes' omps connect to the bridge on the port the server got (0675); it listens before the service starts the
 	// boss, whose environment names it.
 	bridge.listen(handle.port(), &tokens.api, &(Arc::clone(&service) as Arc<dyn BridgeService>))?;
@@ -728,7 +645,7 @@ async fn start_rest(
 		token: tokens.api,
 		bridge,
 		service,
-		inner: Arc::new(Inner { codes, stops, close, question: asking.question, popups: asking.popups, keys }),
+		inner: Arc::new(Inner { stops, close, question: asking.question, popups: asking.popups, keys }),
 	})
 }
 

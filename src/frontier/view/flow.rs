@@ -1,0 +1,285 @@
+//! A flow drawn on a canvas (0721): its nodes placed by `layout.rs`'s layers and orders, left to right (top down with 4
+//! or more layers or in a narrow window), curved edges with their labels, the active node ringed, and the first-open
+//! entrance of `motion.rs`.
+
+use std::collections::HashMap;
+
+use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Text};
+use iced::{Point, Rectangle, Renderer, Size, Theme, alignment, mouse};
+
+use crate::frontier::brief::model::{FlowEdge, FlowNode, NodeState};
+use crate::frontier::view::motion::{Motion, edges_at, node_at};
+use crate::frontier::view::style::{self, Colours, fade};
+
+#[cfg(test)]
+#[path = "flow_tests.rs"]
+mod tests;
+
+/// A node's box.
+pub const NODE_W: f32 = 200.0;
+/// A node's height: its label and one line under it.
+pub const NODE_H: f32 = 56.0;
+/// Space between layers along the flow.
+const LAYER_GAP: f32 = 64.0;
+/// Space between nodes of one layer.
+const NODE_GAP: f32 = 16.0;
+/// Room around the drawing for the ring and the edges that loop back.
+const PAD: f32 = 24.0;
+/// The narrowest window a flow is drawn left to right in.
+pub const NARROW: f32 = 720.0;
+
+/// One edge's curve: start, two control points, end, and where its label sits.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Curve {
+	pub from: Point,
+	pub c1: Point,
+	pub c2: Point,
+	pub to: Point,
+	pub label: Option<String>,
+	pub label_at: Point,
+	/// The label sits beside the curve (top down), not above it.
+	pub beside: bool,
+}
+
+/// A flow placed: the drawing's size, each node's box (in the nodes' order) and each edge's curve.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Shape {
+	pub size: Size,
+	pub boxes: Vec<Rectangle>,
+	pub curves: Vec<Curve>,
+}
+
+/// Which way a flow runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+	/// Left to right, a layer a column.
+	Across,
+	/// Top down, a layer a row.
+	Down,
+}
+
+/// How a flow is drawn: top down with 4 or more layers or in a window narrower than 720 px, else left to right.
+pub fn direction(nodes: &[FlowNode], width: f32) -> Direction {
+	if nodes.iter().map(|node| node.layer).max().unwrap_or(0) >= 3 || width < NARROW {
+		Direction::Down
+	} else {
+		Direction::Across
+	}
+}
+
+/// The point of a cubic Bézier at `t`.
+fn at(p: [Point; 4], t: f32) -> Point {
+	let u = 1.0 - t;
+	let (a, b, c, d) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+	Point::new(a * p[0].x + b * p[1].x + c * p[2].x + d * p[3].x, a * p[0].y + b * p[1].y + c * p[2].y + d * p[3].y)
+}
+
+/// The first `t` of a cubic Bézier, as a Bézier of its own (de Casteljau).
+pub fn split(p: [Point; 4], t: f32) -> [Point; 4] {
+	let lerp = |a: Point, b: Point| Point::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+	let (ab, bc, cd) = (lerp(p[0], p[1]), lerp(p[1], p[2]), lerp(p[2], p[3]));
+	let (abc, bcd) = (lerp(ab, bc), lerp(bc, cd));
+	[p[0], ab, abc, lerp(abc, bcd)]
+}
+
+/// Places a flow whose nodes carry their layers and orders.
+pub fn shape(nodes: &[FlowNode], edges: &[FlowEdge], direction: Direction) -> Shape {
+	let layers = nodes.iter().map(|node| node.layer + 1).max().unwrap_or(0);
+	let mut per_layer = vec![0_usize; layers];
+	for node in nodes {
+		per_layer[node.layer] = per_layer[node.layer].max(node.order + 1);
+	}
+	let widest = per_layer.iter().copied().max().unwrap_or(0) as f32;
+	// Along the flow a layer takes a node and a gap; across it, the widest layer sets the room and the rest centre.
+	let (along, across) = match direction {
+		Direction::Down => (NODE_H, NODE_W),
+		Direction::Across => (NODE_W, NODE_H),
+	};
+	let room = widest * (across + NODE_GAP) - NODE_GAP;
+	let boxes: Vec<Rectangle> = nodes
+		.iter()
+		.map(|node| {
+			let count = per_layer[node.layer] as f32;
+			let offset = (room - (count * (across + NODE_GAP) - NODE_GAP)) / 2.0;
+			let main = PAD + node.layer as f32 * (along + LAYER_GAP);
+			let cross = PAD + offset + node.order as f32 * (across + NODE_GAP);
+			let (x, y) = match direction {
+				Direction::Down => (cross, main),
+				Direction::Across => (main, cross),
+			};
+			Rectangle::new(Point::new(x, y), Size::new(NODE_W, NODE_H))
+		})
+		.collect();
+	let length = PAD * 2.0 + layers as f32 * (along + LAYER_GAP) - LAYER_GAP;
+	let breadth = PAD * 2.0 + room.max(0.0);
+	// Top down, the edges that go back loop out on the right: room for them.
+	let size = match direction {
+		Direction::Down => Size::new(breadth + LOOP, length),
+		Direction::Across => Size::new(length, breadth),
+	};
+	let index: HashMap<&str, usize> = nodes.iter().enumerate().map(|(i, node)| (node.id.as_str(), i)).collect();
+	let curves = edges
+		.iter()
+		.filter_map(|edge| {
+			let (a, b) = (*index.get(edge.from.as_str())?, *index.get(edge.to.as_str())?);
+			Some(curve(boxes[a], boxes[b], nodes[b].layer > nodes[a].layer, direction, edge.label.clone()))
+		})
+		.collect();
+	Shape { size, boxes, curves }
+}
+
+/// How far an edge that goes back loops out of the boxes, top down.
+const LOOP: f32 = 72.0;
+
+/// An edge from box `a` to box `b`: forward along the flow, or a loop out to the side when it goes back. A label sits
+/// above the curve's middle left to right, beside it top down.
+fn curve(a: Rectangle, b: Rectangle, forward: bool, direction: Direction, label: Option<String>) -> Curve {
+	let down = direction == Direction::Down;
+	let (from, to) = match (forward, down) {
+		(true, true) => (Point::new(a.center_x(), a.y + a.height), Point::new(b.center_x(), b.y)),
+		(false, true) => (Point::new(a.x + a.width, a.center_y()), Point::new(b.x + b.width, b.center_y())),
+		_ => (Point::new(a.x + a.width, a.center_y()), Point::new(b.x, b.center_y())),
+	};
+	let (c1, c2) = match (forward, down) {
+		(true, false) => {
+			let dx = ((to.x - from.x) / 2.0).max(24.0);
+			(Point::new(from.x + dx, from.y), Point::new(to.x - dx, to.y))
+		}
+		(true, true) => {
+			let dy = ((to.y - from.y) / 2.0).max(24.0);
+			(Point::new(from.x, from.y + dy), Point::new(to.x, to.y - dy))
+		}
+		(false, false) => {
+			let lift = PAD.min(a.y.min(b.y)) + a.height / 2.0;
+			(Point::new(from.x + 60.0, from.y - lift), Point::new(to.x - 60.0, to.y - lift))
+		}
+		(false, true) => (Point::new(from.x + LOOP, from.y), Point::new(to.x + LOOP, to.y)),
+	};
+	let middle = at([from, c1, c2, to], 0.5);
+	let label_at = match direction {
+		Direction::Down => Point::new(middle.x + 8.0, middle.y),
+		Direction::Across => Point::new(middle.x, middle.y - 4.0),
+	};
+	Curve { from, c1, c2, to, label, label_at, beside: down }
+}
+
+/// `text` cut to what fits one line of `room` px at `size` px (an average glyph is about half an em), with `…` when
+/// cut.
+pub fn fit(text: &str, room: f32, size: f32) -> String {
+	let most = (room / (size * 0.5)).floor().max(1.0) as usize;
+	if text.chars().count() <= most {
+		return text.to_owned();
+	}
+	let kept: String = text.chars().take(most.saturating_sub(1)).collect();
+	format!("{}\u{2026}", kept.trim_end())
+}
+
+/// The canvas program of one flow: what it draws `elapsed` ms after the window first opened.
+pub struct FlowCanvas<'a> {
+	pub nodes: &'a [FlowNode],
+	pub shape: Shape,
+	pub elapsed: f32,
+	pub motion: Motion,
+}
+
+fn state_colour(c: &Colours, state: NodeState) -> iced::Color {
+	match state {
+		NodeState::Done => c.green,
+		NodeState::Active => c.blue,
+		NodeState::Failed => c.red,
+		NodeState::Pending => c.control,
+	}
+}
+
+impl FlowCanvas<'_> {
+	fn draw_edges(&self, frame: &mut Frame, c: &Colours) {
+		let (opacity, drawn) = edges_at(self.elapsed, self.motion);
+		for curve in &self.shape.curves {
+			let whole = [curve.from, curve.c1, curve.c2, curve.to];
+			let part = if drawn < 1.0 { split(whole, drawn) } else { whole };
+			let path = Path::new(|p| {
+				p.move_to(part[0]);
+				p.bezier_curve_to(part[1], part[2], part[3]);
+			});
+			frame.stroke(&path, Stroke::default().with_color(fade(c.control, opacity)).with_width(1.25));
+			if drawn >= 1.0 {
+				let head = Path::circle(curve.to, 2.5);
+				frame.fill(&head, fade(c.control, opacity));
+				if let Some(label) = &curve.label {
+					frame.fill_text(Text {
+						content: label.clone(),
+						position: curve.label_at,
+						color: fade(c.muted, opacity),
+						size: style::META.into(),
+						font: style::ui_font(),
+						align_x: if curve.beside { alignment::Horizontal::Left } else { alignment::Horizontal::Center }
+							.into(),
+						align_y: if curve.beside { alignment::Vertical::Center } else { alignment::Vertical::Bottom },
+						..Text::default()
+					});
+				}
+			}
+		}
+	}
+
+	fn draw_node(&self, frame: &mut Frame, c: &Colours, node: &FlowNode, at: Rectangle) {
+		let (opacity, rise) = node_at(self.elapsed, node.layer, self.motion);
+		let top = Point::new(at.x, at.y + rise);
+		let body = Path::rounded_rectangle(top, at.size(), style::RADIUS.into());
+		frame.fill(&body, fade(c.raised, opacity));
+		let edge = state_colour(c, node.state);
+		frame.stroke(&body, Stroke::default().with_color(fade(edge, opacity)).with_width(1.0));
+		if node.state == NodeState::Active {
+			let ring = Path::rounded_rectangle(
+				Point::new(top.x - 3.0, top.y - 3.0),
+				Size::new(at.width + 6.0, at.height + 6.0),
+				(style::RADIUS + 3.0).into(),
+			);
+			frame.stroke(&ring, Stroke::default().with_color(fade(c.blue, 0.45 * opacity)).with_width(2.0));
+		}
+		let label = Text {
+			content: fit(&node.label, at.width - 24.0, style::LABEL),
+			position: Point::new(top.x + 12.0, top.y + 10.0),
+			max_width: at.width - 24.0,
+			color: fade(c.fg, opacity),
+			size: style::LABEL.into(),
+			font: style::ui_font(),
+			..Text::default()
+		};
+		frame.fill_text(label);
+		let under =
+			[node.group.as_deref(), node.detail.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+		if !under.is_empty() {
+			frame.fill_text(Text {
+				content: fit(&under, at.width - 24.0, style::META),
+				position: Point::new(top.x + 12.0, top.y + 32.0),
+				max_width: at.width - 24.0,
+				color: fade(c.muted, opacity),
+				size: style::META.into(),
+				font: style::ui_font(),
+				..Text::default()
+			});
+		}
+	}
+}
+
+impl<Message> canvas::Program<Message> for FlowCanvas<'_> {
+	type State = ();
+
+	fn draw(
+		&self,
+		_state: &(),
+		renderer: &Renderer,
+		_theme: &Theme,
+		bounds: Rectangle,
+		_cursor: mouse::Cursor,
+	) -> Vec<Geometry> {
+		let c = style::colours();
+		let mut frame = Frame::new(renderer, bounds.size());
+		self.draw_edges(&mut frame, &c);
+		for (node, at) in self.nodes.iter().zip(&self.shape.boxes) {
+			self.draw_node(&mut frame, &c, node, *at);
+		}
+		vec![frame.into_geometry()]
+	}
+}

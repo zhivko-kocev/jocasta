@@ -26,13 +26,13 @@ While threads work, you keep talking to the boss. It tells you when one needs yo
 
 - **One boss, many threads.** The boss starts, watches and steers threads; it never edits your code itself. Threads run in parallel, each isolated on its own branch.
 - **Plans before code.** Every thread starts in omp's plan mode and waits for your approval. A thread can carry `done_when` commands, and its review runs them.
-- **Reviews you can trust.** When a thread finishes, a brief opens in your browser with its diff, its checks and the reviewer's notes, each note machine-checked against the committed code. A review fails if the change weakens the tests (a removed test, fewer assertions, an added skip). Design findings are judged against a shipped code-quality rubric.
+- **Reviews you can trust.** When a thread finishes, its brief opens in a window of its own with its diff, its checks and the reviewer's notes, each note machine-checked against the committed code. A review fails if the change weakens the tests (a removed test, fewer assertions, an added skip). Design findings are judged against a shipped code-quality rubric.
 - **`today`.** Beside the boss: what needs you, what's underway, what landed today, your calendar, your model quota and today's spend, your notes, and optional weather and news.
 - **Cost in view.** Each thread shows its spend, its peak context, its cache hits and its compactions. A thread warns you at $50, and the tab bar shows today's total.
 - **Checks once per tree.** A project's checks run once for each git tree state and the result is reused, so an unchanged tree is never tested twice.
 - **Guard rails.** A shipped rule list stops or asks about destructive commands (force pushes, `reset --hard`, recursive deletes, reading tokens). Merges, PRs and other irreversible steps need a code that you type into a question drawn over your terminal. A push to `main` asks you once per repo.
 - **Memory across sessions.** `history_search` lets every agent search past sessions of the same project.
-- **Briefs.** The boss's `show` draws animated diagrams, code maps and diffs as pages in your browser, from a spec. There is no free-hand drawing: you ask for a new picture.
+- **Briefs.** The boss's `show` draws animated diagrams, code maps and diffs in a native window, from a spec. There is no free-hand drawing: you ask for a new picture. `jocasta view <brief-id>` opens a stored brief again.
 - **Your inbox in one place.** GitHub and Azure DevOps reviews and failed pipelines, plus an iCal calendar, appear in `today`.
 - **Nothing runs behind your back.** When you close Jocasta, everything it started stops. Threads continue where they left off the next time you open it.
 
@@ -43,8 +43,7 @@ While threads work, you keep talking to the boss. It tells you when one needs yo
 - The terminal shell needs no install: it is built into `jocasta`.
 - **git**, version 2.54 or newer for the push check.
 - **[mise](https://mise.jdx.dev)**: installs Jocasta on Linux and macOS. On every system, setup pins gh with it, and each project can have its own check and test tasks.
-- A browser, for the briefs.
-- **On Linux and macOS:** a terminal that sends Alt and Shift keys through the kitty keyboard protocol: foot, kitty, WezTerm or Ghostty. **On Linux** also `notify-send` (libnotify) for notifications and `xdg-open` (xdg-utils) to open briefs and links.
+- **On Linux and macOS:** a terminal that sends Alt and Shift keys through the kitty keyboard protocol: foot, kitty, WezTerm or Ghostty. **On Linux** also `notify-send` (libnotify) for notifications and `xdg-open` (xdg-utils) to open links and screenshots.
 
 When something here is missing, Jocasta says so once at start, in a notification and in red at the top of `today`.
 
@@ -191,7 +190,7 @@ mise run check                              # lint, type checks and every test
 mise run build                              # release build into dist/
 ```
 
-Jocasta is written in Rust. The brief pages' script is plain JavaScript, checked with Bun. To install your own build, set `JOCASTA_INSTALL_FROM` to the `dist` folder and run `scripts/install.ps1` (Windows) or `scripts/install.sh` (Linux and macOS). Read [CONTRIBUTING.md](CONTRIBUTING.md) for how changes are made here, and the [manual's development section](https://github.com/zhivko-kocev/jocasta/blob/main/docs/manual.md#development) for the details.
+Jocasta is written in Rust; its brief windows are drawn with [iced](https://iced.rs). The docs and config checks are TypeScript, run with Bun. To install your own build, set `JOCASTA_INSTALL_FROM` to the `dist` folder and run `scripts/install.ps1` (Windows) or `scripts/install.sh` (Linux and macOS). Read [CONTRIBUTING.md](CONTRIBUTING.md) for how changes are made here, and the [manual's development section](https://github.com/zhivko-kocev/jocasta/blob/main/docs/manual.md#development) for the details.
 
 ## Credits
 

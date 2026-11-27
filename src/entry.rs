@@ -361,7 +361,7 @@ async fn run_route(target: Route, calendar_env: Option<String>) -> Result<i32> {
 		Route::Uninstall => run_uninstall_route().await,
 		Route::Diagnose => run_diagnose_route().await,
 		Route::Status => Ok(run_status_json(&ServiceCli).await),
-		Route::Surface => unreachable!("`main` runs this before Jocasta's runtime exists"),
+		Route::Surface | Route::View { .. } => unreachable!("`main` runs these before Jocasta's runtime exists"),
 	}
 }
 
@@ -402,6 +402,10 @@ pub fn main() -> ExitCode {
 	// before any thread starts.
 	let calendar_env = take_calendar_env();
 	take_source_envs();
+	// A brief's window (0721): iced runs its own event loop and runtime on this thread.
+	if let Route::View { id } = &target {
+		return crate::frontier::view::run(id);
+	}
 	let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
 		Ok(runtime) => runtime,
 		Err(error) => {

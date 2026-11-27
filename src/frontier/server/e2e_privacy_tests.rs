@@ -13,7 +13,6 @@ use serde_json::{Value, json};
 use tokio::net::TcpListener;
 
 use crate::frontier::brief::model::{Brief, Card, Kind, Proof, Severity, Verdict};
-use crate::frontier::brief::routes::BriefActions;
 use crate::frontier::brief::{BriefLinks, store};
 use crate::frontier::protocol::ServerMessage;
 use crate::frontier::server::bridge::BridgeService;
@@ -64,12 +63,12 @@ fn canaries(extra: &[&str]) -> Vec<String> {
 	CONTENT.iter().chain(extra).map(|canary| (*canary).to_owned()).collect()
 }
 
-/// The page server's stand-in: links by id, no browser.
+/// The brief windows' stand-in: links by id, no window.
 struct NoBrowser;
 
 impl BriefLinks for NoBrowser {
 	fn url(&self, id: &str) -> String {
-		format!("http://127.0.0.1:1/brief/{id}")
+		format!("jocasta:brief/{id}")
 	}
 
 	fn open(&self, _id: &str) {}
@@ -406,12 +405,14 @@ async fn no_canary_reaches_a_model_a_push_a_log_or_a_file_a_model_reads_and_only
 			answers.push((format!("stop {pane}"), context));
 		}
 
-		// A reword whose instruction holds the Jira token: omp's argv holds `[secret]`.
+		// A reword (a brief window's `brief act`, 0721) whose instruction holds the Jira token: omp's argv holds
+		// `[secret]`.
 		let brief = review_brief();
 		let instruction = format!("shorter, and mention {JIRA_TOKEN}");
-		BriefActions::act(&*server.service, brief, json!({ "op": "reword", "card": "n1", "instruction": instruction }))
-			.await
-			.expect("the reword runs");
+		let action = json!({ "op": "reword", "card": "n1", "instruction": instruction });
+		let args = json!({ "id": brief, "action": action });
+		let reply = server.service.cli_call("brief act", args.as_object().unwrap()).await;
+		assert_ne!(reply.is_error, Some(true), "the reword runs: {}", reply.text);
 		let argv = fs::read_to_string(reword_dir.join("omp-args.txt")).expect("omp was run");
 		assert!(argv.contains("[secret]") && !argv.contains(JIRA_TOKEN), "{argv}");
 		answers.push(("reword argv".to_owned(), argv));

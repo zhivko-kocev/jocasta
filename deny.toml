@@ -12,6 +12,7 @@ ignore = [
 	{ id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained, no fix; rmcp and icalendar depend on it (0647)" },
 	{ id = "RUSTSEC-2026-0555", reason = "chrono-tz is unmaintained, no fix; icalendar depends on it (0647)" },
 	{ id = "RUSTSEC-2026-0441", reason = "pin-utils is unmaintained, no fix; async-imap 0.12.0 depends on it (0680)" },
+	{ id = "RUSTSEC-2026-0192", reason = "ttf-parser is unmaintained, no fix; iced 0.14's text (fontdb, cosmic-text) reads fonts with it (0721)" },
 ]
 
 [licenses]

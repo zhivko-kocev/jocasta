@@ -14,16 +14,6 @@ use crate::shared::private::Private;
 
 /// The WebSocket path.
 pub const WS_PATH: &str = "/ws";
-/// The query parameter a browser page opens with: `http://127.0.0.1:<port>/?t=<code>`, a one-time launch code the
-/// service swaps for the page cookie (0254, SEC-LOC-11).
-pub const TOKEN_QUERY: &str = "t";
-/// The page cookie's name before its port (0254).
-const TOKEN_COOKIE: &str = "jocasta_service";
-
-/// The page cookie of the service on `port` (SEC-NET-4): cookies aren't kept apart by port, so the name is.
-pub fn token_cookie(port: u16) -> String {
-	format!("{TOKEN_COOKIE}_{port}")
-}
 
 /// What herdr's client shell and the service trade over herdr's client connection (fork plan phase 5), as
 /// `EndpointControl` messages of these kinds, each with JSON data. The service sends [`SHELL_FEED`] (a
@@ -1077,9 +1067,8 @@ mod tests {
 	}
 
 	#[test]
-	fn the_cookie_is_named_after_the_port_and_the_shell_kinds_carry_the_prefix_herdr_routes_by() {
-		assert_eq!(token_cookie(5173), "jocasta_service_5173");
-		assert_eq!((WS_PATH, TOKEN_QUERY), ("/ws", "t"));
+	fn the_feed_path_and_the_shell_kinds_carry_the_prefix_herdr_routes_by() {
+		assert_eq!(WS_PATH, "/ws");
 		let kinds = [SHELL_FEED, SHELL_BOSS, SHELL_QUESTION, SHELL_GONE, SHELL_ANSWER, SHELL_ANSWERED, SHELL_ACTION];
 		assert!(kinds.iter().all(|kind| kind.starts_with(crate::frontier::server::native::KIND_PREFIX)));
 		wire(&AnswerReply::Wrong { left: Some(2) }, &json!({"type": "wrong", "left": 2}));

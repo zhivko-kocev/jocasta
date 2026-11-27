@@ -1,5 +1,5 @@
 //! Tests of `server.rs`: the cases of `test/frontier/server/server.test.ts` that need a running server (the pure ones
-//! are in `page_routes_tests.rs`, `routes_tests.rs` and `close_tests.rs`), and the server-level cases of
+//! are in `routes_tests.rs` and `close_tests.rs`), and the server-level cases of
 //! `pane-hook-env.test.ts`. The pieces of `shutdown.test.ts`, `popups.test.ts` and
 //! `weekly-scorecard.test.ts` are in their own files beside it.
 
@@ -9,7 +9,7 @@ use std::net::TcpListener;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::frontier::protocol::{ServerMessage, token_cookie};
+use crate::frontier::protocol::ServerMessage;
 use crate::frontier::server::helpers::{
 	Page, boss_pane, http, start_test_server, until, with_server, with_test_defaults,
 };
@@ -29,55 +29,25 @@ async fn status(request: reqwest::RequestBuilder) -> u16 {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn the_api_takes_the_token_as_a_bearer_only_a_pages_one_time_code_becomes_its_own_per_port_cookie_never_the_token()
- {
+async fn the_api_takes_the_token_as_a_bearer_only_and_no_page_is_served_0721() {
 	let _j = temp_jocasta();
 	with_server(ServerOptions::default(), |server| async move {
 		let base = format!("http://127.0.0.1:{}", server.port);
 		let client = http();
 		let get = |path: &str| client.get(format!("{base}{path}"));
-		assert_eq!(status(get("/")).await, 403);
+		// No pages (0721): a brief is a window, not a URL; nothing answers but the API.
+		for path in ["/", "/brief/show-1", "/brief/show-1.json", "/brief/assets/brief.js", "/?t=00"] {
+			assert_eq!(status(get(path)).await, 404, "{path}");
+		}
+		let act = client.post(format!("{base}/brief/show-1/act")).header("content-type", "application/json").body("{}");
+		assert_eq!(status(act).await, 404);
 		assert_eq!(status(get("/health")).await, 403);
 		assert_eq!(status(get("/ws").header("upgrade", "websocket")).await, 403);
-		assert_eq!(status(get(&format!("/?t={}", "0".repeat(64)))).await, 403);
-		// A token of the right length in characters but not in bytes is refused, not an error (SE-3).
-		assert_eq!(status(get(&format!("/?t={}", "%C3%A9".repeat(64)))).await, 403);
-		// The API token is no page code, and no cookie.
-		assert_eq!(status(get(&format!("/?t={}", server.token))).await, 403);
-		let token_cookie_header = format!("{}={}", token_cookie(server.port), server.token);
+		// The API token is no cookie.
+		let token_cookie_header = format!("jocasta_service_{}={}", server.port, server.token);
 		assert_eq!(status(get("/health").header("cookie", &token_cookie_header)).await, 403);
 		assert_eq!(status(get("/health").header("authorization", "Bearer wrong")).await, 403);
-
-		let url = server.server.page_url("/brief/show-1");
-		let shape = regex_lite_code(&url, &base);
-		assert!(shape, "{url}");
-		assert!(!url.contains(&server.token));
-		let login = client.get(&url).send().await.unwrap();
-		assert_eq!(login.status().as_u16(), 302);
-		assert_eq!(login.headers()["location"], "/brief/show-1");
-		let set_cookie = login.headers()["set-cookie"].to_str().unwrap().to_owned();
-		assert!(set_cookie.starts_with(&format!("{}=", token_cookie(server.port))), "{set_cookie}");
-		assert!(set_cookie.contains("HttpOnly"));
-		assert!(!set_cookie.contains(&server.token));
-		// The code is single use.
-		assert_eq!(status(client.get(&url)).await, 403);
-		let more = client.get(format!("{}&x=1", server.server.page_url("/brief/show-1"))).send().await.unwrap();
-		assert_eq!(more.headers()["location"], "/brief/show-1?x=1");
-		let cookie = set_cookie.split(';').next().unwrap().to_owned();
-
-		// The page cookie opens the pages, nothing of the API.
-		assert_eq!(status(get("/brief/show-9.json").header("cookie", &cookie)).await, 404);
-		assert_eq!(status(get("/brief/show-9.json")).await, 403);
-		// A brief's action from another origin is refused (0678).
-		let evil = client
-			.post(format!("{base}/brief/show-9/act"))
-			.header("cookie", &cookie)
-			.header("origin", "http://evil.test")
-			.header("content-type", "application/json")
-			.body("{}");
-		assert_eq!(status(evil).await, 403);
-		assert_eq!(status(get("/health").header("cookie", &cookie)).await, 403);
-		assert_eq!(status(get("/ws").header("cookie", &cookie).header("upgrade", "websocket")).await, 403);
+		assert_eq!(status(get("/ws").header("cookie", &token_cookie_header).header("upgrade", "websocket")).await, 403);
 
 		let health: Value = get("/health").bearer_auth(&server.token).send().await.unwrap().json().await.unwrap();
 		assert_eq!(health["pid"], std::process::id());
@@ -94,35 +64,6 @@ async fn the_api_takes_the_token_as_a_bearer_only_a_pages_one_time_code_becomes_
 		assert_eq!((hud.running, hud.blocked, hud.spend_today), (0, 0, Some(0.0)));
 		assert_ne!(hud.quiet, Some(true));
 		page.close();
-	})
-	.await;
-}
-
-/// Whether `url` is `<base>/?t=` and 64 lowercase hex digits.
-fn regex_lite_code(url: &str, base: &str) -> bool {
-	url.strip_prefix(&format!("{base}/brief/show-1?t=")).is_some_and(|code| {
-		code.len() == 64 && code.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-	})
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn a_browsers_page_from_an_earlier_run_gets_a_page_saying_so_and_what_to_do_with_no_token_in_it() {
-	let _j = temp_jocasta();
-	with_server(ServerOptions::default(), |server| async move {
-		let response = http()
-			.get(format!("http://127.0.0.1:{}/?review=r-1", server.port))
-			.header("accept", "text/html,application/xhtml+xml")
-			.header("cookie", format!("{}=stale", token_cookie(server.port)))
-			.send()
-			.await
-			.unwrap();
-		assert_eq!(response.status().as_u16(), 403);
-		assert!(response.headers()["content-type"].to_str().unwrap().contains("text/html"));
-		let html = response.text().await.unwrap();
-		assert!(html.contains(
-			"This Jocasta page is from an earlier run. Ask the boss to show it again; it opens a fresh page."
-		));
-		assert!(!html.contains(&server.token));
 	})
 	.await;
 }

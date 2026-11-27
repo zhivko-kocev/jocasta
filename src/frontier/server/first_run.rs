@@ -41,7 +41,7 @@ pub fn problems(facts: &Facts) -> Vec<String> {
 		found.push("notify-send isn't installed: install libnotify, or Jocasta's notifications stay off".to_owned());
 	}
 	if facts.xdg_open == Some(false) {
-		found.push("xdg-open isn't installed: install xdg-utils, or briefs and links won't open".to_owned());
+		found.push("xdg-open isn't installed: install xdg-utils, or links and screenshots won't open".to_owned());
 	}
 	if facts.keys == Some(false) {
 		found.push(

@@ -23,7 +23,6 @@ use tokio::sync::{OnceCell, watch};
 use tokio::task::JoinHandle;
 
 use crate::frontier::brief::BriefLinks;
-use crate::frontier::brief::routes::BriefActions;
 use crate::frontier::protocol::{
 	BriefLink, ClientMessage, Dashboard, Hud, Leftover, PrFacts, ServerMessage, ServiceHealth, ServiceName,
 	ServiceState, ToastLevel, ToastReason, Today,
@@ -32,7 +31,7 @@ use crate::frontier::server::allow::Confirm;
 use crate::frontier::server::asker::{Ask, Notifier};
 use crate::frontier::server::boss::fresh_session;
 use crate::frontier::server::bridge::{Bridge, BridgeService, PaneAgent, PaneEvent, Resolved, Role};
-use crate::frontier::server::brief_actions::{self, brief_of_link};
+use crate::frontier::server::brief_actions::brief_of_link;
 use crate::frontier::server::checks::CheckRunner;
 use crate::frontier::server::ci_fix;
 use crate::frontier::server::close::CloseService;
@@ -963,7 +962,7 @@ impl JocastaService {
 			| ClientMessage::BriefMorning => {}
 			ClientMessage::PaneFocus { pane_id } => self.ctx.herdr.focus(&pane_id).await?,
 			ClientMessage::LinkOpen { url } => {
-				// A brief's link (the Done toast's) opens its page with a fresh launch code (0678).
+				// A brief's link (`today`'s BRIEFS row, the Done toast's) opens its window (0721).
 				if let (Some(id), Some(briefs)) = (brief_of_link(&self.ctx, &url), self.ctx.options.briefs.as_ref()) {
 					briefs.open(&id);
 					return Ok(());
@@ -976,13 +975,6 @@ impl JocastaService {
 			}
 		}
 		Ok(())
-	}
-}
-
-impl BriefActions for JocastaService {
-	fn act(&self, id: String, action: Value) -> BoxFuture<'static, Result<Value>> {
-		let (ctx, tools) = (Arc::clone(&self.ctx), self.tools.clone());
-		Box::pin(async move { brief_actions::act(&ctx, &tools, &id, &action).await })
 	}
 }
 

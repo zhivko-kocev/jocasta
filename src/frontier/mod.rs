@@ -7,3 +7,4 @@ pub mod server;
 pub mod shell;
 pub mod today;
 pub mod tui;
+pub mod view;

@@ -36,7 +36,7 @@ fn each_missing_piece_is_said_with_its_fix_in_the_checks_order() {
 			"omp isn't on PATH: install omp, run omp, then /login",
 			"git 2.43 is older than 2.54: install git 2.54 or newer, or pushes to main, master and develop go unasked",
 			"notify-send isn't installed: install libnotify, or Jocasta's notifications stay off",
-			"xdg-open isn't installed: install xdg-utils, or briefs and links won't open",
+			"xdg-open isn't installed: install xdg-utils, or links and screenshots won't open",
 			"this terminal doesn't send Alt and Shift keys Jocasta needs; use foot, kitty, WezTerm or Ghostty",
 		]
 	);

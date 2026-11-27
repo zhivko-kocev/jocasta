@@ -55,16 +55,9 @@ struct Running {
 	client: reqwest::Client,
 }
 
-fn guard() -> Guard {
-	Arc::new(|mut response, port| {
-		response.headers_mut().insert("x-guarded", port.to_string().parse().unwrap());
-		response
-	})
-}
-
 fn running() -> Running {
 	let stand = Arc::new(Stand::default());
-	let route = feed_route("t", guard(), feed_socket(stand.clone()));
+	let route = feed_route("t", feed_socket(stand.clone()));
 	let server = listen(
 		0,
 		Served {
@@ -172,16 +165,16 @@ async fn a_clients_message_goes_to_the_service_and_its_reply_goes_to_that_client
 }
 
 #[tokio::test]
-async fn the_feed_is_for_the_bearer_only_and_no_other_origin_and_its_refusals_carry_the_pages_headers() {
+async fn the_feed_is_for_the_bearer_only_and_no_other_origin() {
 	let r = running();
 	let port = r.server.port();
-	let route = feed_route("t", guard(), feed_socket(r.stand.clone()));
+	let route = feed_route("t", feed_socket(r.stand.clone()));
 	assert!(Route::matches(&route, "/ws"));
 	assert!(!Route::matches(&route, "/ws/"));
 	for headers in [
 		vec![],
 		vec![("authorization", "Bearer nope".to_owned())],
-		// The page's cookie is no bearer (SEC-NET-4).
+		// A cookie is no bearer (SEC-NET-4).
 		vec![("cookie", format!("jocasta_service_{port}=t"))],
 		vec![("authorization", "Bearer t".to_owned()), ("origin", "https://evil.test".to_owned())],
 		vec![("authorization", "Bearer t".to_owned()), ("origin", format!("http://localhost:{port}"))],
@@ -190,7 +183,6 @@ async fn the_feed_is_for_the_bearer_only_and_no_other_origin_and_its_refusals_ca
 			panic!("{headers:?} connected")
 		};
 		assert_eq!(response.status(), 403, "{headers:?}");
-		assert_eq!(response.headers()["x-guarded"], port.to_string().as_str());
 		assert_eq!(response.body().as_deref(), Some(&b"Forbidden"[..]));
 	}
 	let own = vec![("authorization", "Bearer t".to_owned()), ("origin", format!("http://127.0.0.1:{port}"))];
@@ -200,12 +192,11 @@ async fn the_feed_is_for_the_bearer_only_and_no_other_origin_and_its_refusals_ca
 }
 
 #[tokio::test]
-async fn a_request_that_does_not_upgrade_is_a_guarded_400() {
+async fn a_request_that_does_not_upgrade_is_a_plain_400() {
 	let r = running();
 	let port = r.server.port();
 	let plain = r.client.get(format!("http://127.0.0.1:{port}/ws")).bearer_auth("t").send().await.unwrap();
 	assert_eq!(plain.status(), 400);
-	assert_eq!(plain.headers()["x-guarded"], port.to_string().as_str());
 	assert_eq!(plain.headers()["content-type"], "text/plain;charset=utf-8");
 	assert_eq!(plain.text().await.unwrap(), "Upgrade failed");
 	r.server.stop(true).await;
