@@ -13,8 +13,8 @@ Jocasta is a work surface around your daily omp, in three parts (0386, 0392, 055
 ## Prerequisites
 
 - Windows 11, Linux (x64) or macOS (Apple silicon). Windows 11 is in daily use; the Linux and macOS builds pass the test suite in CI (see "Linux and macOS" below).
-- omp on PATH, signed in (`omp`, then `/login`; 0386). This build is checked against omp 19.2.0 (0535, 0623, 0663, 0690; the fork build moved the pin). Dictation is omp's own: omp downloads its speech model on first use or with `omp setup speech` (0556).
-- [mise](https://mise.jdx.dev), optional: with it, setup pins gh (0476, 0542).
+- omp on PATH, signed in (`omp`, then `/login`; 0386). omp isn't pinned: use its latest release; this build was last checked with omp 19.2.1, `mise run omp-seams` checks the omp on PATH and the weekly `omp-latest` workflow opens an issue when the newest omp breaks a seam (0693, amending 0690). Dictation is omp's own: omp downloads its speech model on first use or with `omp setup speech` (0556).
+- [mise](https://mise.jdx.dev): the Linux and macOS install (0691); optional on Windows. With it, setup pins gh (0476, 0542).
 - git 2.54 or newer: the question about pushes to main, master and develop needs it (0613).
 - Linux and macOS: a terminal that speaks the kitty keyboard protocol, so Alt and Shift combinations reach Jocasta: foot, kitty, WezTerm or Ghostty. Linux also: `notify-send` (libnotify) for notifications and `xdg-open` (xdg-utils) for briefs and links.
 
@@ -37,10 +37,10 @@ $env:JOCASTA_INSTALL_FROM = "$PWD\dist"; .\scripts\install.ps1   # from the repo
 ### Linux and macOS
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/zhivko-kocev/jocasta/main/scripts/install.sh | sh
+mise use -g github:zhivko-kocev/jocasta
 ```
 
-Installs to `~/.local/lib/jocasta/` (or `JOCASTA_INSTALL_DIR`; 0692) and appends the folder to PATH in your shell's rc file (`~/.zshrc`, `~/.bashrc` or `~/.profile`), so open a new terminal afterwards. The folder rules, the checksum check and `install.json` are as on Windows. A local build installs with `JOCASTA_INSTALL_FROM="$PWD/dist" sh scripts/install.sh` after `mise run build` (`jocasta-<target>.tar.gz` and its `.sha256`).
+mise installs the latest release (tag `v<version>`, the asset named for your system: `jocasta-linux-x64.tar.gz` or `jocasta-darwin-arm64.tar.gz`), verifies the archive's GitHub build attestation and puts `jocasta`, with `config/` beside it, on PATH; `mise upgrade` upgrades (0691). Without mise, `curl -fsSL https://raw.githubusercontent.com/zhivko-kocev/jocasta/main/scripts/install.sh | sh` installs to `~/.local/lib/jocasta/` (or `JOCASTA_INSTALL_DIR`; 0692) and appends the folder to PATH in your shell's rc file (`~/.zshrc`, `~/.bashrc` or `~/.profile`), so open a new terminal afterwards. The folder rules, the checksum check and `install.json` are as on Windows. A local build installs with `JOCASTA_INSTALL_FROM="$PWD/dist" sh scripts/install.sh` after `mise run build` (`jocasta-<target>.tar.gz` and its `.sha256`).
 
 ## First run
 

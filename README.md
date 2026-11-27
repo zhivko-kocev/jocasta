@@ -39,10 +39,10 @@ While threads work, you keep talking to the boss. It tells you when one needs yo
 ## Requirements
 
 - **Windows 11, Linux (x64) or macOS (Apple silicon).** Windows 11 is in daily use; the Linux and macOS builds pass the test suite in CI.
-- **[omp](https://github.com/can1357/oh-my-pi)** on your PATH and signed in to a model provider: run `omp`, then `/login`. This release is checked against omp 19.2.0. Jocasta names no model: the boss and threads use your omp model roles, and a `--heavy` thread uses your `slow` role.
+- **[omp](https://github.com/can1357/oh-my-pi)** on your PATH and signed in to a model provider: run `omp`, then `/login`. Use omp's latest release: Jocasta isn't pinned to one, a weekly check against the newest omp reports what breaks, and this release was last checked with omp 19.2.1. Jocasta names no model: the boss and threads use your omp model roles, and a `--heavy` thread uses your `slow` role.
 - The terminal shell needs no install: it is built into `jocasta`.
 - **git**, version 2.54 or newer for the push check.
-- **[mise](https://mise.jdx.dev)** (optional). With it, setup pins gh, and each project can have its own check and test tasks.
+- **[mise](https://mise.jdx.dev)**: installs Jocasta on Linux and macOS. On every system, setup pins gh with it, and each project can have its own check and test tasks.
 - A browser, for the briefs.
 - **On Linux and macOS:** a terminal that sends Alt and Shift keys through the kitty keyboard protocol: foot, kitty, WezTerm or Ghostty. **On Linux** also `notify-send` (libnotify) for notifications and `xdg-open` (xdg-utils) to open briefs and links.
 
@@ -63,10 +63,12 @@ This installs to `%LOCALAPPDATA%\Programs\jocasta\` and adds that folder to your
 ### Linux and macOS
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/zhivko-kocev/jocasta/main/scripts/install.sh | sh
+mise use -g github:zhivko-kocev/jocasta
 ```
 
-This installs to `~/.local/lib/jocasta/` (set `JOCASTA_INSTALL_DIR` for another folder) and adds it to your PATH in your shell's rc file, so open a new terminal afterwards. The download is checked against a checksum committed in this repository. To upgrade, run the same command again; a running Jocasta keeps the old build until you close it and open it again.
+mise downloads the latest release for your system, checks GitHub's build attestation of the archive, and puts `jocasta` on your PATH. To upgrade, run `mise upgrade`; a running Jocasta keeps the old build until you close it and open it again.
+
+Without mise, `curl -fsSL https://raw.githubusercontent.com/zhivko-kocev/jocasta/main/scripts/install.sh | sh` installs to `~/.local/lib/jocasta/` (set `JOCASTA_INSTALL_DIR` for another folder) and adds it to your PATH in your shell's rc file, so open a new terminal afterwards; the download is checked against a checksum committed in this repository, and running the same command again upgrades.
 
 To install a build of your own instead, run `mise run build` in this repository, then `JOCASTA_INSTALL_FROM="$PWD/dist" sh scripts/install.sh`.
 

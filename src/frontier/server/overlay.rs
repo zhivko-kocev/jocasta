@@ -177,6 +177,37 @@ mod tests {
 		assert!(text.ends_with("\n"));
 	}
 
+	/// The dotted paths of `value`'s leaves (a list is a leaf), as `mise run omp-seams` reads a settings file.
+	fn leaf_keys(prefix: &str, value: &Value, keys: &mut Vec<String>) {
+		match value.as_object() {
+			Some(map) => {
+				for (key, child) in map {
+					let path = if prefix.is_empty() { key.clone() } else { format!("{prefix}.{key}") };
+					leaf_keys(&path, child, keys);
+				}
+			}
+			None => keys.push(prefix.to_owned()),
+		}
+	}
+
+	#[test]
+	fn the_overlay_keys_omp_seams_checks_are_the_keys_the_overlay_writes_0693() {
+		let _j = temp_jocasta();
+		let mut written = Vec::new();
+		leaf_keys("", &crate::shared::yaml::parse_value(&overlay_text("acme")).unwrap(), &mut written);
+		let list = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts").join("omp-seams-overlay-keys.txt");
+		let mut listed: Vec<String> = fs::read_to_string(list)
+			.unwrap()
+			.lines()
+			.map(str::trim)
+			.filter(|line| !line.is_empty() && !line.starts_with('#'))
+			.map(str::to_owned)
+			.collect();
+		written.sort();
+		listed.sort();
+		assert_eq!(written, listed, "scripts/omp-seams-overlay-keys.txt must list overlay_text's keys");
+	}
+
 	#[tokio::test]
 	async fn ensure_overlay_writes_once_and_parallel_starts_share_one_write() {
 		let _j = temp_jocasta();

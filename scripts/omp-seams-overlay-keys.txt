@@ -1,0 +1,17 @@
+# The omp settings `overlay_text` (src/frontier/server/overlay.rs) writes into every project's overlay, one dotted key
+# a line, for `mise run omp-seams` (0693). overlay.rs's tests fail when this list and the overlay's keys differ.
+memory.backend
+task.completionProbe
+task.maxRecursionDepth
+async.widgets
+plan.defaultOnStartup
+compaction.methodOrder
+compaction.thresholdTokens
+compaction.idleEnabled
+compaction.idleThresholdTokens
+contextFiles.extra
+skills.customDirectories
+dev.autoqa
+disabledProviders
+modelRoles.web
+share.serverUrl

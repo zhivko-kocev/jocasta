@@ -1,6 +1,6 @@
 <!--
-Ponytail 5.2.0, AGENTS.md form, from the npm package @dietrichgebert/ponytail@5.2.0
-(source https://github.com/DietrichGebert/ponytail), plus Jocasta's "Running tests" section at the end (0469, from
+Ponytail 5.3.3, the upstream AGENTS.md form (https://github.com/DietrichGebert/ponytail, `AGENTS.md` at commit ebd8654,
+2026-11-22; re-read 2026-11-27, 0705: its text is 5.2.0's unchanged), plus Jocasta's "Running tests" section at the end (0469, from
 Omarchy's AGENTS.md). Jocasta changed three things, per 0612: the "Keep the structure the codebase already has" sentence
 and the "shortest working diff" bullet became one bullet ("Add nothing the task does not need. ..."); the comment bullet
 now asks for a comment on each exported function, class and type; the line about agents working on the ponytail repo

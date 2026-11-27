@@ -1,8 +1,9 @@
 // The guard every pane loads (0450, 0476, 0580), through H1's evaluator (the built `jocasta-bench h1-guard evaluate`,
 // the matcher `src/shared/guard.rs` it wraps): whitespace runs collapse, `*` is the only wildcard, the match is anchored and
 // case-sensitive, a deny or prompt rule fires on the whole command or any one segment of a compound one, and the first
-// matching rule wins. Each case runs again through omp's own resolver where omp 19.2.0 (H1's pinned omp) is installed
-// (`bench/h1-guard/omp-verdicts.ts`'s oracle: omp's `BashTool` approval and `resolveApproval` over the guard, nothing executed), asserting the
+// matching rule wins. Each case runs again through omp's own resolver wherever omp's package is installed, any version
+// (0693; last checked with omp 19.2.1), through `bench/h1-guard/omp-verdicts.ts`'s oracle run with `--any-version`
+// (omp's `BashTool` approval and `resolveApproval` over the guard, nothing executed), asserting the
 // same verdicts; without it (CI) those tests are skipped and say why. omp's verdict here is its approval: `bash.gitGuard`
 // is a refusal by omp's embedded shell at run time, not an approval, and H1's live check measures it (0580).
 
@@ -62,8 +63,8 @@ const evaluator: Resolver = async (corpus) => {
 	}
 };
 
-/** omp 19.2.0, H1's pinned omp: the oracle refuses any other version. */
-const PINNED_OMP = "19.2.0";
+/** The omp these verdicts were last checked with (0693); the oracle loads whichever omp is installed. */
+const PINNED_OMP = "19.2.1";
 
 /** What every answer line of the oracle starts with (`ORACLE_MARK` in `bench/h1-guard/omp-verdicts.ts`). */
 const ORACLE_MARK = "\u0001ORACLE ";
@@ -104,7 +105,7 @@ async function openOmp(): Promise<{ resolver: Resolver; empty: string; stop: () 
 	try {
 		const dir = await oracle.ask({ op: "find" });
 		if (dir === null) throw new Error("omp isn't installed (not on PATH, not in Bun's global install)");
-		await oracle.ask({ op: "load", omp: dir, anyVersion: false });
+		await oracle.ask({ op: "load", omp: dir, anyVersion: true });
 		const empty = mkdtempSync(join(tmpdir(), "jocasta-guard-omp-"));
 		await oracle.ask({ op: "judge-init", configFiles: [file], cwd: empty, agentDir: empty });
 		return {
@@ -140,8 +141,8 @@ afterAll(() => {
 /** Registers `check` once through the evaluator and once through omp's resolver (skipped, with why, without omp). */
 function both(name: string, check: (resolve: Resolver) => Promise<void>): void {
 	test(name, () => check(evaluator));
-	if ("resolver" in omp) test(`${name}, by omp ${PINNED_OMP}'s resolver`, () => check(omp.resolver));
-	else test.skip(`${name}, by omp ${PINNED_OMP}'s resolver (skipped: ${omp.skip})`, () => {});
+	if ("resolver" in omp) test(`${name}, by omp's resolver (last checked: ${PINNED_OMP})`, () => check(omp.resolver));
+	else test.skip(`${name}, by omp's resolver (skipped: ${omp.skip})`, () => {});
 }
 
 /** Every command in `expected` gets its verdict. */

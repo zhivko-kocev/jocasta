@@ -55,9 +55,9 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0046](0046-builtin-mcp-codemode-toolsearch.md) | Built-in MCP, Codemode and tool_search | feature | v1 | 0/0.2 | 2026-10-04 |  |
 | [0047](0047-share-command.md) | /share to a GitHub gist | feature | v1 | 0/0.2 | 2026-10-04 |  |
 | [0048](0048-telemetry.md) | Telemetry | product | decided | 0/0.2 | 2026-10-04 |  |
-| [0049](0049-install-scripts.md) | Install scripts | product | decided | 0/0.2 | 2026-10-04 | 0579, 0692 |
+| [0049](0049-install-scripts.md) | Install scripts | product | decided | 0/0.2 | 2026-10-04 | 0579, 0691, 0692 |
 | [0050](0050-self-upgrade.md) | Self-upgrade command | feature | after v1 | 0/0.2 | 2026-10-04 |  |
-| [0051](0051-releases.md) | Releases | product | decided | 0/0.2 | 2026-10-04 |  |
+| [0051](0051-releases.md) | Releases | product | decided | 0/0.2 | 2026-10-04 | 0691 |
 | [0052](0052-version-output.md) | --version output | product | decided | 0/0.2 | 2026-10-04 |  |
 | [0053](0053-bun-bootstrap-import.md) | Bun bootstrap import | product | decided | 0/0.2 | 2026-10-04 |  |
 | [0054](0054-config-dir.md) | Config dir | product | decided | 0/0.3 | 2026-10-04 |  |
@@ -695,8 +695,10 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0687](0687-thread-dependencies-and-running-limit.md) | Thread dependencies (`after`) and a running limit of 4 | product | v1 | lightweight program | 2026-11-24 |  |
 | [0688](0688-the-journal.md) | The journal: one append-only file of events | product | v1 | lightweight program | 2026-11-24 |  |
 | [0689](0689-sleeping-panes-in-process-and-footprint-count.md) | Sleeping panes drawn by the shell; the footprint counts Jocasta's own processes | product | v1 | lightweight program | 2026-11-25 |  |
-| [0690](0690-omp-19-2-0-pinned.md) | omp 19.2.0 is the pinned omp | product, benchmark | v1 | lightweight program | 2026-11-26 |  |
+| [0690](0690-omp-19-2-0-pinned.md) | omp 19.2.0 is the pinned omp | product, benchmark | v1 | lightweight program | 2026-11-26 | 0693 |
+| [0691](0691-releases-start-at-v0-1-0-mise-installs-them.md) | Releases start at v0.1.0; mise installs them | product | v1 | ultron 0.3 iteration, J10 | 2026-11-26 |  |
 | [0692](0692-unix-install-folder.md) | Unix install folder | product | v1 | ultron 0.3 iteration, J1 | 2026-11-26 |  |
+| [0693](0693-omp-is-not-pinned.md) | omp is not pinned | product, process | v1 | ultron 0.3 iteration, J10 | 2026-11-26 |  |
 | [0694](0694-jocasta-setup-yes.md) | `jocasta setup --yes` | product | v1 | ultron 0.3 iteration, J6 | 2026-11-26 |  |
 | [0695](0695-light-defaults.md) | Light defaults | product | v1 | ultron 0.3 iteration, J2 | 2026-11-26 |  |
 | [0696](0696-snapshot-local-commit-model-no-sleep-inhibitor-on-linux.md) | Snapshot: local commit model, no sleep inhibitor on Linux | product | v1 | ultron 0.3 iteration, J3 | 2026-11-26 |  |
@@ -708,3 +710,4 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0702](0702-unix-runtime.md) | Unix runtime | product | v1 | ultron 0.3 iteration, J1 | 2026-11-26 |  |
 | [0703](0703-first-run-checks.md) | First-run checks | product | v1 | ultron 0.3 iteration, J8 | 2026-11-26 |  |
 | [0704](0704-project-named-mise-file.md) | Project-named mise file | product | v1 | ultron 0.3 iteration, J9 | 2026-11-26 |  |
+| [0705](0705-ponytail-text-refreshed.md) | Ponytail text refreshed | product, prompts | v1 | ultron 0.3 iteration, J10 | 2026-11-26 |  |

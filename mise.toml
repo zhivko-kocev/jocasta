@@ -46,6 +46,11 @@ depends = ["verify"]
 description = "print omp's npm dist-tags and the last commit on its omp2 branch (0608)"
 run = "bun scripts/omp2-watch.ts"
 
+# Not part of `check`: it needs omp on PATH. The weekly `omp-latest` workflow runs it on the newest omp (0693).
+[tasks.omp-seams]
+description = "every omp setting Jocasta's shipped files and project overlay write is known to the omp on PATH (0693)"
+run = "bun scripts/omp-seams.ts"
+
 [tasks.build]
 description = "the per-platform build: cargo's release binaries, then dist/<target>/ and its archive (scripts/build.ts; 0636)"
 run = ["cargo build --release --locked --bin jocasta --bin jocasta-bench", "bun scripts/build.ts"]
