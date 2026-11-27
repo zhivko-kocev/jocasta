@@ -2,7 +2,7 @@
 
 **Run a team of coding agents from one conversation: each works on its own branch, and nothing lands until it is shown to work and you say so.**
 
-[![A finished thread's review page: Works, the System view, proven findings, then a pull request's comments with Polish, To English and the verdict](docs/media/review-page.gif)](docs/media/review-page.mp4)
+[![A finished thread's review page: Works, the System view, proven findings and the code behind Show code, then a pull request's page kept as a record](docs/media/review-page.gif)](docs/media/review-page.mp4)
 
 <sub>Jocasta 0.2's review windows, recorded in the test VM of [ultron](https://github.com/zhivko-kocev/ultron). [Full-quality video](docs/media/review-page.mp4).</sub>
 
@@ -42,7 +42,8 @@ All recorded with Jocasta 0.2 in ultron's test VM, with the placeholder project 
 
 | | |
 |---|---|
-| [![Review page](docs/media/review-page.gif)](docs/media/review-page.mp4) | **A review, top to bottom.** A finished thread's page: Works (a passed clean-room check, a failed try step), the System view with Before / After and Brings / Takes away, the thread's path, proven findings and the code behind *Show code*; then a pull request's page with comments written in Macedonian and Hebrew, Polish and To English on each, a comment of your own and the verdict buttons. [Video](docs/media/review-page.mp4) |
+| [![Review page](docs/media/review-page.gif)](docs/media/review-page.mp4) | **A review, top to bottom.** A finished thread's page: Works (a passed clean-room check, a failed try step), the System view with Before / After and Brings / Takes away, the thread's path, proven findings and the code behind *Show code*; then a pull request's page whose review has ended, kept as a record (no buttons). [Video](docs/media/review-page.mp4) |
+| ![A live pull-request review](docs/media/review-pr-live.webp) | **A live pull-request review.** Proven findings with *Show its code*, an opinion in Macedonian and your own comment mixing English and Hebrew, Polish and To English on each card, your own comment box, and the summary with a suggested English wording before Approve / Request changes / Comment. (Drawn by the same renderer offscreen: a live review needs a signed-in model.) |
 | [![Brief entrance](docs/media/brief-entrance.gif)](docs/media/brief-entrance.mp4) | **A brief from the boss's `show`.** "Invoice export: how it works now" draws in once when it opens; Play walks the pipeline node by node with its caption, then the files changed and the next steps. [Video](docs/media/brief-entrance.mp4) |
 | [![The board](docs/media/board.gif)](docs/media/board.mp4) | **The board on workspace 4.** Four threads start one after another; each row fades in with its phase, age and budget, under a header with open threads, running checks and today's spend. [Video](docs/media/board.mp4) |
 | [![Theme switch](docs/media/theme-switch.gif)](docs/media/theme-switch.mp4) | **Following the desktop.** The same brief under ultron's themes, among them Nord, Catppuccin Latte and Tokyo Night: the window takes the desktop's colours and font. [Video](docs/media/theme-switch.mp4) |
