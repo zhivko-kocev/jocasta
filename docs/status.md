@@ -140,6 +140,8 @@ W1, the board (0718, in its amended native form), is built: `jocasta board` and 
 
 B1's harness (0720) is built: on Linux the settings trials' watcher reads a run's peak as the largest sampled `VmRSS` sum over its process tree, every benchmark's `conditions` carry the machine stamp (`machine {os, kernel, cpu, memoryGb, gpu}`, `ompVersion`, `jocastaCommit`), and `jocasta-bench footprint --out <dir>` writes `footprint.json`. The Linux runs follow.
 
+Fixes from the second VM check (2026-11-27): the clean room builds its own image `jocasta-cleanroom:<hash>` from an inline Dockerfile (`jdxcode/mise` has no shell; 0708 amended). Not run against Docker here (the host user can't reach it); the VM run follows.
+
 Next: R9, the 0.2.0 release (bump `Cargo.toml`, tag `v0.2.0` once CI is green; ultron's skill line for `jocasta brief open`); T1 (0719); B1's Linux runs and the laptop's runbook (0720).
 
 Update this file when a slice's records are written, when its build lands, and when a grilling session stops (name the next slice); keep `AGENTS.md`'s one current-state line in step.

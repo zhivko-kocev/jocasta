@@ -1,4 +1,6 @@
-//! Clean-room runs (0708): a command run on one commit in a `jdxcode/mise` container that sees only the committed tree.
+//! Clean-room runs (0708): a command run on one commit in a container that sees only the committed tree. The image
+//! `jocasta-cleanroom:<hash>` is built on first use from [`DOCKERFILE`]: Debian slim with a shell, git, tar and a C
+//! toolchain, plus mise copied from mise's official image (`jdxcode/mise` alone has no shell).
 //! The commit goes in as a read-only tar (`git archive`) unpacked inside; the project's two mise files go in read-only
 //! as system config; tools and package caches live in the volume `jocasta-cache-<project id>`. No home folder, host
 //! environment variable or Docker socket goes in. The project's check (`verify`, else `test`) is found inside the
@@ -27,16 +29,28 @@ use crate::shared::settings::read_clean_room;
 #[path = "cleanroom_tests.rs"]
 mod tests;
 
-/// mise's official image.
-pub const IMAGE: &str = "jdxcode/mise:latest";
+/// The clean room's image, built locally by `docker build -t <image> -` with this text on stdin (no build context).
+pub const DOCKERFILE: &str = "FROM debian:stable-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git tar xz-utils unzip curl build-essential pkg-config && rm -rf /var/lib/apt/lists/*
+COPY --from=jdxcode/mise:latest /usr/local/bin/mise /usr/local/bin/mise
+ENTRYPOINT []
+";
+
+/// The image's tag: `jocasta-cleanroom:<first 12 hex of the Dockerfile's SHA-256>`, so a changed Dockerfile builds anew.
+pub fn image() -> String {
+	let digest: String =
+		Sha256::digest(DOCKERFILE.as_bytes()).iter().take(6).map(|byte| format!("{byte:02x}")).collect();
+	format!("jocasta-cleanroom:{digest}")
+}
+
 /// A check's time limit, as the check runner's.
 pub const CHECK_MS: i64 = 30 * 60_000;
 /// How many of a run's last output lines its result keeps.
 pub const TAIL_LINES: usize = 20;
 /// `docker info` answers within this or Docker counts as not running.
 const INFO_MS: i64 = 5_000;
-/// Pulling the image.
-const PULL_MS: i64 = 15 * 60_000;
+/// Building the image (pulls `debian:stable-slim` and `jdxcode/mise`, installs the packages).
+const BUILD_MS: i64 = 15 * 60_000;
 /// `git archive` and `git rev-parse` of the commit.
 const GIT_MS: i64 = 120_000;
 /// `docker rm -f` of a container past its limit.
@@ -142,7 +156,7 @@ fn docker_args(name: &str, tar: &Path, project_id: &str, files: &[(PathBuf, &str
 		argv.push("-e".to_owned());
 		argv.push(env.to_owned());
 	}
-	argv.extend(["-w", "/work", IMAGE, "sh", "-lc"].map(str::to_owned));
+	argv.extend(["-w".to_owned(), "/work".to_owned(), image(), "sh".to_owned(), "-lc".to_owned()]);
 	argv.push(format!(
 		"exec 2>&1; mkdir -p /work && tar -xf /src.tar -C /work && cd /work && mise install && mise reshim && export PATH=\"/cache/mise/shims:$PATH\" && {command}"
 	));
@@ -199,17 +213,29 @@ pub async fn unready() -> Option<String> {
 	image_missing().await
 }
 
-/// Why the image isn't there to run: `None` when it is (pulled now when it wasn't).
+/// `docker build`'s argv for the image `tag`: the Dockerfile comes on stdin, with no build context.
+fn build_args(tag: &str) -> Vec<String> {
+	["docker", "build", "-t", tag, "-"].map(str::to_owned).to_vec()
+}
+
+/// Why the image isn't there to run: `None` when it is (built now from [`DOCKERFILE`] when it wasn't).
 async fn image_missing() -> Option<String> {
+	let tag = image();
 	let quick = RunOptions { timeout_ms: Some(INFO_MS * 2), ..RunOptions::default() };
-	if run_program(&["docker", "image", "inspect", IMAGE], quick).await.is_ok_and(|run| run.code == Some(0)) {
+	if run_program(&["docker", "image", "inspect", tag.as_str()], quick).await.is_ok_and(|run| run.code == Some(0)) {
 		return None;
 	}
-	let pull = RunOptions { timeout_ms: Some(PULL_MS), ..RunOptions::default() };
-	match run_program(&["docker", "pull", IMAGE], pull).await {
+	let build = RunOptions {
+		stdin: Some(DOCKERFILE.as_bytes().to_vec()),
+		timeout_ms: Some(BUILD_MS),
+		end_with_jocasta: true,
+		..RunOptions::default()
+	};
+	match run_program(&build_args(&tag), build).await {
 		Ok(run) if run.code == Some(0) => None,
-		Ok(run) => Some(format!("the image {IMAGE} can't be pulled: {}", last_line(&run.stderr, &run.stdout))),
-		Err(error) => Some(format!("the image {IMAGE} can't be pulled: {error}")),
+		Ok(run) if run.timed_out => Some(format!("the image {tag} can't be built: it took over 15 minutes")),
+		Ok(run) => Some(format!("the image {tag} can't be built: {}", last_line(&run.stderr, &run.stdout))),
+		Err(error) => Some(format!("the image {tag} can't be built: {error}")),
 	}
 }
 
@@ -233,7 +259,7 @@ async fn result_file(project: &Project, commit: &str, files: &[(PathBuf, &str)])
 		return None;
 	}
 	let mut hash = Sha256::new();
-	hash.update(IMAGE.as_bytes());
+	hash.update(image().as_bytes());
 	for (file, target) in files {
 		hash.update(target.as_bytes());
 		hash.update(std::fs::read(file).unwrap_or_default());
@@ -243,7 +269,7 @@ async fn result_file(project: &Project, commit: &str, files: &[(PathBuf, &str)])
 }
 
 /// The project's check on `commit` in the clean room (0708): a stored result for the same tree and mise files, else a
-/// run; or why it isn't possible (off, Docker not running, the image not pullable, no `verify` or `test` task).
+/// run; or why it isn't possible (off, Docker not running, the image can't be built, no `verify` or `test` task).
 pub async fn check(project: &Project, commit: &str) -> Check {
 	if let Some(why) = off_for(project) {
 		return Check::NotPossible(why);

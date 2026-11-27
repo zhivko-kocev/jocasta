@@ -50,7 +50,24 @@ fn the_container_gets_the_commit_read_only_the_cache_volume_and_no_host_home_or_
 	assert!(!argv.iter().any(|word| word.starts_with("HOME=") || word.contains(":/root")), "no home folder");
 	assert_eq!(argv.iter().filter(|word| *word == "-v").count(), 1, "only the cache volume");
 	assert!(argv.last().unwrap().ends_with("&& mise run test"));
-	assert_eq!(argv[argv.len() - 4], IMAGE);
+	assert_eq!(argv[argv.len() - 4], image());
+	assert_eq!(argv[argv.len() - 3..argv.len() - 1], ["sh", "-lc"], "the image has a shell and no entrypoint");
+}
+
+#[test]
+fn the_image_is_built_locally_from_debian_slim_with_mise_copied_in_and_tagged_by_its_dockerfile_0708() {
+	assert!(DOCKERFILE.starts_with("FROM debian:stable-slim\n"));
+	for package in ["ca-certificates", "git", "tar", "xz-utils", "unzip", "curl", "build-essential", "pkg-config"] {
+		assert!(DOCKERFILE.contains(&format!(" {package}")), "{package}");
+	}
+	assert!(DOCKERFILE.contains("--no-install-recommends") && DOCKERFILE.contains("rm -rf /var/lib/apt/lists/*"));
+	assert!(DOCKERFILE.contains("COPY --from=jdxcode/mise:latest /usr/local/bin/mise /usr/local/bin/mise\n"));
+	assert!(DOCKERFILE.ends_with("ENTRYPOINT []\n"), "sh -lc runs as given, not through mise");
+	let tag = image();
+	let hash = tag.strip_prefix("jocasta-cleanroom:").expect("the tag");
+	assert!(hash.len() == 12 && hash.chars().all(|c| c.is_ascii_hexdigit()), "{tag}");
+	assert_eq!(image(), tag, "the same Dockerfile gives the same tag");
+	assert_eq!(build_args(&tag), ["docker", "build", "-t", tag.as_str(), "-"], "the Dockerfile on stdin, no context");
 }
 
 #[test]
