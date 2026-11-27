@@ -155,8 +155,8 @@ function renderDiff(s) {
 	return box;
 }
 
-// The buttons under a pull-request note (0680): save his wording, ask for another, publish. A reworded suggestion shows
-// beside the note and is stored only when he accepts it.
+// The buttons under a pull-request note (0680, 0707): save his wording, ask for another, switch its verdict, publish. A
+// reworded suggestion shows beside the note and is stored only when he accepts it.
 async function postAct(id, body) {
 	const res = await fetch(`/brief/${encodeURIComponent(id)}/act`, {
 		method: "POST",
@@ -182,13 +182,22 @@ function noteControls(c, ctx) {
 	instruction.setAttribute("placeholder", "Reword: shorter, kinder, ...");
 	const reword = el("button", null, "Reword");
 	const publish = el("button", "primary", "Publish");
+	// His switch (0707): questions and opinions come as skip and are published only once he picks post or question.
+	const verdict = el("select");
+	verdict.setAttribute("aria-label", "Verdict");
+	for (const v of ["post", "question", "skip"]) {
+		const o = el("option", null, v);
+		o.value = v;
+		verdict.append(o);
+	}
+	verdict.value = c.verdict;
 	const status = el("p", "status muted");
 	status.setAttribute("aria-live", "polite");
 	const banner = el("p", "banner");
 	banner.setAttribute("role", "alert");
 	banner.hidden = true;
-	const btns = [save, reword, publish];
-	for (const b of btns) b.type = "button";
+	const btns = [save, reword, verdict, publish];
+	for (const b of [save, reword, publish]) b.type = "button";
 	publish.disabled = !c.proof?.ok || c.verdict === "skip";
 	async function run(body, waiting) {
 		for (const b of btns) b.disabled = true;
@@ -204,6 +213,7 @@ function noteControls(c, ctx) {
 			status.textContent = "";
 			for (const b of btns) b.disabled = false;
 			publish.disabled = !c.proof?.ok || c.verdict === "skip";
+			verdict.value = c.verdict;
 		}
 	}
 	save.addEventListener("click", () => {
@@ -215,6 +225,10 @@ function noteControls(c, ctx) {
 		if (t) void run({ op: "reword", card: c.id, instruction: t }, "Asking for another wording...");
 	});
 	publish.addEventListener("click", () => void run({ op: "publish", card: c.id }, "Publishing..."));
+	verdict.addEventListener(
+		"change",
+		() => void run({ op: "verdict", card: c.id, verdict: verdict.value }, "Saving..."),
+	);
 	const edit = el("div", "action-send");
 	edit.append(text, save);
 	const ask = el("div", "action-send");
@@ -236,7 +250,7 @@ function noteControls(c, ctx) {
 		box.append(accept, dismiss);
 		bar.append(box);
 	}
-	bar.append(publish, status, banner);
+	bar.append(verdict, publish, status, banner);
 	return bar;
 }
 
@@ -246,6 +260,7 @@ function renderCards(s, ctx) {
 		const card = el("article", `card sev-${String(c.severity).toLowerCase()}`);
 		const head = el("div", "card-head");
 		head.append(badge(c.severity, `sev ${String(c.severity).toLowerCase()}`));
+		head.append(badge(c.kind || "finding", "kind"));
 		if (c.file) head.append(el("span", "mono loc", `${c.file}:${c.line}`));
 		head.append(badge(c.verdict, `verdict v-${c.verdict}`));
 		const ok = c.proof?.ok;

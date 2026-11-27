@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::frontier::brief::layout::lay_out;
-use crate::frontier::brief::model::{Brief, Section};
+use crate::frontier::brief::model::{Brief, Kind, Section};
 use crate::frontier::brief::store;
 use crate::frontier::protocol::ToastPriority;
 use crate::frontier::server::allow::Confirmation;
@@ -21,13 +21,15 @@ use crate::frontier::server::context::ServiceContext;
 use crate::frontier::server::history::{HISTORY_SEARCH, HistoryEntry, add_history, history_answer, search_history};
 use crate::frontier::server::lessons::ensure_lessons_skill;
 use crate::frontier::server::report::{REPORT_RESULT, ReportedDecision, ThreadReport, parse_report};
-use crate::frontier::server::review_notes::{REVIEW_NOTE, ReviewNotes, checked_card, head_of, review_file};
+use crate::frontier::server::review_notes::{
+	MAX_OPINIONS, REVIEW_NOTE, ReviewNotes, checked_card, head_of, review_file,
+};
 use crate::frontier::server::task_file::{CloseFacts, CloseHow, NewTask, TaskReport, close_task, find_task, new_task};
 use crate::frontier::server::thread::{ThreadRef, subject};
 use crate::frontier::server::thread_lifecycle::Awaiting;
 use crate::frontier::server::thread_start::{StartOptions, after_of, budget_of, done_when_of, heavy_of};
 use crate::frontier::server::wording::{Door, asker, asks, branch_slug, brief_title, person, quoted};
-use crate::frontier::server::works::{REVIEW_TRY, review_try};
+use crate::frontier::server::works::{REVIEW_TRY, prove, review_try};
 use crate::frontier::server::worktrees::remove_checkout;
 use crate::shared::clock::now_ms;
 use crate::shared::day::{DayRef, day_label, hhmm, local_day};
@@ -426,8 +428,9 @@ impl Tools {
 		Ok(format!("Shown: {title}"))
 	}
 
-	/// `review_note` (0678): the reviewer hands in one finding with the code it is about. It is kept only when the
-	/// committed file reads that way at that line; else the tool's error says what the lines are.
+	/// `review_note` (0678, 0707): the reviewer hands in one note with the code it is about. It is kept only when the
+	/// committed file reads that way at that line (else the tool's error says what the lines are); a finding only once
+	/// its proof reproduced where the review's steps run, and a review keeps at most three opinions.
 	async fn review_note(&self, pane_id: Option<&str>, args: &Args<'_>, unkeyed: &str) -> Result<String> {
 		let c = &self.c;
 		let Some(thread) = pane_id.and_then(|pane| c.threads.get(pane)) else {
@@ -442,14 +445,34 @@ impl Tools {
 		};
 		let head = head_of(&path).await?;
 		let file = review_file(&project_id, &task_id);
-		let mut notes = ReviewNotes::of_head(&file, &head);
+		let notes = ReviewNotes::of_head(&file, &head);
 		if let Some(what) = notes.ended() {
 			return Err(Error::user(format!(
 				"{REVIEW_NOTE}: the review ended: {what} failed. Hand in nothing more and end your turn."
 			)));
 		}
-		let card = checked_card(&path, &head, args, notes.notes.len() + 1).await?;
-		let said = format!("Note {} stored ({} at {}:{}).", card.id, card.severity.as_str(), card.file, card.line);
+		let (mut card, proof) = checked_card(&path, &head, args, notes.notes.len() + 1).await?;
+		if let Some(step) = proof {
+			card.ran = Some(prove(c, &thread, &step).await?);
+		}
+		// A proof can take minutes: the notes are read again before this one joins them.
+		let mut notes = ReviewNotes::of_head(&file, &head);
+		let opinions = notes.notes.iter().filter(|note| note.kind == Kind::Opinion).count();
+		if card.kind == Kind::Opinion && opinions >= MAX_OPINIONS {
+			return Err(Error::user(format!(
+				"{REVIEW_NOTE}: this review has {MAX_OPINIONS} opinions already, the most it keeps; hand in findings with proofs or questions."
+			)));
+		}
+		card.id = format!("c{}", notes.notes.len() + 1);
+		let proven = if card.ran.is_some() { ", proven" } else { "" };
+		let said = format!(
+			"Note {} stored ({} {} at {}:{}{proven}).",
+			card.id,
+			card.severity.as_str(),
+			card.kind.as_str(),
+			card.file,
+			card.line
+		);
 		notes.notes.push(card);
 		notes.write(&file)?;
 		Ok(said)

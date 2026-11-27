@@ -178,10 +178,15 @@
 					},
 					{
 						"name": "review_note",
-						"description": "Hand in one review finding with the code it is about.\nQuote the code exactly as the committed file has it, starting at `line`: a note whose quote the file doesn't hold at that line is refused with the lines that are there. P0 and P1 block the task; P2 is a suggestion.",
+						"description": "Hand in one review note with the code it is about: a finding with its proof, a question for the author, or an opinion.\nQuote the code exactly as the committed file has it, starting at `line`: a note whose quote the file doesn't hold at that line is refused with the lines that are there. A finding needs `proof` {run, expect}: Jocasta runs it like a review_try step (a pull request in a clean container, your own thread in its worktree) and keeps the finding only when its output contains `expect`, or, for `exit:N`, when it exits N. What you can't prove is a question or an opinion (at most 3 opinions per review): those are P2, never block, and stay with him unless he sends them. For a finding, P0 and P1 block the task; P2 is a suggestion.",
 						"inputSchema": {
 							"type": "object",
 							"properties": {
+								"kind": {
+									"type": "string",
+									"enum": ["finding", "question", "opinion"],
+									"description": "finding (proven), question (for the author) or opinion (unproven taste, at most 3)"
+								},
 								"file": {
 									"type": "string",
 									"description": "The file's path in the repository"
@@ -195,22 +200,37 @@
 									"type": "string",
 									"description": "The code at that line, as the file has it"
 								},
+								"text": {
+									"type": "string",
+									"description": "The note: what is wrong and what to do, or what you ask"
+								},
+								"proof": {
+									"type": "object",
+									"properties": {
+										"run": {
+											"type": "string",
+											"description": "A shell command that shows the finding in the code under review"
+										},
+										"expect": {
+											"type": "string",
+											"description": "Text its output must contain, or exit:N for its exit code"
+										}
+									},
+									"required": ["run", "expect"],
+									"description": "A finding's proof, required for a finding and refused for the other kinds"
+								},
 								"severity": {
 									"type": "string",
 									"enum": ["P0", "P1", "P2"],
-									"description": "P0 or P1 block; P2 doesn't"
-								},
-								"text": {
-									"type": "string",
-									"description": "The finding: what is wrong and what to do"
+									"description": "A finding's weight: P0 or P1 block; P2 doesn't"
 								},
 								"verdict": {
 									"type": "string",
 									"enum": ["post", "question", "skip"],
-									"description": "post (default), question, or skip"
+									"description": "A finding's: post (default), question, or skip"
 								}
 							},
-							"required": ["file", "line", "quote", "severity", "text"],
+							"required": ["kind", "file", "line", "quote", "text"],
 							"additionalProperties": false
 						}
 					},

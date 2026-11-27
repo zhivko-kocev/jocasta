@@ -88,30 +88,44 @@ fn everyone() -> ToolSpec {
 /// What `show` says of itself (0679): a brief drawn from his spec, not a free-hand surface.
 const SHOW_DESCRIPTION: &str = "Draw a brief in his browser from a spec.\nA page of sections he reads top to bottom: text, facts, a flow (a diagram of nodes and edges, laid out and animated by Jocasta), a map of changed files, a diff, a list. A diagram is changed by asking for a new show. A spec that doesn't lay out (a duplicate node id, an edge to an unknown node, more than 200 nodes) is refused with the reason.";
 
-/// A thread's `review_note`, how the reviewer hands in a finding (0678).
+/// A thread's `review_note`, how the reviewer hands in a finding with its proof, a question or an opinion (0678, 0707).
 fn review_note() -> ToolSpec {
+	let proof = json!({
+		"type": "object",
+		"properties": {
+			"run": { "type": "string", "description": "A shell command that shows the finding in the code under review" },
+			"expect": { "type": "string", "description": "Text its output must contain, or exit:N for its exit code" }
+		},
+		"required": ["run", "expect"],
+		"description": "A finding's proof, required for a finding and refused for the other kinds"
+	});
 	tool(
 		REVIEW_NOTE,
-		"Hand in one review finding with the code it is about.\nQuote the code exactly as the committed file has it, starting at `line`: a note whose quote the file doesn't hold at that line is refused with the lines that are there. P0 and P1 block the task; P2 is a suggestion.",
+		"Hand in one review note with the code it is about: a finding with its proof, a question for the author, or an opinion.\nQuote the code exactly as the committed file has it, starting at `line`: a note whose quote the file doesn't hold at that line is refused with the lines that are there. A finding needs `proof` {run, expect}: Jocasta runs it like a review_try step (a pull request in a clean container, your own thread in its worktree) and keeps the finding only when its output contains `expect`, or, for `exit:N`, when it exits N. What you can't prove is a question or an opinion (at most 3 opinions per review): those are P2, never block, and stay with him unless he sends them. For a finding, P0 and P1 block the task; P2 is a suggestion.",
 		schema(
 			vec![
+				(
+					"kind",
+					json!({ "type": "string", "enum": ["finding", "question", "opinion"], "description": "finding (proven), question (for the author) or opinion (unproven taste, at most 3)" }),
+				),
 				("file", string("The file's path in the repository")),
 				(
 					"line",
 					json!({ "type": "integer", "minimum": 1, "description": "The 1-based line where the quoted code starts" }),
 				),
 				("quote", string("The code at that line, as the file has it")),
+				("text", string("The note: what is wrong and what to do, or what you ask")),
+				("proof", proof),
 				(
 					"severity",
-					json!({ "type": "string", "enum": ["P0", "P1", "P2"], "description": "P0 or P1 block; P2 doesn't" }),
+					json!({ "type": "string", "enum": ["P0", "P1", "P2"], "description": "A finding's weight: P0 or P1 block; P2 doesn't" }),
 				),
-				("text", string("The finding: what is wrong and what to do")),
 				(
 					"verdict",
-					json!({ "type": "string", "enum": ["post", "question", "skip"], "description": "post (default), question, or skip" }),
+					json!({ "type": "string", "enum": ["post", "question", "skip"], "description": "A finding's: post (default), question, or skip" }),
 				),
 			],
-			&["file", "line", "quote", "severity", "text"],
+			&["kind", "file", "line", "quote", "text"],
 		),
 	)
 }
@@ -356,10 +370,18 @@ pub fn tools_for(role: Role, layer: bool) -> Vec<ToolSpec> {
 }
 
 /// Tools that can outlast a bash call's default 5 minutes (a `check` runs up to 30, a finish runs hooks, a start builds a
-/// worktree, a lesson waits for his Allow). omp runs a mounted tool inside its `bash` tool, whose own deadline then
-/// applies, so each says how to call it.
-const LONG_RUNNING: [&str; 7] =
-	["check", "thread_start", "thread_finish", "worktree_remove", "lesson", "big_picture_review", REVIEW_TRY];
+/// worktree, a lesson waits for his Allow, a review's step or a finding's proof runs like a check). omp runs a mounted
+/// tool inside its `bash` tool, whose own deadline then applies, so each says how to call it.
+const LONG_RUNNING: [&str; 8] = [
+	"check",
+	"thread_start",
+	"thread_finish",
+	"worktree_remove",
+	"lesson",
+	"big_picture_review",
+	REVIEW_TRY,
+	REVIEW_NOTE,
+];
 
 /// What a long-running tool's description ends with (0675).
 pub const LONG_RUN_NOTE: &str =

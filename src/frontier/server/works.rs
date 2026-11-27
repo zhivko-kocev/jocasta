@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use serde_json::Value;
 
-use crate::frontier::brief::model::{WorksRow, WorksState};
+use crate::frontier::brief::model::{RanProof, WorksRow, WorksState};
 use crate::frontier::brief::store::{brief_dir, valid_id};
 use crate::frontier::server::allow::{AskError, Confirmation};
 use crate::frontier::server::cleanroom::{self, Check, NO_TASK_SAID, tail};
@@ -18,7 +18,7 @@ use crate::frontier::server::context::ServiceContext;
 use crate::frontier::server::mise::{Found, mise_env, mise_task_among};
 use crate::frontier::server::pr_review::{self, PrTarget};
 use crate::frontier::server::review_flow::mise_of;
-use crate::frontier::server::review_notes::{ReviewNotes, head_of, review_file};
+use crate::frontier::server::review_notes::{REVIEW_NOTE, ReviewNotes, head_of, review_file};
 use crate::frontier::server::steps::{self, Place, Step};
 use crate::frontier::server::thread::{Thread, ThreadRef};
 use crate::frontier::server::thread_brief::{self, BriefExtras};
@@ -194,9 +194,9 @@ async fn host_check(
 	}
 }
 
-/// Where `review_try`'s steps run for thread `t`: the clean room for a pull request (his machine when he allowed it),
-/// the worktree for his own thread.
-async fn where_for(c: &ServiceContext, t: &Thread) -> Result<Where> {
+/// Where `review_try`'s steps and a finding's proof run for thread `t`: the clean room for a pull request (his machine
+/// when he allowed it), the worktree for his own thread. `tool` and `otherwise` word the refusal.
+async fn where_for(c: &ServiceContext, t: &Thread, tool: &str, otherwise: &str) -> Result<Where> {
 	let Some(pr) = t.task.as_ref().and_then(|task| task.pr.as_ref()) else {
 		return Ok(Where::Here { path: t.path.clone(), env: here_env(c, &t.project, &t.path).await });
 	};
@@ -215,19 +215,19 @@ async fn where_for(c: &ServiceContext, t: &Thread) -> Result<Where> {
 		return Ok(Where::Here { path: t.path.clone(), env: pr_env(c, &t.project, &t.path).await });
 	}
 	Err(Error::user(format!(
-		"{REVIEW_TRY}: this pull request runs only in the clean room, which isn't possible ({why}), and running it on this machine wasn't allowed; review it by reading."
+		"{tool}: this pull request runs only in the clean room, which isn't possible ({why}), and running it on this machine wasn't allowed; {otherwise}."
 	)))
 }
 
 /// A step on his machine is judged by the shipped guard like `done_when` (0540): deny refuses it, prompt asks him.
-async fn guarded(c: &ServiceContext, t: &Thread, steps: &[Step]) -> Result<()> {
+async fn guarded(c: &ServiceContext, t: &Thread, steps: &[Step], tool: &str) -> Result<()> {
 	for step in steps {
 		let judged = guard_said(&step.run)?;
 		let rule = judged.rule.unwrap_or_default();
 		match judged.verdict {
 			Verdict::Deny => {
 				return Err(Error::user(format!(
-					"{REVIEW_TRY}: `{}` is denied by Jocasta's guard (`{}`); nothing ran.",
+					"{tool}: `{}` is denied by Jocasta's guard (`{}`); nothing ran.",
 					step.run, rule
 				)));
 			}
@@ -321,9 +321,9 @@ pub async fn review_try(
 	if let Some(ended) = ReviewNotes::of_head(&file, &head).ended() {
 		return Err(Error::user(format!("{REVIEW_TRY}: the review ended: {ended} failed. {ENDS_HERE}")));
 	}
-	let place = where_for(c, &t).await?;
+	let place = where_for(c, &t, REVIEW_TRY, "review it by reading").await?;
 	if matches!(place, Where::Here { .. }) {
-		guarded(c, &t, &steps).await?;
+		guarded(c, &t, &steps, REVIEW_TRY).await?;
 	}
 	let started = Instant::now();
 	let mut last = String::new();
@@ -363,6 +363,27 @@ pub async fn review_try(
 		said.push_str(&format!("\n{line}"));
 	}
 	Ok(said)
+}
+
+/// A finding's proof (0707), run once where the review's steps run and under the same guard: what the card keeps when
+/// the run gives its expectation, the refusal otherwise.
+pub async fn prove(c: &ServiceContext, thread: &ThreadRef, step: &Step) -> Result<RanProof> {
+	let t = thread.get();
+	let place = where_for(c, &t, REVIEW_NOTE, "hand it in as a question or an opinion").await?;
+	if matches!(place, Where::Here { .. }) {
+		guarded(c, &t, std::slice::from_ref(step), REVIEW_NOTE).await?;
+	}
+	let ran = steps::run(&place.place(), &step.run)
+		.await
+		.map_err(|error| Error::user(format!("{REVIEW_NOTE}: the proof couldn't run: {error}")))?;
+	if !steps::gives(&ran, &step.expect) {
+		return Err(Error::user(format!(
+			"{REVIEW_NOTE}: the proof didn't reproduce: expected \"{}\", got {}",
+			step.expect,
+			steps::said(&ran)
+		)));
+	}
+	Ok(steps::proof(step, &ran))
 }
 
 /// Finish's clean-room check on the thread's head (0706), before its question: a failing check refuses Finish; one

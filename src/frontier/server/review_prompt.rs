@@ -58,14 +58,14 @@ fn flat(text: &str) -> String {
 	one.trim_matches(is_js_space).to_owned()
 }
 
-/// What the thread is asked once its task ended (0394, 0425, 0453, 0460, 0546, 0678). Jocasta's runner already ran the
-/// project's checks (`gates`): their failures are given as gates, a pass is not mentioned; a project without known
-/// checks has the turn run its tests as one bash command and end on a `TESTS: pass|fail — <command>` (or `TESTS:
+/// What the thread is asked once its task ended (0394, 0425, 0453, 0460, 0546, 0678, 0707). Jocasta's runner already
+/// ran the project's checks (`gates`): their failures are given as gates, a pass is not mentioned; a project without
+/// known checks has the turn run its tests as one bash command and end on a `TESTS: pass|fail — <command>` (or `TESTS:
 /// none`) line the service checks against the session's bash results (`sessions.ts` `checkedTests`). Then its own
 /// `verify` skill when it has one, then omp's reviewer subagent on the range with the approved plan, the project's
-/// rules and its lessons, told to report only material findings, then at most three design findings judged by the
-/// shipped design rubric (0611; priority P2 and led by `Design:`, so they never count as blocking). Every finding goes
-/// in through `review_note` with its code quoted exactly: a note whose quote the file doesn't hold is refused.
+/// rules and its lessons, told to report only material findings, then at most three design opinions judged by the
+/// shipped design rubric (0611). Every note goes in through `review_note` with its code quoted exactly (a note whose
+/// quote the file doesn't hold is refused): a finding with a proof Jocasta runs, a question, or an opinion (0707).
 pub fn review_prompt(range: &str, context: &ReviewContext) -> String {
 	let mut given = Vec::new();
 	if let Some(brief) = context.brief.as_deref().filter(|brief| !brief.is_empty()) {
@@ -118,14 +118,16 @@ pub fn review_prompt(range: &str, context: &ReviewContext) -> String {
 		"Only once it works:".to_owned(),
 		format!("run the reviewer subagent on `git diff {range}` in this worktree. In its task give it {},", given.join(", ")),
 		"and tell it: report only material findings; prefer one strong finding over several weak ones; then, after those,".to_owned(),
-		format!("read the design rubric ({rubric}) and report at most three design findings judged by it,"),
-		"each naming the code this change could delete where there is some. A design finding is P2 with its text".to_owned(),
-		"led by \"Design:\"; design findings never block.".to_owned(),
-		"Hand every finding in with the `review_note` tool, one call each: `file` and `line` (the line in the committed file),".to_owned(),
-		"`quote` (the code at that line, copied exactly: Jocasta checks it against the file and refuses a note whose quote it doesn't find),".to_owned(),
-		"`severity` (P0 breaks the task or the build, P1 is a likely bug, both block; P2 is a smaller or design finding and doesn't),".to_owned(),
-		"`text` (one sentence for the finding, then why) and `verdict` (`post` when it belongs in a PR comment, `question`, or `skip`).".to_owned(),
-		"Run `review_note --help` for the exact arguments. Don't change code in this turn. No findings: hand in nothing and say so.".to_owned(),
+		format!("read the design rubric ({rubric}) and report at most three design opinions judged by it,"),
+		"each naming the code this change could delete where there is some; design opinions never block.".to_owned(),
+		"Hand every note in with the `review_note` tool, one call each, with its `kind`: a `finding` is a claim you prove with".to_owned(),
+		"`proof` `{run, expect}` (a command that shows the problem and what its output must contain, or `exit:N`), which Jocasta".to_owned(),
+		"runs in this worktree and keeps only when it reproduces; a `question` asks the author; an `opinion` is taste or design".to_owned(),
+		"you can't prove, at most three. Questions and opinions carry no proof and never block; what you can't prove is never a finding.".to_owned(),
+		"Every note has `file` and `line` (the line in the committed file), `quote` (the code at that line, copied exactly:".to_owned(),
+		"Jocasta checks it against the file and refuses a note whose quote it doesn't find) and `text` (one sentence, then why);".to_owned(),
+		"a finding also `severity` (P0 breaks the task or the build, P1 is a likely bug, both block; P2 is smaller and doesn't).".to_owned(),
+		"Run `review_note --help` for the exact arguments. Don't change code in this turn. No notes: hand in nothing and say so.".to_owned(),
 	]);
 	if ran_tests {
 		parts.push("End your reply with one line on its own: `TESTS: pass — <the test command you ran>`,".to_owned());

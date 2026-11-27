@@ -258,6 +258,27 @@ pub enum Verdict {
 	Skip,
 }
 
+/// What a note is (0707): a finding Jocasta reproduced, a question for the author, or an unproven opinion.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Kind {
+	#[default]
+	Finding,
+	Question,
+	Opinion,
+}
+
+impl Kind {
+	/// The kind as the tool says it.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Finding => "finding",
+			Self::Question => "question",
+			Self::Opinion => "opinion",
+		}
+	}
+}
+
 /// Whether a card's quote was found in the file at the head it names.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Proof {
@@ -276,6 +297,9 @@ pub struct Published {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Card {
 	pub id: String,
+	/// A card stored before 0707 reads as a finding.
+	#[serde(default)]
+	pub kind: Kind,
 	pub severity: Severity,
 	pub file: String,
 	pub line: usize,

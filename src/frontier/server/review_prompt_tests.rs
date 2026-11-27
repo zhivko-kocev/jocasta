@@ -12,7 +12,7 @@ fn context(rules: &[&str]) -> ReviewContext {
 fn the_review_prompt_tells_the_reviewer_to_hand_findings_in_through_review_note_and_to_quote_the_code() {
 	let prompt = review_prompt("main...feature/x", &context(&[]));
 	assert!(prompt.contains("git diff main...feature/x"));
-	assert!(prompt.contains("Hand every finding in with the `review_note` tool"));
+	assert!(prompt.contains("Hand every note in with the `review_note` tool"));
 	assert!(prompt.contains("copied exactly"));
 	assert!(prompt.contains("`severity` (P0 breaks the task or the build, P1 is a likely bug, both block"));
 	assert!(!prompt.to_lowercase().contains("hunk"));
@@ -72,17 +72,25 @@ fn the_prompt_gives_the_brief_and_the_report_on_one_line_each() {
 }
 
 #[test]
-fn the_review_prompt_gives_the_reviewer_the_shipped_design_rubric_and_a_cap_of_three_non_blocking_design_findings_0611()
-{
+fn the_review_prompt_gives_the_reviewer_the_shipped_design_rubric_and_a_cap_of_three_non_blocking_design_opinions_0611_0707()
+ {
 	let prompt = review_prompt("main...b", &ReviewContext::default());
 	assert!(
 		prompt.contains(&format!("{}/design-rubric.md", shipped_config_dir(None).to_string_lossy().replace('\\', "/")))
 	);
-	assert!(prompt.contains("at most three design findings"));
+	assert!(prompt.contains("at most three design opinions"));
 	assert!(prompt.contains("the code this change could delete"));
-	assert!(prompt.contains("A design finding is P2"));
-	assert!(prompt.contains("never block"));
+	assert!(prompt.contains("design opinions never block"));
 	assert!(shipped_config_dir(None).join("design-rubric.md").exists());
+}
+
+#[test]
+fn the_review_prompt_teaches_the_three_kinds_and_the_proof_a_finding_needs_0707() {
+	let prompt = review_prompt("main...b", &ReviewContext::default());
+	for wanted in ["with its `kind`", "`proof` `{run, expect}`", "keeps only when it reproduces", "at most three."] {
+		assert!(prompt.contains(wanted), "{wanted}");
+	}
+	assert!(prompt.contains("what you can't prove is never a finding"));
 }
 
 #[test]

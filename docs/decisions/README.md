@@ -616,7 +616,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0608](0608-tuning-program-small-calls.md) | The tuning program's small calls | product, benchmark | v1 | program | 2026-11-14 | 0620, 0622 |
 | [0609](0609-the-code-quality-standard.md) | The code-quality standard: the five sources, Ousterhout where they disagree | process | v1 | program | 2026-11-14 |  |
 | [0610](0610-quality-held-by-machine-checks.md) | Quality is held by machine checks first | product, process | v1 | program | 2026-11-14 | 0617, 0645 |
-| [0611](0611-a-design-section-in-the-review.md) | The review gets a design section; the weekly review gets the same rubric | product | v1 | program | 2026-11-14 |  |
+| [0611](0611-a-design-section-in-the-review.md) | The review gets a design section; the weekly review gets the same rubric | product | v1 | program | 2026-11-14 | 0707 |
 | [0612](0612-ponytail-two-lines-rewritten.md) | Ponytail: two lines rewritten, one removed | product, prompts | v1 | program | 2026-11-14 |  |
 | [0613](0613-pushes-to-trunk-ask-once-per-repo.md) | A push to main, master or develop asks him once per repo | product, security | v1 | program | 2026-11-14 |  |
 | [0614](0614-quality-and-security-tools.md) | Quality and security tools: what enters the flow, what stays on demand | product, process | v1 | program | 2026-11-14 | 0624, 0627, 0639, 0645, 0648 |
@@ -683,9 +683,9 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0675](0675-the-bridge-one-extension-one-pipe.md) | The bridge: one omp extension and one local pipe | product | v1 | lightweight program | 2026-11-24 | 0683, 0702 |
 | [0676](0676-process-diet.md) | Process diet: panes start on demand and sleep; a footprint that only goes down | product | v1 | lightweight program | 2026-11-24 | 0689 |
 | [0677](0677-deterministic-loops.md) | Deterministic validation loops | product | v1 | lightweight program | 2026-11-24 |  |
-| [0678](0678-briefs-as-html-pages.md) | Briefs: animated HTML pages served on loopback | product | v1 | lightweight program | 2026-11-24 | 0698, 0699, 0706 |
+| [0678](0678-briefs-as-html-pages.md) | Briefs: animated HTML pages served on loopback | product | v1 | lightweight program | 2026-11-24 | 0698, 0699, 0706, 0707 |
 | [0679](0679-whiteboard-and-hunk-removed.md) | Whiteboard and hunk removed; `show` draws a brief | product | v1 | lightweight program | 2026-11-24 |  |
-| [0680](0680-day-flows-and-new-sources.md) | Day flows and three new read-only sources | product | v1 | lightweight program | 2026-11-24 | 0706, 0709 |
+| [0680](0680-day-flows-and-new-sources.md) | Day flows and three new read-only sources | product | v1 | lightweight program | 2026-11-24 | 0706, 0707, 0709 |
 | [0681](0681-privacy-boundary.md) | Privacy boundary: one door to the model | product | v1 | lightweight program | 2026-11-24 |  |
 | [0682](0682-validation-environment-mise-tasks.md) | Validation environment: the project's own mise tasks | process | v1 | lightweight program | 2026-11-24 |  |
 | [0683](0683-own-shell-on-alacritty-terminal.md) | Own shell on `alacritty_terminal`, gated by a spike | product | v1 | lightweight program | 2026-11-24 | 0702 |
@@ -712,5 +712,6 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0704](0704-project-named-mise-file.md) | Project-named mise file | product | v1 | ultron 0.3 iteration, J9 | 2026-11-26 |  |
 | [0705](0705-ponytail-text-refreshed.md) | Ponytail text refreshed | product, prompts | v1 | ultron 0.3 iteration, J10 | 2026-11-26 |  |
 | [0706](0706-review-works-first.md) | Review: works first | product, prompts | v1 | ultron 0.3 iteration, M2 R2 | 2026-11-26 |  |
+| [0707](0707-review-proof-on-every-finding.md) | Review: proof on every finding | product, prompts | v1 | ultron 0.3 iteration, M2 R3 | 2026-11-26 |  |
 | [0709](0709-review-panes-ask-before-running.md) | Review panes ask before running | product, security | v1 | ultron 0.3 iteration, M2 R4 | 2026-11-26 |  |
 | [0708](0708-clean-room-runs.md) | Clean-room runs | product, security | v1 | ultron 0.3 iteration, M2 R1 | 2026-11-26 |  |

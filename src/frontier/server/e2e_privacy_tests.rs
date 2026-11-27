@@ -12,7 +12,7 @@ use axum::extract::{Request, State};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
 
-use crate::frontier::brief::model::{Brief, Card, Proof, Severity, Verdict};
+use crate::frontier::brief::model::{Brief, Card, Kind, Proof, Severity, Verdict};
 use crate::frontier::brief::routes::BriefActions;
 use crate::frontier::brief::{BriefLinks, store};
 use crate::frontier::protocol::ServerMessage;
@@ -153,7 +153,7 @@ fn args_of(tool: &str, thread: &str) -> Value {
 		"thread_finish" | "thread_stop" => json!({ "thread": "no-such-thread" }),
 		"report_result" => json!({ "outcome": "done", "summary": "Did it." }),
 		"review_note" => {
-			json!({ "file": "README.md", "line": 1, "quote": "demo", "severity": "P2", "text": "A note." })
+			json!({ "kind": "question", "file": "README.md", "line": 1, "quote": "demo", "text": "A note." })
 		}
 		"show" => json!({ "title": "Canary", "sections": [{ "type": "text", "body": "Hello." }] }),
 		"note" => json!({ "text": "a note" }),
@@ -224,6 +224,7 @@ fn review_brief() -> String {
 		head: "1111111111111111111111111111111111111111".to_owned(),
 		notes: vec![Card {
 			id: "n1".to_owned(),
+			kind: Kind::Finding,
 			severity: Severity::P1,
 			file: "src/a.rs".to_owned(),
 			line: 12,

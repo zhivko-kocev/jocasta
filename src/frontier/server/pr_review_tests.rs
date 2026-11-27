@@ -1,12 +1,13 @@
 //! Tests of `pr_review.rs`: the link, the brief text and the pull request's brief (0680, 0681).
 
 use super::*;
-use crate::frontier::brief::model::{Card, Proof, Severity, Verdict};
+use crate::frontier::brief::model::{Card, Kind, Proof, Severity, Verdict};
 use crate::frontier::server::task_file::{NewTask, new_task};
 
 fn card(id: &str, file: &str, quote: &str) -> Card {
 	Card {
 		id: id.to_owned(),
+		kind: Kind::Finding,
 		severity: Severity::P1,
 		file: file.to_owned(),
 		line: 3,

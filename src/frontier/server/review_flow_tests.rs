@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use serde_json::json;
 
 use super::*;
-use crate::frontier::brief::model::{Card, Proof, Severity, Verdict};
+use crate::frontier::brief::model::{Card, Kind, Proof, Severity, Verdict};
 use crate::frontier::server::checks::{CheckRunner, CheckRunnerOptions};
 use crate::frontier::server::context::{BossRef, Shared, TestContext, test_context};
 use crate::frontier::server::helpers::review_asked;
@@ -428,6 +428,7 @@ async fn a_report_is_in_once_it_came_after_the_last_review_0539() {
 fn card(severity: Severity, line: usize) -> Card {
 	Card {
 		id: format!("c{line}"),
+		kind: Kind::Finding,
 		severity,
 		file: "README.md".to_owned(),
 		line,

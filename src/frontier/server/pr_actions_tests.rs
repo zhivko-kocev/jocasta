@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 
 use super::*;
-use crate::frontier::brief::model::{Proof, Severity};
+use crate::frontier::brief::model::{Kind, Proof, Severity};
 use crate::frontier::server::context::{TestContext, test_context};
 use crate::frontier::server::pr_review::{Platform, PrTarget};
 use crate::frontier::server::task_file::{NewTask, new_task, save_task};
@@ -76,6 +76,7 @@ fn fake_omp(dir: &Path) -> Vec<String> {
 fn card(id: &str, ok: bool, verdict: Verdict) -> Card {
 	Card {
 		id: id.to_owned(),
+		kind: Kind::Finding,
 		severity: Severity::P1,
 		file: "src/a.rs".to_owned(),
 		line: 12,
@@ -208,6 +209,18 @@ async fn a_skipped_note_is_not_published() {
 	let refused = w.act(json!({ "op": "publish", "card": "n1" })).await.unwrap_err().to_string();
 	assert!(refused.contains("skip"), "{refused}");
 	assert!(w.gh_calls().is_empty());
+}
+
+#[tokio::test]
+async fn a_question_waits_as_skip_until_he_switches_its_verdict_then_publishes_0707() {
+	let w = world(vec![Card { kind: Kind::Question, ..card("n1", true, Verdict::Skip) }]);
+	let bad = w.act(json!({ "op": "verdict", "card": "n1", "verdict": "maybe" })).await.unwrap_err().to_string();
+	assert!(bad.contains("post, question or skip"), "{bad}");
+	w.act(json!({ "op": "verdict", "card": "n1", "verdict": "question" })).await.unwrap();
+	assert_eq!(w.notes().notes[0].verdict, Verdict::Question);
+	w.act(json!({ "op": "publish", "card": "n1" })).await.unwrap();
+	let late = w.act(json!({ "op": "verdict", "card": "n1", "verdict": "skip" })).await.unwrap_err().to_string();
+	assert!(late.contains("published already"), "{late}");
 }
 
 #[tokio::test]

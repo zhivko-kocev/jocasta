@@ -1,5 +1,6 @@
-//! What the pull-request brief's buttons do (0680, 0681): `edit` stores his wording of a note, `reword` asks a one-shot
-//! `@smol` helper for another wording (the answer is only a suggestion until he accepts it, which is an `edit`), and
+//! What the pull-request brief's buttons do (0680, 0681, 0707): `edit` stores his wording of a note, `reword` asks a
+//! one-shot `@smol` helper for another wording (the answer is only a suggestion until he accepts it, which is an
+//! `edit`), `verdict` switches a note between `post`, `question` and `skip` (questions and opinions come as `skip`), and
 //! `publish` posts one checked note as a comment on the pull request. A comment is published only by his click, only
 //! for a note whose quote was found at the head, whose verdict isn't `skip` and that isn't published yet; no vote is ever
 //! cast. The notes live in the thread's `review.json`; the brief is built again from them after each action, so a
@@ -77,8 +78,8 @@ fn brief_json(brief: &Brief) -> Result<Value> {
 	serde_json::to_value(brief).map_err(|error| Error::other(error.to_string()))
 }
 
-/// Runs `action` (`edit`, `reword` or `publish`) on the pull-request brief `id`; the brief as it is after, whole. A
-/// `reword` adds `suggestion: {card, text}` to it: nothing is stored until he accepts.
+/// Runs `action` (`edit`, `reword`, `verdict` or `publish`) on the pull-request brief `id`; the brief as it is after,
+/// whole. A `reword` adds `suggestion: {card, text}` to it: nothing is stored until he accepts.
 pub async fn act(c: &Arc<ServiceContext>, id: &str, action: &Value) -> Result<Value> {
 	let task = task_of(id)?;
 	let op = action.get("op").and_then(Value::as_str).unwrap_or("");
@@ -113,6 +114,22 @@ pub async fn act(c: &Arc<ServiceContext>, id: &str, action: &Value) -> Result<Va
 				return Err(Error::user("edit: that comment is published already."));
 			}
 			card.edited = (text != card.text).then_some(text);
+			brief_json(&save(&task, &notes, id)?)
+		}
+		"verdict" => {
+			let verdict = match text_of(action, "verdict").as_str() {
+				"post" => Verdict::Post,
+				"question" => Verdict::Question,
+				"skip" => Verdict::Skip,
+				_ => return Err(Error::user("verdict: it is post, question or skip.")),
+			};
+			let _one = ACTING.lock().await;
+			let mut notes = ReviewNotes::read(&review_file(&task.project_id, &task.id));
+			let card = card_of(&mut notes, &card_id)?;
+			if card.published.is_some() {
+				return Err(Error::user("verdict: that comment is published already."));
+			}
+			card.verdict = verdict;
 			brief_json(&save(&task, &notes, id)?)
 		}
 		"publish" => {

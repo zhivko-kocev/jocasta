@@ -517,8 +517,12 @@ async fn check_review_opens(server: &TestServer, pane: &str, boss: &str) {
 	let said = crate::frontier::server::helpers::call_as(server, "review_try", &tried, Some(pane), None).await;
 	assert_eq!(said.is_error, None, "{}", said.text);
 	assert!(said.text.contains("the README line works (1 step passed on this machine)"), "{}", said.text);
-	for text in ["Say what the line is for.", "Name the file."] {
-		let note = json!({ "file": "README.md", "line": 2, "quote": "A line.", "severity": "P2", "text": text });
+	// A finding with its proof, which Jocasta runs in the worktree (0707), and a question, which carries none.
+	let proof = json!({ "run": "git log --oneline -1", "expect": "Add a README line" });
+	let finding = json!({ "kind": "finding", "file": "README.md", "line": 2, "quote": "A line.", "severity": "P2", "text": "Say what the line is for.", "proof": proof });
+	let question =
+		json!({ "kind": "question", "file": "README.md", "line": 2, "quote": "A line.", "text": "Which file?" });
+	for note in [finding, question] {
 		let said = crate::frontier::server::helpers::call_as(server, "review_note", &note, Some(pane), None).await;
 		assert!(said.is_error.is_none(), "{}", said.text);
 	}

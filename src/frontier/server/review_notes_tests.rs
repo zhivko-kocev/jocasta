@@ -1,4 +1,7 @@
+use serde_json::json;
+
 use super::*;
+use crate::shared::testing::temp_dir;
 
 #[test]
 fn a_quote_reads_when_its_lines_start_at_the_line_with_whitespace_collapsed() {
@@ -21,6 +24,7 @@ fn the_refusal_names_the_five_lines_around() {
 fn notes_count_with_the_blocking_ones() {
 	let card = |severity| Card {
 		id: "c".to_owned(),
+		kind: Kind::Finding,
 		severity,
 		file: "a.rs".to_owned(),
 		line: 1,
@@ -86,4 +90,50 @@ fn a_failed_check_ends_the_review_with_one_p0_card_for_him_only_and_a_new_head_s
 	assert_eq!(ReviewNotes::of_head(&file, "abc"), notes);
 	assert_eq!(ReviewNotes::of_head(&file, "def"), ReviewNotes { head: "def".to_owned(), ..ReviewNotes::default() });
 	std::fs::remove_dir_all(&dir).unwrap();
+}
+
+fn git(dir: &Path, args: &[&str]) {
+	let mut command = std::process::Command::new("git");
+	command.args(["-c", "user.name=Test", "-c", "user.email=test@example.com"]).args(args).current_dir(dir);
+	crate::shared::env::apply_to(&mut command);
+	let output = command.output().expect("running git");
+	assert!(output.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&output.stderr));
+}
+
+#[tokio::test]
+async fn a_finding_needs_a_proof_and_questions_and_opinions_carry_none_and_wait_for_him_0707() {
+	let root = temp_dir("jocasta-notes-kinds");
+	let dir = root.path().to_path_buf();
+	git(&dir, &["init", "-q", "-b", "main"]);
+	std::fs::write(dir.join("a.rs"), "fn a() {\n\tlet x = 1;\n}\n").unwrap();
+	git(&dir, &["add", "."]);
+	git(&dir, &["commit", "-q", "-m", "a"]);
+	let head = head_of(&dir).await.unwrap();
+	let note = |extra: Value| {
+		let mut values = json!({ "file": "a.rs", "line": 2, "quote": "let x = 1;", "text": "t", "severity": "P1" });
+		values.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+		values.as_object().unwrap().clone()
+	};
+	let checked = |values: Map<String, Value>| {
+		let (dir, head) = (dir.clone(), head.clone());
+		async move { checked_card(&dir, &head, &Args::new(&values, REVIEW_NOTE), 1).await }
+	};
+	let refused = checked(note(json!({ "kind": "finding" }))).await.unwrap_err().to_string();
+	assert_eq!(
+		refused,
+		"review_note: a finding needs a proof (a command and the output it must give); hand it in as a question or an opinion otherwise"
+	);
+	let proof = json!({ "run": "cargo test", "expect": "exit:0" });
+	let refused = checked(note(json!({ "kind": "opinion", "proof": proof.clone() }))).await.unwrap_err().to_string();
+	assert!(refused.contains("only a finding carries a proof"), "{refused}");
+	let refused = checked(note(json!({ "kind": "nit" }))).await.unwrap_err().to_string();
+	assert!(refused.contains("kind is finding, question or opinion"), "{refused}");
+	let (card, step) = checked(note(json!({ "kind": "finding", "proof": proof }))).await.unwrap();
+	assert_eq!((card.kind, card.severity, card.verdict), (Kind::Finding, Severity::P1, Verdict::Post));
+	assert_eq!(step, Some(Step { run: "cargo test".to_owned(), expect: "exit:0".to_owned() }));
+	let (card, step) = checked(note(json!({ "kind": "question", "verdict": "post" }))).await.unwrap();
+	assert_eq!((card.kind, card.severity, card.verdict), (Kind::Question, Severity::P2, Verdict::Skip));
+	assert_eq!(step, None);
+	let refused = checked(note(json!({ "kind": "opinion", "quote": "let y" }))).await.unwrap_err().to_string();
+	assert!(refused.contains("doesn't read that"), "{refused}");
 }

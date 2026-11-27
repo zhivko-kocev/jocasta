@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::frontier::brief::model::{Card, Proof, RanProof, Severity, Verdict, WorksRow, WorksState};
+use crate::frontier::brief::model::{Card, Kind, Proof, RanProof, Severity, Verdict, WorksRow, WorksState};
+use crate::frontier::server::steps::{Step, step_of};
 use crate::frontier::server::task_file::task_dir;
 use crate::frontier::server::tools::Args;
 use crate::frontier::server::worktrees::git_out;
@@ -21,6 +22,9 @@ mod tests;
 
 /// The tool's name.
 pub const REVIEW_NOTE: &str = "review_note";
+
+/// How many opinions one review keeps (0707).
+pub const MAX_OPINIONS: usize = 3;
 
 /// `<thread dir>/review.json`: the notes of the review of `head`, and what showed it works or doesn't (0706).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -78,6 +82,7 @@ impl ReviewNotes {
 	pub fn failed(&mut self, row: WorksRow, proof: RanProof) {
 		self.notes.push(Card {
 			id: format!("c{}", self.notes.len() + 1),
+			kind: Kind::Finding,
 			severity: Severity::P0,
 			file: String::new(),
 			line: 0,
@@ -129,12 +134,37 @@ fn around(text: &str, line: usize) -> String {
 	format!("Lines {from}–{to} are:\n{}", shown.join("\n"))
 }
 
-/// One note's arguments, read and checked against the committed file at `head`: the card, or the tool's refusal.
-pub async fn checked_card(cwd: &Path, head: &str, args: &Args<'_>, number: usize) -> Result<Card> {
-	let file = args.text("file")?;
-	let quote = args.text("quote")?;
-	let text = args.text("text")?;
-	let line = line_of(args.values, REVIEW_NOTE)?;
+/// One note's arguments, read and checked against the committed file at `head`: the card and, for a finding, the
+/// proof still to run (0707); or the tool's refusal.
+pub async fn checked_card(cwd: &Path, head: &str, args: &Args<'_>, number: usize) -> Result<(Card, Option<Step>)> {
+	let kind = match args.text("kind")?.trim() {
+		"finding" => Kind::Finding,
+		"question" => Kind::Question,
+		"opinion" => Kind::Opinion,
+		other => {
+			return Err(Error::user(format!("{REVIEW_NOTE}: kind is finding, question or opinion, not `{other}`.")));
+		}
+	};
+	let proof = match (kind, args.values.get("proof")) {
+		(Kind::Finding, None | Some(Value::Null)) => {
+			return Err(Error::user(format!(
+				"{REVIEW_NOTE}: a finding needs a proof (a command and the output it must give); hand it in as a question or an opinion otherwise"
+			)));
+		}
+		(Kind::Finding, Some(value)) => Some(step_of(value, REVIEW_NOTE, "proof")?),
+		(_, None | Some(Value::Null)) => None,
+		(_, Some(_)) => {
+			return Err(Error::user(format!(
+				"{REVIEW_NOTE}: only a finding carries a proof; leave it out of a question or an opinion."
+			)));
+		}
+	};
+	// Questions and opinions are unproven: P2, kept for him (skip) until he switches them.
+	if kind != Kind::Finding {
+		let card =
+			Card { kind, severity: Severity::P2, verdict: Verdict::Skip, ..quoted(cwd, head, args, number).await? };
+		return Ok((card, None));
+	}
 	let severity = match args.text("severity")?.trim() {
 		"P0" => Severity::P0,
 		"P1" => Severity::P1,
@@ -149,6 +179,17 @@ pub async fn checked_card(cwd: &Path, head: &str, args: &Args<'_>, number: usize
 			return Err(Error::user(format!("{REVIEW_NOTE}: verdict is post, question or skip, not `{other}`.")));
 		}
 	};
+	let card = Card { severity, verdict, ..quoted(cwd, head, args, number).await? };
+	Ok((card, proof))
+}
+
+/// A note's card from `file`, `line`, `quote` and `text` once the committed file at `head` holds `quote` at that line;
+/// the refusal with the lines there otherwise. It is a P2 finding to post until the caller says more.
+async fn quoted(cwd: &Path, head: &str, args: &Args<'_>, number: usize) -> Result<Card> {
+	let file = args.text("file")?;
+	let quote = args.text("quote")?;
+	let text = args.text("text")?;
+	let line = line_of(args.values, REVIEW_NOTE)?;
 	let Some(content) = git_out_raw(cwd, head, &file).await? else {
 		return Err(Error::user(format!("{REVIEW_NOTE}: {file} isn't in the commit {}.", short(head))));
 	};
@@ -161,12 +202,13 @@ pub async fn checked_card(cwd: &Path, head: &str, args: &Args<'_>, number: usize
 	}
 	Ok(Card {
 		id: format!("c{number}"),
-		severity,
+		kind: Kind::Finding,
+		severity: Severity::P2,
 		file,
 		line,
 		quote,
 		text,
-		verdict,
+		verdict: Verdict::Post,
 		proof: Proof { sha: head.to_owned(), ok: true },
 		edited: None,
 		published: None,

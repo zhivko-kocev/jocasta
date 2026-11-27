@@ -34,7 +34,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use super::*;
-use crate::frontier::brief::model::Section;
+use crate::frontier::brief::model::{Section, Verdict};
 use crate::frontier::brief::store;
 use crate::frontier::protocol::ThreadState;
 use crate::frontier::server::allow::{Answer, Confirm};
@@ -1048,8 +1048,10 @@ fn review_world_thread(w: &World) -> ThreadRef {
 	thread
 }
 
+/// A finding on README.md, proven by the last commit's subject (`review_world_thread`'s).
 fn note_args(line: usize, quote: &str) -> Value {
-	json!({"file": "README.md", "line": line, "quote": quote, "severity": "P1", "text": "Say more."})
+	json!({"kind": "finding", "file": "README.md", "line": line, "quote": quote, "severity": "P1", "text": "Say more.",
+		"proof": {"run": "git log --oneline -1", "expect": "Three lines"}})
 }
 
 #[tokio::test]
@@ -1057,17 +1059,49 @@ async fn review_note_keeps_a_quote_that_reads_at_its_line_and_counts_it() {
 	let w = World::new().await;
 	let thread = review_world_thread(&w);
 	let said = w.ask_from_pane("review_note", note_args(3, "second line"), Some("pane-key-1")).await.unwrap();
-	assert_eq!(said, "Note c1 stored (P1 at README.md:3).");
+	assert_eq!(said, "Note c1 stored (P1 finding at README.md:3, proven).");
 	let file = review_file("p-demo", "task-1");
 	let stored = ReviewNotes::read(&file);
 	assert_eq!(stored.head, git(&w.main, &["rev-parse", "HEAD"]));
 	assert_eq!(stored.notes.len(), 1);
 	assert!(stored.notes[0].proof.ok);
 	assert_eq!(stored.notes[0].proof.sha, stored.head);
+	let ran = stored.notes[0].ran.as_ref().expect("the proof Jocasta ran");
+	assert_eq!((ran.run.as_str(), ran.exit), ("git log --oneline -1", Some(0)));
+	assert!(ran.tail.contains("Three lines"), "{}", ran.tail);
 	let second = w.ask_from_pane("review_note", note_args(2, "first line"), Some("pane-key-1")).await.unwrap();
-	assert_eq!(second, "Note c2 stored (P1 at README.md:2).");
+	assert_eq!(second, "Note c2 stored (P1 finding at README.md:2, proven).");
 	assert_eq!(ReviewNotes::read(&file).counts(), NoteCounts { notes: 2, blocking: 2 });
 	drop(thread);
+}
+
+#[tokio::test]
+async fn review_note_refuses_a_finding_whose_proof_doesnt_reproduce_and_a_fourth_opinion_0707() {
+	let w = World::new().await;
+	review_world_thread(&w);
+	let mut wrong = note_args(2, "first line");
+	wrong["proof"] = json!({"run": "git log --oneline -1", "expect": "no such subject"});
+	let refused = w.ask_from_pane("review_note", wrong, Some("pane-key-1")).await.unwrap_err();
+	assert!(
+		refused.starts_with("review_note: the proof didn't reproduce: expected \"no such subject\", got exit 0: "),
+		"{refused}"
+	);
+	assert!(refused.contains("Three lines"), "{refused}");
+	let file = review_file("p-demo", "task-1");
+	assert!(ReviewNotes::read(&file).notes.is_empty());
+	let opinion = json!({"kind": "opinion", "file": "README.md", "line": 2, "quote": "first line", "text": "Shorter?"});
+	for n in 1..=3 {
+		let said = w.ask_from_pane("review_note", opinion.clone(), Some("pane-key-1")).await.unwrap();
+		assert_eq!(said, format!("Note c{n} stored (P2 opinion at README.md:2)."));
+	}
+	let fourth = w.ask_from_pane("review_note", opinion, Some("pane-key-1")).await.unwrap_err();
+	assert_eq!(
+		fourth,
+		"review_note: this review has 3 opinions already, the most it keeps; hand in findings with proofs or questions."
+	);
+	let stored = ReviewNotes::read(&file);
+	assert_eq!(stored.counts(), NoteCounts { notes: 3, blocking: 0 });
+	assert!(stored.notes.iter().all(|card| card.verdict == Verdict::Skip && card.ran.is_none()));
 }
 
 #[tokio::test]
