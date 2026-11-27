@@ -72,6 +72,8 @@ impl BriefLinks for NoBrowser {
 	}
 
 	fn open(&self, _id: &str) {}
+
+	fn open_board(&self) {}
 }
 
 /// A local ntfy: what each push carried, without its `Authorization` header and its path (the topic is the path).

@@ -5,6 +5,7 @@
 - Phase/slice: ultron 0.3 iteration, M2 R8
 - Date: 2026-11-27
 - Amends: 0581 (the key line), 0683 (the dock's width and when it shows), 0553 (the question box's size)
+- Amended by: 0718 (the always-keys gain `w Board`)
 
 ## Question
 The review of the dock found five problems (T1–T5): a key line of eleven keys whatever is picked; a 46-column dock that is gone in a window under 118 columns; thread rows whose title shrinks to 18 columns in a narrow dock; a picked row lit even when the pane has the keys; a question box that grows past readable width on a wide screen and a brief typed on one cut line. How do `today` and `ask` lay out?

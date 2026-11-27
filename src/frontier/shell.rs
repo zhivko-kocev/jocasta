@@ -431,6 +431,15 @@ impl JocastaShell {
 					..Reply::default()
 				};
 			}
+			// `w` (0718): the board's window, through the service.
+			"w" => {
+				self.say("Opening the board…", false);
+				return Reply {
+					send: vec![sent(SHELL_FEED, &ClientMessage::BoardOpen)],
+					redraw: true,
+					..Reply::default()
+				};
+			}
 			"up" | "k" => self.step(-1),
 			"down" | "j" => self.step(1),
 			"return" | "enter" => return self.enter(),

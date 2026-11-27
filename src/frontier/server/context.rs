@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::time::Duration;
 
 use crate::frontier::server::allow::AllowGate;
+use crate::frontier::server::board::PhaseLines;
 use crate::frontier::server::boss::LaunchedPanes;
 use crate::frontier::server::bridge::Bridge;
 use crate::frontier::server::checks::{Admission, CheckRunner, CheckRunnerOptions, checks_dir};
@@ -231,6 +232,8 @@ pub struct ServiceContext {
 	pub thread_facts: ThreadFacts,
 	/// The orchestrator's events, one line each (0688).
 	pub journal: Journal,
+	/// Each open thread's phase as the refresh tick last saw it, for the board's phase lines (0718).
+	pub phase_lines: PhaseLines,
 }
 
 impl ServiceContext {
@@ -286,6 +289,7 @@ impl ServiceContext {
 			sleep: PaneSleeps::new(link.clone()),
 			thread_facts: ThreadFacts::new(),
 			journal: Journal::default(),
+			phase_lines: PhaseLines::default(),
 			catalog,
 			options,
 			day,

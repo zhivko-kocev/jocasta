@@ -423,3 +423,16 @@ fn lowercase_b_asks_the_service_for_the_morning_brief_and_says_so_0680() {
 	shell.message(SHELL_FEED, &serde_json::to_string(&opened).unwrap());
 	assert_eq!(shell.today.said.as_ref().map(|said| said.text.as_str()), Some("Morning brief opened."));
 }
+
+#[test]
+fn lowercase_w_asks_the_service_for_the_board_and_says_so_0718() {
+	let mut shell = with_today();
+	drawn(&mut shell, 100, 34, true);
+	let key = shell.dock_key(char_key('w'));
+	assert!(key.redraw && !key.pass);
+	assert_eq!(sends(&key), [(SHELL_FEED.to_owned(), json!({"type": "board.open"}))]);
+	assert_eq!(
+		shell.today.said.as_ref().map(|said| (said.text.as_str(), said.is_error)),
+		Some(("Opening the board…", false))
+	);
+}

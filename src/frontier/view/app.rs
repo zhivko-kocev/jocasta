@@ -122,7 +122,7 @@ const SUBMITS: [(&str, Tone); 3] =
 
 #[cfg(test)]
 #[path = "app_tests.rs"]
-mod tests;
+pub(super) mod tests;
 
 /// One window's state.
 struct Window {
@@ -176,12 +176,12 @@ pub fn run(brief: Brief) -> iced::Result {
 }
 
 #[cfg(target_os = "linux")]
-fn platform(app_id: &str) -> window::settings::PlatformSpecific {
+pub(super) fn platform(app_id: &str) -> window::settings::PlatformSpecific {
 	window::settings::PlatformSpecific { application_id: app_id.to_owned(), ..Default::default() }
 }
 
 #[cfg(not(target_os = "linux"))]
-fn platform(_app_id: &str) -> window::settings::PlatformSpecific {
+pub(super) fn platform(_app_id: &str) -> window::settings::PlatformSpecific {
 	window::settings::PlatformSpecific::default()
 }
 

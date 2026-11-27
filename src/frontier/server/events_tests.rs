@@ -207,6 +207,9 @@ impl crate::frontier::brief::BriefLinks for OpenedBriefs {
 	fn open(&self, id: &str) {
 		self.0.lock().unwrap().push(id.to_owned());
 	}
+	fn open_board(&self) {
+		self.0.lock().unwrap().push("board".to_owned());
+	}
 }
 
 #[tokio::test]

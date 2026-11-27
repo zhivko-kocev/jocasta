@@ -31,6 +31,10 @@ impl BriefLinks for FakeLinks {
 	fn open(&self, id: &str) {
 		self.opened.lock().unwrap_or_else(PoisonError::into_inner).push(id.to_owned());
 	}
+
+	fn open_board(&self) {
+		self.opened.lock().unwrap_or_else(PoisonError::into_inner).push("board".to_owned());
+	}
 }
 
 fn opened(links: &FakeLinks) -> Vec<String> {

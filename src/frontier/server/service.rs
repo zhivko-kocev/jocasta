@@ -927,6 +927,14 @@ impl JocastaService {
 				});
 				return;
 			}
+			ClientMessage::BoardOpen => {
+				// His `w` (0718): the board's window; one already open stays the only one.
+				if let Some(windows) = self.ctx.options.briefs.as_ref() {
+					windows.open_board();
+				}
+				reply(ServerMessage::Action { text: "Board opened.".to_owned(), is_error: false });
+				return;
+			}
 			other => other,
 		};
 		if let Err(error) = self.handle_one(message).await {
@@ -963,7 +971,8 @@ impl JocastaService {
 			ClientMessage::LeftoverRemove { .. }
 			| ClientMessage::PrReview { .. }
 			| ClientMessage::CiFix { .. }
-			| ClientMessage::BriefMorning => {}
+			| ClientMessage::BriefMorning
+			| ClientMessage::BoardOpen => {}
 			ClientMessage::PaneFocus { pane_id } => self.ctx.herdr.focus(&pane_id).await?,
 			ClientMessage::LinkOpen { url } => {
 				// A brief's link (`today`'s BRIEFS row, the Done toast's) opens its window (0721).

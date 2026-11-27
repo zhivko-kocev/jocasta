@@ -4,9 +4,9 @@
 
 use clap::{Parser, Subcommand};
 
-/// The `jocasta` command's words (0387, 0467, 0468, 0472, 0544, 0694, 0700, 0716, 0721): open the work surface,
+/// The `jocasta` command's words (0387, 0467, 0468, 0472, 0544, 0694, 0700, 0716, 0718, 0721): open the work surface,
 /// `setup [--refresh <file> | --yes]`, `uninstall`, `diagnose`, `status --json`, `project …`, `thread …`,
-/// `worktree leftover|remove <path>`, `view <brief-id>`, `brief open <spec.json | ->`, `--version`;
+/// `worktree leftover|remove <path>`, `view <brief-id>`, `brief open <spec.json | ->`, `board`, `--version`;
 /// and, not listed in the help, `push-hook <remote> <address>`, the `pre-push` hook git runs in every Jocasta pane
 /// (0613). `--help` and a word that is no command are not routes: [`route`] returns clap's error for them. The shell is
 /// Jocasta's own (0683), so herdr's words are gone; a sleeping pane is drawn by the shell (0689), so no role runs it.
@@ -23,6 +23,7 @@ pub enum Route {
 	PushHook { args: Vec<String> },
 	View { id: String },
 	BriefOpen { spec: String },
+	Board,
 	Version,
 }
 
@@ -70,6 +71,8 @@ enum Word {
 		#[arg(value_name = "BRIEF-ID")]
 		id: String,
 	},
+	/// Open the board: the open threads, live, in their own window (one at a time)
+	Board,
 	/// Briefs: open <spec.json | -> checks a `show` spec and opens it in its own window
 	Brief {
 		#[command(subcommand)]
@@ -128,6 +131,7 @@ impl From<Word> for Route {
 			Word::Worktree { args } => Self::Worktree { args },
 			Word::PushHook { args } => Self::PushHook { args },
 			Word::View { id } => Self::View { id },
+			Word::Board => Self::Board,
 			Word::Brief { word: BriefWord::Open { spec } } => Self::BriefOpen { spec },
 		}
 	}

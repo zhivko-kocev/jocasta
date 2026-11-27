@@ -1,5 +1,5 @@
-//! How Jocasta's own programs reach the running Jocasta service: the push hook (0613), a sleeping pane's wake (0676)
-//! and a brief window's buttons (0721).
+//! How Jocasta's own programs reach the running Jocasta service: the push hook (0613), a sleeping pane's wake (0676),
+//! a brief window's buttons (0721) and the board (0718).
 //! Its port and token come from
 //! `<data>/jocasta-service.json` when its process is alive; the call goes over the bridge pipe as a CLI peer (0675).
 
@@ -74,6 +74,12 @@ pub async fn brief_live(id: &str) -> Result<bool, String> {
 /// why not ([`NOT_RUNNING`] when it isn't running).
 pub async fn brief_open(spec: &serde_json::Map<String, serde_json::Value>) -> Result<String, String> {
 	cli_call("brief open", serde_json::Value::Object(spec.clone()), 60).await
+}
+
+/// The board's rows from the running service (0718), or why not ([`NOT_RUNNING`] when it isn't running).
+pub async fn board() -> Result<crate::frontier::protocol::Board, String> {
+	let text = cli_call("board json", json!({}), 10).await?;
+	serde_json::from_str(&text).map_err(|error| format!("Jocasta's answer wasn't the board: {error}"))
 }
 
 #[cfg(test)]

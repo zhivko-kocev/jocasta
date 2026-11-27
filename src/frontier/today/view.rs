@@ -89,8 +89,8 @@ pub const NEWS_LINES: usize = 5;
 /// His last key's outcome shows this long (0581, UX-5).
 pub const SAID_MS: i64 = 60_000;
 
-/// The keys every row takes, after the picked row's own (0717); the key line drops the last ones that don't fit.
-const ALWAYS: [&str; 3] = ["n New", "b Brief", "X Stop all"];
+/// The keys every row takes, after the picked row's own (0717, 0718); the key line drops the last ones that don't fit.
+const ALWAYS: [&str; 4] = ["n New", "b Brief", "w Board", "X Stop all"];
 
 /// Under this width a thread takes two rows: its whole title, then its facts (0717).
 pub const NARROW: usize = 60;

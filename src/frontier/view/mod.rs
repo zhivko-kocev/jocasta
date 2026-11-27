@@ -20,6 +20,7 @@ use crate::shared::paths::config_dir;
 use crate::shared::service_file::NOT_RUNNING;
 
 mod app;
+pub mod board;
 pub mod flow;
 pub mod model;
 pub mod motion;
@@ -69,15 +70,15 @@ pub async fn open_spec(source: &str) -> Result<String> {
 		spec.sections.into_iter().filter_map(|part| if let Part::Given(section) = part { Some(section) } else { None });
 	let brief = spec::show_brief(spec.title, sections.collect());
 	store::save(&brief)?;
-	spawn(&brief.id).map_err(|error| Error::other(format!("the window didn't open: {error}")))?;
+	spawn(&["view", &brief.id]).map_err(|error| Error::other(format!("the window didn't open: {error}")))?;
 	Ok(format!("Shown: {}", brief.title))
 }
 
-/// Starts `<this program> view <id>` on its own, not waiting for it (every OS).
-fn spawn(id: &str) -> std::io::Result<()> {
+/// Starts `<this program> <args>` on its own, not waiting for it (every OS): a brief's window or the board's.
+fn spawn(args: &[&str]) -> std::io::Result<()> {
 	let program = self_command(None).into_iter().next().unwrap_or_default();
 	let mut command = Command::new(program);
-	command.args(["view", id]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+	command.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
 	// Its own process group: Ctrl+C in Jocasta's terminal doesn't close his windows.
 	#[cfg(unix)]
 	std::os::unix::process::CommandExt::process_group(&mut command, 0);
@@ -91,7 +92,8 @@ fn spawn(id: &str) -> std::io::Result<()> {
 	Ok(())
 }
 
-/// How the service shows a brief (0721): its own window, `jocasta view <id>`.
+/// How the service shows a brief (0721) and the board (0718): their own windows, `jocasta view <id>` and
+/// `jocasta board`.
 pub struct BriefWindows;
 
 impl BriefLinks for BriefWindows {
@@ -100,8 +102,14 @@ impl BriefLinks for BriefWindows {
 	}
 
 	fn open(&self, id: &str) {
-		if let Err(error) = spawn(id) {
+		if let Err(error) = spawn(&["view", id]) {
 			log(LogLevel::Warn, "view", &format!("couldn't open the brief {id}: {error}"), None);
+		}
+	}
+
+	fn open_board(&self) {
+		if let Err(error) = spawn(&["board"]) {
+			log(LogLevel::Warn, "view", &format!("couldn't open the board: {error}"), None);
 		}
 	}
 }

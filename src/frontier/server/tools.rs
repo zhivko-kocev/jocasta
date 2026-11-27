@@ -16,6 +16,7 @@ use crate::frontier::brief::spec::{self, Part};
 use crate::frontier::brief::store;
 use crate::frontier::protocol::ToastPriority;
 use crate::frontier::server::allow::Confirmation;
+use crate::frontier::server::board::board_json;
 use crate::frontier::server::bridge::Deliver;
 use crate::frontier::server::brief_actions;
 use crate::frontier::server::context::ServiceContext;
@@ -575,6 +576,8 @@ impl Tools {
 			"ping" => Ok("ok".to_owned()),
 			// `jocasta status --json` (0700): what the service holds, for a status bar.
 			"status json" => c.status.status_json(),
+			// The board window's rows (0718).
+			"board json" => board_json(c),
 			// A sleeping pane's key was pressed (0676): its sleeper asks for its omp back. Internal, no Allow.
 			"wake" => c.sleep.wake_by_key(&args.text("key")?).await,
 			// A brief window's button (0721): the brief's action through the same gate; the brief after it as JSON.

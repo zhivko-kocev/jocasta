@@ -723,4 +723,5 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0714](0714-show-spec.md) | `show` spec | product, prompts | v1 | ultron 0.3 iteration, M2 R8 | 2026-11-27 |  |
 | [0715](0715-brief-retention.md) | Brief retention | product | v1 | ultron 0.3 iteration, M2 R8 | 2026-11-27 |  |
 | [0716](0716-jocasta-brief-open.md) | `jocasta brief open` | product | v1 | ultron 0.3 iteration, M2 R8 | 2026-11-27 |  |
-| [0717](0717-today-and-ask-layout.md) | `today` and `ask` layout | product | v1 | ultron 0.3 iteration, M2 R8 | 2026-11-27 |  |
+| [0717](0717-today-and-ask-layout.md) | `today` and `ask` layout | product | v1 | ultron 0.3 iteration, M2 R8 | 2026-11-27 | 0718 |
+| [0718](0718-the-board.md) | The board | product | v1 | ultron 0.3 iteration, M3 W1 | 2026-11-27 |  |

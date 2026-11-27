@@ -239,7 +239,10 @@ fn today_header_needs_you_first_with_kind_glyphs_underway_landed_calendar_his_no
 	assert!(has(&shown, "  Hacker News: A headline ↗"));
 	assert_eq!(shown.len(), 34);
 	// The picked thread's keys first, then the ones every row takes (0717).
-	assert_eq!(shown.last().unwrap(), "Enter go · f Finish · s Stop · r Review · n New · b Brief · X Stop all");
+	assert_eq!(
+		shown.last().unwrap(),
+		"Enter go · f Finish · s Stop · r Review · n New · b Brief · w Board · X Stop all"
+	);
 	// No greeting.
 	let all = shown.join("\n").to_lowercase();
 	assert!(!["good morning", "good afternoon", "good evening"].iter().any(|g| all.contains(g)));
@@ -292,10 +295,10 @@ fn today_rows_enter_acts_on_in_drawn_order_threads_go_to_their_pane_link_rows_op
 	let shown = lines(&picked, 100, 34);
 	assert!(shown.iter().find(|l| l.contains("Client-a sync")).unwrap().starts_with("› now   Client-a sync ↗"));
 	// Its keys lead the key line (0717); a review request's add `R`.
-	assert_eq!(shown.last().unwrap(), "Enter open · n New · b Brief · X Stop all");
+	assert_eq!(shown.last().unwrap(), "Enter open · n New · b Brief · w Board · X Stop all");
 	let review = TodayState { selected: Some("https://example.org/web/pull/12".to_string()), ..state.clone() };
 	let review_keys = lines(&review, 100, 34);
-	assert_eq!(review_keys.last().unwrap(), "Enter open · R PR · n New · b Brief · X Stop all");
+	assert_eq!(review_keys.last().unwrap(), "Enter open · R PR · n New · b Brief · w Board · X Stop all");
 	// News only in spare rows: the shorter pane draws none and offers none.
 	assert!(!render(&state, now(), 100, 16).picks.iter().any(|p| p.key.contains("example.org/1")));
 }
@@ -376,7 +379,7 @@ fn today_at_40_columns_threads_take_two_rows_the_header_yields_to_two_rows_the_k
 	assert_eq!(shown[at + 1], "    working  12 min  $0.84  83k");
 	let wide_at = shown.iter().position(|l| l.contains("修复")).unwrap();
 	assert_eq!(shown[wide_at + 1], "    working  48 min");
-	assert_eq!(shown.last().unwrap(), "n New · b Brief · X Stop all");
+	assert_eq!(shown.last().unwrap(), "n New · b Brief · w Board · X Stop all");
 	let picked = TodayState { selected: Some("w3:p1".to_string()), ..state.clone() };
 	assert_eq!(lines(&picked, 40, 30).last().unwrap(), "Enter go · f Finish · s Stop · r Review");
 	// Every line fits from 20 to 120 columns.
@@ -744,7 +747,7 @@ fn leftovers_show_one_pickable_row_each_and_no_section_while_there_are_none() {
 	let shown = lines(&state, 100, 40);
 	assert!(position(&shown, "CALENDAR").unwrap() < position(&shown, "LEFTOVERS").unwrap());
 	assert!(shown.iter().any(|l| l.trim_end() == "› acme-api/acme-api-wt"), "{shown:#?}");
-	assert_eq!(shown.last().unwrap(), "x Remove · n New · b Brief · X Stop all");
+	assert_eq!(shown.last().unwrap(), "x Remove · n New · b Brief · w Board · X Stop all");
 	let frame = render(&state, now(), 100, 40);
 	let pick = frame.picks.iter().find(|p| p.leftover.is_some()).expect("a pickable leftover");
 	assert_eq!(
@@ -780,7 +783,7 @@ fn every_section_at_heights_10_20_and_40_keeps_needs_you_and_underway_and_fits()
 		assert!(fits(&state, 100, height), "height {height}");
 		assert!(has(&shown, "NEEDS YOU") && has(&shown, "UNDERWAY"), "height {height}");
 		// Nothing picked: only the keys every row takes (0717).
-		assert_eq!(shown.last().unwrap(), "n New · b Brief · X Stop all", "height {height}");
+		assert_eq!(shown.last().unwrap(), "n New · b Brief · w Board · X Stop all", "height {height}");
 	}
 	// 10 and 20 rows have no room for NEXT and NEWS; 40 has every section, in the budget's order.
 	assert!(!has(&lines(&state, 100, 20), "NEWS") && !has(&lines(&state, 100, 20), "NEXT"));

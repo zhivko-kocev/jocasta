@@ -667,6 +667,45 @@ pub struct ChecksLoad {
 	pub waiting: u32,
 }
 
+/// One open thread on the board (0718): what the dock's row says of it, with its phase and its PR's CI.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardRow {
+	pub pane_id: String,
+	pub project: String,
+	pub title: String,
+	/// `stuck`, `review`, `handoff`, `finishing`, `done`, `plan ready`, `awaiting you`, `working` or `idle`.
+	pub phase: String,
+	/// What runs now: the dock's line.
+	pub line: String,
+	/// When its state last changed, epoch ms.
+	pub since: i64,
+	#[serde(default, skip_serializing_if = "Option::is_none", serialize_with = "js_number_opt")]
+	pub cost: Option<f64>,
+	#[serde(default, skip_serializing_if = "Option::is_none", serialize_with = "js_number_opt")]
+	pub budget: Option<f64>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub context: Option<u64>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub check: Option<bool>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub pr: Option<PrFacts>,
+}
+
+/// The board's data (0718), the bridge command `board json`'s answer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Board {
+	pub rows: Vec<BoardRow>,
+	/// Thread starts waiting for their turn (0687), as `today` says them.
+	#[serde(default)]
+	pub queued: Vec<String>,
+	pub checks: ChecksLoad,
+	/// Today's spend as last counted; null until today's sessions were read.
+	#[serde(default, serialize_with = "js_number_opt")]
+	pub spend_today: Option<f64>,
+}
+
 /// The costliest thread of today (0668).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -820,6 +859,9 @@ pub enum ClientMessage {
 	/// His `b` in the dock (0680): the service builds today's morning brief again and opens it.
 	#[serde(rename = "brief.morning")]
 	BriefMorning,
+	/// His `w` in the dock (0718): the service opens the board's window.
+	#[serde(rename = "board.open")]
+	BoardOpen,
 }
 
 #[cfg(test)]

@@ -576,7 +576,7 @@ fn a_map_row_is_lit_while_the_pointer_is_on_it_and_a_late_leave_of_another_row_c
 }
 
 /// `snapshot` as the PNG `path` (iced_test names its files `<stem>-<renderer>.png`; this renames it to `path`).
-fn write_png(snapshot: &iced_test::simulator::Snapshot, path: &std::path::Path) {
+pub(in crate::frontier::view) fn write_png(snapshot: &iced_test::simulator::Snapshot, path: &std::path::Path) {
 	let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
 	let dir = path.parent().unwrap();
 	let _ = std::fs::remove_file(path);

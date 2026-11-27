@@ -1,6 +1,7 @@
 pub mod allow;
 pub mod ask_question;
 pub mod asker;
+pub mod board;
 pub mod boss;
 pub mod bridge;
 pub mod brief_actions;

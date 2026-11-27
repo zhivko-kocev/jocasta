@@ -381,16 +381,22 @@ impl Events {
 			"body": body,
 			"result": result,
 		});
-		let written = OpenOptions::new()
-			.create(true)
-			.append(true)
-			.open(data_dir().join("notifications.jsonl"))
-			.and_then(|mut file| file.write_all(format!("{line}\n").as_bytes()));
-		if let Err(error) = written {
+		if let Err(error) = log_notification(&line) {
 			self.link.ctx().warn(error);
 		}
 	}
+}
 
+/// Appends one line to `<data>/notifications.jsonl` (H2, 0543; a board phase line, 0718).
+pub fn log_notification(line: &Value) -> std::io::Result<()> {
+	OpenOptions::new()
+		.create(true)
+		.append(true)
+		.open(data_dir().join("notifications.jsonl"))
+		.and_then(|mut file| file.write_all(format!("{line}\n").as_bytes()))
+}
+
+impl Events {
 	/// Sends the start's notifications herdr couldn't show again, in order (each refresh tick): the first one probes;
 	/// while no client was ever attached they all wait for the next tick, and once one is, each is sent once, whatever
 	/// herdr answers. A service no terminal attached to within `UNSHOWN_WAIT_MS` drops them.

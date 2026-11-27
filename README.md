@@ -33,6 +33,7 @@ While threads work, you keep talking to the boss. It tells you when one needs yo
 - **Guard rails.** A shipped rule list stops or asks about destructive commands (force pushes, `reset --hard`, recursive deletes, reading tokens). Merges, PRs and other irreversible steps need a code that you type into a question drawn over your terminal. A push to `main` asks you once per repo.
 - **Memory across sessions.** `history_search` lets every agent search past sessions of the same project.
 - **Briefs.** The boss's `show` draws animated diagrams, code maps and diffs in a native window, from a spec. There is no free-hand drawing: you ask for a new picture. `jocasta view <brief-id>` opens a stored brief again, and `jocasta brief open spec.json` lets any agent or script open its own spec the same way. Briefs are kept 30 days.
+- **The board.** `jocasta board` (or `w` in the dock) opens a live window of every open thread: its phase, what it runs now, its age, cost against budget, context, last check and its PR's CI. Each phase change is also a line in `notifications.jsonl`, which ultron turns into a phone push.
 - **Your inbox in one place.** GitHub and Azure DevOps reviews and failed pipelines, plus an iCal calendar, appear in `today`.
 - **Nothing runs behind your back.** When you close Jocasta, everything it started stops. Threads continue where they left off the next time you open it.
 

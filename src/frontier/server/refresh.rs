@@ -13,6 +13,7 @@ use futures_util::FutureExt;
 use futures_util::future::{BoxFuture, Shared as SharedFuture, join_all};
 
 use crate::frontier::protocol::ThreadState;
+use crate::frontier::server::board::log_phase_changes;
 use crate::frontier::server::boss::{DefaultClosed, close_herdr_default};
 use crate::frontier::server::context::{Finishing, Link, ServiceContext, Shared};
 use crate::frontier::server::day_briefs;
@@ -294,6 +295,8 @@ impl Inner {
 			.await;
 			self.step("morning brief", day_briefs::morning_if_due(c)).await;
 		}
+		// A thread's phase change is one line for his phone (0718).
+		self.step("phase lines", async { log_phase_changes(c) }).await;
 		self.step("sidebar and HUD", c.status.report()).await;
 	}
 
