@@ -1,0 +1,37 @@
+name: Idea
+description: Something Jocasta should do, or do differently.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ideas are welcome. An accepted idea becomes a decision record in `docs/decisions/` before any code is written, and this issue links it (see CONTRIBUTING.md).
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you were trying to do
+      description: The task, and where Jocasta got in the way or fell short. Use placeholder names (`acme-api`, `client-a`).
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd like instead
+      description: How it could work for you. A command, a key, a screen sketch, or just the outcome you want.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do today
+      description: Workarounds, other tools, or settings you tried.
+  - type: dropdown
+    id: os
+    attributes:
+      label: Where you use Jocasta
+      multiple: true
+      options:
+        - Windows 11
+        - Linux (ultron)
+        - Linux (other)
+        - macOS (Apple silicon)

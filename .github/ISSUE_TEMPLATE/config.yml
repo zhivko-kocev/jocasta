@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: The manual
+    url: https://github.com/zhivko-kocev/jocasta/blob/main/docs/manual.md
+    about: Setup, daily use, every command and config key, and what the guard doesn't stop.
+  - name: Why it works this way
+    url: https://github.com/zhivko-kocev/jocasta/tree/main/docs/decisions
+    about: One decision record per behaviour; read the record before proposing to change it.
+  - name: omp itself
+    url: https://github.com/can1357/oh-my-pi
+    about: Problems inside the agent (models, tools, its own TUI) belong to omp.

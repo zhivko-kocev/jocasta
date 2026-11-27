@@ -1,0 +1,59 @@
+name: Bug
+description: Something Jocasta does differs from the README, the manual or what you expected.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. This repo is public: use placeholder names (`acme-api`, `client-a`) instead of real project, client or company names, and leave out tokens and private paths.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead. Exact error text and the command you ran help most.
+      placeholder: |
+        I ran `jocasta thread new acme-api "add retries"`; I expected a new thread tab, but it printed …
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The shortest way to see it again, if you know one.
+      placeholder: |
+        1. jocasta
+        2. Ctrl+B, then Alt+N, pick acme-api
+        3. …
+  - type: input
+    id: version
+    attributes:
+      label: jocasta --version
+      description: Paste the line it prints (it names omp's version too).
+      placeholder: jocasta 0.2.0 (omp 19.2.1)
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11
+        - Linux (ultron)
+        - Linux (other)
+        - macOS (Apple silicon)
+    validations:
+      required: true
+  - type: input
+    id: os-detail
+    attributes:
+      label: OS version and terminal
+      description: For example "Windows 11 24H2, Windows Terminal 1.23", "Arch Linux, foot 1.25" or "macOS 26.1, Ghostty 1.3".
+    validations:
+      required: true
+  - type: textarea
+    id: diagnose
+    attributes:
+      label: Log and state
+      description: |
+        `jocasta diagnose` writes `state.md` and `recent.log` into the `diagnose` folder of Jocasta's data folder (`%LOCALAPPDATA%\jocasta\data` on Windows, `~/.local/share/jocasta/data` on Linux, `~/Library/Application Support/jocasta/data` on macOS), then opens a read-only omp that sends them to your model provider to find the cause (close it if you only want the files). Paste the lines that matter, after replacing project names and paths you don't want public. If you copy its terminal output, leave out the `phone` line: it names your ntfy topic.
+      render: text
