@@ -159,8 +159,9 @@ jocasta-bench h3-recovery --out "$D\h3-recovery"
 jocasta-bench h8-parallel --out "$D\h8-parallel" --project acme-h8 --repo "$B1\projects\acme-h8" --threads 2,4
 ```
 
-H3 is not in the Linux list yet: on 2026-11-27 a killed thread pane was not started again and a restarted Jocasta
-listed no threads, so it is re-run after that restore fix (same command, `--out $D/h3-recovery`, in `data-h3`).
+H3 on Linux ran after the thread-restore fix (`70593ee`), in `data-h3c` with three small threads (as for H4), pane
+fault first so every thread's folder is in the pane rotation: `jocasta-bench h3-recovery --out $D/h3-recovery --faults
+pane,service`.
 
 **The task benchmark**, once `tasks.jsonl` is in `~/thesis/data/bench/tasks/` (copied from his Windows PC; A4 needs
 Claude Code signed in, A7 the key in `JOCASTA_A7_ANTHROPIC_API_KEY`):
