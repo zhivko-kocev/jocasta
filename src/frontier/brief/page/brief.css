@@ -629,3 +629,7 @@ td.num {
 		stroke-dashoffset: 0;
 	}
 }
+
+.shot {
+	max-width: 100%;
+}

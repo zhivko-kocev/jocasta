@@ -213,6 +213,46 @@
 							"required": ["file", "line", "quote", "severity", "text"],
 							"additionalProperties": false
 						}
+					},
+					{
+						"name": "review_try",
+						"description": "Try the change: Jocasta runs your steps and checks each one's output.\nRun this before any finding. Each step is {run, expect}: Jocasta runs `run` itself (a pull request in a clean container, your own thread in its worktree) and the step passes when its output contains `expect`, or, for `exit:N`, when it exits N. A step that fails ends the review: hand in nothing more. screenshots are image files you saved (for a web UI driven with the headless browser); they appear on the review page.",
+						"inputSchema": {
+							"type": "object",
+							"properties": {
+								"what": {
+									"type": "string",
+									"description": "What you are trying, in a few words (e.g. `the --dry-run flag`)"
+								},
+								"steps": {
+									"type": "array",
+									"items": {
+										"type": "object",
+										"properties": {
+											"run": {
+												"type": "string",
+												"description": "A shell command to run in the code under review"
+											},
+											"expect": {
+												"type": "string",
+												"description": "Text its output must contain, or exit:N for its exit code"
+											}
+										},
+										"required": ["run", "expect"]
+									},
+									"description": "The steps, in order"
+								},
+								"screenshots": {
+									"type": "array",
+									"items": {
+										"type": "string"
+									},
+									"description": "Image files to show on the page"
+								}
+							},
+							"required": ["what", "steps"],
+							"additionalProperties": false
+						}
 					}
 				]
 			}

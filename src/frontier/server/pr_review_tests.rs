@@ -16,6 +16,7 @@ fn card(id: &str, file: &str, quote: &str) -> Card {
 		proof: Proof { sha: "1111111".to_owned(), ok: true },
 		edited: None,
 		published: None,
+		ran: None,
 	}
 }
 
@@ -96,6 +97,7 @@ fn the_brief_holds_the_header_flow_cards_and_a_map_linking_files_the_cards_menti
 	let notes = ReviewNotes {
 		head: task.pr.as_ref().unwrap().head_sha.clone(),
 		notes: vec![card("n1", "src/a.rs", "y"), second],
+		..ReviewNotes::default()
 	};
 	let rows = numstat_rows("3\t1\tsrc/a.rs\n5\t0\tsrc/b.rs\n");
 	let brief = assemble(&task, "acme", &notes, Some(map_section(&rows, &notes)), None).unwrap();

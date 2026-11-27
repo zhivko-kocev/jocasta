@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::frontier::brief::model::{Card, Proof, Severity, Verdict};
+use crate::frontier::brief::model::{Card, Proof, RanProof, Severity, Verdict, WorksRow, WorksState};
 use crate::frontier::server::task_file::task_dir;
 use crate::frontier::server::tools::Args;
 use crate::frontier::server::worktrees::git_out;
@@ -22,11 +22,13 @@ mod tests;
 /// The tool's name.
 pub const REVIEW_NOTE: &str = "review_note";
 
-/// `<thread dir>/review.json`: the notes of the review of `head`.
+/// `<thread dir>/review.json`: the notes of the review of `head`, and what showed it works or doesn't (0706).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ReviewNotes {
 	pub head: String,
 	pub notes: Vec<Card>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub works: Vec<WorksRow>,
 }
 
 /// A review's notes counted: all of them, and the blocking ones (P0 and P1, 0453).
@@ -58,6 +60,36 @@ impl ReviewNotes {
 			notes: self.notes.len(),
 			blocking: self.notes.iter().filter(|card| card.severity.blocking()).count(),
 		}
+	}
+
+	/// The notes at `file` when they are of `head`; a fresh, empty review of `head` otherwise.
+	pub fn of_head(file: &Path, head: &str) -> Self {
+		let notes = Self::read(file);
+		if notes.head == head { notes } else { Self { head: head.to_owned(), ..Self::default() } }
+	}
+
+	/// What ended the review (0706): the first check or try that failed.
+	pub fn ended(&self) -> Option<&str> {
+		self.works.iter().find(|row| row.state == WorksState::Failed).map(|row| row.label.as_str())
+	}
+
+	/// Records that `what` doesn't work: its failed row and the one P0 card `It doesn't work: <what> failed`, proven by
+	/// the command's tail and not for publishing (0706).
+	pub fn failed(&mut self, row: WorksRow, proof: RanProof) {
+		self.notes.push(Card {
+			id: format!("c{}", self.notes.len() + 1),
+			severity: Severity::P0,
+			file: String::new(),
+			line: 0,
+			quote: String::new(),
+			text: format!("It doesn't work: {} failed", row.label),
+			verdict: Verdict::Skip,
+			proof: Proof { sha: self.head.clone(), ok: true },
+			edited: None,
+			published: None,
+			ran: Some(proof),
+		});
+		self.works.push(row);
 	}
 }
 
@@ -138,6 +170,7 @@ pub async fn checked_card(cwd: &Path, head: &str, args: &Args<'_>, number: usize
 		proof: Proof { sha: head.to_owned(), ok: true },
 		edited: None,
 		published: None,
+		ran: None,
 	})
 }
 

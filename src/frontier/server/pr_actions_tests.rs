@@ -85,6 +85,7 @@ fn card(id: &str, ok: bool, verdict: Verdict) -> Card {
 		proof: Proof { sha: HEAD.to_owned(), ok },
 		edited: None,
 		published: None,
+		ran: None,
 	}
 }
 
@@ -134,7 +135,7 @@ fn world(cards: Vec<Card>) -> World {
 		None,
 	);
 	save_task(&task).unwrap();
-	let notes = ReviewNotes { head: HEAD.to_owned(), notes: cards };
+	let notes = ReviewNotes { head: HEAD.to_owned(), notes: cards, ..ReviewNotes::default() };
 	notes.write(&review_file(&task.project_id, &task.id)).unwrap();
 	let brief = format!("pr-{project}-7");
 	let first = rebuilt_from_nothing(&task, &notes, &brief);

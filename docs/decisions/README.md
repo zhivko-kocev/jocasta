@@ -683,9 +683,9 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0675](0675-the-bridge-one-extension-one-pipe.md) | The bridge: one omp extension and one local pipe | product | v1 | lightweight program | 2026-11-24 | 0683, 0702 |
 | [0676](0676-process-diet.md) | Process diet: panes start on demand and sleep; a footprint that only goes down | product | v1 | lightweight program | 2026-11-24 | 0689 |
 | [0677](0677-deterministic-loops.md) | Deterministic validation loops | product | v1 | lightweight program | 2026-11-24 |  |
-| [0678](0678-briefs-as-html-pages.md) | Briefs: animated HTML pages served on loopback | product | v1 | lightweight program | 2026-11-24 | 0698, 0699 |
+| [0678](0678-briefs-as-html-pages.md) | Briefs: animated HTML pages served on loopback | product | v1 | lightweight program | 2026-11-24 | 0698, 0699, 0706 |
 | [0679](0679-whiteboard-and-hunk-removed.md) | Whiteboard and hunk removed; `show` draws a brief | product | v1 | lightweight program | 2026-11-24 |  |
-| [0680](0680-day-flows-and-new-sources.md) | Day flows and three new read-only sources | product | v1 | lightweight program | 2026-11-24 |  |
+| [0680](0680-day-flows-and-new-sources.md) | Day flows and three new read-only sources | product | v1 | lightweight program | 2026-11-24 | 0706 |
 | [0681](0681-privacy-boundary.md) | Privacy boundary: one door to the model | product | v1 | lightweight program | 2026-11-24 |  |
 | [0682](0682-validation-environment-mise-tasks.md) | Validation environment: the project's own mise tasks | process | v1 | lightweight program | 2026-11-24 |  |
 | [0683](0683-own-shell-on-alacritty-terminal.md) | Own shell on `alacritty_terminal`, gated by a spike | product | v1 | lightweight program | 2026-11-24 | 0702 |
@@ -711,4 +711,5 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0703](0703-first-run-checks.md) | First-run checks | product | v1 | ultron 0.3 iteration, J8 | 2026-11-26 |  |
 | [0704](0704-project-named-mise-file.md) | Project-named mise file | product | v1 | ultron 0.3 iteration, J9 | 2026-11-26 |  |
 | [0705](0705-ponytail-text-refreshed.md) | Ponytail text refreshed | product, prompts | v1 | ultron 0.3 iteration, J10 | 2026-11-26 |  |
+| [0706](0706-review-works-first.md) | Review: works first | product, prompts | v1 | ultron 0.3 iteration, M2 R2 | 2026-11-26 |  |
 | [0708](0708-clean-room-runs.md) | Clean-room runs | product, security | v1 | ultron 0.3 iteration, M2 R1 | 2026-11-26 |  |

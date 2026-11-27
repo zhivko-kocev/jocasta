@@ -244,9 +244,13 @@ impl World {
 
 	/// The reviewer hands in two P2 notes through `review_note`.
 	fn two_notes(&self) {
-		ReviewNotes { head: self.head(), notes: vec![card(Severity::P2, 1), card(Severity::P2, 2)] }
-			.write(&self.notes_file())
-			.unwrap();
+		ReviewNotes {
+			head: self.head(),
+			notes: vec![card(Severity::P2, 1), card(Severity::P2, 2)],
+			..ReviewNotes::default()
+		}
+		.write(&self.notes_file())
+		.unwrap();
 	}
 
 	/// The thread's `review.json`.
@@ -433,6 +437,7 @@ fn card(severity: Severity, line: usize) -> Card {
 		proof: Proof { sha: String::new(), ok: true },
 		edited: None,
 		published: None,
+		ran: None,
 	}
 }
 
@@ -448,9 +453,13 @@ async fn b4_a_task_end_asks_for_the_review_with_a_clean_notes_file_and_the_revie
 	assert_eq!((running.range.as_str(), running.commits.as_str()), (RANGE, "1 new commit «Add a README line»"));
 	assert_eq!(running.head.as_deref(), Some(w.head().as_str()));
 	let file = w.notes_file();
-	assert_eq!(ReviewNotes::read(&file), ReviewNotes { head: w.head(), notes: Vec::new() });
+	assert_eq!(ReviewNotes::read(&file), ReviewNotes { head: w.head(), ..ReviewNotes::default() });
 	// The reviewer hands in a P1 and a P2: the review finds both, one of them blocking.
-	let notes = ReviewNotes { head: w.head(), notes: vec![card(Severity::P1, 1), card(Severity::P2, 2)] };
+	let notes = ReviewNotes {
+		head: w.head(),
+		notes: vec![card(Severity::P1, 1), card(Severity::P2, 2)],
+		..ReviewNotes::default()
+	};
 	notes.write(&file).unwrap();
 	let found = w.flow().found(&w.thread).await.unwrap();
 	assert_eq!((found.notes, found.blocking), (Some(2), Some(1)));

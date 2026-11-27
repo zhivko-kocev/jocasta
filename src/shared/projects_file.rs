@@ -63,6 +63,17 @@ pub struct ProjectsFile {
 	pub push: Vec<(String, PushEntry)>,
 	/// The repos (main checkout folders, as the file writes them) whose clean-room runs are off (`cleanRoom:`, 0708).
 	pub clean_room_off: Vec<String>,
+	/// His answers to running a pull request on this machine (`prRun:`, 0706): per repo, each author with allow (true)
+	/// or deny (false).
+	pub pr_run: Vec<(String, Vec<(String, bool)>)>,
+}
+
+impl ProjectsFile {
+	/// His answer to running `author`'s pull requests of the repo at `main` on this machine, when he gave one.
+	pub fn pr_run_answer(&self, main: &Path, author: &str) -> Option<bool> {
+		let (_, authors) = self.pr_run.iter().find(|(repo, _)| same_path(Path::new(repo), main))?;
+		authors.iter().find(|(name, _)| name == author).map(|(_, allow)| *allow)
+	}
 }
 
 struct Parsed {
@@ -72,6 +83,7 @@ struct Parsed {
 	names: Vec<(String, String)>,
 	push: Vec<(String, PushWay)>,
 	clean_room_off: Vec<String>,
+	pr_run: Vec<(String, Vec<(String, bool)>)>,
 }
 
 fn invalid(path: Vec<PathSegment>, message: &str) -> SchemaProblem {
@@ -145,8 +157,15 @@ fn root_of(index: usize, value: &Value) -> std::result::Result<WatchedRoot, Sche
 /// The file's shape (0109): the mapping first, so a list or a scalar is told it must be a mapping. A root's other keys
 /// and the file's other keys (an old `scopes`) are allowed and left alone. The messages are the schema checker's.
 fn validate(value: &Value) -> std::result::Result<Parsed, SchemaProblem> {
-	let mut parsed =
-		Parsed { roots: vec![], add: vec![], exclude: vec![], names: vec![], push: vec![], clean_room_off: vec![] };
+	let mut parsed = Parsed {
+		roots: vec![],
+		add: vec![],
+		exclude: vec![],
+		names: vec![],
+		push: vec![],
+		clean_room_off: vec![],
+		pr_run: vec![],
+	};
 	let map = match value {
 		Value::Null => return Ok(parsed),
 		Value::Object(map) => map,
@@ -209,6 +228,27 @@ fn validate(value: &Value) -> std::result::Result<Parsed, SchemaProblem> {
 		}
 		Some(_) => return Err(invalid(key_path(&["cleanRoom"]), "must be object")),
 	}
+	match map.get("prRun") {
+		None | Some(Value::Null) => {}
+		Some(Value::Object(repos)) => {
+			for (repo, authors) in repos {
+				let Some(authors) = authors.as_object() else {
+					return Err(invalid(key_path(&["prRun", repo]), "must be object"));
+				};
+				let mut answers = Vec::new();
+				for (author, answer) in authors {
+					let allow = match answer.as_str() {
+						Some("allow") => true,
+						Some("deny") => false,
+						_ => return Err(invalid(key_path(&["prRun", repo, author]), "must be equal to constant")),
+					};
+					answers.push((author.clone(), allow));
+				}
+				parsed.pr_run.push((repo.clone(), answers));
+			}
+		}
+		Some(_) => return Err(invalid(key_path(&["prRun"]), "must be object")),
+	}
 	Ok(parsed)
 }
 
@@ -240,6 +280,7 @@ pub fn read_projects_file(file: Option<&Path>) -> Result<ProjectsFile> {
 		names: parsed.names.clone(),
 		push,
 		clean_room_off: parsed.clean_room_off.clone(),
+		pr_run: parsed.pr_run.clone(),
 	})
 }
 
@@ -249,6 +290,8 @@ static FLOW_MAP: LazyLock<Regex> =
 	LazyLock::new(|| Regex::new(r"^push:\s*(\{.*\})\s*(#.*)?$").expect("a valid pattern"));
 static OLD_WAY: LazyLock<Regex> =
 	LazyLock::new(|| Regex::new(r":\s+(direct|pull-requests)(\s+#.*)?$").expect("a valid pattern"));
+static PR_RUN_FLOW: LazyLock<Regex> =
+	LazyLock::new(|| Regex::new(r"^prRun:\s*(\{.*\})\s*(#.*)?$").expect("a valid pattern"));
 
 /// Paths as the file writes them: forward slashes, like the 0109 preview.
 fn yaml_scalar(path: &str) -> String {
@@ -475,6 +518,75 @@ fn place_entry(lines: &mut Vec<String>, key_line: usize, repo: &str, entry: &str
 	}
 	lines.insert(end, format!("{indent}{entry}"));
 	Ok(true)
+}
+
+/// One repo's `prRun` line: `<repo>: {"<author>": allow, …}`.
+fn pr_run_entry(repo: &str, answers: &[(String, bool)]) -> String {
+	let flow: Vec<String> = answers
+		.iter()
+		.map(|(author, allow)| format!("{}: {}", Value::String(author.clone()), if *allow { "allow" } else { "deny" }))
+		.collect();
+	format!("{}: {{{}}}", yaml_scalar(repo), flow.join(", "))
+}
+
+/// Records his answer to running `author`'s pull requests of `repo` on this machine (0706) in the `prRun:` map,
+/// keeping the rest of the file, its comments and its order: the repo's line gains or changes the author, a new repo
+/// goes at the map's end, and a file without the map gets it at its end.
+pub fn set_pr_run(repo: &str, author: &str, allow: bool, file: Option<&Path>) -> Result<bool> {
+	edit(&target(file), |lines| {
+		let answer = (author.to_owned(), allow);
+		let Some(key_line) = lines.iter().position(|line| is_key_line(line, "prRun")) else {
+			lines.push("prRun:".to_owned());
+			lines.push(format!("  {}", pr_run_entry(repo, &[answer])));
+			return Ok(true);
+		};
+		// A flow map (`prRun: {}`) is rewritten as a block first, as `set_push_way` does.
+		if let Some(flow) = PR_RUN_FLOW.captures(&lines[key_line].clone()) {
+			let parsed = parse_value(&format!("x: {}", &flow[1])).map_err(Error::other)?;
+			let rows: Map<String, Value> = parsed.get("x").and_then(Value::as_object).cloned().unwrap_or_default();
+			let mut replacement = vec![format!("prRun:{}", comment_of(flow.get(2)))];
+			for (key, value) in &rows {
+				let answers = value.as_object().into_iter().flatten();
+				let answers: Vec<(String, bool)> =
+					answers.map(|(name, said)| (name.clone(), said.as_str() == Some("allow"))).collect();
+				replacement.push(format!("  {}", pr_run_entry(key, &answers)));
+			}
+			lines.splice(key_line..=key_line, replacement);
+		}
+		let mut end = key_line + 1;
+		let mut indent = "  ".to_owned();
+		for (i, slot) in lines.iter_mut().enumerate().skip(key_line + 1) {
+			let line = slot.clone();
+			if skipped(&line) {
+				continue;
+			}
+			if !line.starts_with(char::is_whitespace) {
+				break;
+			}
+			indent = line[..line.len() - line.trim_start().len()].to_owned();
+			end = i + 1;
+			let parsed = parse_value(line.trim()).map_err(Error::other)?;
+			let Some((key, value)) = parsed.as_object().and_then(|map| map.iter().next()) else { continue };
+			if !same_path(Path::new(key), Path::new(repo)) {
+				continue;
+			}
+			let mut answers: Vec<(String, bool)> = value
+				.as_object()
+				.into_iter()
+				.flatten()
+				.map(|(name, said)| (name.clone(), said.as_str() == Some("allow")))
+				.collect();
+			match answers.iter_mut().find(|(name, _)| *name == author) {
+				Some((_, said)) if *said == allow => return Ok(false),
+				Some((_, said)) => *said = allow,
+				None => answers.push(answer),
+			}
+			*slot = format!("{indent}{}", pr_run_entry(key, &answers));
+			return Ok(true);
+		}
+		lines.insert(end, format!("{indent}{}", pr_run_entry(repo, &[answer])));
+		Ok(true)
+	})
 }
 
 #[cfg(test)]

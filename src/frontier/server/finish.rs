@@ -178,6 +178,8 @@ impl Finisher {
 		let c = self.link.ctx();
 		let mut found = self.finishable(thread, door).await?;
 		self.ready(mode, thread, &found.trunk).await?;
+		// Works first (0706): the clean-room check on the head, before any question; a failure refuses Finish.
+		crate::frontier::server::works::finish_check(&c, thread).await?;
 		if door != Door::Key {
 			self.allowed(mode, thread, &found, door).await?;
 			// His Allow can take minutes: the thread may have closed, started a run or moved meanwhile.

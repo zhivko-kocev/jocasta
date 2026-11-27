@@ -27,6 +27,7 @@ use crate::frontier::server::thread::{ThreadRef, subject};
 use crate::frontier::server::thread_lifecycle::Awaiting;
 use crate::frontier::server::thread_start::{StartOptions, after_of, budget_of, done_when_of, heavy_of};
 use crate::frontier::server::wording::{Door, asker, asks, branch_slug, brief_title, person, quoted};
+use crate::frontier::server::works::{REVIEW_TRY, review_try};
 use crate::frontier::server::worktrees::remove_checkout;
 use crate::shared::clock::now_ms;
 use crate::shared::day::{DayRef, day_label, hhmm, local_day};
@@ -75,6 +76,7 @@ pub const TOOLS: &[Tool] = &[
 	Tool { name: "thread_stop", boss: true },
 	Tool { name: REPORT_RESULT, boss: false },
 	Tool { name: REVIEW_NOTE, boss: false },
+	Tool { name: REVIEW_TRY, boss: false },
 	Tool { name: "check", boss: false },
 	Tool { name: "show", boss: true },
 	Tool { name: "today", boss: true },
@@ -289,6 +291,15 @@ impl Tools {
 			"thread_stop" => self.stop_named(&args.text("thread")?, Door::Boss).await,
 			REPORT_RESULT => self.report_result(call.pane_id.as_deref(), call.args.values, call.unkeyed).await,
 			REVIEW_NOTE => self.review_note(call.pane_id.as_deref(), args, call.unkeyed).await,
+			REVIEW_TRY => {
+				let Some(thread) = call.pane_id.as_deref().and_then(|pane| c.threads.get(pane)) else {
+					return Err(Error::user(format!(
+						"{REVIEW_TRY}: only a thread's pane tries a change, and this pane isn't a thread's{}.",
+						call.unkeyed
+					)));
+				};
+				review_try(c, &thread, args.values).await
+			}
 			"check" => c.review.check_tool(call.pane_id.as_deref(), call.unkeyed).await,
 			"worktree_remove" => self.remove_leftover(&args.text("path")?, Door::Boss).await,
 			other => self.run_boss(other, args).await,
@@ -431,9 +442,11 @@ impl Tools {
 		};
 		let head = head_of(&path).await?;
 		let file = review_file(&project_id, &task_id);
-		let mut notes = ReviewNotes::read(&file);
-		if notes.head != head {
-			notes = ReviewNotes { head: head.clone(), notes: Vec::new() };
+		let mut notes = ReviewNotes::of_head(&file, &head);
+		if let Some(what) = notes.ended() {
+			return Err(Error::user(format!(
+				"{REVIEW_NOTE}: the review ended: {what} failed. Hand in nothing more and end your turn."
+			)));
 		}
 		let card = checked_card(&path, &head, args, notes.notes.len() + 1).await?;
 		let said = format!("Note {} stored ({} at {}:{}).", card.id, card.severity.as_str(), card.file, card.line);

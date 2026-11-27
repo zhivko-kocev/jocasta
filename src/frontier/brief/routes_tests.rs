@@ -114,3 +114,28 @@ async fn an_action_needs_the_servers_origin_and_json_and_answers_the_whole_brief
 	let unknown = post("/brief/show-9/act", &host, Some(&origin), "application/json", "{}");
 	assert_eq!(routes().handle(unknown).await.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn a_kept_screenshot_is_served_by_its_brief_and_name_and_nothing_outside_its_folder_0706() {
+	let _j = temp_jocasta();
+	let dir = store::brief_dir().join("assets").join("pr-p1-7");
+	std::fs::create_dir_all(&dir).unwrap();
+	std::fs::write(dir.join("1-1.png"), b"\x89PNG\r\n\x1a\nimage").unwrap();
+	std::fs::write(store::brief_dir().join("secret.png"), b"no").unwrap();
+	let host = format!("127.0.0.1:{PORT}");
+	let shot = routes().handle(get("/brief/assets/pr-p1-7/1-1.png", &host)).await;
+	assert_eq!(shot.status(), StatusCode::OK);
+	assert_eq!(shot.headers()[header::CONTENT_TYPE], "image/png");
+	for path in [
+		"/brief/assets/pr-p1-7/1-2.png",
+		"/brief/assets/pr-p1-7/..%2F..%2Fsecret.png",
+		"/brief/assets/pr-p1-7/../../secret.png",
+		"/brief/assets/../secret.png",
+		"/brief/assets/pr-p1-7/1-1.txt",
+		"/brief/assets/pr-p1-7/.hidden.png",
+	] {
+		assert_eq!(routes().handle(get(path, &host)).await.status(), StatusCode::NOT_FOUND, "{path}");
+	}
+	let elsewhere = routes().handle(get("/brief/assets/pr-p1-7/1-1.png", "evil.example:80")).await;
+	assert_eq!(elsewhere.status(), StatusCode::FORBIDDEN);
+}

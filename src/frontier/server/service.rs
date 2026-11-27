@@ -136,6 +136,9 @@ pub struct ServiceOptions {
 	/// `Some(keys)`: the first-run checks run once after the start (0703), `keys` being whether his terminal reports Alt
 	/// and Shift; `None` (tests) runs none, so no test runs `omp usage`.
 	pub first_run: Option<bool>,
+	/// `true`: checks may run in the clean room (0708): a pull request's works-first check and Finish's; `false` (tests)
+	/// runs none, so no test starts Docker.
+	pub clean_room: bool,
 	/// Asks him Allow or Deny (0484): a question through the service's question API (0519, 0552), with how it ended
 	/// (0578: his answer, three wrong codes, the popup closed, another reader). The signal aborts once the answer isn't
 	/// wanted any more (the wait ran out, the service is stopping) and the question goes. Without it every ask counts as
@@ -194,6 +197,7 @@ impl ServiceOptions {
 			weekly_reviews: None,
 			auto_briefs: None,
 			first_run: None,
+			clean_room: false,
 			confirm: None,
 			confirm_wait_ms: None,
 			boss_key: None,

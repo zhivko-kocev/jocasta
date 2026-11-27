@@ -46,6 +46,8 @@ const DOCKER_FAILED: i32 = 125;
 /// The line the check script prints before its task, and when it finds none.
 const TASK_MARK: &str = "jocasta-check: ";
 const NO_TASK: &str = "none";
+/// Why a project's check can't run anywhere: it has neither task.
+pub const NO_TASK_SAID: &str = "the project has neither a verify nor a test task";
 /// The project's check, found inside the container: `verify`, else `test`.
 const CHECK_SCRIPT: &str = "for t in verify test; do if mise tasks info \"$t\" >/dev/null 2>&1; then echo \"jocasta-check: $t\"; exec mise run \"$t\"; fi; done; echo \"jocasta-check: none\"";
 
@@ -265,7 +267,7 @@ pub async fn check(project: &Project, commit: &str) -> Check {
 	}
 	let check = match task_of(&ran.output) {
 		Some(task) if task == NO_TASK => {
-			return Check::NotPossible("the project has neither a verify nor a test task".to_owned());
+			return Check::NotPossible(NO_TASK_SAID.to_owned());
 		}
 		task => Check::Ran {
 			task: task.unwrap_or_else(|| "mise install".to_owned()),

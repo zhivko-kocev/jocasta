@@ -395,7 +395,7 @@ impl ReviewFlow {
 		let t = thread.get();
 		// A new review starts with no notes (0678): `review.json` holds the reviewed HEAD and what the reviewer hands in.
 		if let (Some(task), Ok(head)) = (t.task.as_ref(), head_of(&t.path).await) {
-			ReviewNotes { head, notes: Vec::new() }.write(&review_file(&t.project.id, &task.id))?;
+			ReviewNotes { head, ..ReviewNotes::default() }.write(&review_file(&t.project.id, &task.id))?;
 		}
 		// After "Approve and execute" the session is a new one without the plan: the plan recorded at approval (0453, 0540).
 		let from_session = match &t.session_path {

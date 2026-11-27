@@ -140,6 +140,7 @@ pub fn run_embedded() -> Result<()> {
 		shell: Some(Arc::clone(&native)),
 		bridge: Some(bridge),
 		first_run: Some(enhanced),
+		clean_room: true,
 		..ServerOptions::default()
 	};
 	let closed = Arc::new(Notify::new());

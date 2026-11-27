@@ -498,7 +498,7 @@ pub async fn begin(c: &Arc<ServiceContext>, thread: &ThreadRef) -> Result<()> {
 	let (Some(task), Some(pr)) = (t.task.as_ref(), t.task.as_ref().and_then(|task| task.pr.as_ref())) else {
 		return Ok(());
 	};
-	ReviewNotes { head: pr.head_sha.clone(), notes: Vec::new() }.write(&review_file(&t.project.id, &task.id))?;
+	ReviewNotes { head: pr.head_sha.clone(), ..ReviewNotes::default() }.write(&review_file(&t.project.id, &task.id))?;
 	let running = ReviewRunning {
 		head: Some(pr.head_sha.clone()),
 		at: now_ms(),
@@ -572,6 +572,10 @@ pub async fn ready(c: &Arc<ServiceContext>, thread: &ThreadRef) -> Result<()> {
 async fn recheck(path: &Path, head: &str, notes: &mut ReviewNotes) {
 	let mut files: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
 	for card in &mut notes.notes {
+		// A works-first card names no file: its proof is the command it ran (0706).
+		if card.file.is_empty() {
+			continue;
+		}
 		if !files.contains_key(&card.file) {
 			let text = git_out_raw(path, head, &card.file).await.ok().flatten();
 			files.insert(card.file.clone(), text);
@@ -701,6 +705,9 @@ fn assemble(
 	let pr = task.pr.as_ref().ok_or_else(|| Error::other("the thread reviews no pull request"))?;
 	let id = brief_id(task).ok_or_else(|| Error::other("the thread reviews no pull request"))?;
 	let mut sections: Vec<Section> = facts_section(task, project, notes).into_iter().collect();
+	if !notes.works.is_empty() {
+		sections.push(Section::Works { heading: Some("Works".to_owned()), rows: notes.works.clone() });
+	}
 	sections.push(flow_section(notes));
 	if !notes.notes.is_empty() {
 		sections.push(Section::Cards { heading: Some("Review notes".to_owned()), cards: notes.notes.clone() });

@@ -111,7 +111,12 @@ pub fn review_prompt(range: &str, context: &ReviewContext) -> String {
 		);
 	}
 	parts.extend([
-		format!("Then run the reviewer subagent on `git diff {range}` in this worktree. In its task give it {},", given.join(", ")),
+		"Then try the change with the `review_try` tool before judging it: `what` (what you try) and `steps`, each".to_owned(),
+		"`{run, expect}`, which Jocasta runs in this worktree and passes when the output contains `expect` (or exits N for".to_owned(),
+		"`exit:N`): run what the change adds or changes; for a web UI, drive it with the browser tool headless and pass the".to_owned(),
+		"screenshots you save. When a step fails, stop: the review ends there and you hand in nothing more.".to_owned(),
+		"Only once it works:".to_owned(),
+		format!("run the reviewer subagent on `git diff {range}` in this worktree. In its task give it {},", given.join(", ")),
 		"and tell it: report only material findings; prefer one strong finding over several weak ones; then, after those,".to_owned(),
 		format!("read the design rubric ({rubric}) and report at most three design findings judged by it,"),
 		"each naming the code this change could delete where there is some. A design finding is P2 with its text".to_owned(),

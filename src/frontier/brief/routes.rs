@@ -90,12 +90,39 @@ impl BriefRoutes {
 			(Method::GET, "assets/brief.css") => {
 				asset(format!("{PAGE_CSS}{}", palette_css()), "text/css; charset=utf-8")
 			}
+			(Method::GET, _) if rest.starts_with("assets/") => Self::screenshot(rest),
 			(Method::GET, _) => Self::read(rest),
 			(Method::POST, _) => match rest.strip_suffix("/act") {
 				Some(id) => self.act(request, id, host.as_deref().unwrap_or_default()).await,
 				None => not_found(),
 			},
 			_ => text_response(StatusCode::METHOD_NOT_ALLOWED, "Method not allowed"),
+		}
+	}
+
+	/// `assets/<brief id>/<name>`: a screenshot `review_try` kept for that brief (0706), from
+	/// `<data>/briefs/assets/<brief id>/`; the id and the name can't leave that folder.
+	fn screenshot(rest: &str) -> Response {
+		let mut parts = rest.split('/').skip(1);
+		let (Some(id), Some(name), None) = (parts.next(), parts.next(), parts.next()) else { return not_found() };
+		let plain = |text: &str| {
+			!text.is_empty()
+				&& !text.starts_with('.')
+				&& text.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+		};
+		if !store::valid_id(id) || !plain(name) {
+			return not_found();
+		}
+		let content_type = match name.rsplit_once('.').map(|(_, ext)| ext) {
+			Some("png") => "image/png",
+			Some("jpg") => "image/jpeg",
+			Some("gif") => "image/gif",
+			Some("webp") => "image/webp",
+			_ => return not_found(),
+		};
+		match std::fs::read(store::brief_dir().join("assets").join(id).join(name)) {
+			Ok(bytes) => asset(bytes, content_type),
+			Err(_) => not_found(),
 		}
 	}
 

@@ -511,6 +511,12 @@ async fn check_review_opens(server: &TestServer, pane: &str, boss: &str) {
 	assert!(asked.contains("review_note"));
 	assert!(asked.contains("First run the project's tests"));
 	assert!(asked.contains("`TESTS: pass — <the test command you ran>`"));
+	assert!(asked.contains("try the change with the `review_try` tool before judging it"));
+	// It tries the change first (0706): Jocasta runs the step in the worktree and keeps a passed row.
+	let tried = json!({ "what": "the README line", "steps": [{ "run": "git log --oneline -1", "expect": "Add a README line" }] });
+	let said = crate::frontier::server::helpers::call_as(server, "review_try", &tried, Some(pane), None).await;
+	assert_eq!(said.is_error, None, "{}", said.text);
+	assert!(said.text.contains("the README line works (1 step passed on this machine)"), "{}", said.text);
 	for text in ["Say what the line is for.", "Name the file."] {
 		let note = json!({ "file": "README.md", "line": 2, "quote": "A line.", "severity": "P2", "text": text });
 		let said = crate::frontier::server::helpers::call_as(server, "review_note", &note, Some(pane), None).await;

@@ -166,3 +166,26 @@ fn a_missing_file_is_an_empty_one_and_the_files_other_keys_are_read() {
 	);
 	assert_eq!(read.names, [("p-1".to_owned(), "Acme".to_owned())]);
 }
+
+#[test]
+fn clean_room_off_and_pr_run_answers_are_read_and_an_answer_is_added_or_changed_in_place_0706_0708() {
+	let env = temp_jocasta();
+	let file = file_with(env.root(), "# mine\ncleanRoom:\n  /code/acme: off\n  /code/client-a: auto\nprRun: {}\n");
+	let read_back = read_projects_file(Some(&file)).unwrap();
+	assert_eq!(read_back.clean_room_off, ["/code/acme"]);
+	assert!(set_pr_run("/code/acme", "octo-cat", true, Some(&file)).unwrap());
+	assert!(set_pr_run("/code/acme", "Jane Doe", false, Some(&file)).unwrap());
+	assert!(!set_pr_run("/code/acme", "octo-cat", true, Some(&file)).unwrap(), "already so");
+	assert!(set_pr_run("/code/acme", "octo-cat", false, Some(&file)).unwrap());
+	assert!(set_pr_run("/code/client-a", "octo-cat", true, Some(&file)).unwrap());
+	assert_eq!(
+		read(&file),
+		"# mine\ncleanRoom:\n  /code/acme: off\n  /code/client-a: auto\nprRun:\n  /code/acme: {\"octo-cat\": deny, \"Jane Doe\": deny}\n  /code/client-a: {\"octo-cat\": allow}\n"
+	);
+	let parsed = read_projects_file(Some(&file)).unwrap();
+	assert_eq!(parsed.pr_run_answer(Path::new("/code/acme"), "Jane Doe"), Some(false));
+	assert_eq!(parsed.pr_run_answer(Path::new("/code/client-a"), "octo-cat"), Some(true));
+	assert_eq!(parsed.pr_run_answer(Path::new("/code/client-a"), "someone"), None);
+	file_with(env.root(), "prRun:\n  /code/acme: allow\n");
+	assert!(read_projects_file(Some(&file)).unwrap_err().to_string().contains("prRun"));
+}

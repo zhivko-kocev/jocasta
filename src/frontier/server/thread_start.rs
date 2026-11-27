@@ -22,6 +22,7 @@ use crate::frontier::server::task_file::{NewTask, TaskRecord, new_task, task_dir
 use crate::frontier::server::thread::{Thread, ThreadPlan, ThreadRef, subject};
 use crate::frontier::server::thread_lifecycle::StateSource;
 use crate::frontier::server::wording::{COMMIT_LINE, Door, LESSONS_LINE, branch_slug, brief_title, start_prefix};
+use crate::frontier::server::works::{WorksFirst, works_first};
 use crate::frontier::server::worktrees::{
 	GIT_MS, ThreadPlace, copy_worktree_include, git_out, remove_checkout, thread_place,
 };
@@ -91,6 +92,18 @@ fn shipped_guard() -> Result<&'static [GuardRule]> {
 	let file = shipped_config_dir(None).join("guard.yml");
 	let rules = parse_guard(&std::fs::read_to_string(&file)?, &file.display().to_string())?;
 	Ok(RULES.get_or_init(|| rules))
+}
+
+/// A command's verdict under the shipped guard, as Jocasta judges a command it runs itself (0580): omp matches it with
+/// its quotes removed, Jocasta's copy the raw text, so both forms are matched and the stricter verdict counts
+/// (`git push --for"ce"` is still `--force`).
+pub(super) fn guard_said(command: &str) -> Result<Judged> {
+	let rules = shipped_guard()?;
+	let forms: [Judged; 2] = [verdict(command, rules), verdict(&command.replace(['"', '\''], ""), rules)];
+	let deny = forms.iter().position(|form| form.verdict == Verdict::Deny);
+	let at = deny.or_else(|| forms.iter().position(|form| form.verdict == Verdict::Prompt)).unwrap_or(0);
+	let [first, second] = forms;
+	Ok(if at == 0 { first } else { second })
 }
 
 /// A thread start's outcome: its text, whether it went all the way, and the task id of the thread it made (none for
@@ -475,15 +488,9 @@ impl ThreadStarts {
 		if checks.is_empty() {
 			return Ok(false);
 		}
-		let rules = shipped_guard()?;
 		let mut prompted: Vec<&String> = Vec::new();
 		for command in checks {
-			let forms: [Judged; 2] = [verdict(command, rules), verdict(&command.replace(['"', '\''], ""), rules)];
-			let said = forms
-				.iter()
-				.find(|form| form.verdict == Verdict::Deny)
-				.or_else(|| forms.iter().find(|form| form.verdict == Verdict::Prompt))
-				.unwrap_or(&forms[0]);
+			let said = guard_said(command)?;
 			if said.verdict == Verdict::Deny {
 				return Err(Error::user(format!(
 					"{prefix}: done_when `{command}` is denied by Jocasta's guard (`{}`); no thread was started.",
@@ -671,9 +678,24 @@ impl ThreadStarts {
 		// A pull request review is already in its Review phase when its brief goes in (0680): the brief is the whole
 		// prompt, with the facts code read; it hands notes in and plans nothing.
 		let pr = thread.with(|t| t.task.as_ref().and_then(|task| task.pr.clone()));
-		let said = if pr.is_some() {
+		let said = if let Some(pr) = &pr {
 			pr_review::begin(&c, thread).await?;
-			request.brief.trim_end().to_owned()
+			// Works first (0706): the project's check runs before the review's first turn; a failure ends the review.
+			match works_first(&c, thread).await? {
+				WorksFirst::Ended(what) => {
+					pr_review::ready(&c, thread).await?;
+					return Ok(Started {
+						text: format!(
+							"{started}: pull request #{} doesn't work ({what} failed); its review page is ready, and no reviewer turn was spent.",
+							pr.number
+						),
+						done: true,
+						task_id,
+					});
+				}
+				WorksFirst::Go(line) if line.is_empty() => request.brief.trim_end().to_owned(),
+				WorksFirst::Go(line) => format!("{}\n\n{line}", request.brief.trim_end()),
+			}
 		} else {
 			// The commit step is in `prompt.md`'s When you finish (0577); with the layer off there is none, so it ends the brief.
 			let commit = if c.layer { String::new() } else { format!("\n{COMMIT_LINE}") };

@@ -99,6 +99,8 @@ pub struct ServerOptions {
 	/// `Some(keys)`: the first-run checks run once after the start (0703), `keys` being whether his terminal reports Alt
 	/// and Shift; `None` (tests) runs none.
 	pub first_run: Option<bool>,
+	/// `true`: checks may run in the clean room (0708); off in tests, so no test starts Docker.
+	pub clean_room: bool,
 	/// Asks him Allow or Deny (0484); his question through this server's question API by default.
 	pub confirm: Option<Confirm>,
 	/// How long an ask waits for his answer.
@@ -151,6 +153,7 @@ impl ServerOptions {
 		service.weekly_reviews = self.weekly_reviews;
 		service.auto_briefs = self.auto_briefs;
 		service.first_run = self.first_run;
+		service.clean_room = self.clean_room;
 		service.confirm_wait_ms = self.confirm_wait_ms;
 		service.boss_key = self.boss_key.take();
 		service.bridge = self.bridge.clone();

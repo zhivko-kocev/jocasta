@@ -1,6 +1,7 @@
 //! The thread brief (0678): `thread-<tid>`, built by code when a review is ready and again when the thread is stuck,
-//! from what git, the check run and the ledger say. Facts, the phase table as a flow, the checks, the reviewer's notes
-//! as cards, the changed files as a map and the diff. Nothing here asks a model.
+//! from what git, the check run and the ledger say. Facts, whether it works (its checks, the reviewer's tries and the
+//! clean-room check, 0706), the phase table as a flow, the reviewer's notes as cards, the changed files as a map and
+//! the diff. Nothing here asks a model.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
@@ -8,8 +9,8 @@ use std::sync::Arc;
 
 use crate::frontier::brief::layout::lay_out;
 use crate::frontier::brief::model::{
-	Brief, CheckRow, DiffFile, DiffHunk, DiffLine, Fact, FlowEdge, FlowNode, MapGroup, MapItem, MapLink, NodeState,
-	Section,
+	Brief, DiffFile, DiffHunk, DiffLine, Fact, FlowEdge, FlowNode, MapGroup, MapItem, MapLink, NodeState, Section,
+	WorksRow, WorksState,
 };
 use crate::frontier::brief::store;
 use crate::frontier::server::context::ServiceContext;
@@ -79,12 +80,13 @@ async fn build(c: &Arc<ServiceContext>, t: &Thread, id: &str, extras: &BriefExtr
 			body: extras.gate_tail.join("\n"),
 		});
 	}
-	sections.push(flow(t));
-	if let Some(checks) = checks(t, extras) {
-		sections.push(checks);
+	let notes =
+		t.task.as_ref().map(|task| ReviewNotes::read(&review_file(&t.project.id, &task.id))).unwrap_or_default();
+	if let Some(works) = works(t, extras, &notes) {
+		sections.push(works);
 	}
-	let notes = t.task.as_ref().map(|task| ReviewNotes::read(&review_file(&t.project.id, &task.id)));
-	if let Some(notes) = notes.filter(|notes| !notes.notes.is_empty()) {
+	sections.push(flow(t));
+	if !notes.notes.is_empty() {
 		sections.push(Section::Cards { heading: Some("Review notes".to_owned()), cards: notes.notes });
 	}
 	if !git.numstat.is_empty() {
@@ -242,22 +244,27 @@ fn flow(t: &Thread) -> Section {
 	Section::Flow { heading: Some("Where it stands".to_owned()), nodes, edges }
 }
 
-/// The last review's checks with their exits and durations.
-fn checks(t: &Thread, extras: &BriefExtras) -> Option<Section> {
-	let result = t.review.as_ref()?.result.as_ref()?;
-	if result.checks.is_empty() {
-		return None;
-	}
-	let rows = result
-		.checks
+/// Whether it works (0706): the last review's checks with their exits and durations, then the reviewer's tries and the
+/// clean-room check from the review's notes.
+fn works(t: &Thread, extras: &BriefExtras, notes: &ReviewNotes) -> Option<Section> {
+	let checks = t.review.as_ref().and_then(|review| review.result.as_ref()).map(|result| result.checks.as_slice());
+	let mut rows: Vec<WorksRow> = checks
+		.unwrap_or_default()
 		.iter()
-		.map(|check| CheckRow {
-			command: check.command.clone(),
-			exit: check.exit,
-			ms: extras.check_ms.iter().find(|(command, _)| *command == check.command).map_or(0, |(_, ms)| *ms),
+		.map(|check| WorksRow {
+			label: format!("`{}`", check.command),
+			state: match check.exit {
+				Some(0) => WorksState::Passed,
+				Some(_) => WorksState::Failed,
+				None => WorksState::NotRun,
+			},
+			ms: extras.check_ms.iter().find(|(command, _)| *command == check.command).map(|(_, ms)| *ms),
+			tail: String::new(),
+			screenshots: Vec::new(),
 		})
 		.collect();
-	Some(Section::Checks { heading: Some("Checks".to_owned()), rows })
+	rows.extend(notes.works.iter().cloned());
+	(!rows.is_empty()).then(|| Section::Works { heading: Some("Works".to_owned()), rows })
 }
 
 /// The changed files grouped by their top folder, with a link between two files changed in the same commit.

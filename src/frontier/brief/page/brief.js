@@ -89,6 +89,36 @@ function renderChecks(s) {
 	});
 }
 
+// Whether the change works (0706): each check and try, its outcome, time, output tail and screenshots.
+function renderWorks(s, ctx) {
+	const box = el("div", "works");
+	for (const r of s.rows || []) {
+		const row = el("p", "works-row");
+		const state = r.state === "not_run" ? "not run" : r.state;
+		row.append(badge(state, r.state === "passed" ? "good" : r.state === "failed" ? "fail" : ""));
+		row.append(document.createTextNode(` ${r.label}`));
+		if (r.ms != null) row.append(el("span", "muted num", ` ${r.ms} ms`));
+		box.append(row);
+		if (r.tail) box.append(el("pre", "mono", r.tail));
+		for (const name of r.screenshots || []) {
+			const img = el("img", "shot");
+			img.src = `/brief/assets/${encodeURIComponent(ctx.brief.id)}/${encodeURIComponent(name)}`;
+			img.alt = `Screenshot: ${r.label}`;
+			box.append(img);
+		}
+	}
+	return box;
+}
+
+// The command that proves a card, as Jocasta ran it, behind a disclosure (0706, 0707). A finding's proof is kept only
+// once it reproduced; a works card's is the failing check.
+function ranProof(ran, proven) {
+	const det = el("details", "proof");
+	det.append(el("summary", null, proven ? "✓ proven" : "Proof"));
+	det.append(el("pre", "mono", `$ ${ran.run}\nexpect: ${ran.expect}\nexit: ${ran.exit ?? "didn't end"}\n${ran.tail}`));
+	return det;
+}
+
 function renderList(s) {
 	const ul = el("ul", "list");
 	for (const r of s.rows || []) {
@@ -216,12 +246,13 @@ function renderCards(s, ctx) {
 		const card = el("article", `card sev-${String(c.severity).toLowerCase()}`);
 		const head = el("div", "card-head");
 		head.append(badge(c.severity, `sev ${String(c.severity).toLowerCase()}`));
-		head.append(el("span", "mono loc", `${c.file}:${c.line}`));
+		if (c.file) head.append(el("span", "mono loc", `${c.file}:${c.line}`));
 		head.append(badge(c.verdict, `verdict v-${c.verdict}`));
 		const ok = c.proof?.ok;
 		head.append(badge(ok ? `checked at ${String(c.proof.sha).slice(0, 7)}` : "not checked", ok ? "good" : "fail"));
 		card.append(head);
 		if (c.quote) card.append(el("pre", "quote mono", c.quote));
+		if (c.ran) card.append(ranProof(c.ran, Boolean(c.file)));
 		card.append(el("p", "card-text", c.edited != null && c.edited !== "" ? c.edited : c.text));
 		if (c.published?.url) {
 			const p = el("p", "published");
@@ -477,6 +508,7 @@ const RENDERERS = {
 	text: renderText,
 	facts: renderFacts,
 	checks: renderChecks,
+	works: renderWorks,
 	flow: renderFlow,
 	map: renderMap,
 	diff: renderDiff,

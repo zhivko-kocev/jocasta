@@ -30,9 +30,13 @@ fn notes_count_with_the_blocking_ones() {
 		proof: Proof { sha: "abc".to_owned(), ok: true },
 		edited: None,
 		published: None,
+		ran: None,
 	};
-	let notes =
-		ReviewNotes { head: "abc".to_owned(), notes: vec![card(Severity::P0), card(Severity::P1), card(Severity::P2)] };
+	let notes = ReviewNotes {
+		head: "abc".to_owned(),
+		notes: vec![card(Severity::P0), card(Severity::P1), card(Severity::P2)],
+		..ReviewNotes::default()
+	};
 	assert_eq!(notes.counts(), NoteCounts { notes: 3, blocking: 2 });
 	assert_eq!(ReviewNotes::default().counts(), NoteCounts::default());
 }
@@ -43,8 +47,43 @@ fn a_notes_file_round_trips_and_a_missing_one_is_empty() {
 	std::fs::create_dir_all(&dir).unwrap();
 	let file = dir.join("review.json");
 	assert_eq!(ReviewNotes::read(&file), ReviewNotes::default());
-	let notes = ReviewNotes { head: "abc".to_owned(), notes: Vec::new() };
+	let notes = ReviewNotes { head: "abc".to_owned(), ..ReviewNotes::default() };
 	notes.write(&file).unwrap();
 	assert_eq!(ReviewNotes::read(&file), notes);
+	std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_failed_check_ends_the_review_with_one_p0_card_for_him_only_and_a_new_head_starts_afresh_0706() {
+	let mut notes = ReviewNotes { head: "abc".to_owned(), ..ReviewNotes::default() };
+	assert_eq!(notes.ended(), None);
+	let row = WorksRow {
+		label: "`mise run test` in the clean room".to_owned(),
+		state: WorksState::Failed,
+		ms: Some(5),
+		tail: "1 failed".to_owned(),
+		screenshots: Vec::new(),
+	};
+	let proof = RanProof {
+		run: "mise run test".to_owned(),
+		expect: "exit:0".to_owned(),
+		exit: Some(1),
+		tail: "1 failed".to_owned(),
+	};
+	notes.failed(row, proof.clone());
+	assert_eq!(notes.ended(), Some("`mise run test` in the clean room"));
+	let card = &notes.notes[0];
+	assert_eq!(
+		(card.severity, card.verdict, card.text.as_str()),
+		(Severity::P0, Verdict::Skip, "It doesn't work: `mise run test` in the clean room failed")
+	);
+	assert_eq!(card.ran.as_ref(), Some(&proof));
+	assert_eq!(notes.counts(), NoteCounts { notes: 1, blocking: 1 });
+	let dir = std::env::temp_dir().join(format!("jocasta-notes-ended-{}", std::process::id()));
+	std::fs::create_dir_all(&dir).unwrap();
+	let file = dir.join("review.json");
+	notes.write(&file).unwrap();
+	assert_eq!(ReviewNotes::of_head(&file, "abc"), notes);
+	assert_eq!(ReviewNotes::of_head(&file, "def"), ReviewNotes { head: "def".to_owned(), ..ReviewNotes::default() });
 	std::fs::remove_dir_all(&dir).unwrap();
 }

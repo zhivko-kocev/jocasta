@@ -59,6 +59,12 @@ pub enum Section {
 		heading: Option<String>,
 		cards: Vec<Card>,
 	},
+	/// Whether the change works (0706): its checks and tries, first on thread and pull-request pages.
+	Works {
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		heading: Option<String>,
+		rows: Vec<WorksRow>,
+	},
 	List {
 		#[serde(default, skip_serializing_if = "Option::is_none")]
 		heading: Option<String>,
@@ -77,6 +83,7 @@ impl Section {
 			Self::Map { .. } => "map",
 			Self::Diff { .. } => "diff",
 			Self::Cards { .. } => "cards",
+			Self::Works { .. } => "works",
 			Self::List { .. } => "list",
 		}
 	}
@@ -98,6 +105,38 @@ pub struct CheckRow {
 	/// `None`: it didn't run.
 	pub exit: Option<i32>,
 	pub ms: i64,
+}
+
+/// How a `works` row came out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorksState {
+	Passed,
+	Failed,
+	NotRun,
+}
+
+/// One check or try of a `works` section (0706): what ran, how it came out, how long it took, its output's tail and the
+/// screenshots it left (file names under `/brief/assets/<brief id>/`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorksRow {
+	pub label: String,
+	pub state: WorksState,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub ms: Option<i64>,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub tail: String,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub screenshots: Vec<String>,
+}
+
+/// A command Jocasta ran to prove a card (0706, 0707): what it ran, what its output had to give, its exit and tail.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RanProof {
+	pub run: String,
+	pub expect: String,
+	pub exit: Option<i32>,
+	pub tail: String,
 }
 
 /// Where a flow node stands.
@@ -248,6 +287,9 @@ pub struct Card {
 	pub edited: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub published: Option<Published>,
+	/// The command that proves it, as Jocasta ran it (0706, 0707).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub ran: Option<RanProof>,
 }
 
 /// One row of a `list` section.

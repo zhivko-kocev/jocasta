@@ -9,6 +9,7 @@ use crate::frontier::server::bridge::Role;
 use crate::frontier::server::history::HISTORY_SEARCH;
 use crate::frontier::server::report::{REPORT_DESCRIPTION, REPORT_RESULT, parse_report, report_schema};
 use crate::frontier::server::review_notes::REVIEW_NOTE;
+use crate::frontier::server::works::REVIEW_TRY;
 
 #[cfg(test)]
 #[path = "tool_specs_tests.rs"]
@@ -111,6 +112,33 @@ fn review_note() -> ToolSpec {
 				),
 			],
 			&["file", "line", "quote", "severity", "text"],
+		),
+	)
+}
+
+/// A thread's `review_try` (0706): the reviewer's steps, which Jocasta runs and judges.
+fn review_try() -> ToolSpec {
+	let step = json!({
+		"type": "object",
+		"properties": {
+			"run": { "type": "string", "description": "A shell command to run in the code under review" },
+			"expect": { "type": "string", "description": "Text its output must contain, or exit:N for its exit code" }
+		},
+		"required": ["run", "expect"]
+	});
+	tool(
+		REVIEW_TRY,
+		"Try the change: Jocasta runs your steps and checks each one's output.\nRun this before any finding. Each step is {run, expect}: Jocasta runs `run` itself (a pull request in a clean container, your own thread in its worktree) and the step passes when its output contains `expect`, or, for `exit:N`, when it exits N. A step that fails ends the review: hand in nothing more. screenshots are image files you saved (for a web UI driven with the headless browser); they appear on the review page.",
+		schema(
+			vec![
+				("what", string("What you are trying, in a few words (e.g. `the --dry-run flag`)")),
+				("steps", json!({ "type": "array", "items": step, "description": "The steps, in order" })),
+				(
+					"screenshots",
+					json!({ "type": "array", "items": { "type": "string" }, "description": "Image files to show on the page" }),
+				),
+			],
+			&["what", "steps"],
 		),
 	)
 }
@@ -330,8 +358,8 @@ pub fn tools_for(role: Role, layer: bool) -> Vec<ToolSpec> {
 /// Tools that can outlast a bash call's default 5 minutes (a `check` runs up to 30, a finish runs hooks, a start builds a
 /// worktree, a lesson waits for his Allow). omp runs a mounted tool inside its `bash` tool, whose own deadline then
 /// applies, so each says how to call it.
-const LONG_RUNNING: [&str; 6] =
-	["check", "thread_start", "thread_finish", "worktree_remove", "lesson", "big_picture_review"];
+const LONG_RUNNING: [&str; 7] =
+	["check", "thread_start", "thread_finish", "worktree_remove", "lesson", "big_picture_review", REVIEW_TRY];
 
 /// What a long-running tool's description ends with (0675).
 pub const LONG_RUN_NOTE: &str =
@@ -345,8 +373,8 @@ fn role_tools(role: Role, layer: bool) -> Vec<ToolSpec> {
 			tools.extend(boss_inbox_tools());
 			tools
 		}
-		Role::Thread if layer => vec![everyone(), report(), check(), review_note()],
-		Role::Thread => vec![everyone(), review_note()],
+		Role::Thread if layer => vec![everyone(), report(), check(), review_note(), review_try()],
+		Role::Thread => vec![everyone(), review_note(), review_try()],
 		Role::Project => vec![everyone()],
 	}
 }

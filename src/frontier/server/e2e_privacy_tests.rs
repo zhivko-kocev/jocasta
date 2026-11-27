@@ -233,7 +233,9 @@ fn review_brief() -> String {
 			proof: Proof { sha: "1111111111111111111111111111111111111111".to_owned(), ok: true },
 			edited: None,
 			published: None,
+			ran: None,
 		}],
+		..ReviewNotes::default()
 	};
 	notes.write(&review_file(&task.project_id, &task.id)).unwrap();
 	let id = format!("pr-{project}-7");
