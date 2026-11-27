@@ -10,7 +10,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use regex::Regex;
 
 use crate::frontier::protocol::{PopupAnswer, PopupForm, PopupView};
-use crate::frontier::tui::{Line, Segment, columns, fit, palette, wrap};
+use crate::frontier::tui::{Line, Segment, fit, palette, wrap};
 
 #[derive(Debug, Clone)]
 pub struct AskState {
@@ -285,6 +285,9 @@ fn strings(parts: &[&str]) -> Vec<String> {
 	parts.iter().map(ToString::to_string).collect()
 }
 
+/// New thread shows this many rows of the brief being typed, the last ones (0717).
+const BRIEF_ROWS: usize = 3;
+
 /// New thread's form block: the project, the brief (its tail, caret in the field the keys go to), the note and the hint.
 fn form_foot(state: &AskState, form: &PopupForm, width: usize, reading: &[&str]) -> Vec<Line> {
 	let project = form.projects.get(state.project).map_or("", String::as_str);
@@ -293,24 +296,22 @@ fn form_foot(state: &AskState, form: &PopupForm, width: usize, reading: &[&str])
 		Segment::new("Project  ", palette().fg3),
 		on(Field::Project, Segment::new(format!("‹ {project} ›"), palette().cyan).bold()),
 	]];
-	// The brief's tail, so the caret's end shows; the caret only in the field the keys go to (UX-15).
+	// The brief's last rows wrapped, so its end and the caret show, `…` when rows above are hidden; the caret only in
+	// the field the keys go to (UX-15, 0717).
 	let caret = if state.field == Field::Brief { "▏" } else { "" };
-	let room = width.saturating_sub(9).max(10).saturating_sub(columns(caret));
-	let mut brief = state.brief.as_str();
-	let shortened;
-	if columns(brief) > room {
-		while columns(brief) > room.saturating_sub(1) {
-			let mut chars = brief.chars();
-			chars.next();
-			brief = chars.as_str();
-		}
-		shortened = format!("…{brief}");
-		brief = &shortened;
+	let wrapped = wrap(&format!("{}{caret}", state.brief), width.saturating_sub(9).max(10));
+	let hidden = wrapped.len().saturating_sub(BRIEF_ROWS);
+	for (index, text) in wrapped.iter().skip(hidden).enumerate() {
+		let label = match (index, hidden) {
+			(0, 0) => "Brief    ",
+			(0, _) => "Brief  … ",
+			_ => "         ",
+		};
+		lines.push(vec![
+			Segment::new(label, palette().fg3),
+			on(Field::Brief, Segment::new(text.as_str(), palette().fg)),
+		]);
 	}
-	lines.push(vec![
-		Segment::new("Brief    ", palette().fg3),
-		on(Field::Brief, Segment::new(format!("{brief}{caret}"), palette().fg)),
-	]);
 	lines.push(Vec::new());
 	lines.extend(state.note.iter().map(|n| vec![Segment::new(n.as_str(), palette().red)]));
 	let mut parts = if state.field == Field::Brief {

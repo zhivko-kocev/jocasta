@@ -559,7 +559,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0550](0550-omp-updates-off-and-setup-files-now.md) | omp stops updating itself until the benchmarks end, and setup's omp files are written on his PC now | process | decided | program | 2026-11-08 |  |
 | [0551](0551-jocasta-pane-drawn-with-opentui.md) | The `jocasta` pane is drawn with OpenTUI and holds today, the thread keys and his answers | product | v1 | program | 2026-11-09 | 0581, 0625, 0634 |
 | [0552](0552-no-companion-app.md) | No companion app: the service is a plain Bun process, diagrams open in the browser, dictation stays without spoken replies, and questions are answered in herdr | product | v1 | program | 2026-11-09 | 0553, 0556, 0563, 0578, 0583, 0584, 0649, 0672 |
-| [0553](0553-jocasta-is-a-herdr-plugin.md) | Jocasta is a herdr plugin: `today` beside the boss, questions in a popup, after a spike | product | v1 | program | 2026-11-09 | 0558, 0578, 0649, 0667 |
+| [0553](0553-jocasta-is-a-herdr-plugin.md) | Jocasta is a herdr plugin: `today` beside the boss, questions in a popup, after a spike | product | v1 | program | 2026-11-09 | 0558, 0578, 0649, 0667, 0717 |
 | [0554](0554-herdr-keys-pings-and-settings.md) | herdr's keys, pings and settings for Jocasta | product | v1 | program | 2026-11-09 | 0569, 0578, 0581, 0667 |
 | [0555](0555-today-pane-contents.md) | The `today` pane's contents: what needs him first, no greeting or Presence, the extras where they fit, no screen hotkeys | product | v1 | program | 2026-11-09 | 0581, 0668, 0670 |
 | [0556](0556-dictation-through-omp-stt.md) | Dictation goes through omp's own speech-to-text in the boss pane, started from anywhere with Right Ctrl | product | v1 | program | 2026-11-09 |  |
@@ -587,7 +587,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0578](0578-allow-popup-and-local-api.md) | The Allow popup and the service's local API | product, security | v1 | program | 2026-11-09 | 0699 |
 | [0579](0579-install-folder-is-jocastas-alone.md) | The install folder is Jocasta's alone | product | v1 | program | 2026-11-09 |  |
 | [0580](0580-guard-covers-more-shapes.md) | The guard covers more shapes, and done_when goes through it | product, security | v1 | program | 2026-11-09 | 0613, 0701 |
-| [0581](0581-today-keys-wording-and-canvas.md) | today, the keys, the wording and the canvas | product, ux | v1 | program | 2026-11-09 | 0660, 0662, 0670 |
+| [0581](0581-today-keys-wording-and-canvas.md) | today, the keys, the wording and the canvas | product, ux | v1 | program | 2026-11-09 | 0660, 0662, 0670, 0717 |
 | [0582](0582-starting-recovering-and-counting-cost.md) | Starting, recovering and counting cost | product | v1 | program | 2026-11-09 | 0649 |
 | [0583](0583-boss-manual-and-shipped-prompt-texts.md) | The boss manual and shipped prompt texts | product, prompts | v1 | program | 2026-11-09 | 0608, 0611, 0616, 0619, 0621 |
 | [0584](0584-setup-settings-tests-names-and-stale-files.md) | Setup, settings, tests, names and stale files | product, process | v1 | program | 2026-11-09 |  |
@@ -684,11 +684,11 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0676](0676-process-diet.md) | Process diet: panes start on demand and sleep; a footprint that only goes down | product | v1 | lightweight program | 2026-11-24 | 0689 |
 | [0677](0677-deterministic-loops.md) | Deterministic validation loops | product | v1 | lightweight program | 2026-11-24 |  |
 | [0678](0678-briefs-as-html-pages.md) | Briefs: animated HTML pages served on loopback | product | v1 | lightweight program | 2026-11-24 | 0698, 0699, 0706, 0707, 0710, 0712, 0713, 0721 |
-| [0679](0679-whiteboard-and-hunk-removed.md) | Whiteboard and hunk removed; `show` draws a brief | product | v1 | lightweight program | 2026-11-24 |  |
+| [0679](0679-whiteboard-and-hunk-removed.md) | Whiteboard and hunk removed; `show` draws a brief | product | v1 | lightweight program | 2026-11-24 | 0714 |
 | [0680](0680-day-flows-and-new-sources.md) | Day flows and three new read-only sources | product | v1 | lightweight program | 2026-11-24 | 0706, 0707, 0709, 0711, 0712 |
 | [0681](0681-privacy-boundary.md) | Privacy boundary: one door to the model | product | v1 | lightweight program | 2026-11-24 |  |
 | [0682](0682-validation-environment-mise-tasks.md) | Validation environment: the project's own mise tasks | process | v1 | lightweight program | 2026-11-24 |  |
-| [0683](0683-own-shell-on-alacritty-terminal.md) | Own shell on `alacritty_terminal`, gated by a spike | product | v1 | lightweight program | 2026-11-24 | 0702 |
+| [0683](0683-own-shell-on-alacritty-terminal.md) | Own shell on `alacritty_terminal`, gated by a spike | product | v1 | lightweight program | 2026-11-24 | 0702, 0717 |
 | [0684](0684-harness-contract-and-omp2-preparation.md) | Harness contract: omp's own screen, capabilities, no adapter layer | product | v1 | lightweight program | 2026-11-24 |  |
 | [0685](0685-stage-setting-facts-and-precheck.md) | Stage setting: a facts block by code and the full check ahead of time | product | v1 | lightweight program | 2026-11-24 |  |
 | [0686](0686-circuit-breakers.md) | Circuit breakers: loop cap, cost cap, pressure sleep, stop-all | product | v1 | lightweight program | 2026-11-24 |  |
@@ -719,4 +719,8 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0712](0712-submit-with-a-verdict-one-page.md) | Submit with a verdict; one page for threads and pull requests | product | v1 | ultron 0.3 iteration, M2 R6 | 2026-11-26 |  |
 | [0713](0713-page-motion-and-design.md) | Page motion and design | product | v1 | ultron 0.3 iteration, M2 R7 | 2026-11-26 |  |
 | [0708](0708-clean-room-runs.md) | Clean-room runs | product, security | v1 | ultron 0.3 iteration, M2 R1 | 2026-11-26 |  |
-| [0721](0721-native-views-with-iced.md) | Native views with iced | product, security | v1 | ultron 0.3 iteration, M2 V1 | 2026-11-27 | 0710, 0711, 0712, 0713 |
+| [0721](0721-native-views-with-iced.md) | Native views with iced | product, security | v1 | ultron 0.3 iteration, M2 V1 | 2026-11-27 | 0710, 0711, 0712, 0713, 0716 |
+| [0714](0714-show-spec.md) | `show` spec | product, prompts | v1 | ultron 0.3 iteration, M2 R8 | 2026-11-27 |  |
+| [0715](0715-brief-retention.md) | Brief retention | product | v1 | ultron 0.3 iteration, M2 R8 | 2026-11-27 |  |
+| [0716](0716-jocasta-brief-open.md) | `jocasta brief open` | product | v1 | ultron 0.3 iteration, M2 R8 | 2026-11-27 |  |
+| [0717](0717-today-and-ask-layout.md) | `today` and `ask` layout | product | v1 | ultron 0.3 iteration, M2 R8 | 2026-11-27 |  |

@@ -42,3 +42,22 @@ fn show_ids_count_up() {
 	save(&brief("show-7")).unwrap();
 	assert_eq!(next_show_id(), "show-8");
 }
+
+#[test]
+fn a_save_deletes_the_briefs_last_written_over_30_days_ago_with_their_screenshots_0715() {
+	let _j = temp_jocasta();
+	save(&brief("pr-acme-1")).unwrap();
+	save(&brief("show-2")).unwrap();
+	let shots = brief_dir().join("assets").join("pr-acme-1");
+	std::fs::create_dir_all(&shots).unwrap();
+	std::fs::write(shots.join("home.png"), b"png").unwrap();
+	let old = SystemTime::now() - KEEP - Duration::from_secs(60);
+	std::fs::File::options().write(true).open(brief_dir().join("pr-acme-1.json")).unwrap().set_modified(old).unwrap();
+	let young = SystemTime::now() - KEEP + Duration::from_secs(3_600);
+	std::fs::File::options().write(true).open(brief_dir().join("show-2.json")).unwrap().set_modified(young).unwrap();
+	save(&brief("show-3")).unwrap();
+	assert!(!exists("pr-acme-1"));
+	assert!(!shots.exists());
+	assert!(exists("show-2"));
+	assert!(exists("show-3"));
+}

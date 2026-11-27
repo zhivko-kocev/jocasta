@@ -4,9 +4,9 @@
 
 use clap::{Parser, Subcommand};
 
-/// The `jocasta` command's words (0387, 0467, 0468, 0472, 0544, 0694, 0700, 0721): open the work surface,
+/// The `jocasta` command's words (0387, 0467, 0468, 0472, 0544, 0694, 0700, 0716, 0721): open the work surface,
 /// `setup [--refresh <file> | --yes]`, `uninstall`, `diagnose`, `status --json`, `project …`, `thread …`,
-/// `worktree leftover|remove <path>`, `view <brief-id>`, `--version`;
+/// `worktree leftover|remove <path>`, `view <brief-id>`, `brief open <spec.json | ->`, `--version`;
 /// and, not listed in the help, `push-hook <remote> <address>`, the `pre-push` hook git runs in every Jocasta pane
 /// (0613). `--help` and a word that is no command are not routes: [`route`] returns clap's error for them. The shell is
 /// Jocasta's own (0683), so herdr's words are gone; a sleeping pane is drawn by the shell (0689), so no role runs it.
@@ -22,6 +22,7 @@ pub enum Route {
 	Worktree { args: Vec<String> },
 	PushHook { args: Vec<String> },
 	View { id: String },
+	BriefOpen { spec: String },
 	Version,
 }
 
@@ -69,6 +70,11 @@ enum Word {
 		#[arg(value_name = "BRIEF-ID")]
 		id: String,
 	},
+	/// Briefs: open <spec.json | -> checks a `show` spec and opens it in its own window
+	Brief {
+		#[command(subcommand)]
+		word: BriefWord,
+	},
 	/// list | add <path> | remove <name|id>
 	#[command(disable_help_flag = true)]
 	Project {
@@ -100,6 +106,16 @@ enum Word {
 	},
 }
 
+#[derive(Subcommand)]
+enum BriefWord {
+	/// Check a `show` spec and open it in its own window; exit 2 with the reason when it is refused
+	Open {
+		/// The spec's JSON file, or `-` for standard input
+		#[arg(value_name = "SPEC")]
+		spec: String,
+	},
+}
+
 impl From<Word> for Route {
 	fn from(word: Word) -> Self {
 		match word {
@@ -112,6 +128,7 @@ impl From<Word> for Route {
 			Word::Worktree { args } => Self::Worktree { args },
 			Word::PushHook { args } => Self::PushHook { args },
 			Word::View { id } => Self::View { id },
+			Word::Brief { word: BriefWord::Open { spec } } => Self::BriefOpen { spec },
 		}
 	}
 }

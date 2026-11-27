@@ -42,6 +42,8 @@ pub struct TodayState {
 	pub said: Option<Said>,
 	/// The first NEWS line shown (0668): the wheel and up/down move it.
 	pub news_top: usize,
+	/// The dock has the keys (0717): only then is the picked row lit; otherwise its `›` is grey.
+	pub keys: bool,
 }
 
 /// A row Enter acts on (0581): a thread's pane (Enter goes to it) or a link (Enter opens it); a leftover (0670) is
@@ -87,24 +89,24 @@ pub const NEWS_LINES: usize = 5;
 /// His last key's outcome shows this long (0581, UX-5).
 pub const SAID_MS: i64 = 60_000;
 
-/// The pane's keys, most important first: the key line drops the last ones that don't fit (0581, UX-7, UX-16). `x`
-/// (0670) and `X` (0686) drop first, then `F` and `R` (0680).
-const KEYS: [&str; 11] = [
-	"↑↓ pick",
-	"Enter go/open",
-	"f Finish",
-	"s Stop",
-	"r Review",
-	"n New",
-	"b Brief",
-	"R PR",
-	"F CI",
-	"X Stop all",
-	"x Remove",
-];
-/// The keys joined as the key line shows them when they all fit.
-pub const KEY_LINE: &str =
-	"↑↓ pick · Enter go/open · f Finish · s Stop · r Review · n New · b Brief · R PR · F CI · X Stop all · x Remove";
+/// The keys every row takes, after the picked row's own (0717); the key line drops the last ones that don't fit.
+const ALWAYS: [&str; 3] = ["n New", "b Brief", "X Stop all"];
+
+/// Under this width a thread takes two rows: its whole title, then its facts (0717).
+pub const NARROW: usize = 60;
+
+/// The keys the picked row takes (0717): a thread's, a link's (a review request's `R`, a red pipeline's `F`), a
+/// leftover's.
+fn row_keys(pick: Option<&Pick>) -> &'static [&'static str] {
+	match pick {
+		Some(pick) if pick.pane_id.is_some() => &["Enter go", "f Finish", "s Stop", "r Review"],
+		Some(pick) if pick.leftover.is_some() => &["x Remove"],
+		Some(pick) if pick.kind == Some(NeedsYouKind::Review) => &["Enter open", "R PR"],
+		Some(pick) if pick.kind == Some(NeedsYouKind::Pipeline) => &["Enter open", "F CI"],
+		Some(pick) if pick.url.is_some() => &["Enter open"],
+		_ => &[],
+	}
+}
 
 /// The title of a row keeps at least this many columns before its facts give way (0581, UX-4).
 const MIN_TITLE: i64 = 18;
@@ -152,13 +154,14 @@ fn hint(parts: &[&str]) -> Line {
 		.collect()
 }
 
-/// The key line for `width`: lower keys dropped while it doesn't fit.
-fn key_line(width: usize) -> Line {
-	let mut count = KEYS.len();
-	while count > 1 && columns(&KEYS[..count].join(" · ")) > width {
+/// The key line for `width` (0717): the picked row's keys, then [`ALWAYS`], the last dropped while it doesn't fit.
+fn key_line(width: usize, pick: Option<&Pick>) -> Line {
+	let keys: Vec<&str> = row_keys(pick).iter().chain(&ALWAYS).copied().collect();
+	let mut count = keys.len();
+	while count > 1 && columns(&keys[..count].join(" · ")) > width {
 		count -= 1;
 	}
-	fit(&hint(&KEYS[..count]), width)
+	fit(&hint(&keys[..count]), width)
 }
 
 /// `left` and the facts on one line, the facts flush to the edge. While the left part would get fewer than
@@ -365,13 +368,21 @@ impl Row {
 	}
 }
 
-/// A pickable row: the picked one carries the marker and the selection colour across the pane.
+/// A pickable row: the picked one carries the marker, and the selection colour across the pane while the dock has the
+/// keys (0717; a grey marker otherwise).
 fn row(line: &[Segment], pick: Option<Pick>, state: &TodayState, width: usize) -> Row {
+	marked_row(line, pick, state, width, "› ")
+}
+
+/// [`row`] whose picked form starts with `mark` (a thread's second row keeps blank space, `"  "`).
+fn marked_row(line: &[Segment], pick: Option<Pick>, state: &TodayState, width: usize, mark: &str) -> Row {
 	let picked = pick.as_ref().is_some_and(|p| Some(&p.key) == state.selected.as_ref());
-	let mut with_marker = vec![Segment::new(if picked { "› " } else { "  " }, palette().blue)];
+	let lit = picked && state.keys;
+	let mark = if picked { mark } else { "  " };
+	let mut with_marker = vec![Segment::new(mark, if lit { palette().blue } else { palette().fg3 })];
 	with_marker.extend(line.iter().cloned());
 	let mut line = fit(&with_marker, width);
-	if picked {
+	if lit {
 		let fill = width.saturating_sub(line_columns(&line));
 		line.push(Segment::plain(" ".repeat(fill)));
 		for segment in &mut line {
@@ -510,12 +521,19 @@ fn underway_rows(state: &TodayState, today: &Today, now: i64, width: usize) -> V
 		if let Some(progress) = &u.progress {
 			left.push(Segment::new(format!("  {progress}"), palette().fg3));
 		}
-		out.push(row(
-			&spread(&left, &facts, width.saturating_sub(2), None),
-			pick_of(Some(&u.pane_id), None),
-			state,
-			width,
-		));
+		let pick = pick_of(Some(&u.pane_id), None);
+		if width < NARROW {
+			// Narrow (0717): the whole title on its row; the facts on the next, under it, the last dropping first.
+			out.push(row(&left, pick.clone(), state, width));
+			let mut kept: Vec<Segment> = facts.into_iter().filter(|fact| !fact.text.is_empty()).collect();
+			while kept.len() > 1 && line_columns(&kept) + 4 > width {
+				kept.pop();
+			}
+			let below: Line = std::iter::once(Segment::plain("  ")).chain(kept).collect();
+			out.push(marked_row(&below, pick, state, width, "  "));
+			continue;
+		}
+		out.push(row(&spread(&left, &facts, width.saturating_sub(2), None), pick, state, width));
 	}
 	// Starts that wait for other threads or for room (0687), after the threads at work.
 	for line in &today.queued {
@@ -773,14 +791,17 @@ fn news_of(state: &TodayState) -> Vec<(&String, &crate::frontier::protocol::Head
 /// any), then his last key's outcome and the key line. Every line fits the width.
 pub fn render(state: &TodayState, now: i64, width: usize, height: usize) -> Frame {
 	let mut bottom = said(state, now, width);
-	bottom.push(key_line(width));
+	// The key line names the picked row's keys: drawn once the rows are known.
+	bottom.push(Vec::new());
 	let mut top = if state.up { header(state, now, width) } else { vec![offline(state, now, width)] };
 	top.push(Vec::new());
 	let room = height.saturating_sub(top.len() + bottom.len());
 	let mut rows = body(state, now, width, room);
 	let mut picks: Vec<Pick> = rows.iter().filter_map(|r| r.pick.clone()).collect();
 	if rows.len() > room {
-		let picked = rows.iter().position(|r| r.pick.as_ref().is_some_and(|p| Some(&p.key) == state.selected.as_ref()));
+		// The picked row's last line: a narrow thread's facts stay in view with its title.
+		let picked =
+			rows.iter().rposition(|r| r.pick.as_ref().is_some_and(|p| Some(&p.key) == state.selected.as_ref()));
 		let start = match picked {
 			Some(at) if at >= room => at + 1 - room,
 			_ => 0,
@@ -831,6 +852,10 @@ pub fn render(state: &TodayState, now: i64, width: usize, height: usize) -> Fram
 		}
 		let keys = news.iter().map(|(_, item)| item.url.clone()).collect();
 		news_box = Some(NewsBox { lines: start..lines.len(), top: first, keys });
+	}
+	let picked = picks.iter().find(|pick| Some(&pick.key) == state.selected.as_ref());
+	if let Some(last) = bottom.last_mut() {
+		*last = key_line(width, picked);
 	}
 	let above = height.saturating_sub(bottom.len());
 	while lines.len() < above {

@@ -196,6 +196,27 @@ fn thread_and_worktree_bad_usage_exits_2_with_the_usage_without_the_service_exit
 	}
 }
 
+/// The refusals only: a spec that passes would open a window on the desktop the tests run on.
+#[test]
+fn brief_open_refuses_a_bad_spec_from_stdin_or_a_file_with_show_errors_and_exit_2_0716() {
+	let sandbox = Sandbox::new();
+	let mut child = sandbox.jocasta(&["brief", "open", "-"]).stdin(Stdio::piped()).spawn().expect("starting jocasta");
+	child.stdin.take().expect("piped stdin").write_all(br#"{"title":"t","sections":[]}"#).expect("writing the spec");
+	let out = finish(child, 30);
+	assert_eq!(out.code, Some(2), "{}", out.stderr);
+	assert_eq!(out.stderr.trim(), "jocasta: show: sections is empty; give at least one section.");
+	let file = sandbox.path().join("spec.json");
+	let spec = json!({ "title": "t", "sections": [{ "type": "diff", "thread": "login" }] });
+	std::fs::write(&file, spec.to_string()).expect("writing the spec");
+	let out = run(&sandbox, &["brief", "open", &file.to_string_lossy()]);
+	assert_eq!(out.code, Some(2), "{}", out.stderr);
+	assert_eq!(
+		out.stderr.trim(),
+		"jocasta: show: section 1 is filled from the thread login, and Jocasta isn't running to fill it."
+	);
+	assert!(!sandbox.path().join("data").join("briefs").exists());
+}
+
 #[test]
 fn jocasta_setup_ends_after_its_last_answer_while_its_console_stays_open_as_a_terminals_does() {
 	let sandbox = Sandbox::new();

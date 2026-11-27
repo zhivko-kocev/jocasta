@@ -238,17 +238,8 @@ fn today_header_needs_you_first_with_kind_glyphs_underway_landed_calendar_his_no
 	assert!(has(&shown, "  acme-api: look at the slow search endpoint (#7)"));
 	assert!(has(&shown, "  Hacker News: A headline ↗"));
 	assert_eq!(shown.len(), 34);
-	// At 100 columns the last key (`x Remove`) has dropped off the right.
-	assert_eq!(
-		shown.last().unwrap(),
-		"↑↓ pick · Enter go/open · f Finish · s Stop · r Review · n New · b Brief · R PR · F CI · X Stop all"
-	);
-	assert!(KEY_LINE.starts_with(shown.last().unwrap().as_str()));
-	assert_eq!(KEY_LINE, KEYS.join(" · "));
-	assert_eq!(
-		KEY_LINE,
-		"↑↓ pick · Enter go/open · f Finish · s Stop · r Review · n New · b Brief · R PR · F CI · X Stop all · x Remove"
-	);
+	// The picked thread's keys first, then the ones every row takes (0717).
+	assert_eq!(shown.last().unwrap(), "Enter go · f Finish · s Stop · r Review · n New · b Brief · X Stop all");
 	// No greeting.
 	let all = shown.join("\n").to_lowercase();
 	assert!(!["good morning", "good afternoon", "good evening"].iter().any(|g| all.contains(g)));
@@ -300,6 +291,11 @@ fn today_rows_enter_acts_on_in_drawn_order_threads_go_to_their_pane_link_rows_op
 	let picked = TodayState { selected: Some("https://meet.example.org/a".to_string()), ..state.clone() };
 	let shown = lines(&picked, 100, 34);
 	assert!(shown.iter().find(|l| l.contains("Client-a sync")).unwrap().starts_with("› now   Client-a sync ↗"));
+	// Its keys lead the key line (0717); a review request's add `R`.
+	assert_eq!(shown.last().unwrap(), "Enter open · n New · b Brief · X Stop all");
+	let review = TodayState { selected: Some("https://example.org/web/pull/12".to_string()), ..state.clone() };
+	let review_keys = lines(&review, 100, 34);
+	assert_eq!(review_keys.last().unwrap(), "Enter open · R PR · n New · b Brief · X Stop all");
 	// News only in spare rows: the shorter pane draws none and offers none.
 	assert!(!render(&state, now(), 100, 16).picks.iter().any(|p| p.key.contains("example.org/1")));
 }
@@ -350,8 +346,7 @@ fn today_news_only_while_rows_remain_the_list_scrolls_only_as_far_as_the_picked_
 }
 
 #[test]
-fn today_at_40_columns_titles_keep_18_columns_before_facts_give_way_the_header_yields_to_two_rows_the_key_line_drops_keys()
- {
+fn today_at_40_columns_threads_take_two_rows_the_header_yields_to_two_rows_the_key_line_drops_keys_0717() {
 	let hud_high = Hud {
 		spend_today: Some(48.73),
 		quota: vec![
@@ -376,9 +371,14 @@ fn today_at_40_columns_titles_keep_18_columns_before_facts_give_way_the_header_y
 	let shown = lines(&state, 40, 30);
 	assert!(fits(&state, 40, 30));
 	assert_eq!(shown[..2], ["Mon 9 Nov 14:30 · cpu 7% · mem 60%", "5h 91% (16:30) · 7d 97% · $48.73 today"]);
-	assert!(has(&shown, "  acme-api/Fix login re… working  12 min"));
-	assert!(shown.iter().find(|l| l.contains("修复")).unwrap().ends_with("working  48 min"));
-	assert_eq!(shown.last().unwrap(), "↑↓ pick · Enter go/open · f Finish");
+	// Under 60 columns a thread's title has its own row and its facts the next (0717).
+	let at = position(&shown, "  acme-api/Fix login redirect loop").expect("the whole title");
+	assert_eq!(shown[at + 1], "    working  12 min  $0.84  83k");
+	let wide_at = shown.iter().position(|l| l.contains("修复")).unwrap();
+	assert_eq!(shown[wide_at + 1], "    working  48 min");
+	assert_eq!(shown.last().unwrap(), "n New · b Brief · X Stop all");
+	let picked = TodayState { selected: Some("w3:p1".to_string()), ..state.clone() };
+	assert_eq!(lines(&picked, 40, 30).last().unwrap(), "Enter go · f Finish · s Stop · r Review");
 	// Every line fits from 20 to 120 columns.
 	let full = up(Some(narrow), Some(hud_high), Some(dashboard()));
 	for width in [20, 30, 35, 60, 120] {
@@ -419,14 +419,17 @@ fn today_connecting_at_first_offline_keeps_the_time_and_says_since_when_quiet_ho
 }
 
 #[test]
-fn the_picked_row_is_drawn_with_the_marker_and_the_selection_colour_across_the_pane() {
+fn the_picked_row_is_lit_across_the_pane_only_while_the_dock_has_the_keys_a_grey_marker_otherwise_0717() {
 	let state = TodayState { selected: Some("w3:p1".to_string()), ..up(Some(today()), Some(hud()), None) };
-	let frame = render(&state, now(), 60, 30);
-	let mut buf = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 60, 30));
-	let area = buf.area;
-	render_lines(&mut buf, area, &frame.lines);
-	let row = frame.lines.iter().position(|l| text(l).starts_with("› acme-api/Export v2")).expect("the picked row");
-	let y = row as u16;
+	let drawn = |state: &TodayState| {
+		let frame = render(state, now(), 60, 30);
+		let mut buf = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 60, 30));
+		let area = buf.area;
+		render_lines(&mut buf, area, &frame.lines);
+		let row = frame.lines.iter().position(|l| text(l).starts_with("› acme-api/Export v2")).expect("the picked row");
+		(buf, row as u16)
+	};
+	let (buf, y) = drawn(&TodayState { keys: true, ..state.clone() });
 	assert_eq!(buf[(0, y)].fg, TOKYO_NIGHT.blue);
 	assert_eq!(buf[(0, y)].bg, TOKYO_NIGHT.bg2);
 	assert_eq!(buf[(59, y)].bg, TOKYO_NIGHT.bg2);
@@ -434,6 +437,10 @@ fn the_picked_row_is_drawn_with_the_marker_and_the_selection_colour_across_the_p
 	assert_eq!(buf[(59, y + 1)].bg, TOKYO_NIGHT.bg0);
 	assert_eq!(buf[(0, 2)].fg, TOKYO_NIGHT.blue);
 	assert!(buf[(0, 2)].modifier.contains(ratatui::style::Modifier::BOLD));
+	// The keys are the pane's: the marker stays, grey, and nothing is lit.
+	let (buf, y) = drawn(&state);
+	assert_eq!(buf[(0, y)].fg, TOKYO_NIGHT.fg3);
+	assert_eq!((buf[(0, y)].bg, buf[(59, y)].bg), (TOKYO_NIGHT.bg0, TOKYO_NIGHT.bg0));
 }
 
 #[test]
@@ -576,11 +583,20 @@ fn an_underway_row_shows_state_check_diff_age_cost_and_context_dropped_from_the_
 			.ends_with("working  ✓  +84 −12  12 min  $0.84  83k")
 	);
 	assert!(wide.iter().find(|l| l.contains("acme-api/Cleanup")).unwrap().ends_with("working  ✗"));
-	// At 40 columns the title keeps its 18: context, cost and age went first.
+	// At 59 columns and less a thread takes two rows (0717): its title, then its facts under it, the last dropping
+	// first while they don't fit.
 	let narrow = lines(&state, 40, 20);
-	let row = narrow.iter().find(|l| l.contains("acme-api/Fix login")).unwrap();
-	assert!(row.ends_with("working  ✓  +84 −12") && !row.contains("min"), "{row}");
+	let at = position(&narrow, "  acme-api/Fix login").expect("the title on a row of its own");
+	assert_eq!(narrow[at + 1], "    working  ✓  +84 −12  12 min  $0.84");
+	assert_eq!(narrow[at + 2], "  acme-api/Cleanup");
+	assert_eq!(narrow[at + 3], "    working  ✗");
 	assert!(fits(&state, 40, 20));
+	let edge = lines(&state, 59, 20);
+	assert_eq!(
+		edge[position(&edge, "  acme-api/Fix login").unwrap() + 1],
+		"    working  ✓  +84 −12  12 min  $0.84  83k"
+	);
+	assert!(lines(&state, 60, 20).iter().any(|l| l.contains("acme-api/Fix login") && l.ends_with("83k")));
 	// The diff is green for what was added and red for what was removed.
 	let frame = render(&state, now(), 100, 20);
 	let colour = |text: &str| frame.lines.iter().flatten().find(|s| s.text.trim() == text).and_then(|s| s.fg);
@@ -728,6 +744,7 @@ fn leftovers_show_one_pickable_row_each_and_no_section_while_there_are_none() {
 	let shown = lines(&state, 100, 40);
 	assert!(position(&shown, "CALENDAR").unwrap() < position(&shown, "LEFTOVERS").unwrap());
 	assert!(shown.iter().any(|l| l.trim_end() == "› acme-api/acme-api-wt"), "{shown:#?}");
+	assert_eq!(shown.last().unwrap(), "x Remove · n New · b Brief · X Stop all");
 	let frame = render(&state, now(), 100, 40);
 	let pick = frame.picks.iter().find(|p| p.leftover.is_some()).expect("a pickable leftover");
 	assert_eq!(
@@ -762,12 +779,8 @@ fn every_section_at_heights_10_20_and_40_keeps_needs_you_and_underway_and_fits()
 		assert_eq!(shown.len(), height);
 		assert!(fits(&state, 100, height), "height {height}");
 		assert!(has(&shown, "NEEDS YOU") && has(&shown, "UNDERWAY"), "height {height}");
-		// The keys drop from the right as the dock narrows: at 100 columns the last one no longer fits.
-		let keys = shown.last().unwrap();
-		assert!(
-			KEY_LINE.starts_with(keys.as_str()) && keys.starts_with("↑↓ pick") && keys.contains("b Brief"),
-			"{keys}"
-		);
+		// Nothing picked: only the keys every row takes (0717).
+		assert_eq!(shown.last().unwrap(), "n New · b Brief · X Stop all", "height {height}");
 	}
 	// 10 and 20 rows have no room for NEXT and NEWS; 40 has every section, in the budget's order.
 	assert!(!has(&lines(&state, 100, 20), "NEWS") && !has(&lines(&state, 100, 20), "NEXT"));

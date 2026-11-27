@@ -11,6 +11,7 @@ use crate::frontier::brief::layout::lay_out;
 use crate::frontier::brief::model::{
 	Brief, DiffFile, DiffHunk, DiffLine, Fact, MapGroup, MapItem, MapLink, Section, WorksRow, WorksState,
 };
+use crate::frontier::brief::spec::Reference;
 use crate::frontier::brief::store;
 use crate::frontier::server::context::ServiceContext;
 use crate::frontier::server::review_notes::{ReviewNotes, review_file};
@@ -33,6 +34,9 @@ const LINK_ALL_UP_TO: usize = 12;
 
 /// The most links a map carries.
 const MAX_LINKS: usize = 200;
+
+/// The map's heading on a thread's brief.
+const CHANGED_FILES: &str = "Changed files";
 
 /// A thread brief's id: `thread-<task id>`; none for a thread with no task record.
 pub fn brief_id(thread: &Thread) -> Option<String> {
@@ -67,6 +71,21 @@ pub async fn refresh(c: &Arc<ServiceContext>, thread: &ThreadRef, extras: &Brief
 	}
 }
 
+/// A `show` spec's reference section (0714): the thread's changed files as a map, or its diff, read from git as its
+/// brief reads them; the spec's heading replaces the brief's.
+pub async fn reference(c: &Arc<ServiceContext>, thread: &ThreadRef, of: Reference, heading: Option<String>) -> Section {
+	let (path, project) = thread.with(|t| (t.path.clone(), t.project.clone()));
+	let trunk = c.places.trunk(&project).await.ok().flatten().filter(|trunk| !trunk.is_empty());
+	let git = Git::read(&path, trunk.as_deref()).await;
+	match of {
+		Reference::Diff => Section::Diff {
+			heading: heading.or_else(|| Some("Diff".to_owned())),
+			files: parse_diff(&git.diff, DIFF_LINES),
+		},
+		Reference::Map => map(&git, heading.unwrap_or_else(|| CHANGED_FILES.to_owned())),
+	}
+}
+
 async fn build(c: &Arc<ServiceContext>, t: &Thread, id: &str, extras: &BriefExtras) -> Result<Brief> {
 	let trunk = c.places.trunk(&t.project).await.ok().flatten().filter(|trunk| !trunk.is_empty());
 	let git = Git::read(&t.path, trunk.as_deref()).await;
@@ -88,7 +107,7 @@ async fn build(c: &Arc<ServiceContext>, t: &Thread, id: &str, extras: &BriefExtr
 		sections.push(Section::Cards { heading: Some("Review notes".to_owned()), cards: notes.notes });
 	}
 	if !git.numstat.is_empty() {
-		sections.push(map(&git));
+		sections.push(map(&git, CHANGED_FILES.to_owned()));
 	}
 	if !git.diff.is_empty() {
 		sections.push(Section::Diff { heading: Some("Diff".to_owned()), files: parse_diff(&git.diff, DIFF_LINES) });
@@ -214,7 +233,7 @@ fn works(t: &Thread, extras: &BriefExtras, notes: &ReviewNotes) -> Option<Sectio
 }
 
 /// The changed files grouped by their top folder, with a link between two files changed in the same commit.
-fn map(git: &Git) -> Section {
+fn map(git: &Git, heading: String) -> Section {
 	let mut groups: BTreeMap<String, Vec<MapItem>> = BTreeMap::new();
 	for (added, removed, path) in &git.numstat {
 		let group = path.split_once('/').map_or("(root)", |(top, _)| top).to_owned();
@@ -246,7 +265,7 @@ fn map(git: &Git) -> Section {
 		}
 	}
 	Section::Map {
-		heading: Some("Changed files".to_owned()),
+		heading: Some(heading),
 		groups: groups.into_iter().map(|(label, items)| MapGroup { label, items }).collect(),
 		links,
 	}

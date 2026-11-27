@@ -1,16 +1,23 @@
 //! The brief windows (0721): `jocasta view <brief-id>` draws one stored brief in a native window of its own with iced
 //! (tiny-skia, on the CPU). It reads `<data>/briefs/<id>.json`; its buttons go to the running service over the bridge
-//! pipe (`frontier::client`), which stays the only writer of briefs. `model.rs` is what each section and button turns
-//! into, `motion.rs` the timings, `flow.rs` the flow's canvas, `style.rs` the look, `app.rs` the window.
+//! pipe (`frontier::client`), which writes the briefs (only `jocasta brief open` without a running Jocasta stores its
+//! own, 0716). `model.rs` is what each section and button turns into, `motion.rs` the timings, `flow.rs` the flow's
+//! canvas, `style.rs` the look, `app.rs` the window.
 
 use std::process::{Command, ExitCode, Stdio};
 
+use serde_json::Value;
+
+use crate::frontier::brief::spec::{self, Part};
 use crate::frontier::brief::{BriefLinks, store};
+use crate::frontier::client;
 use crate::frontier::tui::load_palette;
 use crate::shared::env;
+use crate::shared::errors::{Error, Result};
 use crate::shared::install::self_command;
 use crate::shared::log::{LogLevel, log};
 use crate::shared::paths::config_dir;
+use crate::shared::service_file::NOT_RUNNING;
 
 mod app;
 pub mod flow;
@@ -35,6 +42,35 @@ pub fn run(id: &str) -> ExitCode {
 			ExitCode::from(1)
 		}
 	}
+}
+
+/// `jocasta brief open <spec.json | ->` (0716): checks the spec as `show` does, then the running service shows it as the
+/// boss's `show`; without a running Jocasta it is stored here and its window opened all the same (a `show` brief has
+/// no buttons), and only a section filled from a thread is refused. The `Shown: <title>` line, or a `show:` refusal
+/// (exit 2).
+pub async fn open_spec(source: &str) -> Result<String> {
+	let text = if source == "-" { std::io::read_to_string(std::io::stdin()) } else { std::fs::read_to_string(source) }
+		.map_err(|error| Error::user(format!("show: can't read {source}: {error}")))?;
+	let Ok(Value::Object(given)) = serde_json::from_str::<Value>(&text) else {
+		return Err(Error::user("show: the spec isn't a JSON object: {\"title\": …, \"sections\": […]}."));
+	};
+	let spec = spec::read(&given)?;
+	match client::brief_open(&given).await {
+		Ok(shown) => return Ok(shown),
+		Err(why) if why != NOT_RUNNING => return Err(Error::user(why)),
+		Err(_) => {}
+	}
+	if let Some((number, thread)) = spec.references().next() {
+		return Err(Error::user(format!(
+			"show: section {number} is filled from the thread {thread}, and Jocasta isn't running to fill it."
+		)));
+	}
+	let sections =
+		spec.sections.into_iter().filter_map(|part| if let Part::Given(section) = part { Some(section) } else { None });
+	let brief = spec::show_brief(spec.title, sections.collect());
+	store::save(&brief)?;
+	spawn(&brief.id).map_err(|error| Error::other(format!("the window didn't open: {error}")))?;
+	Ok(format!("Shown: {}", brief.title))
 }
 
 /// Starts `<this program> view <id>` on its own, not waiting for it (every OS).

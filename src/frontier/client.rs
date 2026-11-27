@@ -70,6 +70,12 @@ pub async fn brief_live(id: &str) -> Result<bool, String> {
 	Ok(cli_call("brief live", json!({ "id": id }), 10).await? == "true")
 }
 
+/// `jocasta brief open` (0716): the running service shows the spec as the boss's `show` does; its `Shown: <title>`, or
+/// why not ([`NOT_RUNNING`] when it isn't running).
+pub async fn brief_open(spec: &serde_json::Map<String, serde_json::Value>) -> Result<String, String> {
+	cli_call("brief open", serde_json::Value::Object(spec.clone()), 60).await
+}
+
 #[cfg(test)]
 #[path = "client_tests.rs"]
 mod tests;

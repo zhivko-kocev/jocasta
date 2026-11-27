@@ -11,8 +11,8 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use crate::frontier::brief::layout::lay_out;
-use crate::frontier::brief::model::{Brief, Kind, Section};
+use crate::frontier::brief::model::Kind;
+use crate::frontier::brief::spec::{self, Part};
 use crate::frontier::brief::store;
 use crate::frontier::protocol::ToastPriority;
 use crate::frontier::server::allow::Confirmation;
@@ -28,6 +28,7 @@ use crate::frontier::server::review_notes::{
 use crate::frontier::server::review_system::{REVIEW_SYSTEM, review_system};
 use crate::frontier::server::task_file::{CloseFacts, CloseHow, NewTask, TaskReport, close_task, find_task, new_task};
 use crate::frontier::server::thread::{ThreadRef, subject};
+use crate::frontier::server::thread_brief;
 use crate::frontier::server::thread_lifecycle::Awaiting;
 use crate::frontier::server::thread_start::{StartOptions, after_of, budget_of, done_when_of, heavy_of};
 use crate::frontier::server::wording::{Door, asker, asks, branch_slug, brief_title, person, quoted};
@@ -140,9 +141,6 @@ fn js_string(value: Option<&Value>) -> String {
 		Some(Value::Object(_)) => "[object Object]".to_owned(),
 	}
 }
-
-/// The section types the boss's `show` draws (0679): what it can say, not what the service computes.
-const SHOW_SECTIONS: [&str; 6] = ["text", "facts", "flow", "map", "diff", "list"];
 
 /// One call's arguments, read with the refusals named by its door: the tool's name, or `jocasta <command>`.
 pub struct Args<'a> {
@@ -401,43 +399,29 @@ impl Tools {
 		Ok(started.text)
 	}
 
-	/// `show` (0679): a brief drawn from his spec (`title` and `sections`), laid out and checked by code, stored as
-	/// `show-<n>` and opened in his browser.
+	/// `show` (0679, 0714) and `jocasta brief open` (0716): a brief drawn from a spec, checked by `spec::read`, its
+	/// reference sections filled from their threads, stored as `show-<n>` and opened in its window.
 	async fn show(&self, args: &Args<'_>) -> Result<String> {
-		let title = js_trim(&args.text("title")?).to_owned();
-		let Some(Value::Array(given)) = args.values.get("sections") else {
-			return Err(Error::user("show: sections is required: an array of sections, each with a `type`."));
-		};
-		let mut sections = Vec::with_capacity(given.len());
-		for (index, section) in given.iter().enumerate() {
-			let kind = section.get("type").and_then(Value::as_str).unwrap_or("");
-			if !SHOW_SECTIONS.contains(&kind) {
-				return Err(Error::user(format!(
-					"show: section {} has type `{kind}`; the types are {}.",
-					index + 1,
-					SHOW_SECTIONS.join(", ")
-				)));
-			}
-			let parsed: Section = serde_json::from_value(section.clone()).map_err(|error| {
-				Error::user(format!("show: section {} ({kind}) isn't well formed: {error}", index + 1))
-			})?;
-			sections.push(parsed);
-		}
+		let spec = spec::read(args.values)?;
 		let Some(briefs) = self.c.options.briefs.clone() else {
 			return Err(Error::user("show: this Jocasta has no page server; nothing can be shown."));
 		};
-		let mut brief = Brief {
-			id: store::next_show_id(),
-			kind: "show".to_owned(),
-			title: title.clone(),
-			subtitle: String::new(),
-			generated_at_ms: now_ms(),
-			sections,
-		};
-		lay_out(&mut brief).map_err(|error| Error::user(format!("show: {error}")))?;
+		let mut sections = Vec::with_capacity(spec.sections.len());
+		for (index, part) in spec.sections.into_iter().enumerate() {
+			sections.push(match part {
+				Part::Given(section) => section,
+				Part::Thread { of, heading, thread } => {
+					let found = self.c.threads.find(&thread).map_err(|error| {
+						Error::user(format!("show: section {} ({}): {error}", index + 1, of.type_name()))
+					})?;
+					thread_brief::reference(&self.c, &found, of, heading).await
+				}
+			});
+		}
+		let brief = spec::show_brief(spec.title, sections);
 		store::save(&brief)?;
 		briefs.open(&brief.id);
-		Ok(format!("Shown: {title}"))
+		Ok(format!("Shown: {}", brief.title))
 	}
 
 	/// `review_note` (0678, 0707): the reviewer hands in one note with the code it is about. It is kept only when the
@@ -600,6 +584,8 @@ impl Tools {
 			}
 			// Whether a brief window's buttons have a live thread behind them (0721).
 			"brief live" => Ok(brief_actions::live(c, &args.text("id")?).to_string()),
+			// `jocasta brief open` (0716): a spec opened as the boss's `show` opens it.
+			"brief open" => self.show(&args).await,
 			// The pane's visible grid as text (0683): the benchmark and live checks read panes through the pipe.
 			"pane_text" => Ok(c.herdr.screen(&args.text("pane")?).await.map_err(Error::from)?),
 			// The panes as JSON text (0683): the benchmark and live checks list the shell's panes through the pipe.

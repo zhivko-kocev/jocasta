@@ -369,6 +369,12 @@ fn the_third_wrong_code_shows_its_note_for_two_seconds_and_the_box_draws_over_th
 	let rows = buffer_rows(&buffer);
 	assert!(rows.iter().any(|row| row.contains("Jocasta asks")));
 	assert!(rows.iter().any(|row| row.contains("Remove the leftover worktree")));
+	// At most 88 columns wide and at least half the window high (0717): 80×30, a wide window, a tall one.
+	for (width, height, outer_width, outer_height) in [(80, 30, 56, 20), (200, 30, 88, 20), (200, 60, 88, 30)] {
+		let area = Rect::new(0, 0, width, height);
+		let outer = shell.draw_question(&mut Buffer::empty(area), area);
+		assert_eq!((outer.width, outer.height), (outer_width, outer_height), "{width}×{height}");
+	}
 	CLOCK.store(KEY_GRACE_MS * 2 + EXHAUSTED_MS, std::sync::atomic::Ordering::SeqCst);
 	assert!(shell.tick());
 	assert!(!shell.asking());

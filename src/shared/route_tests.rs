@@ -39,6 +39,10 @@ fn the_jocasta_commands_words_0387_0467_0468_0472_0544_0694_anything_else_is_a_u
 	assert_eq!(go(&["project", "list"]), Route::Project { args: words(&["list"]) });
 	assert_eq!(go(&["thread", "list"]), Route::Thread { args: words(&["list"]) });
 	assert_eq!(go(&["worktree", "remove", "x"]), Route::Worktree { args: words(&["remove", "x"]) });
+	assert_eq!(go(&["brief", "open", "-"]), Route::BriefOpen { spec: "-".to_owned() });
+	assert_eq!(go(&["brief", "open", "plan.json"]), Route::BriefOpen { spec: "plan.json".to_owned() });
+	assert_eq!(refused(&["brief", "open"]).kind(), ErrorKind::MissingRequiredArgument);
+	assert_eq!(refused(&["brief", "render", "-"]).kind(), ErrorKind::InvalidSubcommand);
 	assert_eq!(go(&["--version"]), Route::Version);
 	assert_eq!(go(&["-v"]), Route::Version);
 	assert_eq!(refused(&["--help"]).kind(), ErrorKind::DisplayHelp);

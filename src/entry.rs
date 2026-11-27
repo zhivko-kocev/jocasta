@@ -361,6 +361,10 @@ async fn run_route(target: Route, calendar_env: Option<String>) -> Result<i32> {
 		Route::Uninstall => run_uninstall_route().await,
 		Route::Diagnose => run_diagnose_route().await,
 		Route::Status => Ok(run_status_json(&ServiceCli).await),
+		Route::BriefOpen { spec } => {
+			out(&crate::frontier::view::open_spec(&spec).await?);
+			Ok(0)
+		}
 		Route::Surface | Route::View { .. } => unreachable!("`main` runs these before Jocasta's runtime exists"),
 	}
 }

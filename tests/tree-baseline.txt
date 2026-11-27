@@ -301,7 +301,6 @@ src/frontier/shell.rs undocumented-export JocastaShell.question_key
 src/frontier/shell.rs undocumented-export JocastaShell.question_paste
 src/frontier/shell.rs undocumented-export JocastaShell.tick
 src/frontier/shell/app.rs flag-parameter App.chord(ctrl)
-src/frontier/shell/app.rs flag-parameter layout(docked)
 src/frontier/shell/app.rs forwarding App.front
 src/frontier/shell/tabs.rs undocumented-export Hub.find_workspace
 src/frontier/shell/tabs.rs undocumented-export Hub.new

@@ -229,7 +229,7 @@ async fn show_draws_a_brief_from_a_spec_lays_it_out_and_opens_it_0679() {
 		let none = World::new().await;
 		// Without a page server nothing is shown, and the boss is told so.
 		assert_eq!(
-			reply(&none.say("show", json!({ "title": "Plan", "sections": [] })).await),
+			reply(&none.say("show", json!({ "title": "Plan", "sections": [{ "type": "text", "body": "Hi." }] })).await),
 			ToolReply {
 				text: "show: this Jocasta has no page server; nothing can be shown.".to_owned(),
 				is_error: Some(true)
@@ -273,6 +273,28 @@ async fn show_draws_a_brief_from_a_spec_lays_it_out_and_opens_it_0679() {
 	assert!(w.say("show", cards).await.unwrap_err().contains("the types are text, facts, flow, map, diff, list"));
 	assert_eq!(w.say("show", json!({})).await.unwrap_err(), "show: title is required.");
 	assert_eq!(*opened.lock().unwrap(), ["show-1", "show-2"]);
+}
+
+#[tokio::test]
+async fn a_spec_names_a_thread_and_the_service_fills_its_diff_and_map_and_the_cli_door_shows_it_too_0714_0716() {
+	let opened = Arc::new(Mutex::new(Vec::<String>::new()));
+	let links = Arc::clone(&opened);
+	let w = World::with(move |options| options.briefs = Some(Arc::new(OpenedBriefs(links)))).await;
+	review_world_thread(&w);
+	let spec = json!({
+		"title": "Its change",
+		"sections": [{ "type": "diff", "thread": "Readme line" }, { "type": "map", "heading": "Files", "thread": "t-1" }],
+	});
+	assert_eq!(w.say("show", spec.clone()).await.unwrap(), "Shown: Its change");
+	let brief = crate::frontier::brief::store::load("show-1").expect("the brief is stored");
+	use crate::frontier::brief::model::Section;
+	assert!(matches!(&brief.sections[0], Section::Diff { heading: Some(h), .. } if h == "Diff"));
+	assert!(matches!(&brief.sections[1], Section::Map { heading: Some(h), .. } if h == "Files"));
+	let Value::Object(args) = spec else { unreachable!() };
+	assert_eq!(w.tools.cli("brief open", &args).await.unwrap(), "Shown: Its change");
+	assert_eq!(*opened.lock().unwrap(), ["show-1", "show-2"]);
+	let unknown = json!({ "title": "T", "sections": [{ "type": "diff", "thread": "nope" }] });
+	assert_eq!(w.say("show", unknown).await.unwrap_err(), "show: section 1 (diff): no thread nope.");
 }
 
 #[tokio::test]

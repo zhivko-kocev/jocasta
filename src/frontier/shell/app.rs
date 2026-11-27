@@ -41,9 +41,12 @@ use crate::shared::clock::now_ms;
 /// The sidebar's width, and the narrowest terminal that has one.
 const SIDEBAR: u16 = 28;
 const SIDEBAR_MIN_TERMINAL: u16 = 70;
-/// The dock's width, and the narrowest main area (beside the sidebar) that has one.
-const DOCK: u16 = 46;
-const DOCK_MIN_MAIN: u16 = 90;
+/// The dock (0717): this share of the window's width, clamped to these columns, beside a pane at least `PANE_MIN`
+/// wide; a narrower main area gets it laid over the pane while it has the keys (Ctrl+B Alt+T until Esc).
+const DOCK_PERCENT: u32 = 35;
+const DOCK_MIN: u16 = 46;
+const DOCK_MAX: u16 = 72;
+const PANE_MIN: u16 = 44;
 /// A frame waits for this much quiet, and at most this long after the first change.
 const QUIET: Duration = Duration::from_millis(3);
 const MAX_WAIT: Duration = Duration::from_millis(12);
@@ -91,20 +94,40 @@ struct Layout {
 	pane: Rect,
 	dock: Option<Rect>,
 	status: Rect,
+	/// The front tab is the boss's, so the dock can open.
+	docked: bool,
+	/// The dock is laid over the pane (a window too narrow for it beside the pane).
+	over: bool,
 }
 
-/// Lays the frame out for `area`; `docked` says the front tab is the boss's.
-fn layout(area: Rect, docked: bool) -> Layout {
+/// The dock as the front tab has it: none (not the boss's tab), shut (beside the pane when there is room) or open (it
+/// has the keys, laid over the pane when there is no room beside it).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Dock {
+	None,
+	Shut,
+	Open,
+}
+
+/// Lays the frame out for `area` and the front tab's `dock`.
+fn layout(area: Rect, dock: Dock) -> Layout {
 	let status = Rect { y: area.y + area.height.saturating_sub(1), height: area.height.min(1), ..area };
 	let body = Rect { height: area.height.saturating_sub(1), ..area };
 	let side = if area.width >= SIDEBAR_MIN_TERMINAL { SIDEBAR.min(area.width / 3) } else { 0 };
 	let sidebar = Rect { width: side, ..body };
 	let main = Rect { x: body.x + side, width: body.width - side, ..body };
-	if docked && main.width >= DOCK_MIN_MAIN {
-		let dock = Rect { x: main.x + main.width - DOCK, width: DOCK, ..main };
-		return Layout { sidebar, pane: Rect { width: main.width - DOCK, ..main }, dock: Some(dock), status };
+	let docked = dock != Dock::None;
+	let laid = Layout { sidebar, pane: main, dock: None, status, docked, over: false };
+	let share = u16::try_from(u32::from(area.width) * DOCK_PERCENT / 100).unwrap_or(DOCK_MAX);
+	let width = share.clamp(DOCK_MIN, DOCK_MAX);
+	if docked && main.width >= width + PANE_MIN {
+		let dock = Rect { x: main.x + main.width - width, width, ..main };
+		return Layout { pane: Rect { width: main.width - width, ..main }, dock: Some(dock), ..laid };
 	}
-	Layout { sidebar, pane: main, dock: None, status }
+	if dock == Dock::Open {
+		return Layout { dock: Some(main), over: true, ..laid };
+	}
+	laid
 }
 
 fn inside(rect: Rect, column: u16, row: u16) -> bool {
@@ -161,9 +184,17 @@ impl App {
 			}
 		}
 		let docked = front.as_ref().is_some_and(|front| self.shell.docks(&front.workspace_id));
-		let laid = layout(area, docked);
+		// Another tab in front closes a dock laid over the pane; the boss's tab comes back without it.
+		self.dock_focus &= docked;
+		let dock = match (docked, self.dock_focus) {
+			(false, _) => Dock::None,
+			(true, false) => Dock::Shut,
+			(true, true) => Dock::Open,
+		};
+		let laid = layout(area, dock);
 		self.laid = laid;
-		self.hub.set_area(laid.pane.width.saturating_add(laid.dock.map_or(0, |dock| dock.width)), laid.pane.height);
+		let beside = if laid.over { 0 } else { laid.dock.map_or(0, |dock| dock.width) };
+		self.hub.set_area(laid.pane.width.saturating_add(beside), laid.pane.height);
 		if let Some(front) = &front {
 			front.pane.resize(laid.pane.width, laid.pane.height);
 			front.pane.proxy.pending.store(false, std::sync::atomic::Ordering::Release);
@@ -203,8 +234,10 @@ impl App {
 				"Enter jumps · Esc cancels"
 			} else if dock_focus {
 				"dock: Esc gives the keys back"
-			} else {
+			} else if laid.docked {
 				"Ctrl+B Alt+T today · Alt+1-9 agents · Alt+G goto"
+			} else {
+				"Alt+1-9 agents · Alt+G goto"
 			};
 			// The HUD (0403, 0437, 0554): the blocked count and today's spend, then the time.
 			let clock = chrono::Local::now().format("%H:%M").to_string();
@@ -266,7 +299,7 @@ impl App {
 			self.swallowed.push(key.code);
 			return;
 		}
-		if self.dock_focus && self.laid.dock.is_some() {
+		if self.dock_focus && self.laid.docked {
 			let reply = self.shell.dock_key(key);
 			self.deliver(&reply);
 			if reply.release {
@@ -319,7 +352,7 @@ impl App {
 		}
 		match key.code {
 			KeyCode::Char('t') if alt => {
-				if self.laid.dock.is_some() {
+				if self.laid.docked {
 					self.dock_focus = true;
 				}
 			}
@@ -459,7 +492,7 @@ impl App {
 			self.deliver(&reply);
 			return;
 		}
-		if self.dock_focus && self.laid.dock.is_some() {
+		if self.dock_focus && self.laid.docked {
 			return;
 		}
 		let Some(front) = self.front() else { return };
@@ -534,7 +567,7 @@ pub fn run(parts: Parts) -> io::Result<()> {
 			let _ = closing.send(Ui::Quit);
 		});
 	}
-	let first = layout(Rect { x: 0, y: 0, width, height }, false);
+	let first = layout(Rect { x: 0, y: 0, width, height }, Dock::None);
 	hub.set_area(first.pane.width, first.pane.height);
 	native.joined(CLIENT, None);
 	let mut app = App {
@@ -751,3 +784,7 @@ impl Input {
 		}
 	}
 }
+
+#[cfg(test)]
+#[path = "app_tests.rs"]
+mod tests;

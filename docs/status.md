@@ -134,7 +134,9 @@ R7, motion and design (0713, rewritten for the iced windows), is built: one curv
 
 Fixes from the VM (2026-11-27): a question's notification closes once the question ends (Linux: `notify-send -p` and the freedesktop `CloseNotification` through `gdbus`; 0699); `today` and the question box take their ground from the palette's `bg-0` (0698); a GitHub poller without a `gh` login is one red header line and no notification (0703). Not checked in the VM yet: the closing notifications under mako, and the dock under another theme.
 
-Next: R8, the `show` spec, retention, `jocasta brief open` and the dock (0714–0717).
+R8, the `show` spec, retention, `jocasta brief open` and the dock (0714–0717), is built: one spec reader (`brief/spec.rs`) for `show` and the new `jocasta brief open <spec.json | ->` with strict keys, the label and diff limits, map ids checked like a flow's and `{"type": "diff"|"map", "thread"}` filled by the service; the boss manual lists every section; briefs older than 30 days go when one is saved; `brief open` shows through the running service, or stores and opens the window itself without one. `today` and `ask`: the picked row's keys lead the key line, the dock is 35 % of the window (46–72 columns) and opens over the pane in a narrow window, threads take two rows under 60 columns, the picked row is lit only while the dock has the keys, the question box is at most 88 wide and at least half the window high, New thread shows the brief's last three rows. Checked in ratatui buffers at 80×30, 59 columns and a 200-column window. Not checked live: the dock over the pane in a real foot window, and `jocasta brief open` opening a window (both need a desktop; the host has no windows for tests). Open: ultron's skill line telling any agent about `jocasta brief open` (R9, the ultron side).
+
+Next: R9, the 0.2.0 release (bump `Cargo.toml`, tag `v0.2.0` once CI is green; ultron's skill line for `jocasta brief open`).
 
 Update this file when a slice's records are written, when its build lands, and when a grilling session stops (name the next slice); keep `AGENTS.md`'s one current-state line in step.
 

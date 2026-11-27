@@ -726,7 +726,7 @@
 					},
 					{
 						"name": "show",
-						"description": "Draw a brief in his browser from a spec.\nA page of sections he reads top to bottom: text, facts, a flow (a diagram of nodes and edges, laid out and animated by Jocasta), a map of changed files, a diff, a list. A diagram is changed by asking for a new show. A spec that doesn't lay out (a duplicate node id, an edge to an unknown node, more than 200 nodes) is refused with the reason.",
+						"description": "Draw a brief in its own window from a spec.\nA window of sections he reads top to bottom: text, facts, a flow (a diagram of nodes and edges, laid out and animated by Jocasta), a map of changed files, a diff, a list. A diagram is changed by asking for a new show. A thread's diff or map is one line, {\"type\": \"diff\", \"thread\": \"<name>\"}, and Jocasta fills it. The spec is checked whole and refused with the reason: no sections, an unknown key (named), a node label over 80 characters, an edge label over 24, a fact label over 40, more than 2000 diff lines, a duplicate node or map item id, an edge or link to an unknown one, more than 200 nodes.",
 						"inputSchema": {
 							"type": "object",
 							"properties": {
@@ -739,7 +739,7 @@
 									"items": {
 										"type": "object"
 									},
-									"description": "The sections, top to bottom; each has a `type`: text {body}, facts {rows: [{label, value, url?}]}, flow {nodes: [{id, label, state: done|active|failed|pending, group?, detail?}], edges: [{from, to, label?}]}, map {groups: [{label, items: [{id, label, added, removed}]}], links: [{a, b}]}, diff {files: [{path, hunks: [{header, lines: [{kind: +|-|space, old?, new?, text}]}]}]}, list {rows: [{text, url?, note?}]}; every section may carry a heading"
+									"description": "The sections, top to bottom; each has a `type`: text {body}, facts {rows: [{label, value, url?}]}, flow {nodes: [{id, label, state: done|active|failed|pending, group?, detail?}], edges: [{from, to, label?}]}, map {groups: [{label, items: [{id, label, added, removed}]}], links?: [{a, b}]} or {thread}, diff {files: [{path, hunks: [{header, lines: [{kind: +|-|space, old?, new?, text}]}]}]} or {thread}, list {rows: [{text, url?, note?}]}; every section may carry a heading"
 								}
 							},
 							"required": ["title", "sections"],

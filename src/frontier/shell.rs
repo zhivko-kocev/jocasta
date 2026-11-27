@@ -47,8 +47,10 @@ const EXHAUSTED_MS: i64 = 2_000;
 const CLOCK_MS: i64 = 30_000;
 /// With no message from the service for this long it is shown as not answering, its picture dimmed (0662).
 const SILENT_MS: i64 = 30_000;
-/// The question's box: this share of the terminal's width, and this many rows inside its border (0553).
+/// The question's box: this share of the terminal's width up to `QUESTION_MAX` columns, and this many rows inside its
+/// border, or half the terminal's height when that is more (0553, 0717).
 const QUESTION_PERCENT: u16 = 70;
+const QUESTION_MAX: u32 = 88;
 const QUESTION_ROWS: u16 = 18;
 
 /// The clock, in ms since the epoch; a test's own.
@@ -369,6 +371,10 @@ impl JocastaShell {
 	}
 
 	pub fn draw_dock(&mut self, buffer: &mut Buffer, area: Rect, focused: bool) {
+		// Laid over the pane on a narrow window (0717): nothing of the pane shows through.
+		Clear.render(area, buffer);
+		buffer.set_style(area, Style::new().fg(palette().fg).bg(palette().bg0));
+		self.today.keys = focused;
 		let bar = if focused { palette().blue } else { palette().bg3 };
 		buffer.set_style(Rect { width: 1, ..area }, Style::new().fg(bar).bg(palette().bg0));
 		for y in area.y..area.y + area.height {
@@ -453,9 +459,9 @@ impl JocastaShell {
 
 	pub fn draw_question(&mut self, buffer: &mut Buffer, area: Rect) -> Rect {
 		let Some(asking) = self.question.as_mut() else { return Rect::default() };
-		let width = (u32::from(area.width) * u32::from(QUESTION_PERCENT) / 100).max(44).min(u32::from(area.width));
-		let width = u16::try_from(width).unwrap_or(area.width);
-		let height = (QUESTION_ROWS + 2).min(area.height);
+		let width = (u32::from(area.width) * u32::from(QUESTION_PERCENT) / 100).clamp(44, QUESTION_MAX);
+		let width = u16::try_from(width).unwrap_or(area.width).min(area.width);
+		let height = (QUESTION_ROWS + 2).max(area.height / 2).min(area.height);
 		let outer =
 			Rect { x: area.x + (area.width - width) / 2, y: area.y + (area.height - height) / 2, width, height };
 		Clear.render(outer, buffer);

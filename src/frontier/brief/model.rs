@@ -119,6 +119,7 @@ impl Section {
 
 /// One labelled value of a `facts` section, linking to `url` when it has one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Fact {
 	pub label: String,
 	pub value: String,
@@ -197,6 +198,7 @@ pub struct FlowNode {
 
 /// One arrow of a `flow`, from one node id to another.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FlowEdge {
 	pub from: String,
 	pub to: String,
@@ -206,6 +208,7 @@ pub struct FlowEdge {
 
 /// A column of a `map`: a label and its items.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MapGroup {
 	pub label: String,
 	pub items: Vec<MapItem>,
@@ -213,6 +216,7 @@ pub struct MapGroup {
 
 /// One file of a `map`, with the lines it added and removed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MapItem {
 	pub id: String,
 	pub label: String,
@@ -222,6 +226,7 @@ pub struct MapItem {
 
 /// An arc of a `map` between two item ids.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MapLink {
 	pub a: String,
 	pub b: String,
@@ -229,6 +234,7 @@ pub struct MapLink {
 
 /// One file of a `diff` section.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DiffFile {
 	pub path: String,
 	pub hunks: Vec<DiffHunk>,
@@ -236,6 +242,7 @@ pub struct DiffFile {
 
 /// One hunk of a diff file: its header and lines.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DiffHunk {
 	pub header: String,
 	pub lines: Vec<DiffLine>,
@@ -243,6 +250,7 @@ pub struct DiffHunk {
 
 /// One line of a diff hunk with its numbers on either side.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DiffLine {
 	/// `+`, `-` or a space.
 	pub kind: String,
@@ -419,6 +427,7 @@ pub struct SystemRow {
 
 /// One row of a `list` section.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ListRow {
 	pub text: String,
 	#[serde(default, skip_serializing_if = "Option::is_none")]

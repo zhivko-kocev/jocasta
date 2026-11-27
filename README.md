@@ -32,7 +32,7 @@ While threads work, you keep talking to the boss. It tells you when one needs yo
 - **Checks once per tree.** A project's checks run once for each git tree state and the result is reused, so an unchanged tree is never tested twice.
 - **Guard rails.** A shipped rule list stops or asks about destructive commands (force pushes, `reset --hard`, recursive deletes, reading tokens). Merges, PRs and other irreversible steps need a code that you type into a question drawn over your terminal. A push to `main` asks you once per repo.
 - **Memory across sessions.** `history_search` lets every agent search past sessions of the same project.
-- **Briefs.** The boss's `show` draws animated diagrams, code maps and diffs in a native window, from a spec. There is no free-hand drawing: you ask for a new picture. `jocasta view <brief-id>` opens a stored brief again.
+- **Briefs.** The boss's `show` draws animated diagrams, code maps and diffs in a native window, from a spec. There is no free-hand drawing: you ask for a new picture. `jocasta view <brief-id>` opens a stored brief again, and `jocasta brief open spec.json` lets any agent or script open its own spec the same way. Briefs are kept 30 days.
 - **Your inbox in one place.** GitHub and Azure DevOps reviews and failed pipelines, plus an iCal calendar, appear in `today`.
 - **Nothing runs behind your back.** When you close Jocasta, everything it started stops. Threads continue where they left off the next time you open it.
 
@@ -127,7 +127,7 @@ This opens Jocasta's session. The boss is on the left, and `today` is docked on 
 | Alt+1 … Alt+9 | Switch workspaces (Alt+1 is the boss) |
 | Alt+[ and Alt+] | Move between agents |
 | Hold Right Ctrl | Talk to the boss from anywhere in Windows. omp transcribes your speech on your machine, and the text is sent when you let go |
-| Ctrl+B, then Alt+T, or a click in `today` | Give `today` the keys: ↑↓ pick a row, Enter goes to it, f, s, r, n Finish, Stop, Review, New; Esc gives them back |
+| Ctrl+B, then Alt+T, or a click in `today` | Give `today` the keys: ↑↓ pick a row, Enter goes to it, f, s, r, n Finish, Stop, Review, New; Esc gives them back. In a narrow window `today` opens over the boss pane until Esc |
 
 Questions that need your permission appear in front of whatever you're doing, drawn over your terminal. To allow, type the code it shows. Esc denies, and so does no answer within 2 minutes.
 

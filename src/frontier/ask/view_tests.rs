@@ -141,6 +141,27 @@ fn finish_merge_and_pr_each_take_the_code_moving_the_pick_clears_the_letters() {
 }
 
 #[test]
+fn new_thread_shows_the_last_three_wrapped_rows_of_the_brief_being_typed_0717() {
+	let mut form = ask_state(new_thread_question(&["acme-api"], Some("acme-api")));
+	let brief = "Add retry with backoff to the export job so a flaky upstream doesn't fail the nightly run, and tell \
+		the on-call channel in one message when it gives up after the last try";
+	paste(&mut form, brief);
+	// The box of an 80×30 window: 52 columns inside.
+	let shown = rows(&mut form, 52, 18);
+	let at =
+		shown.iter().position(|l| l.starts_with("Brief  … ")).expect("the brief's first shown row, rows above hidden");
+	assert!(shown[at + 1].starts_with("         ") && shown[at + 2].starts_with("         "), "{shown:#?}");
+	assert_eq!(shown[at + 2].trim_end(), "         try▏");
+	assert_eq!(shown[at + 3].trim(), "");
+	assert!(shown.iter().all(|l| crate::frontier::tui::columns(l.trim_end()) <= 52));
+	// A short brief is one row.
+	let mut short = ask_state(new_thread_question(&["acme-api"], Some("acme-api")));
+	paste(&mut short, "Fix it");
+	let shown = rows(&mut short, 52, 18);
+	assert!(has(&shown, "Brief    Fix it▏"));
+}
+
+#[test]
 fn new_thread_opens_on_the_brief_with_a_project_picked_type_to_find_the_caret_and_the_hint_follow_the_field() {
 	// No project focused this run: the service's pick may be absent, and the form still opens on the brief.
 	let mut form = ask_state(new_thread_question(&["acme-api", "acme-web", "client-a"], None));
