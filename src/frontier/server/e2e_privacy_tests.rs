@@ -1,6 +1,6 @@
 //! The canary test of the privacy boundary (0681): the service runs with fake mail, Jira, Azure and calendar sources
 //! whose lines, keys, resource ids and secrets are canaries, every tool is called as the boss, a thread and a project
-//! pane, a turn-end check, a reword, a push to a phone and the failing rounds run, and nothing a model reads, a push
+//! pane, a turn-end check, a Polish, a push to a phone and the failing rounds run, and nothing a model reads, a push
 //! carries, a log or the journal holds may contain a canary. The one place the canaries may be is what his screens
 //! show: the dock's `today` rows and the morning brief.
 
@@ -320,7 +320,7 @@ async fn no_canary_reaches_a_model_a_push_a_log_or_a_file_a_model_reads_and_only
 	};
 	let options =
 		ServerOptions { day: Some(day), omp: Some(omp), briefs: Some(Arc::new(NoBrowser)), ..ServerOptions::default() };
-	let reword_dir = omp_dir.clone();
+	let polish_dir = omp_dir.clone();
 	with_server(options, |server| async move {
 		let started = start_thread(&server, Default::default()).await;
 		let project_pane = server
@@ -405,17 +405,17 @@ async fn no_canary_reaches_a_model_a_push_a_log_or_a_file_a_model_reads_and_only
 			answers.push((format!("stop {pane}"), context));
 		}
 
-		// A reword (a brief window's `brief act`, 0721) whose instruction holds the Jira token: omp's argv holds
+		// A Polish (a brief window's `brief act`, 0711, 0721) whose text holds the Jira token: omp's argv holds
 		// `[secret]`.
 		let brief = review_brief();
-		let instruction = format!("shorter, and mention {JIRA_TOKEN}");
-		let action = json!({ "op": "reword", "card": "n1", "instruction": instruction });
+		let text = format!("Please mention {JIRA_TOKEN} here.");
+		let action = json!({ "op": "polish", "card": "n1", "text": text });
 		let args = json!({ "id": brief, "action": action });
 		let reply = server.service.cli_call("brief act", args.as_object().unwrap()).await;
-		assert_ne!(reply.is_error, Some(true), "the reword runs: {}", reply.text);
-		let argv = fs::read_to_string(reword_dir.join("omp-args.txt")).expect("omp was run");
+		assert_ne!(reply.is_error, Some(true), "the polish runs: {}", reply.text);
+		let argv = fs::read_to_string(polish_dir.join("omp-args.txt")).expect("omp was run");
 		assert!(argv.contains("[secret]") && !argv.contains(JIRA_TOKEN), "{argv}");
-		answers.push(("reword argv".to_owned(), argv));
+		answers.push(("polish argv".to_owned(), argv));
 		let sealed = server.service.context().bridge.seal(&format!("token {JIRA_TOKEN} here"));
 		assert_eq!(sealed.as_str(), "token [secret] here");
 

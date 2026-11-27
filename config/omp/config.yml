@@ -96,6 +96,8 @@ modelRoles:
   smol: anthropic/claude-haiku-5-5:low
   # Commit messages on the local model first, Haiku where Ollama or the model isn't there (0696).
   commit: "ollama/qwen3:4b, anthropic/claude-haiku-5-5:low"
+  # A review comment's Polish and To English on the local model first, Haiku without it (0711).
+  polish: "ollama/qwen3:4b, anthropic/claude-haiku-5-5:low"
   judge: anthropic/claude-haiku-5-5
   tiny: local/lfm2.5-350m
   speech: local/phonon-31m

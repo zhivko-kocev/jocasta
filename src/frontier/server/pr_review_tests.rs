@@ -82,7 +82,7 @@ fn outside_text_in_the_brief_is_fenced_and_a_title_cannot_close_a_block() {
 }
 
 #[test]
-fn the_brief_holds_the_header_flow_cards_and_a_map_linking_files_the_cards_mention() {
+fn the_brief_holds_the_header_cards_his_verdict_box_and_a_map_linking_files_the_cards_mention_0712() {
 	let task = new_task(
 		NewTask {
 			project_id: "p-acme".to_owned(),
@@ -104,7 +104,7 @@ fn the_brief_holds_the_header_flow_cards_and_a_map_linking_files_the_cards_menti
 	let brief = assemble(&task, "acme", &notes, Some(map_section(&rows, &notes)), None).unwrap();
 	assert_eq!(brief.kind, "pr");
 	let kinds: Vec<&str> = brief.sections.iter().map(Section::type_name).collect();
-	assert_eq!(kinds, ["facts", "flow", "cards", "map"]);
+	assert_eq!(kinds, ["facts", "cards", "verdict", "map"]);
 	let Section::Map { groups, links, .. } = &brief.sections[3] else { panic!("a map") };
 	assert_eq!(groups.iter().map(|g| g.items.len()).sum::<usize>(), 2);
 	assert_eq!(links.len(), 1, "src/b.rs's card mentions src/a.rs");

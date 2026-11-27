@@ -88,8 +88,8 @@ fn each_button_sends_the_op_the_service_takes() {
 	let cases = [
 		(Act::Edit { card: card(), text: "t".to_owned() }, json!({"op": "edit", "card": "n1", "text": "t"})),
 		(
-			Act::Reword { card: card(), instruction: "shorter".to_owned() },
-			json!({"op": "reword", "card": "n1", "instruction": "shorter"}),
+			Act::Help { card: card(), text: "t".to_owned(), op: "polish" },
+			json!({"op": "polish", "card": "n1", "text": "t"}),
 		),
 		(
 			Act::Verdict { card: card(), verdict: Verdict::Skip },

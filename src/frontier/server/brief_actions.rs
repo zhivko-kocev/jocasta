@@ -26,8 +26,8 @@ fn thread_of(c: &Arc<ServiceContext>, id: &str) -> Result<ThreadRef> {
 }
 
 /// Runs `action` on the brief `id`: a thread brief's `{"op":"finish","mode":"merge"|"pr"}` or `{"op":"send","text":…}`
-/// on its thread, a pull request brief's `edit`, `reword` or `publish` (`pr_actions.rs`); the brief as it is after,
-/// whole (a `reword` adds its suggestion).
+/// on its thread, a pull request brief's `edit`, `polish`, `english`, `verdict`, `add`, `summary`, `publish` or `submit`
+/// (`pr_actions.rs`); the brief as it is after, whole (a `polish` or `english` adds its suggestion).
 pub async fn act(c: &Arc<ServiceContext>, tools: &Tools, id: &str, action: &Value) -> Result<Value> {
 	if id.starts_with("pr-") {
 		return pr_actions::act(c, id, action).await;

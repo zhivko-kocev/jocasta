@@ -59,7 +59,7 @@ pub async fn ask_wake(pane_key: &str) -> Result<(), String> {
 }
 
 /// Runs a brief's action through the service (0721), which may wait for his Allow: the brief as it is after (with a
-/// reword's `suggestion`), or why not.
+/// `polish` or `english` suggestion), or why not.
 pub async fn brief_act(id: &str, action: serde_json::Value) -> Result<serde_json::Value, String> {
 	let text = cli_call("brief act", json!({ "id": id, "action": action }), 150).await?;
 	serde_json::from_str(&text).map_err(|error| format!("Jocasta's answer wasn't a brief: {error}"))

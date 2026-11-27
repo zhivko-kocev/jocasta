@@ -721,6 +721,8 @@ fn the_shipped_config_yml_carries_the_decided_values_that_his_own_file_held_wher
 	assert_eq!(config["modelRoles"]["default"], "anthropic/claude-opus-5-5:medium");
 	// Commit messages on the local model first, Haiku without it (0696).
 	assert_eq!(config["modelRoles"]["commit"], "ollama/qwen3:4b, anthropic/claude-haiku-5-5:low");
+	// Polish and To English the same way (0711).
+	assert_eq!(config["modelRoles"]["polish"], "ollama/qwen3:4b, anthropic/claude-haiku-5-5:low");
 }
 
 #[tokio::test]

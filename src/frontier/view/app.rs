@@ -10,7 +10,7 @@ use std::time::Instant;
 use iced::animation::Easing;
 use iced::widget::{
 	Column, button, canvas, column, container, image, mouse_area, pick_list, row, rule, scrollable, space, text,
-	text_editor, text_input,
+	text_editor,
 };
 use iced::{Alignment, Animation, Color, Element, Fill, Length, Size, Subscription, Task, window};
 use serde_json::Value;
@@ -61,7 +61,6 @@ pub enum Message {
 	/// A system section's switch (by its index): After when true, Before otherwise.
 	Side(usize, bool),
 	Edit(String, text_editor::Action),
-	Instruction(String, String),
 	SendText(text_editor::Action),
 	Act(Act),
 	Answered(Act, Result<Value, String>),
@@ -101,7 +100,6 @@ struct Window {
 	/// Each system section's switch, true for After; a section not in it shows After, settled.
 	sides: HashMap<usize, Animation<bool>>,
 	editors: HashMap<String, text_editor::Content>,
-	instructions: HashMap<String, String>,
 	send: text_editor::Content,
 	busy: Option<(Target, &'static str)>,
 	banners: HashMap<Target, String>,
@@ -174,7 +172,6 @@ impl Window {
 			width: 1040.0,
 			folds: HashMap::new(),
 			sides: HashMap::new(),
-			instructions: HashMap::new(),
 			send: text_editor::Content::new(),
 			busy: None,
 			banners: HashMap::new(),
@@ -228,9 +225,6 @@ impl Window {
 					editor.perform(action);
 				}
 			}
-			Message::Instruction(card, text) => {
-				self.instructions.insert(card, text);
-			}
 			Message::SendText(action) => self.send.perform(action),
 			Message::Act(act) => return self.act(act),
 			Message::Answered(act, answer) => return self.answered(&act, answer),
@@ -272,13 +266,13 @@ impl Window {
 			}
 		};
 		match act {
-			Act::Edit { card, .. } | Act::Reword { card, .. } | Act::Verdict { card, .. } | Act::Publish { card } => {
+			Act::Edit { card, .. } | Act::Help { card, .. } | Act::Verdict { card, .. } | Act::Publish { card } => {
 				patch_card(&mut self.brief, &fresh, card);
 				if let (Act::Edit { .. }, Some(shown)) = (act, crate::frontier::view::model::card(&self.brief, card)) {
 					self.editors.insert(card.clone(), text_editor::Content::with_text(card_text(shown)));
 					self.suggestion = None;
 				}
-				if matches!(act, Act::Reword { .. }) {
+				if matches!(act, Act::Help { .. }) {
 					self.suggestion = suggestion;
 				}
 				Task::none()
@@ -390,6 +384,7 @@ impl Window {
 			| Section::Cards { heading, .. }
 			| Section::Works { heading, .. }
 			| Section::System { heading, .. }
+			| Section::Verdict { heading, .. }
 			| Section::List { heading, .. } => heading.as_deref(),
 		};
 		let body: Element<'a, Message> = if is_empty(section) {
@@ -407,6 +402,14 @@ impl Window {
 						self.system(index, nodes, edges, [brings, takes])
 					}
 				}
+				Section::Verdict { summary, submitted, .. } => match submitted {
+					Some(done) => {
+						let said = crate::frontier::server::pr_review::verdict_said(&done.verdict);
+						text(format!("Submitted: {said}")).size(BODY).color(c.fg).into()
+					}
+					None if summary.is_empty() => text("No summary yet.").size(BODY).color(c.muted).into(),
+					None => prose(summary),
+				},
 				Section::Flow { nodes, edges, .. } => self.flow(nodes, edges),
 				Section::Map { groups, links, .. } => map(groups, links),
 				Section::Diff { files, .. } => self.diff(index, files),
@@ -630,10 +633,11 @@ impl Window {
 	fn card_controls<'a>(&'a self, card: &'a Card) -> Element<'a, Message> {
 		let id = card.id.clone();
 		let mut controls = Column::new().spacing(12);
+		let words = self.editors.get(&card.id).map(text_editor::Content::text).unwrap_or_default();
+		let words = words.trim().to_owned();
 		if let Some(editor) = self.editors.get(&card.id) {
-			let words = editor.text();
-			let save = Act::Edit { card: id.clone(), text: words.trim().to_owned() };
-			let changed = !words.trim().is_empty() && words.trim() != card_text(card);
+			let save = Act::Edit { card: id.clone(), text: words.clone() };
+			let changed = !words.is_empty() && words != card_text(card);
 			let edit_id = id.clone();
 			controls = controls.push(
 				text_editor(editor)
@@ -643,24 +647,17 @@ impl Window {
 					.size(BODY)
 					.style(style::editor),
 			);
-			controls = controls.push(self.act_button("Save", Tone::Plain, changed.then_some(save)));
+			let help =
+				|op: &'static str| (!words.is_empty()).then(|| Act::Help { card: id.clone(), text: words.clone(), op });
+			controls = controls.push(
+				row![
+					self.act_button("Save", Tone::Plain, changed.then_some(save)),
+					self.act_button("Polish", Tone::Plain, help("polish")),
+					self.act_button("To English", Tone::Plain, help("english")),
+				]
+				.spacing(8),
+			);
 		}
-		let instruction = self.instructions.get(&card.id).map_or("", String::as_str);
-		let reword = (!instruction.trim().is_empty())
-			.then(|| Act::Reword { card: id.clone(), instruction: instruction.trim().to_owned() });
-		let input_id = id.clone();
-		controls = controls.push(
-			row![
-				text_input("Reword: shorter, kinder, \u{2026}", instruction)
-					.on_input(move |text| Message::Instruction(input_id.clone(), text))
-					.padding(8)
-					.size(BODY)
-					.style(style::input),
-				self.act_button("Reword", Tone::Plain, reword),
-			]
-			.spacing(8)
-			.align_y(Alignment::Center),
-		);
 		if let Some((_, suggested)) = self.suggestion.as_ref().filter(|(card_id, _)| *card_id == card.id) {
 			controls = controls.push(self.suggestion_box(&id, suggested));
 		}

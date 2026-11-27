@@ -12,9 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::frontier::brief::layout::lay_out;
-use crate::frontier::brief::model::{
-	Brief, Fact, FlowEdge, FlowNode, MapGroup, MapItem, MapLink, NodeState, Proof, Section,
-};
+use crate::frontier::brief::model::{Brief, Fact, MapGroup, MapItem, MapLink, Proof, Section};
 use crate::frontier::brief::store;
 use crate::frontier::protocol::{ServerMessage, ToastLevel, ToastPriority, ToastReason};
 use crate::frontier::server::context::ServiceContext;
@@ -589,18 +587,6 @@ fn fact(label: &str, value: impl Into<String>) -> Fact {
 	Fact { label: label.to_owned(), value: value.into(), url: None }
 }
 
-fn node(id: &str, label: &str, state: NodeState, detail: String) -> FlowNode {
-	FlowNode {
-		id: id.to_owned(),
-		label: label.to_owned(),
-		group: None,
-		state,
-		detail: Some(detail).filter(|detail| !detail.is_empty()),
-		layer: 0,
-		order: 0,
-	}
-}
-
 /// The page's top: the pull request, and where its review stands.
 fn facts_section(task: &TaskRecord, project: &str, notes: &ReviewNotes) -> Option<Section> {
 	let pr = task.pr.as_ref()?;
@@ -625,33 +611,23 @@ fn facts_section(task: &TaskRecord, project: &str, notes: &ReviewNotes) -> Optio
 		"Notes",
 		format!("{} ({} blocking), {edited} edited, {published} published", counts.notes, counts.blocking),
 	));
+	if let Some(submitted) = &notes.submitted {
+		rows.push(Fact {
+			label: "Submitted".to_owned(),
+			value: verdict_said(&submitted.verdict).to_owned(),
+			url: Some(submitted.url.clone()),
+		});
+	}
 	Some(Section::Facts { heading: None, rows })
 }
 
-/// fetched → reviewed → your edits → published, with counts as details.
-fn flow_section(notes: &ReviewNotes) -> Section {
-	let counts = notes.counts();
-	let edited = notes.notes.iter().filter(|card| card.edited.is_some()).count();
-	let published = notes.notes.iter().filter(|card| card.published.is_some()).count();
-	let postable =
-		notes.notes.iter().filter(|card| card.verdict != crate::frontier::brief::model::Verdict::Skip).count();
-	let edits = if edited > 0 { NodeState::Done } else { NodeState::Pending };
-	let publishing = match published {
-		0 => NodeState::Pending,
-		n if n >= postable => NodeState::Done,
-		_ => NodeState::Active,
-	};
-	let nodes = vec![
-		node("fetched", "Fetched", NodeState::Done, String::new()),
-		node("reviewed", "Reviewed", NodeState::Done, format!("{} notes", counts.notes)),
-		node("edits", "Your edits", edits, format!("{edited} edited")),
-		node("published", "Published", publishing, format!("{published} of {postable}")),
-	];
-	let edges = nodes
-		.windows(2)
-		.map(|pair| FlowEdge { from: pair[0].id.clone(), to: pair[1].id.clone(), label: None })
-		.collect();
-	Section::Flow { heading: Some("Where it stands".to_owned()), nodes, edges }
+/// A submitted verdict as the page says it.
+pub fn verdict_said(verdict: &str) -> &'static str {
+	match verdict {
+		"approve" => "Approve",
+		"request_changes" => "Request changes",
+		_ => "Comment",
+	}
 }
 
 /// The changed files grouped by top folder, with a link from each file to the files its cards mention.
@@ -695,6 +671,8 @@ fn numstat_rows(text: &str) -> Vec<(usize, usize, String)> {
 		.collect()
 }
 
+/// The page's sections, in the order every review page has (0712): facts, works, system, cards, his verdict box, the
+/// changed files and the diff.
 fn assemble(
 	task: &TaskRecord,
 	project: &str,
@@ -709,10 +687,13 @@ fn assemble(
 		sections.push(Section::Works { heading: Some("Works".to_owned()), rows: notes.works.clone() });
 	}
 	sections.extend(notes.system.as_ref().map(|system| system.section()));
-	sections.push(flow_section(notes));
-	if !notes.notes.is_empty() {
-		sections.push(Section::Cards { heading: Some("Review notes".to_owned()), cards: notes.notes.clone() });
-	}
+	// His own comments go here even before there is any note (0711).
+	sections.push(Section::Cards { heading: Some("Review notes".to_owned()), cards: notes.notes.clone() });
+	sections.push(Section::Verdict {
+		heading: Some("Your review".to_owned()),
+		summary: notes.summary.clone(),
+		submitted: notes.submitted.clone(),
+	});
 	sections.extend(map);
 	sections.extend(diff);
 	let mut brief = Brief {
@@ -742,8 +723,8 @@ pub async fn build(task: &TaskRecord, project: &str, notes: &ReviewNotes, repo: 
 	assemble(task, project, notes, map, diff)
 }
 
-/// The stored brief with its notes-derived sections (facts, flow, cards) built again from `notes`: what an edit or a
-/// publish changed. The map and the diff stay as they were stored.
+/// The stored brief with its notes-derived sections (facts, works, system, cards, verdict) built again from `notes`:
+/// what an action changed. The map and the diff stay as they were stored.
 pub fn rebuilt(brief: &Brief, task: &TaskRecord, project: &str, notes: &ReviewNotes) -> Result<Brief> {
 	let keep = |wanted: &str| brief.sections.iter().find(|section| section.type_name() == wanted).cloned();
 	let mut next = assemble(task, project, notes, keep("map"), keep("diff"))?;
@@ -751,11 +732,11 @@ pub fn rebuilt(brief: &Brief, task: &TaskRecord, project: &str, notes: &ReviewNo
 	Ok(next)
 }
 
-/// Journal line for a published comment.
-pub fn journal_published(c: &ServiceContext, task: &TaskRecord, platform: Platform) {
+/// Journal line for what he published: `comment` (one card) or `review` (a submitted review, 0712).
+pub fn journal_published(c: &ServiceContext, task: &TaskRecord, platform: Platform, what: &str) {
 	c.journal.append(
 		"published",
 		About { project: &task.project_id, thread: Some(&task.id) },
-		json!({ "platform": platform.as_str(), "what": "comment" }),
+		json!({ "platform": platform.as_str(), "what": what }),
 	);
 }

@@ -1132,7 +1132,7 @@ async fn review_note_answers_only_a_threads_pane() {
 }
 
 #[tokio::test]
-async fn refreshing_a_thread_brief_stores_thread_task_id_with_its_facts_flow_and_notes() {
+async fn refreshing_a_thread_brief_stores_thread_task_id_with_its_facts_and_notes_and_no_flow_0712() {
 	let w = World::new().await;
 	let thread = review_world_thread(&w);
 	w.ask_from_pane("review_note", note_args(2, "first line"), Some("pane-key-1")).await.unwrap();
@@ -1141,7 +1141,7 @@ async fn refreshing_a_thread_brief_stores_thread_task_id_with_its_facts_flow_and
 	let brief = store::load("thread-task-1").expect("the stored brief");
 	assert_eq!((brief.kind.as_str(), brief.title.as_str()), ("thread", "Readme line"));
 	let types: Vec<&str> = brief.sections.iter().map(Section::type_name).collect();
-	assert!(types.starts_with(&["facts", "flow"]), "{types:?}");
+	assert!(types.starts_with(&["facts"]) && !types.contains(&"flow"), "{types:?}");
 	assert!(types.contains(&"cards"), "{types:?}");
 	// A thread with no task record has no brief.
 	let bare = w.t.with_thread("t-2", "Bare");

@@ -1,7 +1,7 @@
-//! The thread brief (0678): `thread-<tid>`, built by code when a review is ready and again when the thread is stuck,
-//! from what git, the check run and the ledger say. Facts, whether it works (its checks, the reviewer's tries and the
-//! clean-room check, 0706), the phase table as a flow, the reviewer's notes as cards, the changed files as a map and
-//! the diff. Nothing here asks a model.
+//! The thread brief (0678, 0712): `thread-<tid>`, built by code when a review is ready and again when the thread is
+//! stuck, from what git, the check run and the ledger say, in the order every review page has: facts, whether it works
+//! (its checks, the reviewer's tries and the clean-room check, 0706), the system view (0710), the reviewer's notes as
+//! cards, the changed files as a map and the diff. Nothing here asks a model.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
@@ -9,13 +9,11 @@ use std::sync::Arc;
 
 use crate::frontier::brief::layout::lay_out;
 use crate::frontier::brief::model::{
-	Brief, DiffFile, DiffHunk, DiffLine, Fact, FlowEdge, FlowNode, MapGroup, MapItem, MapLink, NodeState, Section,
-	WorksRow, WorksState,
+	Brief, DiffFile, DiffHunk, DiffLine, Fact, MapGroup, MapItem, MapLink, Section, WorksRow, WorksState,
 };
 use crate::frontier::brief::store;
 use crate::frontier::server::context::ServiceContext;
 use crate::frontier::server::review_notes::{ReviewNotes, review_file};
-use crate::frontier::server::task_file::CheckExit;
 use crate::frontier::server::thread::{Thread, ThreadRef};
 use crate::frontier::server::wording::{money, review_said};
 use crate::frontier::server::worktrees::git_out;
@@ -86,7 +84,6 @@ async fn build(c: &Arc<ServiceContext>, t: &Thread, id: &str, extras: &BriefExtr
 		sections.push(works);
 	}
 	sections.extend(notes.system.as_ref().map(|system| system.section()));
-	sections.push(flow(t));
 	if !notes.notes.is_empty() {
 		sections.push(Section::Cards { heading: Some("Review notes".to_owned()), cards: notes.notes });
 	}
@@ -191,58 +188,6 @@ fn facts(t: &Thread, trunk: Option<&str>, git: &Git, spent: Option<f64>) -> Sect
 		rows.push(fact("Stopped", stuck.clone()));
 	}
 	Section::Facts { heading: None, rows }
-}
-
-fn node(id: &str, label: &str, state: NodeState, detail: Option<String>) -> FlowNode {
-	FlowNode {
-		id: id.to_owned(),
-		label: label.to_owned(),
-		group: None,
-		state,
-		detail: detail.filter(|detail| !detail.is_empty()),
-		layer: 0,
-		order: 0,
-	}
-}
-
-fn passed(checks: &[CheckExit]) -> bool {
-	checks.iter().all(|check| check.exit == Some(0))
-}
-
-/// The thread's phase table as a flow: the task, then each review's checks and review with the fix round that
-/// followed a failed one, then his call. The current step is `active`; a failed gate or review is `failed`.
-fn flow(t: &Thread) -> Section {
-	let reviews = t.task.as_ref().map(|task| task.reviews.as_slice()).unwrap_or_default();
-	let stuck = t.stuck.clone();
-	let mut nodes = Vec::new();
-	if reviews.is_empty() {
-		let state = if stuck.is_some() { NodeState::Failed } else { NodeState::Active };
-		nodes.push(node("task", "Task", state, stuck.clone()));
-	} else {
-		nodes.push(node("task", "Task", NodeState::Done, None));
-	}
-	for (index, review) in reviews.iter().enumerate() {
-		let n = index + 1;
-		let checks_state = if passed(&review.checks) { NodeState::Done } else { NodeState::Failed };
-		let gates = review.checks.len();
-		nodes.push(node(&format!("check{n}"), "Checks", checks_state, Some(format!("{gates} run"))));
-		let review_state = if review.passed { NodeState::Done } else { NodeState::Failed };
-		nodes.push(node(&format!("review{n}"), "Review", review_state, Some(review.said.clone())));
-		if index + 1 < reviews.len() {
-			nodes.push(node(&format!("fix{n}"), &format!("Fix round {n}"), NodeState::Done, None));
-		}
-	}
-	if !reviews.is_empty() {
-		match stuck {
-			Some(stuck) => nodes.push(node("stuck", "Stopped", NodeState::Failed, Some(stuck))),
-			None => nodes.push(node("you", "Your call", NodeState::Active, None)),
-		}
-	}
-	let edges = nodes
-		.windows(2)
-		.map(|pair| FlowEdge { from: pair[0].id.clone(), to: pair[1].id.clone(), label: None })
-		.collect();
-	Section::Flow { heading: Some("Where it stands".to_owned()), nodes, edges }
 }
 
 /// Whether it works (0706): the last review's checks with their exits and durations, then the reviewer's tries and the

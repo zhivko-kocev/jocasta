@@ -370,7 +370,7 @@ fn an_answer_patches_its_card_keeps_his_unsaved_words_elsewhere_and_never_replay
 #[test]
 fn a_refusal_shows_under_its_buttons_and_a_reword_brings_its_suggestion() {
 	let mut window = settled_window(pr_brief());
-	let reword = Act::Reword { card: "n1".to_owned(), instruction: "shorter".to_owned() };
+	let reword = Act::Help { card: "n1".to_owned(), text: "shorter".to_owned(), op: "polish" };
 	let _ = window
 		.update(Message::Answered(reword.clone(), Err("Jocasta isn't running; start it with jocasta.".to_owned())));
 	assert_eq!(window.banners[&Target::Card("n1".to_owned())], "Jocasta isn't running; start it with jocasta.");

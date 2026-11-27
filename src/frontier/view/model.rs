@@ -108,6 +108,7 @@ pub fn is_empty(section: &Section) -> bool {
 		Section::Diff { files, .. } => files.is_empty(),
 		Section::Cards { cards, .. } => cards.is_empty(),
 		Section::Works { rows, .. } => rows.is_empty(),
+		Section::Verdict { .. } => false,
 		Section::System { nodes, brings, takes, no_change, .. } => {
 			!no_change && nodes.is_empty() && brings.is_empty() && takes.is_empty()
 		}
@@ -175,8 +176,8 @@ pub fn screenshot(id: &str, name: &str) -> Option<PathBuf> {
 pub enum Act {
 	/// Save his words for a card.
 	Edit { card: String, text: String },
-	/// Ask for another wording of a card.
-	Reword { card: String, instruction: String },
+	/// Ask the `@polish` helper (`op` is `polish` or `english`) about his text for a card (0711).
+	Help { card: String, text: String, op: &'static str },
 	/// Switch a card's verdict.
 	Verdict { card: String, verdict: Verdict },
 	/// Publish a card.
@@ -192,7 +193,7 @@ impl Act {
 	pub fn to_json(&self) -> Value {
 		match self {
 			Self::Edit { card, text } => json!({ "op": "edit", "card": card, "text": text }),
-			Self::Reword { card, instruction } => json!({ "op": "reword", "card": card, "instruction": instruction }),
+			Self::Help { card, text, op } => json!({ "op": op, "card": card, "text": text }),
 			Self::Verdict { card, verdict: v } => json!({ "op": "verdict", "card": card, "verdict": verdict(*v) }),
 			Self::Publish { card } => json!({ "op": "publish", "card": card }),
 			Self::Finish { mode } => json!({ "op": "finish", "mode": mode }),
@@ -203,10 +204,9 @@ impl Act {
 	/// The card it acts on; `None` for the thread's own buttons.
 	pub fn card(&self) -> Option<&str> {
 		match self {
-			Self::Edit { card, .. }
-			| Self::Reword { card, .. }
-			| Self::Verdict { card, .. }
-			| Self::Publish { card } => Some(card),
+			Self::Edit { card, .. } | Self::Help { card, .. } | Self::Verdict { card, .. } | Self::Publish { card } => {
+				Some(card)
+			}
 			Self::Finish { .. } | Self::Send { .. } => None,
 		}
 	}
@@ -216,7 +216,8 @@ impl Act {
 		match self {
 			Self::Finish { .. } => "Waiting for your Allow in Jocasta\u{2026}",
 			Self::Send { .. } => "Sending\u{2026}",
-			Self::Reword { .. } => "Asking for another wording\u{2026}",
+			Self::Help { op: "english", .. } => "Putting it into English\u{2026}",
+			Self::Help { .. } => "Polishing\u{2026}",
 			Self::Publish { .. } => "Publishing\u{2026}",
 			Self::Edit { .. } | Self::Verdict { .. } => "Saving\u{2026}",
 		}

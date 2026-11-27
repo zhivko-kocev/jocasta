@@ -82,6 +82,15 @@ pub enum Section {
 		#[serde(default, skip_serializing_if = "std::ops::Not::not")]
 		no_change: bool,
 	},
+	/// A pull-request review's end (0712): his summary and the verdict he submitted, once he has.
+	Verdict {
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		heading: Option<String>,
+		#[serde(default)]
+		summary: String,
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		submitted: Option<Submitted>,
+	},
 	List {
 		#[serde(default, skip_serializing_if = "Option::is_none")]
 		heading: Option<String>,
@@ -102,6 +111,7 @@ impl Section {
 			Self::Cards { .. } => "cards",
 			Self::Works { .. } => "works",
 			Self::System { .. } => "system",
+			Self::Verdict { .. } => "verdict",
 			Self::List { .. } => "list",
 		}
 	}
@@ -276,7 +286,8 @@ pub enum Verdict {
 	Skip,
 }
 
-/// What a note is (0707): a finding Jocasta reproduced, a question for the author, or an unproven opinion.
+/// What a note is (0707, 0711): a finding Jocasta reproduced, a question for the author, an unproven opinion, or one he
+/// wrote himself.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
@@ -284,15 +295,17 @@ pub enum Kind {
 	Finding,
 	Question,
 	Opinion,
+	Yours,
 }
 
 impl Kind {
-	/// The kind as the tool says it.
+	/// The kind as the tool and the page say it.
 	pub fn as_str(self) -> &'static str {
 		match self {
 			Self::Finding => "finding",
 			Self::Question => "question",
 			Self::Opinion => "opinion",
+			Self::Yours => "yours",
 		}
 	}
 }
@@ -307,6 +320,14 @@ pub struct Proof {
 /// Where and when a card was published.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Published {
+	pub url: String,
+	pub at_ms: i64,
+}
+
+/// The review he submitted (0712): its verdict (`approve`, `request_changes` or `comment`), where and when.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Submitted {
+	pub verdict: String,
 	pub url: String,
 	pub at_ms: i64,
 }

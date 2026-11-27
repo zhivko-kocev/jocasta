@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::frontier::brief::model::{Card, Kind, Proof, RanProof, Severity, Verdict, WorksRow, WorksState};
+use crate::frontier::brief::model::{Card, Kind, Proof, RanProof, Severity, Submitted, Verdict, WorksRow, WorksState};
 use crate::frontier::server::review_system::SystemReview;
 use crate::frontier::server::steps::{Step, step_of};
 use crate::frontier::server::task_file::task_dir;
@@ -40,6 +40,12 @@ pub struct ReviewNotes {
 	/// The turn end asked once for a missing `review_system` (0710).
 	#[serde(default, skip_serializing_if = "std::ops::Not::not")]
 	pub system_asked: bool,
+	/// His summary of the whole review (0711).
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub summary: String,
+	/// The review he submitted with its verdict (0712).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub submitted: Option<Submitted>,
 }
 
 /// A review's notes counted: all of them, and the blocking ones (P0 and P1, 0453).
