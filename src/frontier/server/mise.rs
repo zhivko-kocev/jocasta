@@ -119,7 +119,7 @@ fn with_jocasta_env(project_id: &str, repo: Option<&str>, base: &Env) -> String 
 /// The name ultron's shell hook gives the repository `cwd` is in (0704): the folder holding its git common dir, so a
 /// worktree gets its main checkout's; `None` outside git or when mise's global config folder, as `base` resolves it, has
 /// no `config.<name>.toml`.
-async fn repo_mise_name(cwd: &Path, base: &Env) -> Option<String> {
+pub(super) async fn repo_mise_name(cwd: &Path, base: &Env) -> Option<String> {
 	let args = ["rev-parse", "--path-format=absolute", "--git-common-dir"];
 	let out =
 		git_async(cwd, &args, GIT_TIMEOUT_MS, GitOptions::default()).await.ok().filter(|out| out.code == Some(0))?;

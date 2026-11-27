@@ -139,6 +139,7 @@ fn rule_of(key: &str) -> Option<KeyRule> {
 		"checks.memoryReserveGb" => {
 			rule("checks.memoryReserveGb must be a number from 0 to 256", CHECKS_DEFAULT, false)
 		}
+		"checks.cleanRoom" => rule("checks.cleanRoom must be auto or off", "clean-room runs stay on (auto)", false),
 		"threads" => rule("threads must be a mapping", THREADS_DEFAULT, true),
 		"threads.maxCostUsd" => {
 			rule("threads.maxCostUsd must be a number of dollars, 0 or more (0 = no cap)", COST_DEFAULT, false)
@@ -356,6 +357,10 @@ fn check_checks(value: &Value, faults: &mut Vec<Fault>) {
 				faults.push(fault(&["checks"], name, false));
 			}
 			"memoryReserveGb" => {}
+			"cleanRoom" if !matches!(value.as_str(), Some("auto" | "off")) => {
+				faults.push(fault(&["checks"], name, false))
+			}
+			"cleanRoom" => {}
 			_ => faults.push(fault(&["checks"], name, true)),
 		}
 	}
@@ -601,6 +606,15 @@ pub fn read_check_reserve_gb() -> f64 {
 		.and_then(Value::as_f64)
 		.filter(|gb| (0.0..=256.0).contains(gb))
 		.unwrap_or(DEFAULT)
+}
+
+/// `checks.cleanRoom` (0708): whether checks may run in a clean-room container; on (`auto`) when unset or bad.
+pub fn read_clean_room() -> bool {
+	let Ok(settings) = read_settings() else { return true };
+	if check_settings(&settings, "checks.cleanRoom").is_err() {
+		return true;
+	}
+	settings.get("checks").and_then(|checks| checks.get("cleanRoom")).and_then(Value::as_str) != Some("off")
 }
 
 /// `threads.maxCostUsd` (0686): a thread's cost cap in dollars; 75 when unset or bad, 0 = no cap.

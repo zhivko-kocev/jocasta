@@ -61,6 +61,8 @@ pub struct ProjectsFile {
 	/// What each repo (its main checkout's folder, as the file writes it) answered about pushes to trunk (0613), with
 	/// its line, in the file's order.
 	pub push: Vec<(String, PushEntry)>,
+	/// The repos (main checkout folders, as the file writes them) whose clean-room runs are off (`cleanRoom:`, 0708).
+	pub clean_room_off: Vec<String>,
 }
 
 struct Parsed {
@@ -69,6 +71,7 @@ struct Parsed {
 	exclude: Vec<String>,
 	names: Vec<(String, String)>,
 	push: Vec<(String, PushWay)>,
+	clean_room_off: Vec<String>,
 }
 
 fn invalid(path: Vec<PathSegment>, message: &str) -> SchemaProblem {
@@ -142,7 +145,8 @@ fn root_of(index: usize, value: &Value) -> std::result::Result<WatchedRoot, Sche
 /// The file's shape (0109): the mapping first, so a list or a scalar is told it must be a mapping. A root's other keys
 /// and the file's other keys (an old `scopes`) are allowed and left alone. The messages are the schema checker's.
 fn validate(value: &Value) -> std::result::Result<Parsed, SchemaProblem> {
-	let mut parsed = Parsed { roots: vec![], add: vec![], exclude: vec![], names: vec![], push: vec![] };
+	let mut parsed =
+		Parsed { roots: vec![], add: vec![], exclude: vec![], names: vec![], push: vec![], clean_room_off: vec![] };
 	let map = match value {
 		Value::Null => return Ok(parsed),
 		Value::Object(map) => map,
@@ -192,6 +196,19 @@ fn validate(value: &Value) -> std::result::Result<Parsed, SchemaProblem> {
 		}
 		Some(_) => return Err(invalid(key_path(&["push"]), "must be object")),
 	}
+	match map.get("cleanRoom") {
+		None | Some(Value::Null) => {}
+		Some(Value::Object(repos)) => {
+			for (repo, value) in repos {
+				match value.as_str() {
+					Some("off") => parsed.clean_room_off.push(repo.clone()),
+					Some("auto") => {}
+					_ => return Err(invalid(key_path(&["cleanRoom", repo]), "must be equal to constant")),
+				}
+			}
+		}
+		Some(_) => return Err(invalid(key_path(&["cleanRoom"]), "must be object")),
+	}
 	Ok(parsed)
 }
 
@@ -222,6 +239,7 @@ pub fn read_projects_file(file: Option<&Path>) -> Result<ProjectsFile> {
 		exclude: parsed.exclude.clone(),
 		names: parsed.names.clone(),
 		push,
+		clean_room_off: parsed.clean_room_off.clone(),
 	})
 }
 

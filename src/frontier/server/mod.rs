@@ -7,6 +7,7 @@ pub mod brief_actions;
 pub mod check_costs;
 pub mod checks;
 pub mod ci_fix;
+pub mod cleanroom;
 pub mod close;
 pub mod context;
 pub mod cost_cap;

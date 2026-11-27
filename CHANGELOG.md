@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.0 (unreleased)
+
+- **R1, clean-room runs (0708):** new `cleanroom.rs` runs a command on one commit in `jdxcode/mise:latest`: the commit goes in as a read-only `git archive`, the project's two mise files read-only as system config, tools and caches in the volume `jocasta-cache-<project id>`; no home folder, host environment or Docker socket. The project's check (`verify`, else `test`) is found inside the container and kept per tree; "not possible" (Docker not running, runs off, image not pullable, no task) carries its reason. `checks.cleanRoom: auto | off` in `jocasta.yaml`, `cleanRoom: {<repo folder>: off}` in `projects.yaml`. The tests that need Docker skip and say why without it.
+
 ## 0.1.0
 
 ### Phase 0: Foundation

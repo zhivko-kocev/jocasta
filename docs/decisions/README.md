@@ -711,3 +711,4 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0703](0703-first-run-checks.md) | First-run checks | product | v1 | ultron 0.3 iteration, J8 | 2026-11-26 |  |
 | [0704](0704-project-named-mise-file.md) | Project-named mise file | product | v1 | ultron 0.3 iteration, J9 | 2026-11-26 |  |
 | [0705](0705-ponytail-text-refreshed.md) | Ponytail text refreshed | product, prompts | v1 | ultron 0.3 iteration, J10 | 2026-11-26 |  |
+| [0708](0708-clean-room-runs.md) | Clean-room runs | product, security | v1 | ultron 0.3 iteration, M2 R1 | 2026-11-26 |  |
