@@ -36,7 +36,7 @@ jobs:
           - target: linux-x64
             os: ubuntu-latest
           - target: darwin-arm64
-            os: macos-14
+            os: macos-latest
     runs-on: ${{ matrix.os }}
     env:
       # The mise release the install scripts fetch (checked against GitHub's SHASUMS256.txt by the script).

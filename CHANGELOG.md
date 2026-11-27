@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.2
+
+- The release's macOS build asked for the `macos-14` runner, which GitHub no longer offers, so no release was published for 0.1.1. It now runs on `macos-latest` (Apple silicon), like CI.
+
 ## 0.1.1
 
 - The Windows package build failed on the ConPTY notices: the repo had stored Microsoft's two notice files with LF line endings, so their SHA-256 no longer matched the pins in `packaging/windows/conpty.json`. They are stored byte for byte again (CRLF, `-text` in `.gitattributes`). The release workflow retries a failed test twice (#16). 0.1.0 was tagged but never released.
