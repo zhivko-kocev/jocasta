@@ -1,7 +1,10 @@
-//! The brief windows' motion (0721, R7's tokens): one curve, two durations, and the first-open entrance of a flow.
-//! Everything here is a pure function of the time since the window opened, so a press never replays it.
+//! The brief windows' motion (0721, R7's tokens): one curve, two durations, the first-open entrance of a flow, and a
+//! system's Before / After switch (0710). The entrance is a pure function of the time since the window opened, so a
+//! press never replays it; the switch moves only when he presses it.
 
 use std::time::Duration;
+
+use crate::frontier::brief::model::Mark;
 
 #[cfg(test)]
 #[path = "motion_tests.rs"]
@@ -24,6 +27,27 @@ pub const SETTLED_MS: f32 = STAGGER_MS * STAGGER_LAYERS as f32 + REVEAL_MS;
 
 /// A disclosure's opening, as `iced::Animation` takes it.
 pub const DISCLOSURE: Duration = Duration::from_millis(180);
+
+/// A system's Before / After switch, the `base` token (0710).
+pub const SWITCH: Duration = Duration::from_millis(220);
+
+/// The scale an added part grows from as it appears.
+pub const APPEAR_SCALE: f32 = 0.96;
+
+/// How present a system part marked `mark` is at `after` (0 Before shown, 1 After, between while switching): its
+/// opacity and scale. An added part fades and grows in from 0.96, a removed one fades out, a kept one stays; reduced
+/// motion keeps the fade only.
+pub fn presence(mark: Mark, after: f32, motion: Motion) -> (f32, f32) {
+	let grow = |shown: f32| match motion {
+		Motion::Full => APPEAR_SCALE + (1.0 - APPEAR_SCALE) * shown,
+		Motion::Reduced => 1.0,
+	};
+	match mark {
+		Mark::Kept => (1.0, 1.0),
+		Mark::Added => (after, grow(after)),
+		Mark::Removed => (1.0 - after, 1.0),
+	}
+}
 
 /// One point of a cubic Bézier through (0,0), `(p1, ·)`, `(p2, ·)` and (1,1) on one axis.
 fn bezier(p1: f32, p2: f32, t: f32) -> f32 {

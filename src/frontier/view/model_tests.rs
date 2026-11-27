@@ -148,3 +148,37 @@ fn a_screenshot_is_read_only_from_its_briefs_folder() {
 		assert_eq!(screenshot(id, name), None, "{id} {name}");
 	}
 }
+
+#[test]
+fn a_systems_parts_draw_by_their_mark_with_their_file_and_line_and_no_change_is_not_empty_0710() {
+	use crate::frontier::brief::model::{Anchor, Mark, SystemNode};
+	let part = |mark: Mark| SystemNode {
+		id: "a".to_owned(),
+		label: "A".to_owned(),
+		mark,
+		anchor: Anchor { file: "src/billing/a.rs".to_owned(), line: 7, quote: "x".to_owned() },
+		layer: 1,
+		order: 2,
+	};
+	let drawn = system_nodes(&[part(Mark::Kept), part(Mark::Added), part(Mark::Removed)]);
+	let shown: Vec<(NodeState, Option<&str>)> = drawn.iter().map(|node| (node.state, node.detail.as_deref())).collect();
+	assert_eq!(
+		shown,
+		[
+			(NodeState::Pending, Some("a.rs:7")),
+			(NodeState::Done, Some("added \u{b7} a.rs:7")),
+			(NodeState::Failed, Some("removed \u{b7} a.rs:7")),
+		]
+	);
+	assert_eq!((drawn[0].layer, drawn[0].order), (1, 2), "the union's layout");
+	let system = |no_change: bool| Section::System {
+		heading: None,
+		nodes: vec![],
+		edges: vec![],
+		brings: vec![],
+		takes: vec![],
+		no_change,
+	};
+	assert!(is_empty(&system(false)));
+	assert!(!is_empty(&system(true)), "no change is said, not `Nothing here.`");
+}

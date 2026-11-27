@@ -96,6 +96,8 @@ pub struct ServerOptions {
 	pub first_run: Option<bool>,
 	/// `true`: checks may run in the clean room (0708); off in tests, so no test starts Docker.
 	pub clean_room: bool,
+	/// `true`: a review's turn end asks once for a missing system view (0710); off in tests.
+	pub ask_system: bool,
 	/// Asks him Allow or Deny (0484); his question through this server's question API by default.
 	pub confirm: Option<Confirm>,
 	/// How long an ask waits for his answer.
@@ -149,6 +151,7 @@ impl ServerOptions {
 		service.auto_briefs = self.auto_briefs;
 		service.first_run = self.first_run;
 		service.clean_room = self.clean_room;
+		service.ask_system = self.ask_system;
 		service.confirm_wait_ms = self.confirm_wait_ms;
 		service.boss_key = self.boss_key.take();
 		service.bridge = self.bridge.clone();

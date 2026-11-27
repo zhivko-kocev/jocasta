@@ -6,7 +6,9 @@ use std::path::PathBuf;
 use chrono::{Local, TimeZone};
 use serde_json::{Value, json};
 
-use crate::frontier::brief::model::{Brief, Card, DiffFile, RanProof, Section, Verdict, WorksState};
+use crate::frontier::brief::model::{
+	Anchor, Brief, Card, DiffFile, FlowNode, Mark, NodeState, RanProof, Section, SystemNode, Verdict, WorksState,
+};
 use crate::frontier::brief::store;
 
 #[cfg(test)]
@@ -106,8 +108,46 @@ pub fn is_empty(section: &Section) -> bool {
 		Section::Diff { files, .. } => files.is_empty(),
 		Section::Cards { cards, .. } => cards.is_empty(),
 		Section::Works { rows, .. } => rows.is_empty(),
+		Section::System { nodes, brings, takes, no_change, .. } => {
+			!no_change && nodes.is_empty() && brings.is_empty() && takes.is_empty()
+		}
 		Section::List { rows, .. } => rows.is_empty(),
 	}
+}
+
+/// What a system says when the change leaves it as it was (0710).
+pub const NO_SYSTEM_CHANGE: &str = "No change to the system.";
+
+/// Where an anchor points: `src/a.rs:12`.
+pub fn place(anchor: &Anchor) -> String {
+	format!("{}:{}", anchor.file, anchor.line)
+}
+
+/// A system's parts as flow nodes to draw (0710): added green, removed red, kept neutral, each with its file name and
+/// line under its label, after its mark when it was added or removed.
+pub fn system_nodes(nodes: &[SystemNode]) -> Vec<FlowNode> {
+	nodes
+		.iter()
+		.map(|node| FlowNode {
+			id: node.id.clone(),
+			label: node.label.clone(),
+			group: None,
+			state: match node.mark {
+				Mark::Kept => NodeState::Pending,
+				Mark::Added => NodeState::Done,
+				Mark::Removed => NodeState::Failed,
+			},
+			detail: Some({
+				let file = node.anchor.file.rsplit(['/', '\\']).next().unwrap_or(&node.anchor.file);
+				match node.mark {
+					Mark::Kept => format!("{file}:{}", node.anchor.line),
+					mark => format!("{} \u{b7} {file}:{}", mark.as_str(), node.anchor.line),
+				}
+			}),
+			layer: node.layer,
+			order: node.order,
+		})
+		.collect()
 }
 
 /// The paragraphs of a text section: blank lines part them.

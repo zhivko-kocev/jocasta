@@ -45,4 +45,5 @@ bash:
     - { match: "history_search *", approval: allow }
     - { match: "review_note *", approval: allow }
     - { match: "review_try *", approval: allow }
+    - { match: "review_system *", approval: allow }
     - { match: "*", approval: prompt }

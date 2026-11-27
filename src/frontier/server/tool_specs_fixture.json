@@ -273,6 +273,282 @@
 							"required": ["what", "steps"],
 							"additionalProperties": false
 						}
+					},
+					{
+						"name": "review_system",
+						"description": "Hand in what the change does to the system: Before and After graphs.\nCall it once per review, after review_try passed. `before` is the system's parts as the base commit has them, `after` as the head has them, each {nodes, edges} with at most 12 nodes; use the same id for the same part in both. Every node and edge has an `anchor` {file, line, quote}: Jocasta checks Before's at the base and After's at the head and refuses a quote the file doesn't hold there. `brings` lists what the change brings (new abilities, fixes), `takes` what it takes away (removed behaviour, lost guarantees, new costs); each row has `text` and either `proof` {run, expect}, which Jocasta runs like a review_try step, or `anchor` (Brings' read at the head, Takes away's at the base). When the change touches no part of the system (a typo, a test, docs), pass only `no_system_change: true`. A second call replaces the first.",
+						"inputSchema": {
+							"type": "object",
+							"properties": {
+								"before": {
+									"type": "object",
+									"properties": {
+										"nodes": {
+											"type": "array",
+											"description": "The system's parts the change touches or depends on, at most 12",
+											"items": {
+												"type": "object",
+												"properties": {
+													"id": {
+														"type": "string",
+														"description": "The same id in both graphs for the same part"
+													},
+													"label": {
+														"type": "string",
+														"description": "The part's name, a few words"
+													},
+													"anchor": {
+														"type": "object",
+														"properties": {
+															"file": {
+																"type": "string",
+																"description": "The file's path in the repository"
+															},
+															"line": {
+																"type": "integer",
+																"minimum": 1,
+																"description": "The 1-based line where the quoted code starts"
+															},
+															"quote": {
+																"type": "string",
+																"description": "The code at that line, as the file has it"
+															}
+														},
+														"required": ["file", "line", "quote"]
+													}
+												},
+												"required": ["id", "label", "anchor"]
+											}
+										},
+										"edges": {
+											"type": "array",
+											"description": "Who calls, sends to or reads whom",
+											"items": {
+												"type": "object",
+												"properties": {
+													"from": {
+														"type": "string",
+														"description": "A node id of this graph"
+													},
+													"to": {
+														"type": "string",
+														"description": "A node id of this graph"
+													},
+													"label": {
+														"type": "string",
+														"description": "What goes along it, a word or two"
+													},
+													"anchor": {
+														"type": "object",
+														"properties": {
+															"file": {
+																"type": "string",
+																"description": "The file's path in the repository"
+															},
+															"line": {
+																"type": "integer",
+																"minimum": 1,
+																"description": "The 1-based line where the quoted code starts"
+															},
+															"quote": {
+																"type": "string",
+																"description": "The code at that line, as the file has it"
+															}
+														},
+														"required": ["file", "line", "quote"]
+													}
+												},
+												"required": ["from", "to", "anchor"]
+											}
+										}
+									},
+									"required": ["nodes"]
+								},
+								"after": {
+									"type": "object",
+									"properties": {
+										"nodes": {
+											"type": "array",
+											"description": "The system's parts the change touches or depends on, at most 12",
+											"items": {
+												"type": "object",
+												"properties": {
+													"id": {
+														"type": "string",
+														"description": "The same id in both graphs for the same part"
+													},
+													"label": {
+														"type": "string",
+														"description": "The part's name, a few words"
+													},
+													"anchor": {
+														"type": "object",
+														"properties": {
+															"file": {
+																"type": "string",
+																"description": "The file's path in the repository"
+															},
+															"line": {
+																"type": "integer",
+																"minimum": 1,
+																"description": "The 1-based line where the quoted code starts"
+															},
+															"quote": {
+																"type": "string",
+																"description": "The code at that line, as the file has it"
+															}
+														},
+														"required": ["file", "line", "quote"]
+													}
+												},
+												"required": ["id", "label", "anchor"]
+											}
+										},
+										"edges": {
+											"type": "array",
+											"description": "Who calls, sends to or reads whom",
+											"items": {
+												"type": "object",
+												"properties": {
+													"from": {
+														"type": "string",
+														"description": "A node id of this graph"
+													},
+													"to": {
+														"type": "string",
+														"description": "A node id of this graph"
+													},
+													"label": {
+														"type": "string",
+														"description": "What goes along it, a word or two"
+													},
+													"anchor": {
+														"type": "object",
+														"properties": {
+															"file": {
+																"type": "string",
+																"description": "The file's path in the repository"
+															},
+															"line": {
+																"type": "integer",
+																"minimum": 1,
+																"description": "The 1-based line where the quoted code starts"
+															},
+															"quote": {
+																"type": "string",
+																"description": "The code at that line, as the file has it"
+															}
+														},
+														"required": ["file", "line", "quote"]
+													}
+												},
+												"required": ["from", "to", "anchor"]
+											}
+										}
+									},
+									"required": ["nodes"]
+								},
+								"brings": {
+									"type": "array",
+									"items": {
+										"type": "object",
+										"properties": {
+											"text": {
+												"type": "string",
+												"description": "One sentence"
+											},
+											"proof": {
+												"type": "object",
+												"properties": {
+													"run": {
+														"type": "string",
+														"description": "A shell command that shows it"
+													},
+													"expect": {
+														"type": "string",
+														"description": "Text its output must contain, or exit:N for its exit code"
+													}
+												},
+												"required": ["run", "expect"]
+											},
+											"anchor": {
+												"type": "object",
+												"properties": {
+													"file": {
+														"type": "string",
+														"description": "The file's path in the repository"
+													},
+													"line": {
+														"type": "integer",
+														"minimum": 1,
+														"description": "The 1-based line where the quoted code starts"
+													},
+													"quote": {
+														"type": "string",
+														"description": "The code at that line, as the file has it"
+													}
+												},
+												"required": ["file", "line", "quote"]
+											}
+										},
+										"required": ["text"]
+									},
+									"description": "What the change brings"
+								},
+								"takes": {
+									"type": "array",
+									"items": {
+										"type": "object",
+										"properties": {
+											"text": {
+												"type": "string",
+												"description": "One sentence"
+											},
+											"proof": {
+												"type": "object",
+												"properties": {
+													"run": {
+														"type": "string",
+														"description": "A shell command that shows it"
+													},
+													"expect": {
+														"type": "string",
+														"description": "Text its output must contain, or exit:N for its exit code"
+													}
+												},
+												"required": ["run", "expect"]
+											},
+											"anchor": {
+												"type": "object",
+												"properties": {
+													"file": {
+														"type": "string",
+														"description": "The file's path in the repository"
+													},
+													"line": {
+														"type": "integer",
+														"minimum": 1,
+														"description": "The 1-based line where the quoted code starts"
+													},
+													"quote": {
+														"type": "string",
+														"description": "The code at that line, as the file has it"
+													}
+												},
+												"required": ["file", "line", "quote"]
+											}
+										},
+										"required": ["text"]
+									},
+									"description": "What the change takes away"
+								},
+								"no_system_change": {
+									"type": "boolean",
+									"description": "true, alone, when the change touches no part of the system"
+								}
+							},
+							"additionalProperties": false
+						}
 					}
 				]
 			}

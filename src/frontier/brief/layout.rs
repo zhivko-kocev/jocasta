@@ -1,10 +1,10 @@
-//! Validation and layout of a brief's flows (0678, 0679): each node's `layer` (the longest path from the sources, an
-//! edge that closes a cycle ignored) and `order` (input order within its layer). The errors are text for the boss's
-//! `show` tool.
+//! Validation and layout of a brief's flows (0678, 0679) and systems (0710): each node's `layer` (the longest path
+//! from the sources, an edge that closes a cycle ignored) and `order` (input order within its layer); a system is laid
+//! out once over the union of its Before and After graphs. The errors are text for the boss's `show` tool.
 
 use std::collections::HashMap;
 
-use crate::frontier::brief::model::{Brief, FlowEdge, FlowNode, Section};
+use crate::frontier::brief::model::{Brief, FlowEdge, FlowNode, NodeState, Section, SystemEdge, SystemNode};
 
 #[cfg(test)]
 #[path = "layout_tests.rs"]
@@ -13,12 +13,38 @@ mod tests;
 /// The most nodes one flow may have.
 pub const MAX_NODES: usize = 200;
 
-/// Checks every flow of `brief` and writes the layers and orders into its nodes.
+/// Checks every flow and system of `brief` and writes the layers and orders into their nodes.
 pub fn lay_out(brief: &mut Brief) -> Result<(), String> {
 	for section in &mut brief.sections {
-		if let Section::Flow { nodes, edges, .. } = section {
-			lay_out_flow(nodes, edges)?;
+		match section {
+			Section::Flow { nodes, edges, .. } => lay_out_flow(nodes, edges)?,
+			Section::System { nodes, edges, .. } => lay_out_system(nodes, edges)?,
+			_ => {}
 		}
+	}
+	Ok(())
+}
+
+/// A system's union laid out as one flow, so a part keeps its place whichever graph is shown.
+pub fn lay_out_system(nodes: &mut [SystemNode], edges: &[SystemEdge]) -> Result<(), String> {
+	let mut flow: Vec<FlowNode> = nodes
+		.iter()
+		.map(|node| FlowNode {
+			id: node.id.clone(),
+			label: String::new(),
+			group: None,
+			state: NodeState::Pending,
+			detail: None,
+			layer: 0,
+			order: 0,
+		})
+		.collect();
+	let arrows: Vec<FlowEdge> =
+		edges.iter().map(|edge| FlowEdge { from: edge.from.clone(), to: edge.to.clone(), label: None }).collect();
+	lay_out_flow(&mut flow, &arrows)?;
+	for (node, placed) in nodes.iter_mut().zip(flow) {
+		node.layer = placed.layer;
+		node.order = placed.order;
 	}
 	Ok(())
 }

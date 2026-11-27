@@ -85,6 +85,7 @@ async fn build(c: &Arc<ServiceContext>, t: &Thread, id: &str, extras: &BriefExtr
 	if let Some(works) = works(t, extras, &notes) {
 		sections.push(works);
 	}
+	sections.extend(notes.system.as_ref().map(|system| system.section()));
 	sections.push(flow(t));
 	if !notes.notes.is_empty() {
 		sections.push(Section::Cards { heading: Some("Review notes".to_owned()), cards: notes.notes });

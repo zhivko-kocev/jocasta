@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::frontier::brief::model::{Card, Kind, Proof, RanProof, Severity, Verdict, WorksRow, WorksState};
+use crate::frontier::server::review_system::SystemReview;
 use crate::frontier::server::steps::{Step, step_of};
 use crate::frontier::server::task_file::task_dir;
 use crate::frontier::server::tools::Args;
@@ -33,6 +34,12 @@ pub struct ReviewNotes {
 	pub notes: Vec<Card>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub works: Vec<WorksRow>,
+	/// What the change does to the system, as `review_system` handed it in (0710).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub system: Option<SystemReview>,
+	/// The turn end asked once for a missing `review_system` (0710).
+	#[serde(default, skip_serializing_if = "std::ops::Not::not")]
+	pub system_asked: bool,
 }
 
 /// A review's notes counted: all of them, and the blocking ones (P0 and P1, 0453).
@@ -120,7 +127,7 @@ pub fn reads(text: &str, line: usize, quote: &str) -> bool {
 }
 
 /// The lines around `line` for a refused note: `Lines a–b are:` and each as `<n>: <text>`.
-fn around(text: &str, line: usize) -> String {
+pub(crate) fn around(text: &str, line: usize) -> String {
 	let total = text.lines().count();
 	let from = line.saturating_sub(2).max(1);
 	let to = (line + 2).min(total.max(from));

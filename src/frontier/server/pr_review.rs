@@ -708,6 +708,7 @@ fn assemble(
 	if !notes.works.is_empty() {
 		sections.push(Section::Works { heading: Some("Works".to_owned()), rows: notes.works.clone() });
 	}
+	sections.extend(notes.system.as_ref().map(|system| system.section()));
 	sections.push(flow_section(notes));
 	if !notes.notes.is_empty() {
 		sections.push(Section::Cards { heading: Some("Review notes".to_owned()), cards: notes.notes.clone() });

@@ -517,6 +517,27 @@ async fn check_review_opens(server: &TestServer, pane: &str, boss: &str) {
 	let said = crate::frontier::server::helpers::call_as(server, "review_try", &tried, Some(pane), None).await;
 	assert_eq!(said.is_error, None, "{}", said.text);
 	assert!(said.text.contains("the README line works (1 step passed on this machine)"), "{}", said.text);
+	// The system view (0710): Before's anchors read at the merge base, After's and Brings' at the head.
+	let readme = |line: usize, quote: &str| json!({ "file": "README.md", "line": line, "quote": quote });
+	let node = |id: &str, at: serde_json::Value| json!({ "id": id, "label": id, "anchor": at });
+	let misplaced = json!({
+		"before": { "nodes": [node("intro", readme(1, "demo")), node("line", readme(2, "A line."))] },
+		"after": { "nodes": [node("intro", readme(1, "demo"))] },
+	});
+	let said = crate::frontier::server::helpers::call_as(server, "review_system", &misplaced, Some(pane), None).await;
+	assert!(said.text.contains("before node line: README.md:2 at"), "the base has no line 2: {}", said.text);
+	let system = json!({
+		"before": { "nodes": [node("intro", readme(1, "demo"))] },
+		"after": {
+			"nodes": [node("intro", readme(1, "demo")), node("line", readme(2, "A line."))],
+			"edges": [{ "from": "intro", "to": "line", "anchor": readme(2, "A line.") }],
+		},
+		"brings": [{ "text": "A second line.", "proof": { "run": "git show HEAD:README.md", "expect": "A line." } }],
+		"takes": [{ "text": "The one-line README.", "anchor": readme(1, "demo") }],
+	});
+	let said = crate::frontier::server::helpers::call_as(server, "review_system", &system, Some(pane), None).await;
+	assert_eq!(said.is_error, None, "{}", said.text);
+	assert!(said.text.contains("1 added, 0 removed, 1 kept; 1 brings, 1 takes away"), "{}", said.text);
 	// A finding with its proof, which Jocasta runs in the worktree (0707), and a question, which carries none.
 	let proof = json!({ "run": "git log --oneline -1", "expect": "Add a README line" });
 	let finding = json!({ "kind": "finding", "file": "README.md", "line": 2, "quote": "A line.", "severity": "P2", "text": "Say what the line is for.", "proof": proof });

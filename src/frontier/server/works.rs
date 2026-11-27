@@ -18,7 +18,7 @@ use crate::frontier::server::context::ServiceContext;
 use crate::frontier::server::mise::{Found, mise_env, mise_task_among};
 use crate::frontier::server::pr_review::{self, PrTarget};
 use crate::frontier::server::review_flow::mise_of;
-use crate::frontier::server::review_notes::{REVIEW_NOTE, ReviewNotes, head_of, review_file};
+use crate::frontier::server::review_notes::{ReviewNotes, head_of, review_file};
 use crate::frontier::server::steps::{self, Place, Step};
 use crate::frontier::server::thread::{Thread, ThreadRef};
 use crate::frontier::server::thread_brief::{self, BriefExtras};
@@ -365,20 +365,27 @@ pub async fn review_try(
 	Ok(said)
 }
 
-/// A finding's proof (0707), run once where the review's steps run and under the same guard: what the card keeps when
-/// the run gives its expectation, the refusal otherwise.
-pub async fn prove(c: &ServiceContext, thread: &ThreadRef, step: &Step) -> Result<RanProof> {
+/// A finding's proof (0707) or a system row's (0710), run once where the review's steps run and under the same guard:
+/// what the card or row keeps when the run gives its expectation, the refusal otherwise. `tool` and `otherwise` word
+/// the refusal.
+pub async fn prove(
+	c: &ServiceContext,
+	thread: &ThreadRef,
+	step: &Step,
+	tool: &str,
+	otherwise: &str,
+) -> Result<RanProof> {
 	let t = thread.get();
-	let place = where_for(c, &t, REVIEW_NOTE, "hand it in as a question or an opinion").await?;
+	let place = where_for(c, &t, tool, otherwise).await?;
 	if matches!(place, Where::Here { .. }) {
-		guarded(c, &t, std::slice::from_ref(step), REVIEW_NOTE).await?;
+		guarded(c, &t, std::slice::from_ref(step), tool).await?;
 	}
 	let ran = steps::run(&place.place(), &step.run)
 		.await
-		.map_err(|error| Error::user(format!("{REVIEW_NOTE}: the proof couldn't run: {error}")))?;
+		.map_err(|error| Error::user(format!("{tool}: the proof couldn't run: {error}")))?;
 	if !steps::gives(&ran, &step.expect) {
 		return Err(Error::user(format!(
-			"{REVIEW_NOTE}: the proof didn't reproduce: expected \"{}\", got {}",
+			"{tool}: the proof didn't reproduce: expected \"{}\", got {}",
 			step.expect,
 			steps::said(&ran)
 		)));

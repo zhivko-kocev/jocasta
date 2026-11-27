@@ -80,6 +80,7 @@ pub mod review_flow;
 pub mod review_notes;
 pub mod review_prompt;
 pub mod review_proof;
+pub mod review_system;
 pub mod routes;
 #[allow(clippy::module_inception)]
 pub mod server;

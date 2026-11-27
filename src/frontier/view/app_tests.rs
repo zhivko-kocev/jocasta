@@ -6,9 +6,63 @@ use serde_json::json;
 use super::*;
 use crate::frontier::brief::layout::lay_out;
 use crate::frontier::brief::model::{
-	DiffHunk, DiffLine, Kind, MapItem, NodeState, Proof, Published, RanProof, Severity, WorksRow,
+	Anchor, DiffHunk, DiffLine, Kind, MapItem, Mark, NodeState, Proof, Published, RanProof, Severity, WorksRow,
 };
 use crate::shared::testing::temp_jocasta;
+
+fn part(id: &str, label: &str, mark: Mark, line: usize) -> SystemNode {
+	let anchor = Anchor {
+		file: "src/billing/invoice_reconciliation/handlers.rs".to_owned(),
+		line,
+		quote: "fn reconcile(".to_owned(),
+	};
+	SystemNode { id: id.to_owned(), label: label.to_owned(), mark, anchor, layer: 0, order: 0 }
+}
+
+fn arrow(from: &str, to: &str, label: Option<&str>, mark: Mark) -> SystemEdge {
+	SystemEdge { from: from.to_owned(), to: to.to_owned(), label: label.map(str::to_owned), mark }
+}
+
+/// What a refund fix does to the billing system: the refunds filter is added, the old summing helper removed.
+fn system() -> Section {
+	Section::System {
+		heading: Some("System".to_owned()),
+		nodes: vec![
+			part("api", "Invoices API", Mark::Kept, 12),
+			part("reconcile", "reconcile()", Mark::Kept, 138),
+			part("refunds", "Refund filter", Mark::Added, 141),
+			part("ledger", "Ledger", Mark::Kept, 40),
+			part("sum", "sum_lines()", Mark::Removed, 139),
+		],
+		edges: vec![
+			arrow("api", "reconcile", Some("invoice"), Mark::Kept),
+			arrow("reconcile", "refunds", None, Mark::Added),
+			arrow("refunds", "ledger", Some("total"), Mark::Added),
+			arrow("reconcile", "sum", None, Mark::Removed),
+			arrow("sum", "ledger", Some("total"), Mark::Removed),
+		],
+		brings: vec![SystemRow {
+			text: "A refunded line no longer counts toward the reconciled total.".to_owned(),
+			ran: Some(RanProof {
+				run: "cargo test -p billing reconciles_refunds".to_owned(),
+				expect: "test result: ok".to_owned(),
+				exit: Some(0),
+				tail: "test result: ok. 1 passed; 0 failed".to_owned(),
+			}),
+			anchor: None,
+		}],
+		takes: vec![SystemRow {
+			text: "sum_lines() is gone; two report jobs called it.".to_owned(),
+			ran: None,
+			anchor: Some(Anchor {
+				file: "src/billing/reports.rs".to_owned(),
+				line: 77,
+				quote: "sum_lines(&invoice)".to_owned(),
+			}),
+		}],
+		no_change: false,
+	}
+}
 
 fn node(id: &str, label: &str, state: NodeState, detail: Option<&str>) -> FlowNode {
 	FlowNode {
@@ -122,6 +176,7 @@ fn thread_brief() -> Brief {
 					},
 				],
 			},
+			system(),
 			Section::Flow {
 				heading: Some("Where it is".to_owned()),
 				nodes: vec![
@@ -348,17 +403,36 @@ fn the_threads_buttons_take_the_whole_brief_and_a_closed_thread_shows_its_record
 #[test]
 fn a_disclosure_opens_over_its_duration_then_asks_for_no_more_frames() {
 	let mut window = settled_window(thread_brief());
-	assert_eq!(window.fold(&Fold::Diff(5)), None);
-	let _ = window.update(Message::Toggle(Fold::Diff(5)));
+	assert_eq!(window.fold(&Fold::Diff(6)), None);
+	let _ = window.update(Message::Toggle(Fold::Diff(6)));
 	assert!(window.animating());
 	let start = window.now;
 	let _ = window.update(Message::Tick(start + DISCLOSURE + std::time::Duration::from_millis(1)));
-	assert_eq!(window.fold(&Fold::Diff(5)), Some(1.0));
+	assert_eq!(window.fold(&Fold::Diff(6)), Some(1.0));
 	assert!(!window.animating());
-	let _ = window.update(Message::Toggle(Fold::Diff(5)));
+	let _ = window.update(Message::Toggle(Fold::Diff(6)));
 	let later = window.now;
 	let _ = window.update(Message::Tick(later + DISCLOSURE + std::time::Duration::from_millis(1)));
-	assert_eq!(window.fold(&Fold::Diff(5)), None);
+	assert_eq!(window.fold(&Fold::Diff(6)), None);
+}
+
+#[test]
+fn the_system_switch_goes_to_before_over_220_ms_and_turns_back_from_where_it_is_0710() {
+	let mut window = settled_window(thread_brief());
+	let after = |window: &Window| window.sides.get(&2).map_or(1.0, |side| side.interpolate(0.0_f32, 1.0, window.now));
+	assert_eq!(after(&window), 1.0, "After shows by default");
+	assert!(!window.animating());
+	let _ = window.update(Message::Side(2, false));
+	assert!(window.animating());
+	std::thread::sleep(std::time::Duration::from_millis(60));
+	let _ = window.update(Message::Tick(Instant::now()));
+	let mid = after(&window);
+	assert!(mid > 0.0 && mid < 1.0, "half way: {mid}");
+	let _ = window.update(Message::Side(2, true));
+	assert!((after(&window) - mid).abs() < 0.2, "it turns back from where it is, not from Before");
+	let _ = window.update(Message::Tick(window.now + SWITCH + std::time::Duration::from_millis(1)));
+	assert_eq!(after(&window), 1.0);
+	assert!(!window.animating(), "settled: no more frames");
 }
 
 /// `snapshot` as the PNG `path` (iced_test names its files `<stem>-<renderer>.png`; this renames it to `path`).
@@ -402,7 +476,8 @@ fn view_shots() {
 
 	let mut thread = settled_window(thread_brief());
 	shoot(&thread, "thread", tall);
-	let _ = thread.update(Message::Toggle(Fold::Diff(5)));
+	let _ = thread.update(Message::Toggle(Fold::Diff(6)));
+	let _ = thread.update(Message::Toggle(Fold::Row(2, "brings", 0)));
 	let _ = thread.update(Message::Toggle(Fold::Proof("n1".to_owned())));
 	let now = thread.now + DISCLOSURE;
 	let _ = thread.update(Message::Tick(now));
@@ -415,6 +490,14 @@ fn view_shots() {
 	let (mut entering, _) = Window::open(thread_brief());
 	let _ = entering.update(Message::Tick(entering.opened + std::time::Duration::from_millis(100)));
 	shoot(&entering, "thread-entrance-100ms", Size::new(1040.0, 1400.0));
+	// The system switched to Before: half way at 110 ms, then settled.
+	let mut before = settled_window(thread_brief());
+	let _ = before.update(Message::Side(2, false));
+	let at = before.now;
+	let _ = before.update(Message::Tick(at + std::time::Duration::from_millis(60)));
+	shoot(&before, "system-switch-60ms", Size::new(1040.0, 1500.0));
+	let _ = before.update(Message::Tick(at + SWITCH));
+	shoot(&before, "system-before", Size::new(1040.0, 1500.0));
 
 	let mut pr = settled_window(pr_brief());
 	pr.suggestion = Some(("n1".to_owned(), "Failing deliveries are retried without end.".to_owned()));

@@ -65,6 +65,23 @@ pub enum Section {
 		heading: Option<String>,
 		rows: Vec<WorksRow>,
 	},
+	/// What the change does to the system (0710): the union of its Before and After graphs, each part marked, and what
+	/// it brings and takes away.
+	System {
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		heading: Option<String>,
+		#[serde(default)]
+		nodes: Vec<SystemNode>,
+		#[serde(default)]
+		edges: Vec<SystemEdge>,
+		#[serde(default)]
+		brings: Vec<SystemRow>,
+		#[serde(default)]
+		takes: Vec<SystemRow>,
+		/// The reviewer said the change leaves the system as it was.
+		#[serde(default, skip_serializing_if = "std::ops::Not::not")]
+		no_change: bool,
+	},
 	List {
 		#[serde(default, skip_serializing_if = "Option::is_none")]
 		heading: Option<String>,
@@ -84,6 +101,7 @@ impl Section {
 			Self::Diff { .. } => "diff",
 			Self::Cards { .. } => "cards",
 			Self::Works { .. } => "works",
+			Self::System { .. } => "system",
 			Self::List { .. } => "list",
 		}
 	}
@@ -314,6 +332,68 @@ pub struct Card {
 	/// The command that proves it, as Jocasta ran it (0706, 0707).
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub ran: Option<RanProof>,
+}
+
+/// Where a part of the system is in the code (0710): the file, the 1-based line and the code there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Anchor {
+	pub file: String,
+	pub line: usize,
+	pub quote: String,
+}
+
+/// Whether a part of the system is in both graphs, only in After or only in Before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Mark {
+	Kept,
+	Added,
+	Removed,
+}
+
+impl Mark {
+	/// The mark as the page says it.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Kept => "kept",
+			Self::Added => "added",
+			Self::Removed => "removed",
+		}
+	}
+}
+
+/// One part of a `system`: its anchor is After's when it is there, Before's for a removed part.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SystemNode {
+	pub id: String,
+	pub label: String,
+	pub mark: Mark,
+	pub anchor: Anchor,
+	/// Set by `layout::lay_out` over the union, as a flow node's.
+	#[serde(default)]
+	pub layer: usize,
+	#[serde(default)]
+	pub order: usize,
+}
+
+/// One arrow of a `system`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SystemEdge {
+	pub from: String,
+	pub to: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub label: Option<String>,
+	pub mark: Mark,
+}
+
+/// One row of Brings or Takes away: its text, proven by a run or anchored to the code.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemRow {
+	pub text: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub ran: Option<RanProof>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub anchor: Option<Anchor>,
 }
 
 /// One row of a `list` section.

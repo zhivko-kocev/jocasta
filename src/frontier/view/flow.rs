@@ -1,7 +1,9 @@
 //! A flow drawn on a canvas (0721): its nodes placed by `layout.rs`'s layers and orders, left to right (top down with 4
 //! or more layers or in a narrow window), curved edges with their labels, the active node ringed, and the first-open
-//! entrance of `motion.rs`.
+//! entrance of `motion.rs`. A system (0710) is drawn the same way, each part as present as its Before / After switch
+//! makes it.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Text};
@@ -174,12 +176,21 @@ pub fn fit(text: &str, room: f32, size: f32) -> String {
 	format!("{}\u{2026}", kept.trim_end())
 }
 
+/// How present each node and edge is, in the flow's order: a node's opacity and scale, an edge's opacity. Empty lists
+/// draw everything whole (a flow); a system's switch fills them (0710).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Presence {
+	pub nodes: Vec<(f32, f32)>,
+	pub edges: Vec<f32>,
+}
+
 /// The canvas program of one flow: what it draws `elapsed` ms after the window first opened.
 pub struct FlowCanvas<'a> {
-	pub nodes: &'a [FlowNode],
+	pub nodes: Cow<'a, [FlowNode]>,
 	pub shape: Shape,
 	pub elapsed: f32,
 	pub motion: Motion,
+	pub presence: Presence,
 }
 
 fn state_colour(c: &Colours, state: NodeState) -> iced::Color {
@@ -193,8 +204,12 @@ fn state_colour(c: &Colours, state: NodeState) -> iced::Color {
 
 impl FlowCanvas<'_> {
 	fn draw_edges(&self, frame: &mut Frame, c: &Colours) {
-		let (opacity, drawn) = edges_at(self.elapsed, self.motion);
-		for curve in &self.shape.curves {
+		let (whole_opacity, drawn) = edges_at(self.elapsed, self.motion);
+		for (index, curve) in self.shape.curves.iter().enumerate() {
+			let opacity = whole_opacity * self.presence.edges.get(index).copied().unwrap_or(1.0);
+			if opacity <= 0.001 {
+				continue;
+			}
 			let whole = [curve.from, curve.c1, curve.c2, curve.to];
 			let part = if drawn < 1.0 { split(whole, drawn) } else { whole };
 			let path = Path::new(|p| {
@@ -222,8 +237,17 @@ impl FlowCanvas<'_> {
 		}
 	}
 
-	fn draw_node(&self, frame: &mut Frame, c: &Colours, node: &FlowNode, at: Rectangle) {
-		let (opacity, rise) = node_at(self.elapsed, node.layer, self.motion);
+	/// The node at `index` in its box, as present (its opacity and its scale around its centre) as the switch makes it.
+	fn draw_node(&self, frame: &mut Frame, c: &Colours, index: usize) {
+		let (node, at) = (&self.nodes[index], self.shape.boxes[index]);
+		let shown = self.presence.nodes.get(index).copied().unwrap_or((1.0, 1.0));
+		let (entered, rise) = node_at(self.elapsed, node.layer, self.motion);
+		let opacity = entered * shown.0;
+		if opacity <= 0.001 {
+			return;
+		}
+		let size = Size::new(at.width * shown.1, at.height * shown.1);
+		let at = Rectangle::new(Point::new(at.center_x() - size.width / 2.0, at.center_y() - size.height / 2.0), size);
 		let top = Point::new(at.x, at.y + rise);
 		let body = Path::rounded_rectangle(top, at.size(), style::RADIUS.into());
 		frame.fill(&body, fade(c.raised, opacity));
@@ -277,8 +301,8 @@ impl<Message> canvas::Program<Message> for FlowCanvas<'_> {
 		let c = style::colours();
 		let mut frame = Frame::new(renderer, bounds.size());
 		self.draw_edges(&mut frame, &c);
-		for (node, at) in self.nodes.iter().zip(&self.shape.boxes) {
-			self.draw_node(&mut frame, &c, node, *at);
+		for index in 0..self.nodes.len().min(self.shape.boxes.len()) {
+			self.draw_node(&mut frame, &c, index);
 		}
 		vec![frame.into_geometry()]
 	}

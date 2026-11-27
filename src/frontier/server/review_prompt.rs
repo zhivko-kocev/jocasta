@@ -65,7 +65,8 @@ fn flat(text: &str) -> String {
 /// `verify` skill when it has one, then omp's reviewer subagent on the range with the approved plan, the project's
 /// rules and its lessons, told to report only material findings, then at most three design opinions judged by the
 /// shipped design rubric (0611). Every note goes in through `review_note` with its code quoted exactly (a note whose
-/// quote the file doesn't hold is refused): a finding with a proof Jocasta runs, a question, or an opinion (0707).
+/// quote the file doesn't hold is refused): a finding with a proof Jocasta runs, a question, or an opinion (0707). Once
+/// the change works, the system view goes in through `review_system` (0710).
 pub fn review_prompt(range: &str, context: &ReviewContext) -> String {
 	let mut given = Vec::new();
 	if let Some(brief) = context.brief.as_deref().filter(|brief| !brief.is_empty()) {
@@ -115,7 +116,12 @@ pub fn review_prompt(range: &str, context: &ReviewContext) -> String {
 		"`{run, expect}`, which Jocasta runs in this worktree and passes when the output contains `expect` (or exits N for".to_owned(),
 		"`exit:N`): run what the change adds or changes; for a web UI, drive it with the browser tool headless and pass the".to_owned(),
 		"screenshots you save. When a step fails, stop: the review ends there and you hand in nothing more.".to_owned(),
-		"Only once it works:".to_owned(),
+		"Only once it works, hand in what the change does to the system with the `review_system` tool, once: `before` (the".to_owned(),
+		"parts the change touches or depends on, as the merge base with trunk has them) and `after` (as HEAD has them), each".to_owned(),
+		"`{nodes, edges}` with at most 12 nodes, the same `id` for the same part in both, every node and edge anchored".to_owned(),
+		"`{file, line, quote}` to the code of its commit; then `brings` and `takes` (what it brings and takes away), each row".to_owned(),
+		"with `text` and a `proof` `{run, expect}` or an `anchor`; when it touches no part of the system, pass only".to_owned(),
+		"`no_system_change: true` (`review_system --help` has the exact arguments). Then".to_owned(),
 		format!("run the reviewer subagent on `git diff {range}` in this worktree. In its task give it {},", given.join(", ")),
 		"and tell it: report only material findings; prefer one strong finding over several weak ones; then, after those,".to_owned(),
 		format!("read the design rubric ({rubric}) and report at most three design opinions judged by it,"),

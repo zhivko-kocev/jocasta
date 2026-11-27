@@ -138,6 +138,9 @@ pub struct ServiceOptions {
 	/// `true`: checks may run in the clean room (0708): a pull request's works-first check and Finish's; `false` (tests)
 	/// runs none, so no test starts Docker.
 	pub clean_room: bool,
+	/// `true`: a review's turn end asks once for a system view it didn't hand in (0710); `false` (tests) asks nothing,
+	/// so a test's review ends at its first turn end.
+	pub ask_system: bool,
 	/// Asks him Allow or Deny (0484): a question through the service's question API (0519, 0552), with how it ended
 	/// (0578: his answer, three wrong codes, the popup closed, another reader). The signal aborts once the answer isn't
 	/// wanted any more (the wait ran out, the service is stopping) and the question goes. Without it every ask counts as
@@ -197,6 +200,7 @@ impl ServiceOptions {
 			auto_briefs: None,
 			first_run: None,
 			clean_room: false,
+			ask_system: false,
 			confirm: None,
 			confirm_wait_ms: None,
 			boss_key: None,

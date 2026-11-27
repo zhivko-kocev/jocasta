@@ -141,6 +141,7 @@ pub fn run_embedded() -> Result<()> {
 		bridge: Some(bridge),
 		first_run: Some(enhanced),
 		clean_room: true,
+		ask_system: true,
 		..ServerOptions::default()
 	};
 	let closed = Arc::new(Notify::new());

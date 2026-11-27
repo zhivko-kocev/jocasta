@@ -141,6 +141,8 @@ struct Setup {
 	/// The pane check's wait, ms.
 	wait_ms: Option<i64>,
 	done_when: Vec<String>,
+	/// A review's turn end asks once for a missing system view (0710).
+	ask_system: bool,
 }
 
 impl World {
@@ -167,6 +169,7 @@ impl World {
 		let t = test_context(|options: &mut ServiceOptions| {
 			options.mise = Some(setup.mise.then(|| mise_argv.clone()));
 			options.pane_check_wait_ms = setup.wait_ms;
+			options.ask_system = setup.ask_system;
 			options.checks = Some(Arc::new(CheckRunner::new(CheckRunnerOptions {
 				dir: dir.path().join("checks"),
 				versions: Some(Arc::new(|_, _| futures_util::FutureExt::boxed(async { String::new() }))),
@@ -524,6 +527,32 @@ async fn a_review_line_names_the_commits_the_diff_the_notes_and_the_tests_and_is
 			})
 			.collect();
 	assert_eq!(toasts, [line.replace("[event] ", "").replace(['«', '»'], "")]);
+}
+
+#[tokio::test]
+async fn a_review_without_a_system_view_is_asked_for_it_once_and_its_next_turn_end_goes_on_0710() {
+	let w = World::with(Setup { ask_system: true, ..Setup::default() }).await;
+	w.first_task().await;
+	w.session(&[], "Reviewed.\n\n**TESTS: pass — bun test**");
+	w.flow().ready(&w.thread).await.unwrap();
+	assert_eq!(w.thread().phase, Phase::Review, "the review waits for its next turn end");
+	assert_eq!(w.typed("t-1").last().map(String::as_str), Some(crate::frontier::server::review_system::MISSING));
+	assert!(w.boss_lines().is_empty(), "nothing is said yet");
+	w.flow().ready(&w.thread).await.unwrap();
+	assert_eq!(w.thread().phase, Phase::Handoff, "asked once: the next turn end goes on");
+	let asked = w.typed("t-1").iter().filter(|text| *text == crate::frontier::server::review_system::MISSING).count();
+	assert_eq!(asked, 1);
+}
+
+#[tokio::test]
+async fn a_review_that_handed_in_its_system_view_is_not_asked_0710() {
+	let w = World::with(Setup { ask_system: true, ..Setup::default() }).await;
+	w.first_task().await;
+	let system = crate::frontier::server::review_system::SystemReview { no_change: true, ..Default::default() };
+	ReviewNotes { head: w.head(), system: Some(system), ..ReviewNotes::default() }.write(&w.notes_file()).unwrap();
+	w.session(&[], "Reviewed.\n\n**TESTS: pass — bun test**");
+	w.flow().ready(&w.thread).await.unwrap();
+	assert_eq!(w.thread().phase, Phase::Handoff);
 }
 
 #[tokio::test]

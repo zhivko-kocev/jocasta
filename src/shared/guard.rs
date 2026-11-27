@@ -549,7 +549,7 @@ mod tests {
 		};
 		let allow =
 			["git diff main...HEAD", "git log --oneline -5", "rg foo src", "cat README.md", "ls", "find . -name x"];
-		let tools = ["review_note --help", "review_try -j {}", "check", "history_search why"];
+		let tools = ["review_note --help", "review_try -j {}", "review_system -j {}", "check", "history_search why"];
 		for command in allow.iter().chain(&tools) {
 			assert_eq!(said(command), "allow", "{command}");
 		}

@@ -483,9 +483,13 @@ impl ReviewFlow {
 
 	/// The review turn ended: what it found is collected (`found`), the task is announced done and reviewed in one line,
 	/// toast and sentence (0394, 0405, 0425, UX-21), the commit counts as reviewed, then `/handoff`. A review
-	/// `thread_finish` asked for after main moved (0454) merges when it passed, else says why not.
+	/// `thread_finish` asked for after main moved (0454) merges when it passed, else says why not. A review that handed
+	/// in no system view is asked for it once first, and its next turn end comes back here (0710).
 	pub async fn ready(&self, thread: &ThreadRef) -> Result<()> {
 		let c = self.link.ctx();
+		if crate::frontier::server::review_system::ask_once(&c, thread).await {
+			return Ok(());
+		}
 		// A pull request's review has no tests, report or handoff to wait for: its notes become its brief (0680).
 		if thread.with(|t| t.task.as_ref().is_some_and(|task| task.pr.is_some())) {
 			return crate::frontier::server::pr_review::ready(&c, thread).await;

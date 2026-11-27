@@ -2,6 +2,7 @@
 //! the first open moves; an action's answer patches its card (or, for the thread's buttons, the brief) and nothing
 //! replays. An idle window asks for no frames.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -15,24 +16,26 @@ use iced::{Alignment, Animation, Color, Element, Fill, Length, Size, Subscriptio
 use serde_json::Value;
 
 use crate::frontier::brief::model::{
-	Brief, Card, CheckRow, DiffFile, Fact, FlowEdge, FlowNode, ListRow, MapGroup, MapLink, Section, Severity, Verdict,
-	WorksRow, WorksState,
+	Brief, Card, CheckRow, DiffFile, Fact, FlowEdge, FlowNode, ListRow, MapGroup, MapLink, Section, Severity,
+	SystemEdge, SystemNode, SystemRow, Verdict, WorksRow, WorksState,
 };
 use crate::frontier::client::{brief_act, brief_live};
-use crate::frontier::view::flow::{FlowCanvas, direction, shape};
+use crate::frontier::view::flow::{FlowCanvas, Presence, direction, shape};
 use crate::frontier::view::model::{
-	Act, CLOSED, EMPTY, answer_of, app_id, card_text, diff_summary, duration, exit, generated, is_empty, paragraphs,
-	patch_card, proof_text, publishable, screenshot, verdict, works_state,
+	Act, CLOSED, EMPTY, NO_SYSTEM_CHANGE, answer_of, app_id, card_text, diff_summary, duration, exit, generated,
+	is_empty, paragraphs, patch_card, place, proof_text, publishable, screenshot, system_nodes, verdict, works_state,
 };
-use crate::frontier::view::motion::{self, DISCLOSURE, Motion, ease, settled};
+use crate::frontier::view::motion::{self, DISCLOSURE, Motion, SWITCH, ease, presence, settled};
 use crate::frontier::view::style::{self, BODY, HEADING, LABEL, META, TITLE, Tone, colours, fade, mono_font};
 use crate::shared::link::{open_file, open_in_browser, web_link};
 
-/// What opens and closes in a window: a diff section (by its index) or a card's proof (by its id).
+/// What opens and closes in a window: a diff section (by its index), a card's proof (by its id) or a system row's
+/// proof (by its section, list and index).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Fold {
 	Diff(usize),
 	Proof(String),
+	Row(usize, &'static str, usize),
 }
 
 /// Whose buttons an action came from: the thread's, or a card's.
@@ -55,6 +58,8 @@ pub enum Message {
 	Resized(Size),
 	Live(Result<bool, String>),
 	Toggle(Fold),
+	/// A system section's switch (by its index): After when true, Before otherwise.
+	Side(usize, bool),
 	Edit(String, text_editor::Action),
 	Instruction(String, String),
 	SendText(text_editor::Action),
@@ -93,6 +98,8 @@ struct Window {
 	motion: Motion,
 	width: f32,
 	folds: HashMap<Fold, Animation<bool>>,
+	/// Each system section's switch, true for After; a section not in it shows After, settled.
+	sides: HashMap<usize, Animation<bool>>,
 	editors: HashMap<String, text_editor::Content>,
 	instructions: HashMap<String, String>,
 	send: text_editor::Content,
@@ -149,7 +156,11 @@ fn editors_of(brief: &Brief) -> HashMap<String, text_editor::Content> {
 impl Window {
 	fn open(brief: Brief) -> (Self, Task<Message>) {
 		let now = Instant::now();
-		let has_flow = brief.sections.iter().any(|section| matches!(section, Section::Flow { .. }));
+		let has_flow = brief.sections.iter().any(|section| match section {
+			Section::Flow { .. } => true,
+			Section::System { nodes, .. } => !nodes.is_empty(),
+			_ => false,
+		});
 		let asks = matches!(brief.kind.as_str(), "thread" | "pr");
 		let task = if asks { ask_live(&brief.id) } else { Task::none() };
 		let window = Self {
@@ -162,6 +173,7 @@ impl Window {
 			motion: motion::motion(),
 			width: 1040.0,
 			folds: HashMap::new(),
+			sides: HashMap::new(),
 			instructions: HashMap::new(),
 			send: text_editor::Content::new(),
 			busy: None,
@@ -176,7 +188,9 @@ impl Window {
 	}
 
 	fn animating(&self) -> bool {
-		self.entering || self.folds.values().any(|fold| fold.is_animating(self.now))
+		self.entering
+			|| self.folds.values().any(|fold| fold.is_animating(self.now))
+			|| self.sides.values().any(|side| side.is_animating(self.now))
 	}
 
 	fn subscription(&self) -> Subscription<Message> {
@@ -200,6 +214,14 @@ impl Window {
 					.entry(fold)
 					.or_insert_with(|| Animation::new(false).duration(DISCLOSURE).easing(Easing::Custom(ease)));
 				animation.go_mut(!open, self.now);
+			}
+			Message::Side(index, after) => {
+				self.now = Instant::now();
+				let animation = self
+					.sides
+					.entry(index)
+					.or_insert_with(|| Animation::new(true).duration(SWITCH).easing(Easing::Custom(ease)));
+				animation.go_mut(after, self.now);
 			}
 			Message::Edit(card, action) => {
 				if let Some(editor) = self.editors.get_mut(&card) {
@@ -367,6 +389,7 @@ impl Window {
 			| Section::Diff { heading, .. }
 			| Section::Cards { heading, .. }
 			| Section::Works { heading, .. }
+			| Section::System { heading, .. }
 			| Section::List { heading, .. } => heading.as_deref(),
 		};
 		let body: Element<'a, Message> = if is_empty(section) {
@@ -377,6 +400,13 @@ impl Window {
 				Section::Facts { rows, .. } => facts(rows),
 				Section::Checks { rows, .. } => checks(rows),
 				Section::Works { rows, .. } => self.works(rows),
+				Section::System { nodes, edges, brings, takes, no_change, .. } => {
+					if *no_change {
+						text(NO_SYSTEM_CHANGE).size(BODY).color(c.fg2).into()
+					} else {
+						self.system(index, nodes, edges, [brings, takes])
+					}
+				}
 				Section::Flow { nodes, edges, .. } => self.flow(nodes, edges),
 				Section::Map { groups, links, .. } => map(groups, links),
 				Section::Diff { files, .. } => self.diff(index, files),
@@ -429,16 +459,89 @@ impl Window {
 	}
 
 	fn flow<'a>(&'a self, nodes: &'a [FlowNode], edges: &'a [FlowEdge]) -> Element<'a, Message> {
-		let shape = shape(nodes, edges, direction(nodes, self.width));
+		self.drawing(Cow::Borrowed(nodes), edges, Presence::default())
+	}
+
+	/// A flow's canvas, scrolled sideways when it is wider than the window.
+	fn drawing<'a>(&self, nodes: Cow<'a, [FlowNode]>, edges: &[FlowEdge], presence: Presence) -> Element<'a, Message> {
+		let shape = shape(&nodes, edges, direction(&nodes, self.width));
 		let size = shape.size;
 		let elapsed = if self.entering { self.elapsed() } else { f32::MAX };
-		let drawing = canvas(FlowCanvas { nodes, shape, elapsed, motion: self.motion })
+		let drawing = canvas(FlowCanvas { nodes, shape, elapsed, motion: self.motion, presence })
 			.width(Length::Fixed(size.width))
 			.height(Length::Fixed(size.height));
 		scrollable(drawing)
 			.direction(scrollable::Direction::Horizontal(scrollable::Scrollbar::new()))
 			.width(Fill)
 			.into()
+	}
+
+	/// A system (0710): the Before / After switch, the union drawn with each part as present as the switch makes it,
+	/// then `lists`, Brings and Takes away.
+	fn system<'a>(
+		&'a self,
+		index: usize,
+		nodes: &'a [SystemNode],
+		edges: &'a [SystemEdge],
+		lists: [&'a [SystemRow]; 2],
+	) -> Element<'a, Message> {
+		let c = colours();
+		let side = self.sides.get(&index);
+		let after = side.map_or(1.0, |side| side.interpolate(0.0_f32, 1.0, self.now));
+		let showing_after = side.is_none_or(Animation::value);
+		let choice = |label: &'static str, wanted: bool| {
+			let tone = if showing_after == wanted { Tone::Primary } else { Tone::Plain };
+			button(text(label).size(LABEL))
+				.padding([6, 14])
+				.style(style::control(tone))
+				.on_press(Message::Side(index, wanted))
+		};
+		let mut part = column![row![choice("Before", false), choice("After", true)].spacing(8)].spacing(16);
+		if !nodes.is_empty() {
+			let presence = Presence {
+				nodes: nodes.iter().map(|node| presence(node.mark, after, self.motion)).collect(),
+				edges: edges.iter().map(|edge| presence(edge.mark, after, self.motion).0).collect(),
+			};
+			let arrows: Vec<FlowEdge> = edges
+				.iter()
+				.map(|edge| FlowEdge { from: edge.from.clone(), to: edge.to.clone(), label: edge.label.clone() })
+				.collect();
+			part = part.push(self.drawing(Cow::Owned(system_nodes(nodes)), &arrows, presence));
+		}
+		let [brings, takes] = lists;
+		for (list, label, rows) in [("brings", "Brings", brings), ("takes", "Takes away", takes)] {
+			if rows.is_empty() {
+				continue;
+			}
+			let mut block = column![text(label).size(LABEL).color(c.muted)].spacing(8);
+			for (at, row) in rows.iter().enumerate() {
+				block = block.push(self.system_row(Fold::Row(index, list, at), row));
+			}
+			part = part.push(block);
+		}
+		part.into()
+	}
+
+	/// One Brings or Takes away row: its text, then its `✓ proven` disclosure or its place in the code.
+	fn system_row<'a>(&'a self, fold: Fold, row: &'a SystemRow) -> Element<'a, Message> {
+		let c = colours();
+		let mut item = column![text(&row.text).size(BODY).color(c.fg).wrapping(text::Wrapping::WordOrGlyph)].spacing(6);
+		if let Some(anchor) = &row.anchor {
+			item = item
+				.push(text(place(anchor)).size(LABEL).font(mono_font()).color(c.fg2).wrapping(text::Wrapping::Glyph));
+		}
+		if let Some(ran) = &row.ran {
+			item = item.push(
+				button(text("\u{2713} proven").size(LABEL).color(c.green))
+					.padding(0)
+					.style(style::link)
+					.on_press(Message::Toggle(fold.clone())),
+			);
+			if let Some(alpha) = self.fold(&fold) {
+				item = item.push(code_block(&proof_text(ran), alpha));
+			}
+		}
+		item.into()
 	}
 
 	fn diff<'a>(&'a self, index: usize, files: &'a [DiffFile]) -> Element<'a, Message> {

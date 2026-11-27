@@ -25,6 +25,7 @@ use crate::frontier::server::report::{REPORT_RESULT, ReportedDecision, ThreadRep
 use crate::frontier::server::review_notes::{
 	MAX_OPINIONS, REVIEW_NOTE, ReviewNotes, checked_card, head_of, review_file,
 };
+use crate::frontier::server::review_system::{REVIEW_SYSTEM, review_system};
 use crate::frontier::server::task_file::{CloseFacts, CloseHow, NewTask, TaskReport, close_task, find_task, new_task};
 use crate::frontier::server::thread::{ThreadRef, subject};
 use crate::frontier::server::thread_lifecycle::Awaiting;
@@ -80,6 +81,7 @@ pub const TOOLS: &[Tool] = &[
 	Tool { name: REPORT_RESULT, boss: false },
 	Tool { name: REVIEW_NOTE, boss: false },
 	Tool { name: REVIEW_TRY, boss: false },
+	Tool { name: REVIEW_SYSTEM, boss: false },
 	Tool { name: "check", boss: false },
 	Tool { name: "show", boss: true },
 	Tool { name: "today", boss: true },
@@ -303,6 +305,15 @@ impl Tools {
 				};
 				review_try(c, &thread, args.values).await
 			}
+			REVIEW_SYSTEM => {
+				let Some(thread) = call.pane_id.as_deref().and_then(|pane| c.threads.get(pane)) else {
+					return Err(Error::user(format!(
+						"{REVIEW_SYSTEM}: only a thread's pane hands in a system view, and this pane isn't a thread's{}.",
+						call.unkeyed
+					)));
+				};
+				review_system(c, &thread, args.values).await
+			}
 			"check" => c.review.check_tool(call.pane_id.as_deref(), call.unkeyed).await,
 			"worktree_remove" => self.remove_leftover(&args.text("path")?, Door::Boss).await,
 			other => self.run_boss(other, args).await,
@@ -454,7 +465,7 @@ impl Tools {
 		}
 		let (mut card, proof) = checked_card(&path, &head, args, notes.notes.len() + 1).await?;
 		if let Some(step) = proof {
-			card.ran = Some(prove(c, &thread, &step).await?);
+			card.ran = Some(prove(c, &thread, &step, REVIEW_NOTE, "hand it in as a question or an opinion").await?);
 		}
 		// A proof can take minutes: the notes are read again before this one joins them.
 		let mut notes = ReviewNotes::of_head(&file, &head);

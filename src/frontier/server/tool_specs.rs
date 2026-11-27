@@ -9,6 +9,7 @@ use crate::frontier::server::bridge::Role;
 use crate::frontier::server::history::HISTORY_SEARCH;
 use crate::frontier::server::report::{REPORT_DESCRIPTION, REPORT_RESULT, parse_report, report_schema};
 use crate::frontier::server::review_notes::REVIEW_NOTE;
+use crate::frontier::server::review_system::REVIEW_SYSTEM;
 use crate::frontier::server::works::REVIEW_TRY;
 
 #[cfg(test)]
@@ -153,6 +154,85 @@ fn review_try() -> ToolSpec {
 				),
 			],
 			&["what", "steps"],
+		),
+	)
+}
+
+/// A thread's `review_system` (0710): the Before and After graphs anchored to the code, and Brings / Takes away.
+fn review_system() -> ToolSpec {
+	let anchor = json!({
+		"type": "object",
+		"properties": {
+			"file": { "type": "string", "description": "The file's path in the repository" },
+			"line": { "type": "integer", "minimum": 1, "description": "The 1-based line where the quoted code starts" },
+			"quote": { "type": "string", "description": "The code at that line, as the file has it" }
+		},
+		"required": ["file", "line", "quote"]
+	});
+	let graph = json!({
+		"type": "object",
+		"properties": {
+			"nodes": {
+				"type": "array",
+				"description": "The system's parts the change touches or depends on, at most 12",
+				"items": {
+					"type": "object",
+					"properties": {
+						"id": { "type": "string", "description": "The same id in both graphs for the same part" },
+						"label": { "type": "string", "description": "The part's name, a few words" },
+						"anchor": anchor
+					},
+					"required": ["id", "label", "anchor"]
+				}
+			},
+			"edges": {
+				"type": "array",
+				"description": "Who calls, sends to or reads whom",
+				"items": {
+					"type": "object",
+					"properties": {
+						"from": { "type": "string", "description": "A node id of this graph" },
+						"to": { "type": "string", "description": "A node id of this graph" },
+						"label": { "type": "string", "description": "What goes along it, a word or two" },
+						"anchor": anchor
+					},
+					"required": ["from", "to", "anchor"]
+				}
+			}
+		},
+		"required": ["nodes"]
+	});
+	let row = json!({
+		"type": "object",
+		"properties": {
+			"text": { "type": "string", "description": "One sentence" },
+			"proof": {
+				"type": "object",
+				"properties": {
+					"run": { "type": "string", "description": "A shell command that shows it" },
+					"expect": { "type": "string", "description": "Text its output must contain, or exit:N for its exit code" }
+				},
+				"required": ["run", "expect"]
+			},
+			"anchor": anchor
+		},
+		"required": ["text"]
+	});
+	tool(
+		REVIEW_SYSTEM,
+		"Hand in what the change does to the system: Before and After graphs.\nCall it once per review, after review_try passed. `before` is the system's parts as the base commit has them, `after` as the head has them, each {nodes, edges} with at most 12 nodes; use the same id for the same part in both. Every node and edge has an `anchor` {file, line, quote}: Jocasta checks Before's at the base and After's at the head and refuses a quote the file doesn't hold there. `brings` lists what the change brings (new abilities, fixes), `takes` what it takes away (removed behaviour, lost guarantees, new costs); each row has `text` and either `proof` {run, expect}, which Jocasta runs like a review_try step, or `anchor` (Brings' read at the head, Takes away's at the base). When the change touches no part of the system (a typo, a test, docs), pass only `no_system_change: true`. A second call replaces the first.",
+		schema(
+			vec![
+				("before", graph.clone()),
+				("after", graph),
+				("brings", json!({ "type": "array", "items": row.clone(), "description": "What the change brings" })),
+				("takes", json!({ "type": "array", "items": row, "description": "What the change takes away" })),
+				(
+					"no_system_change",
+					json!({ "type": "boolean", "description": "true, alone, when the change touches no part of the system" }),
+				),
+			],
+			&[],
 		),
 	)
 }
@@ -372,7 +452,7 @@ pub fn tools_for(role: Role, layer: bool) -> Vec<ToolSpec> {
 /// Tools that can outlast a bash call's default 5 minutes (a `check` runs up to 30, a finish runs hooks, a start builds a
 /// worktree, a lesson waits for his Allow, a review's step or a finding's proof runs like a check). omp runs a mounted
 /// tool inside its `bash` tool, whose own deadline then applies, so each says how to call it.
-const LONG_RUNNING: [&str; 8] = [
+const LONG_RUNNING: [&str; 9] = [
 	"check",
 	"thread_start",
 	"thread_finish",
@@ -381,6 +461,7 @@ const LONG_RUNNING: [&str; 8] = [
 	"big_picture_review",
 	REVIEW_TRY,
 	REVIEW_NOTE,
+	REVIEW_SYSTEM,
 ];
 
 /// What a long-running tool's description ends with (0675).
@@ -395,8 +476,8 @@ fn role_tools(role: Role, layer: bool) -> Vec<ToolSpec> {
 			tools.extend(boss_inbox_tools());
 			tools
 		}
-		Role::Thread if layer => vec![everyone(), report(), check(), review_note(), review_try()],
-		Role::Thread => vec![everyone(), review_note(), review_try()],
+		Role::Thread if layer => vec![everyone(), report(), check(), review_note(), review_try(), review_system()],
+		Role::Thread => vec![everyone(), review_note(), review_try(), review_system()],
 		Role::Project => vec![everyone()],
 	}
 }

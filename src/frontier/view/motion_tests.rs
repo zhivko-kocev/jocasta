@@ -38,3 +38,15 @@ fn reduced_motion_keeps_the_fade_and_drops_the_rise_and_the_drawing() {
 	assert!(fade > 0.0 && fade < 1.0);
 	assert_eq!(drawn, 1.0);
 }
+
+#[test]
+fn a_system_switch_fades_and_grows_added_parts_fades_removed_ones_and_reduced_keeps_the_fade_0710() {
+	use crate::frontier::brief::model::Mark;
+	assert_eq!(presence(Mark::Kept, 0.3, Motion::Full), (1.0, 1.0));
+	assert_eq!(presence(Mark::Added, 0.0, Motion::Full), (0.0, APPEAR_SCALE));
+	assert_eq!(presence(Mark::Added, 1.0, Motion::Full), (1.0, 1.0));
+	assert_eq!(presence(Mark::Removed, 1.0, Motion::Full), (0.0, 1.0));
+	assert_eq!(presence(Mark::Removed, 0.25, Motion::Full), (0.75, 1.0));
+	assert_eq!(presence(Mark::Added, 0.5, Motion::Reduced), (0.5, 1.0));
+	assert_eq!(SWITCH.as_millis(), 220);
+}
