@@ -525,4 +525,45 @@ mod tests {
 		let ok = parse_guard("bash:\n  patterns:\n    - match: a b\n      approval: prompt\n", "guard.yml").unwrap();
 		assert_eq!(ok, vec![GuardRule { r#match: "a b".to_owned(), approval: Approval::Prompt }]);
 	}
+
+	/// A review pane's rules (0709), the guard's first (omp prepends the later overlay), then `config/review.yml`'s,
+	/// first match winning. Simple commands only: omp applies an `allow` to a simple command alone.
+	#[test]
+	fn a_review_pane_runs_reading_commands_and_its_tools_and_asks_for_everything_else_0709() {
+		let file = concat!(env!("CARGO_MANIFEST_DIR"), "/config/review.yml");
+		let review = parse_value(&std::fs::read_to_string(file).unwrap()).unwrap();
+		let review: Vec<(String, String)> = review["bash"]["patterns"]
+			.as_array()
+			.unwrap()
+			.iter()
+			.map(|rule| (rule["match"].as_str().unwrap().to_owned(), rule["approval"].as_str().unwrap().to_owned()))
+			.collect();
+		let guard = rules();
+		let said = |command: &str| -> String {
+			match verdict(command, &guard).verdict {
+				Verdict::Deny => return "deny".to_owned(),
+				Verdict::Prompt => return "prompt".to_owned(),
+				Verdict::Allow => {}
+			}
+			review.iter().find(|(pattern, _)| matches(command, pattern)).map(|(_, approval)| approval.clone()).unwrap()
+		};
+		let allow =
+			["git diff main...HEAD", "git log --oneline -5", "rg foo src", "cat README.md", "ls", "find . -name x"];
+		let tools = ["review_note --help", "review_try -j {}", "check", "history_search why"];
+		for command in allow.iter().chain(&tools) {
+			assert_eq!(said(command), "allow", "{command}");
+		}
+		let ask = [
+			"cargo test",
+			"npm install",
+			"find . -delete",
+			"find . -exec rm {}",
+			"rg --pre sh x",
+			"git diff --output=x",
+		];
+		for command in ask {
+			assert_eq!(said(command), "prompt", "{command}");
+		}
+		assert_eq!(said("git push --force"), "deny", "the guard still decides first");
+	}
 }

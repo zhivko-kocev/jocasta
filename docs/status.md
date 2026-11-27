@@ -120,5 +120,7 @@ The ultron 0.3 iteration (2026-11-26, the approved plan's M1-J; records 0691–0
 
 M2, Jocasta 0.2.0 (2026-11-27, the approved plan's M2; records from 0706 decided by his answers of 2026-11-26): R1, clean-room runs (0708), is built: `cleanroom.rs` runs a project's check, or any command, on one commit in `jdxcode/mise` with only the committed tree, his mise files read-only and a cache volume per project. R2, works first (0706), is built: a pull request's check in the clean room before its review's first turn (a failure ends it with one P0 card), `review_try` steps run and judged by Jocasta, Finish's clean-room check, and the `works` section on thread and pull-request pages. Not checked live on his PC: his user can't reach Docker there (the socket is `root:docker`), so the Docker tests skip; they run in the VM. Next: R3, proof on every finding (0707), then R4 (0709).
 
+R4, review panes ask before running (0709), is built (out of order, before R3): `config/review.yml` lets a review pane run reading commands and Jocasta's tools unasked and asks for everything else, with a headless browser; `mise run omp-seams` passes on omp 19.2.1. Next: R3, proof on every finding (0707).
+
 Update this file when a slice's records are written, when its build lands, and when a grilling session stops (name the next slice); keep `AGENTS.md`'s one current-state line in step.
 

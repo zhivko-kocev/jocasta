@@ -1,5 +1,48 @@
-# A pull-request review thread's omp (0680): Jocasta loads this file after the project's overlay, only in a review
-# thread's pane. The thread reviews and hands its notes in through `review_note`; it plans nothing, so the overlay's
-# plan mode on startup (`plan.defaultOnStartup: true`) is turned off here.
+# A pull-request review thread's omp (0680, 0709): Jocasta loads this file after the project's overlay, only in a review
+# thread's pane, and the guard after it, whose rules omp puts first. The thread reviews and hands its notes in through
+# `review_note`; it plans nothing, so the overlay's plan mode on startup (`plan.defaultOnStartup: true`) is turned off.
 plan:
   defaultOnStartup: false
+# Agents' browsers are headless (0709): Jocasta's tries need no window.
+browser:
+  headless: true
+# Review panes run nothing unasked (0709): reading commands and Jocasta's own tools run; every other bash command asks
+# him. omp takes the first matching rule; an `allow` covers a simple command only, so a compound line (`a | b`,
+# `a; b`) meets the last rule and asks. The prompts before the allows catch reading commands that can write or run.
+bash:
+  patterns:
+    - { match: "find * -delete*", approval: prompt }
+    - { match: "find * -exec*", approval: prompt }
+    - { match: "find * -ok*", approval: prompt }
+    - { match: "find * -fprint*", approval: prompt }
+    - { match: "rg *--pre*", approval: prompt }
+    - { match: "git * --output*", approval: prompt }
+    - { match: "git grep *-O*", approval: prompt }
+    - { match: "git grep *--open-files-in-pager*", approval: prompt }
+    - { match: "git diff", approval: allow }
+    - { match: "git diff *", approval: allow }
+    - { match: "git log", approval: allow }
+    - { match: "git log *", approval: allow }
+    - { match: "git show", approval: allow }
+    - { match: "git show *", approval: allow }
+    - { match: "git status", approval: allow }
+    - { match: "git status *", approval: allow }
+    - { match: "git blame *", approval: allow }
+    - { match: "git ls-files", approval: allow }
+    - { match: "git ls-files *", approval: allow }
+    - { match: "git grep *", approval: allow }
+    - { match: "rg *", approval: allow }
+    - { match: "grep *", approval: allow }
+    - { match: "ls", approval: allow }
+    - { match: "ls *", approval: allow }
+    - { match: "cat *", approval: allow }
+    - { match: "head *", approval: allow }
+    - { match: "tail *", approval: allow }
+    - { match: "wc *", approval: allow }
+    - { match: "find", approval: allow }
+    - { match: "check", approval: allow }
+    - { match: "find *", approval: allow }
+    - { match: "history_search *", approval: allow }
+    - { match: "review_note *", approval: allow }
+    - { match: "review_try *", approval: allow }
+    - { match: "*", approval: prompt }
