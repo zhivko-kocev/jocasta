@@ -43,3 +43,6 @@ Each missing piece is named once, where he looks, with the step that fixes it, a
 - New `server/first_run.rs`: the facts, the texts, and the task `Service::start` spawns; `ServerOptions.first_run` (whether the terminal reports keys; unset in tests, so tests run no check).
 - `Hud.problems` carries the texts to `today`'s header.
 - `setup::git_too_old` is shared by setup's note and the check.
+
+## Note (2026-11-27)
+In the VM, a fresh install's GitHub poller sent the notification `Poller github failed: … gh auth login` at every start: a `gh` without a login is a fresh machine's state, like the checks above, not a failure. When a GitHub round fails with `gh`'s sign-in text (`gh auth login`), the poller says nothing as a notification and `today`'s header carries one line, `gh isn't signed in: run gh auth login to see review requests and CI here`, until a round finds `gh` signed in (`Day::problems`, read into `Hud.problems` after the checks' own).

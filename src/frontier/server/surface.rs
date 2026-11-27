@@ -191,6 +191,8 @@ pub struct Note {
 	pub sound: Sound,
 	/// What clicking it opens (0699, #13): a finished thread's brief. Only Linux's `notify-send` offers the click.
 	pub link: Option<NoteLink>,
+	/// What ends it (a question's answer): once that resolves, Linux closes the notification (0699).
+	pub until: Option<NoteUntil>,
 }
 
 /// A notification's link: the page's address and how to open it, with a fresh launch code, once he clicks.
@@ -203,6 +205,22 @@ pub struct NoteLink {
 impl std::fmt::Debug for NoteLink {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		f.debug_struct("NoteLink").field("url", &self.url).finish_non_exhaustive()
+	}
+}
+
+/// The end of what a notification asks: a future that resolves once the question is answered, withdrawn or closed.
+#[derive(Clone)]
+pub struct NoteUntil(pub std::sync::Arc<dyn Fn() -> BoxFuture<'static, ()> + Send + Sync>);
+
+impl std::fmt::Debug for NoteUntil {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.write_str("NoteUntil")
+	}
+}
+
+impl PartialEq for NoteUntil {
+	fn eq(&self, other: &Self) -> bool {
+		std::sync::Arc::ptr_eq(&self.0, &other.0)
 	}
 }
 

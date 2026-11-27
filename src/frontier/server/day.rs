@@ -77,6 +77,8 @@ const WORKLOG_SO_FAR_MS: i64 = 10 * MINUTE;
 const ACTIVITY_ROWS: usize = 10;
 /// The subscription windows are read this often (0456).
 const QUOTA_MINUTES: f64 = 5.0;
+/// `today`'s header line while `gh` has no login: a fresh machine's state, not a failure to notify about.
+pub const GH_SIGNED_OUT: &str = "gh isn't signed in: run gh auth login to see review requests and CI here";
 /// Leftover worktrees are looked for this often (0456): they change only when a thread is closed.
 const LEFTOVER_MINUTES: f64 = 10.0;
 /// The weekly review (0470) runs from this weekday (0 = Sunday) and hour on, once per project and week.
@@ -348,6 +350,8 @@ struct State {
 	/// The poller rounds under way, awaited by `stop()` before the databases close (F7).
 	rounds: HashMap<PollerName, Done>,
 	last_error: HashMap<String, String>,
+	/// `gh` answered that it has no login: the GitHub poller says so in `today`'s header only.
+	gh_signed_out: bool,
 	today_sent: String,
 	worklog_day: String,
 	/// The local day of the last minute tick: a new one checks yesterday's worklog was written (SRV-B-5).
@@ -459,6 +463,7 @@ impl Day {
 			timers: Vec::new(),
 			rounds: HashMap::new(),
 			last_error: HashMap::new(),
+			gh_signed_out: false,
 			today_sent: String::new(),
 			worklog_day: String::new(),
 			tick_day: local_day(now),
@@ -722,6 +727,12 @@ impl Day {
 	/// Quiet hours now (0298); a malformed setting is reported once and counts as none.
 	pub fn quiet(&self) -> bool {
 		is_quiet(self.quiet_hours().as_ref(), self.now_ms())
+	}
+
+	/// What the day's pollers leave in `today`'s header instead of a notification: `gh` without a login, like the
+	/// first-run checks (0703).
+	pub fn problems(&self) -> Vec<String> {
+		if self.st().gh_signed_out { vec![GH_SIGNED_OUT.to_owned()] } else { Vec::new() }
 	}
 
 	/// `service.quietHours`, read live; a malformed value is reported once and counts as none.

@@ -610,7 +610,8 @@ impl StatusViews {
 			checks: Some(c.checks.load()).filter(|load| load.running + load.waiting > 0),
 			// today's header says quiet hours (0581).
 			quiet: Some(c.day.quiet()),
-			problems: self.st().problems.clone(),
+			// The first-run checks' problems, then the pollers' (`gh` without a login).
+			problems: self.st().problems.iter().cloned().chain(c.day.problems()).collect(),
 		}
 	}
 

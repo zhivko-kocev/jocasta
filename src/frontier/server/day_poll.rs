@@ -4,12 +4,14 @@ use chrono::{Datelike, Duration as Days, Timelike};
 use tokio::sync::watch;
 
 use super::{
-	Day, EventPriority, Fault, Finish, PollerName, WEEKLY_REVIEW_DAY, WEEKLY_REVIEW_HOUR, event, finished, local, lock,
+	Day, EventPriority, Fault, Finish, GH_SIGNED_OUT, PollerName, WEEKLY_REVIEW_DAY, WEEKLY_REVIEW_HOUR, event,
+	finished, local, lock,
 };
 use crate::frontier::protocol::{QuotaSpan, ServerMessage, ToastLevel, ToastPriority, ToastReason, quota_high};
 use crate::frontier::server::quota::{account_warning, omp_usage_redacted, read_accounts, read_quota};
 use crate::shared::errors::{Error, Result};
 use crate::shared::events::queue::EventSource;
+use crate::shared::log::{LogLevel, log};
 use crate::shared::paths::data_dir;
 use crate::shared::pollers::azure::{AZURE_KINDS, poll_azure};
 use crate::shared::pollers::azure_portal::{AZURE_PORTAL_KINDS, poll_azure_portal};
@@ -46,8 +48,17 @@ impl Day {
 
 	async fn round(&self, name: PollerName) {
 		let outcome = self.run_round(name).await;
-		// A round the stop ended says nothing.
-		if let Err(fault) = outcome
+		// A round the stop ended says nothing. `gh` without a login is a fresh machine, not a failure: `today`'s header
+		// says it, no notification (like the first-run checks, 0703).
+		if let Err(fault) = &outcome
+			&& name == PollerName::Github
+			&& !self.stopped()
+			&& fault.message().contains("gh auth login")
+		{
+			if !std::mem::replace(&mut self.st().gh_signed_out, true) {
+				log(LogLevel::Info, "day", GH_SIGNED_OUT, None);
+			}
+		} else if let Err(fault) = outcome
 			&& !self.stopped()
 		{
 			let message = fault.message();
@@ -132,7 +143,9 @@ impl Day {
 	async fn poll_cli(&self, name: PollerName) -> std::result::Result<bool, Fault> {
 		let run = &self.inner.run;
 		let (source, kinds, round) = if name == PollerName::Github {
-			(EventSource::Github, GITHUB_KINDS, poll_github(run).await?)
+			let round = poll_github(run).await?;
+			self.st().gh_signed_out = false;
+			(EventSource::Github, GITHUB_KINDS, round)
 		} else {
 			let settings = read_settings()?;
 			let orgs = read_poller::<AzureDevOpsSettings>(&settings).map_err(Fault::Settings)?.orgs;

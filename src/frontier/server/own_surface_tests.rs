@@ -1,10 +1,33 @@
 use std::sync::Arc;
 
 use super::*;
-use crate::frontier::server::surface::NoteLink;
+use crate::frontier::server::surface::{NoteLink, NoteUntil};
 
 fn note(sound: Sound, link: Option<NoteLink>) -> Note {
-	Note { title: "demo/Readme line".to_owned(), body: Some("done".to_owned()), sound, link }
+	Note { title: "demo/Readme line".to_owned(), body: Some("done".to_owned()), sound, link, until: None }
+}
+
+#[test]
+fn a_questions_notification_prints_its_id_and_is_closed_over_dbus_once_answered() {
+	let until = NoteUntil(Arc::new(|| Box::pin(async {})));
+	let asks = Note { until: Some(until), ..note(Sound::Request, None) };
+	let argv = notify_send_argv(&asks);
+	assert_eq!(argv[argv.len() - 4], "-p");
+	assert_eq!(
+		close_argv(42),
+		[
+			"gdbus",
+			"call",
+			"--session",
+			"--dest",
+			"org.freedesktop.Notifications",
+			"--object-path",
+			"/org/freedesktop/Notifications",
+			"--method",
+			"org.freedesktop.Notifications.CloseNotification",
+			"42"
+		]
+	);
 }
 
 #[test]

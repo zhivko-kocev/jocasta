@@ -19,7 +19,7 @@ use crate::frontier::server::bridge::Deliver;
 use crate::frontier::server::brief_actions::brief_of_link;
 use crate::frontier::server::context::{BossRef, Calls, Link};
 use crate::frontier::server::day::AlertDetails;
-use crate::frontier::server::surface::{AgentState, Note, NoteLink, NotificationResult, Sound, pane_text};
+use crate::frontier::server::surface::{AgentState, Note, NoteLink, NoteUntil, NotificationResult, Sound, pane_text};
 use crate::frontier::server::thread::{ThreadRef, is_idle, settled, subject};
 use crate::frontier::server::wording::{cut, quoted};
 use crate::shared::clock::now_ms;
@@ -58,12 +58,19 @@ pub struct Toast {
 	pub pane_id: Option<String>,
 	pub priority: Option<ToastPriority>,
 	pub url: Option<String>,
+	/// What ends the question it asks: its notification is closed then (Linux).
+	pub until: Option<NoteUntil>,
 }
 
 impl Toast {
 	/// A toast of `reason` and `level` with only its text.
 	pub fn new(reason: ToastReason, level: ToastLevel, text: impl Into<String>) -> Self {
-		Self { reason, level, text: text.into(), pane_id: None, priority: None, url: None }
+		Self { reason, level, text: text.into(), pane_id: None, priority: None, url: None, until: None }
+	}
+
+	/// The toast of a question: its notification closes once `until` resolves.
+	pub fn until(self, until: NoteUntil) -> Self {
+		Self { until: Some(until), ..self }
 	}
 
 	fn of(message: &ServerMessage) -> Option<Self> {
@@ -75,6 +82,7 @@ impl Toast {
 			pane_id: pane_id.clone(),
 			priority: *priority,
 			url: url.clone(),
+			until: None,
 		})
 	}
 }
@@ -322,6 +330,7 @@ impl Events {
 				body: Some(body.clone()),
 				sound: if urgent { Sound::Request } else { Sound::None },
 				link: self.brief_link(toast),
+				until: toast.until.clone(),
 			};
 			match ctx.herdr.notify(&note).await {
 				Ok(result) => result,

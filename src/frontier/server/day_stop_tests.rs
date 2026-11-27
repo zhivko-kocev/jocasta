@@ -137,3 +137,33 @@ async fn no_round_starts_once_the_day_stopped() {
 	assert!(calls.lock().unwrap().is_empty());
 	assert!(s.notes().is_empty());
 }
+
+#[tokio::test]
+async fn gh_without_a_login_is_one_header_line_and_no_notification_until_it_signs_in() {
+	let _j = temp_jocasta();
+	let signed_in = Arc::new(AtomicBool::new(false));
+	let login = Arc::clone(&signed_in);
+	let s = stand(
+		move |_command: CliCommand, args: Vec<String>, _ok: Vec<i32>, _signal: Option<AbortSignal>| -> RunFuture {
+			let route = args.get(1).cloned().unwrap_or_default();
+			let signed_in = login.load(Ordering::SeqCst);
+			Box::pin(async move {
+				if signed_in {
+					Ok(answer(&route))
+				} else {
+					Err(Error::other(
+						"gh api notifications failed: exit 4: To get started with GitHub CLI, please run:  gh auth login",
+					))
+				}
+			})
+		},
+	);
+	s.day.poll(PollerName::Github).await;
+	s.day.poll(PollerName::Github).await;
+	assert!(s.notes().is_empty(), "no notification: {:?}", s.notes());
+	assert_eq!(s.day.problems(), [GH_SIGNED_OUT]);
+	signed_in.store(true, Ordering::SeqCst);
+	s.day.poll(PollerName::Github).await;
+	assert!(s.day.problems().is_empty());
+	close(&s).await;
+}

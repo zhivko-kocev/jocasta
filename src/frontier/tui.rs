@@ -281,7 +281,7 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
 
 /// The style a segment draws in: its colours over the pane's, bold when it says so.
 fn style_of(segment: &Segment) -> Style {
-	let mut style = Style::new().fg(segment.fg.unwrap_or(TOKYO_NIGHT.fg));
+	let mut style = Style::new().fg(segment.fg.unwrap_or(palette().fg));
 	if let Some(bg) = segment.bg {
 		style = style.bg(bg);
 	}
@@ -295,7 +295,7 @@ fn style_of(segment: &Segment) -> Style {
 /// wrapping (a miscounted line clips at the edge instead of pushing the bottom rows off, FE-10), rows past the area
 /// dropped.
 pub fn render_lines(buf: &mut Buffer, area: Rect, lines: &[Line]) {
-	buf.set_style(area, Style::new().fg(TOKYO_NIGHT.fg).bg(TOKYO_NIGHT.bg0));
+	buf.set_style(area, Style::new().fg(palette().fg).bg(palette().bg0));
 	for (row, line) in lines.iter().take(usize::from(area.height)).enumerate() {
 		let y = area.y + u16::try_from(row).unwrap_or(u16::MAX);
 		let mut x = area.x;

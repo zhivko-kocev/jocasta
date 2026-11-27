@@ -182,7 +182,27 @@ async fn show(note: &Note) -> NotificationResult {
 		argv
 	};
 	match run_program(&argv, RunOptions { env: Some(env), timeout_ms: Some(10_000), ..RunOptions::default() }).await {
-		Ok(run) if run.code == Some(0) => NotificationResult::Shown,
+		Ok(run) if run.code == Some(0) => {
+			// A question's notification goes once it is answered (0699): `-p` printed its id.
+			if cfg!(target_os = "linux")
+				&& let Some(until) = note.until.clone()
+				&& let Ok(id) = run.stdout.trim().parse::<u32>()
+			{
+				tokio::spawn(async move {
+					(until.0)().await;
+					let options = RunOptions { timeout_ms: Some(10_000), ..RunOptions::default() };
+					if let Err(error) = run_program(&close_argv(id), options).await {
+						log(
+							LogLevel::Warn,
+							"notify",
+							&format!("the notification {id} couldn't be closed: {error}"),
+							None,
+						);
+					}
+				});
+			}
+			NotificationResult::Shown
+		}
 		Ok(run) => {
 			log(
 				LogLevel::Warn,
@@ -204,7 +224,7 @@ const LINK_WAIT_MS: i64 = 60 * 60_000;
 
 /// `notify-send`'s argv (it takes its words as arguments). One that needs him (0699, #5) is critical, so the daemon
 /// keeps it on screen, and asks for the freedesktop sound of a new message; one with a link (#13) offers the click as
-/// its default action and waits for it.
+/// its default action and waits for it; a question's prints its id, so it can be closed once answered.
 fn notify_send_argv(note: &Note) -> Vec<String> {
 	let mut argv = vec!["notify-send".to_owned(), "--app-name=Jocasta".to_owned()];
 	if note.sound == Sound::Request {
@@ -212,9 +232,31 @@ fn notify_send_argv(note: &Note) -> Vec<String> {
 	}
 	if note.link.is_some() {
 		argv.extend(["-A", "default=Open", "--wait"].map(str::to_owned));
+	} else if note.until.is_some() {
+		argv.push("-p".to_owned());
 	}
 	argv.extend(["--".to_owned(), note.title.clone(), note.body.clone().unwrap_or_default()]);
 	argv
+}
+
+/// The freedesktop call that takes notification `id` off the screen. `gdbus` comes with GLib, which libnotify's
+/// `notify-send` needs, so it is there whenever notifications are.
+fn close_argv(id: u32) -> Vec<String> {
+	[
+		"gdbus",
+		"call",
+		"--session",
+		"--dest",
+		"org.freedesktop.Notifications",
+		"--object-path",
+		"/org/freedesktop/Notifications",
+		"--method",
+		"org.freedesktop.Notifications.CloseNotification",
+	]
+	.map(str::to_owned)
+	.into_iter()
+	.chain([id.to_string()])
+	.collect()
 }
 
 impl Surface for OwnSurface {

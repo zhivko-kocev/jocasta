@@ -18,7 +18,7 @@ use tokio::runtime::Handle;
 use super::events::Toast;
 use super::feed::Reply;
 use super::popups::{AnswerTaken, Popup, PopupEnd};
-use super::surface::SurfaceSnapshot;
+use super::surface::{NoteUntil, SurfaceSnapshot};
 use crate::frontier::protocol::{
 	AnswerReply, ClientMessage, PLUGIN_ACTIONS, PluginAction, SHELL_ACTION, SHELL_ANSWER, SHELL_ANSWERED, SHELL_BOSS,
 	SHELL_FEED, SHELL_GONE, SHELL_QUESTION, ServerMessage, ShellAction, ShellAnswer, ShellAnswered, ShellQuestion,
@@ -248,7 +248,16 @@ impl Native {
 	fn notify(&self, popup: &Popup) {
 		let Some(server) = self.server.get() else { return };
 		let text = format!("Jocasta asks — {}", note_body(&popup.view().message));
-		self.runtime.spawn(server.notify(Toast::new(ToastReason::Blocked, ToastLevel::Warning, text)));
+		let asked = popup.clone();
+		let until = NoteUntil(Arc::new(move || {
+			let asked = asked.clone();
+			async move {
+				asked.how().await;
+			}
+			.boxed()
+		}));
+		let toast = Toast::new(ToastReason::Blocked, ToastLevel::Warning, text).until(until);
+		self.runtime.spawn(server.notify(toast));
 	}
 
 	fn ended(self: &Arc<Self>, popup: &Popup) {

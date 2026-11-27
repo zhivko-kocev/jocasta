@@ -36,3 +36,6 @@ The Allow is the notification most likely to be missed and the only one that exp
 ## Consequences
 - `own_surface.rs` builds `notify-send`'s argv in one function; `events.rs` writes every line through one writer; `server.rs` sends question notes through the service.
 - ultron's attention daemon can drop its D-Bus reader of question toasts once this ships.
+
+## Note (2026-11-27)
+In the VM three "Jocasta asks" notifications stayed on screen after three Deny answers: critical notifications never time out, and nothing closed them. A question's toast now carries what ends it (`Toast::until`, the popup's end); on Linux its `notify-send` gets `-p`, which prints the notification's id, and once the question is answered, denied, withdrawn or closed Jocasta calls the freedesktop `CloseNotification` with that id (`gdbus call --session --dest org.freedesktop.Notifications --object-path /org/freedesktop/Notifications --method org.freedesktop.Notifications.CloseNotification <id>`; `gdbus` comes with GLib, which `notify-send` needs). Windows and macOS keep theirs as before: the toast stays in the notification centre.

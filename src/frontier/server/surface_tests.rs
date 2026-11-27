@@ -149,7 +149,9 @@ async fn the_in_memory_fake_respawns_in_the_same_tab_closes_workspaces_with_thei
 	assert!(fake.snapshot().await.unwrap().workspaces.is_empty());
 	assert_eq!(fake.methods().last().map(String::as_str), Some("stopServer"));
 	assert_eq!(
-		fake.notify(&Note { title: "t".into(), body: None, sound: Sound::None, link: None }).await.unwrap(),
+		fake.notify(&Note { title: "t".into(), body: None, sound: Sound::None, link: None, until: None })
+			.await
+			.unwrap(),
 		NotificationResult::Shown
 	);
 }
