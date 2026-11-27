@@ -488,7 +488,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0479](0479-setup-writes-three-omp-files.md) | Setup writes the three omp files after his y | product | decided | program | 2026-10-23 | 0584, 0594 |
 | [0480](0480-the-product-is-jocasta.md) | The product is Jocasta | product | decided | program | 2026-10-24 | 0564, 0584 |
 | [0481](0481-v1-tested-on-every-surface.md) | v1 is tested on every surface before it is called done | process | decided | program | 2026-10-24 | 0595, 0652 |
-| [0482](0482-benchmarks-pre-registered.md) | The benchmarks, pre-registered | process | decided | program | 2026-10-24 | 0488, 0500, 0501, 0508, 0516, 0517, 0520, 0522, 0523, 0528, 0529, 0530, 0533, 0537, 0543, 0574, 0576, 0619 |
+| [0482](0482-benchmarks-pre-registered.md) | The benchmarks, pre-registered | process | decided | program | 2026-10-24 | 0488, 0500, 0501, 0508, 0516, 0517, 0520, 0522, 0523, 0528, 0529, 0530, 0533, 0537, 0543, 0574, 0576, 0619, 0720 |
 | [0483](0483-thesis-macedonian-outside-repo.md) | The thesis: Macedonian, outside the repo, written by him | process | decided | program | 2026-10-24 | 0507 |
 | [0484](0484-security-review-fixes.md) | The security review's fixes | product | decided | program | 2026-10-24 | 0489, 0492, 0519, 0577, 0578, 0579, 0604 |
 | [0485](0485-guard-blocks-known-bypasses.md) | The guard blocks the known bypasses; OS isolation after v1 | product | decided | program | 2026-10-24 | 0578, 0580 |
@@ -662,7 +662,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0654](0654-fork-build-review.md) | His review of the fork build: what stays as built | process, product | v1 | fork build | 2026-11-23 |  |
 | [0655](0655-normal-threads-on-opus-5-5-medium.md) | Normal threads on Opus 5.5 at medium | product | v1 | fork build | 2026-11-23 |  |
 | [0656](0656-url-2-5-9-before-its-seventh-day.md) | url 2.5.9 enters the lock before its seventh day | process | v1 | fork build | 2026-11-23 |  |
-| [0657](0657-vm-benchmarks-after-the-vm.md) | The VM's benchmarks after the VM | benchmark, process | v1 | fork build | 2026-11-23 |  |
+| [0657](0657-vm-benchmarks-after-the-vm.md) | The VM's benchmarks after the VM | benchmark, process | v1 | fork build | 2026-11-23 | 0720 |
 | [0658](0658-session-report-from-his-omp-history.md) | A report on his omp sessions: where the tokens went, what could be deterministic | process | v1 | fork build | 2026-11-23 |  |
 | [0659](0659-sidebar-without-spaces.md) | The sidebar without herdr's spaces section | product | v1 | fork build | 2026-11-23 | 0664, 0683 |
 | [0660](0660-a-click-on-a-today-row-acts-like-enter.md) | A click on a `today` row acts like Enter | product, ux | v1 | fork build | 2026-11-23 | 0683 |
@@ -679,7 +679,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0671](0671-the-check-queue-learns-what-checks-cost.md) | The check queue learns what each check costs | product | v1 | HUD round | 2026-11-23 |  |
 | [0672](0672-phone-check-in-through-ntfy.md) | Phone check-in through ntfy, with Allow from the phone | product | v1 | HUD round | 2026-11-23 |  |
 | [0673](0673-scheduled-threads.md) | Scheduled threads | product | v1 | HUD round | 2026-11-23 |  |
-| [0674](0674-the-lightweight-program-and-its-order.md) | The lightweight program, its order and its footprint budget | product, process | v1 | lightweight program | 2026-11-24 | 0689 |
+| [0674](0674-the-lightweight-program-and-its-order.md) | The lightweight program, its order and its footprint budget | product, process | v1 | lightweight program | 2026-11-24 | 0689, 0720 |
 | [0675](0675-the-bridge-one-extension-one-pipe.md) | The bridge: one omp extension and one local pipe | product | v1 | lightweight program | 2026-11-24 | 0683, 0702 |
 | [0676](0676-process-diet.md) | Process diet: panes start on demand and sleep; a footprint that only goes down | product | v1 | lightweight program | 2026-11-24 | 0689 |
 | [0677](0677-deterministic-loops.md) | Deterministic validation loops | product | v1 | lightweight program | 2026-11-24 |  |
@@ -725,3 +725,4 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0716](0716-jocasta-brief-open.md) | `jocasta brief open` | product | v1 | ultron 0.3 iteration, M2 R8 | 2026-11-27 |  |
 | [0717](0717-today-and-ask-layout.md) | `today` and `ask` layout | product | v1 | ultron 0.3 iteration, M2 R8 | 2026-11-27 | 0718 |
 | [0718](0718-the-board.md) | The board | product | v1 | ultron 0.3 iteration, M3 W1 | 2026-11-27 |  |
+| [0720](0720-benchmark-on-linux.md) | Benchmark on Linux | process | v1 | ultron 0.3 iteration, M3 B1 | 2026-11-27 |  |

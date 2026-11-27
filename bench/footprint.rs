@@ -1,7 +1,7 @@
 //! The footprint budget (0674, 0676): Jocasta's own weight, measured on the release build and held to a budget that
 //! only goes down.
 //!
-//!   jocasta-bench footprint [--write-budget]
+//!   jocasta-bench footprint [--write-budget] [--out <dir>]
 //!
 //! It builds a throwaway sandbox (its own data folder and config folder), registers four projects,
 //! puts a stub `omp` first on PATH (this binary under the name `omp`, which idles and answers `usage` and `config`
@@ -16,7 +16,8 @@
 //! `bench/footprint-budget.json`; without it each number's median over its budget's limit prints
 //! `footprint: <key> <value> over budget <budget>` and exits 1 (a null budget is skipped). The limit is 5% over the
 //! budget, and for the noisy numbers (`startup_ms`, `idle_cpu_pct`, `bridge_ms`) the larger of that and an absolute
-//! slack ([`LIMITS`]).
+//! slack ([`LIMITS`]). `--out <dir>` (outside the repo) also writes `<dir>/footprint.json`: the run's conditions with
+//! the machine stamp (0720), each run's numbers and their medians.
 
 use std::collections::HashSet;
 use std::fs;
@@ -26,6 +27,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value, json};
 
+use crate::lib::output::{Conditions, conditions, read_version, write_json};
 use crate::lib::proctree::{ProcessInfo, snapshot_processes, tree_of};
 use crate::lib::pty::Pty;
 use crate::lib::sandbox::require_sandbox;
@@ -119,18 +121,38 @@ async fn stub_bridge() {
 	}
 }
 
-/// `jocasta-bench footprint [--write-budget]`: in the sandbox's child, the measured run; otherwise the runs, then the
-/// budget written or compared.
+/// `jocasta-bench footprint [--write-budget] [--out <dir>]`: in the sandbox's child, the measured run; otherwise the
+/// runs, then the budget written or compared, and with `--out` the runs written to `<dir>/footprint.json`.
 pub async fn main(args: Vec<String>) -> ExitCode {
-	let write = args.iter().any(|arg| arg == "--write-budget");
-	if let Some(unknown) = args.iter().find(|arg| *arg != "--write-budget") {
-		eprintln!("usage: jocasta-bench footprint [--write-budget] (unknown {unknown})");
-		return ExitCode::from(2);
+	let mut write = false;
+	let mut out = None;
+	let mut words = args.iter();
+	while let Some(arg) = words.next() {
+		match arg.as_str() {
+			"--write-budget" => write = true,
+			"--out" => match words.next().map(std::path::absolute) {
+				Some(Ok(dir)) if !dir.starts_with(jocasta::shared::install::REPO) => out = Some(dir),
+				_ => {
+					eprintln!("usage: jocasta-bench footprint --out <dir outside the repo>");
+					return ExitCode::from(2);
+				}
+			},
+			unknown => {
+				eprintln!("usage: jocasta-bench footprint [--write-budget] [--out <dir>] (unknown {unknown})");
+				return ExitCode::from(2);
+			}
+		}
 	}
 	let result = if std::env::var_os(INNER_ENV).is_some() {
 		inner().await
 	} else {
-		measure_runs().and_then(|runs| if write { write_budget(&runs) } else { compare(&runs) })
+		let started = conditions(&["git"]);
+		measure_runs().and_then(|runs| {
+			if let Some(out) = &out {
+				write_results(out, started, &runs)?;
+			}
+			if write { write_budget(&runs) } else { compare(&runs) }
+		})
 	};
 	match result {
 		Ok(code) => code,
@@ -180,6 +202,27 @@ fn measure_runs() -> Result<Vec<Map<String, Value>>> {
 	Ok(runs)
 }
 
+/// `<out>/footprint.json`: the conditions (0720's machine stamp included), the release measured, each run and the
+/// medians.
+fn write_results(out: &Path, started: Conditions, runs: &[Map<String, Value>]) -> Result<()> {
+	let jocasta = release_jocasta()?;
+	let summary = json!({
+		"conditions": started.finished(),
+		"jocasta": read_version(&[jocasta.display().to_string()]).ok(),
+		"runs": runs,
+		"median": combine(runs, median),
+	});
+	let file = write_json(out, "footprint", &summary)?;
+	println!("wrote {}", file.display());
+	Ok(())
+}
+
+fn median(values: &[f64]) -> f64 {
+	let mut sorted = values.to_vec();
+	sorted.sort_by(f64::total_cmp);
+	sorted[sorted.len() / 2]
+}
+
 fn write_budget(runs: &[Map<String, Value>]) -> Result<ExitCode> {
 	let measured = combine(runs, |values| values.iter().copied().fold(f64::MIN, f64::max));
 	// The budget only goes down (0674): each number keeps the lower of its old budget and its new worst run.
@@ -197,11 +240,7 @@ fn write_budget(runs: &[Map<String, Value>]) -> Result<ExitCode> {
 }
 
 fn compare(runs: &[Map<String, Value>]) -> Result<ExitCode> {
-	let numbers = combine(runs, |values| {
-		let mut sorted = values.to_vec();
-		sorted.sort_by(f64::total_cmp);
-		sorted[sorted.len() / 2]
-	});
+	let numbers = combine(runs, median);
 	let budget: Map<String, Value> = serde_json::from_str(&fs::read_to_string(BUDGET_FILE)?)?;
 	let over = over_budget(&numbers, &budget);
 	for line in &over {

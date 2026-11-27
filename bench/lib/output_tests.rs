@@ -31,3 +31,32 @@ fn pretty_json_is_two_spaces_with_empty_containers_inline_and_compact_json_has_n
 	);
 	assert_eq!(json_text(&value, false), "{\"a\":[1,{\"b\":2.5}],\"c\":[],\"d\":{},\"e\":\"x\\\"y\\n\"}");
 }
+
+#[test]
+fn the_os_name_is_pretty_name_else_name() {
+	assert_eq!(
+		os_release_name("NAME=\"Arch Linux\"\nPRETTY_NAME=\"Arch Linux\"\nID=arch\n").as_deref(),
+		Some("Arch Linux")
+	);
+	assert_eq!(os_release_name("NAME=Fedora\nPRETTY_NAME=\"\"\n").as_deref(), Some("Fedora"));
+	assert_eq!(os_release_name("ID=x\n"), None);
+}
+
+#[test]
+fn the_gpus_are_lspcis_display_classes() {
+	let text = "00:00.0 Host bridge: Acme Root Complex\n01:00.0 VGA compatible controller: Acme Radeon 580 (rev c7)\n\
+		02:00.0 3D controller: Acme Tesla\n03:00.0 Audio device: Acme HDMI Audio\n";
+	assert_eq!(lspci_gpus(text).as_deref(), Some("Acme Radeon 580 (rev c7); Acme Tesla"));
+	assert_eq!(lspci_gpus("00:00.0 Host bridge: Acme\n"), None);
+}
+
+#[test]
+fn the_machine_stamp_is_in_every_header() {
+	let value = serde_json::to_value(conditions(&[] as &[&str])).unwrap();
+	for key in ["os", "kernel", "cpu", "memoryGb", "gpu"] {
+		assert!(value["machine"].get(key).is_some(), "machine.{key} missing: {value}");
+	}
+	assert!(value.get("ompVersion").is_some() && value.get("jocastaCommit").is_some(), "{value}");
+	// The bench is built from this checkout, so its commit is known.
+	assert!(value["jocastaCommit"].as_str().is_some_and(|commit| commit.len() >= 40), "{value}");
+}

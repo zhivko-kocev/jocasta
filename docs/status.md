@@ -138,7 +138,9 @@ R8, the `show` spec, retention, `jocasta brief open` and the dock (0714–0717),
 
 W1, the board (0718, in its amended native form), is built: `jocasta board` and the dock's `w` open one board window (`jocasta-board`, `<data>/board.lock`) that polls the new bridge command `board json` every 3 s and patches its rows by thread (entrance on the first open only, a new row fades in, a changed phase lights and fades; opacity only with reduced motion; `Jocasta isn't running.` while the service is down); each phase change of an open thread is one `phase` line in `notifications.jsonl` with no notification. Checked offscreen (`board_shots`, PNGs `board*.png` in `/tmp/jocasta-view-shots/`). Still to do on a machine with a compositor: open the real window and confirm its app id and title, that a second `jocasta board` leaves the one window, and a live phase change reaching both the board and the line; ultron's side (assign `jocasta-board` to workspace 4, `attentiond` turning a `phase` line into an ntfy push) is ultron's.
 
-Next: R9, the 0.2.0 release (bump `Cargo.toml`, tag `v0.2.0` once CI is green; ultron's skill line for `jocasta brief open`); then M3's T1 and B1 (0719, 0720).
+B1's harness (0720) is built: on Linux the settings trials' watcher reads a run's peak as the largest sampled `VmRSS` sum over its process tree, every benchmark's `conditions` carry the machine stamp (`machine {os, kernel, cpu, memoryGb, gpu}`, `ompVersion`, `jocastaCommit`), and `jocasta-bench footprint --out <dir>` writes `footprint.json`. The Linux runs follow.
+
+Next: R9, the 0.2.0 release (bump `Cargo.toml`, tag `v0.2.0` once CI is green; ultron's skill line for `jocasta brief open`); T1 (0719); B1's Linux runs and the laptop's runbook (0720).
 
 Update this file when a slice's records are written, when its build lands, and when a grilling session stops (name the next slice); keep `AGENTS.md`'s one current-state line in step.
 

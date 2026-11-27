@@ -1,6 +1,7 @@
 //! Every benchmark writes `<out>/<benchmark>.json` (the summary with the run's conditions, 0482 / [S16]) and, where it
 //! has them, raw rows in `<out>/<benchmark>.jsonl`. No host or user names: the conditions are the OS, CPU, memory,
-//! load and the pinned tools' versions.
+//! load, the pinned tools' versions and the machine stamp (`machine`, `ompVersion`, `jocastaCommit`, 0720) that tells
+//! the two machines' results apart.
 //!
 //! The files keep the bytes the TypeScript's `JSON.stringify` wrote: [`json_text`] prints a number as JavaScript does
 //! (`25`, not `25.0`; `1e-7`; NaN as `null`).
@@ -31,6 +32,13 @@ pub struct Conditions {
 	pub cpu: String,
 	pub cpu_count: usize,
 	pub memory_gb: f64,
+	/// The machine the run measured (0720).
+	pub machine: Machine,
+	/// `omp --version`'s line, null when omp isn't on PATH (0720).
+	pub omp_version: Option<String>,
+	/// The commit of the checkout this bench was built from, `-dirty` when its tracked files differ; null without git
+	/// (0720).
+	pub jocasta_commit: Option<String>,
 	pub versions: Map<String, Value>,
 	/// SHA-256 of the `jocasta` on PATH, when the tools include it (0576): with `versions.jocasta` (`jocasta
 	/// --version`) it ties each row to the build it measured (0533); `Some(None)` (null) when it isn't on PATH.
@@ -46,6 +54,69 @@ impl Conditions {
 	pub fn finished(self) -> Self {
 		Self { finished_at: Some(iso_now()), ..self }
 	}
+}
+
+/// The machine stamp (0720): OS name, kernel (Windows' build), CPU model, memory in GB, the graphics cards.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Machine {
+	pub os: String,
+	pub kernel: String,
+	pub cpu: String,
+	pub memory_gb: f64,
+	/// Every graphics card the OS names, `; `-joined; null when none is found.
+	pub gpu: Option<String>,
+}
+
+/// The machine stamp of this host, read once per run (0720).
+pub fn machine() -> Machine {
+	Machine {
+		os: host::os_name(),
+		kernel: host::release(),
+		cpu: host::cpu_model().unwrap_or_else(|| "unknown".to_owned()),
+		memory_gb: host::memory_gb(),
+		gpu: host::gpu(),
+	}
+}
+
+/// `PRETTY_NAME` of an `/etc/os-release` text, else its `NAME`, unquoted.
+pub fn os_release_name(text: &str) -> Option<String> {
+	let value = |key: &str| {
+		text.lines()
+			.find_map(|line| line.strip_prefix(key)?.strip_prefix('='))
+			.map(|value| value.trim().trim_matches('"').to_owned())
+			.filter(|value| !value.is_empty())
+	};
+	value("PRETTY_NAME").or_else(|| value("NAME"))
+}
+
+/// The graphics cards in `lspci`'s output (VGA, 3D and display controllers), `; `-joined; `None` when there is none.
+pub fn lspci_gpus(text: &str) -> Option<String> {
+	let names: Vec<&str> = text
+		.lines()
+		.filter_map(|line| {
+			["VGA compatible controller: ", "3D controller: ", "Display controller: "]
+				.iter()
+				.find_map(|class| line.split_once(class).map(|(_, name)| name.trim()))
+		})
+		.collect();
+	(!names.is_empty()).then(|| names.join("; "))
+}
+
+/// The commit of the checkout at `repo`, with `-dirty` when a tracked file differs from it; `None` without git or a
+/// repository there.
+pub fn repo_commit(repo: &str) -> Option<String> {
+	let git = |args: &[&str]| {
+		let mut argv = vec!["git", "-C", repo];
+		argv.extend_from_slice(args);
+		run_program_sync(&argv, RunOptions { timeout_ms: Some(30_000), ..RunOptions::default() })
+			.ok()
+			.filter(|run| run.code == Some(0))
+			.map(|run| run.stdout.trim().to_owned())
+	};
+	let commit = git(&["rev-parse", "HEAD"]).filter(|commit| !commit.is_empty())?;
+	let dirty = git(&["status", "--porcelain", "--untracked-files=no"]).is_some_and(|status| !status.is_empty());
+	Some(if dirty { format!("{commit}-dirty") } else { commit })
 }
 
 /// `new Date().toISOString()`.
@@ -84,19 +155,26 @@ pub fn program_sha256(command: &str) -> Option<String> {
 
 pub fn conditions(tools: &[impl AsRef<str>]) -> Conditions {
 	let now = Local::now();
-	let versions = tools
+	let versions: Map<String, Value> = tools
 		.iter()
 		.map(|tool| (tool.as_ref().to_owned(), tool_version(tool.as_ref()).map_or(Value::Null, Value::String)))
 		.collect();
+	let machine = machine();
 	Conditions {
 		started_at: iso_now(),
 		local_hour: now.hour(),
 		platform: host::platform().to_owned(),
-		os_release: host::release(),
+		os_release: machine.kernel.clone(),
 		arch: host::arch().to_owned(),
-		cpu: host::cpu_model().unwrap_or_else(|| "unknown".to_owned()),
+		cpu: machine.cpu.clone(),
 		cpu_count: std::thread::available_parallelism().map_or(0, std::num::NonZero::get),
-		memory_gb: host::memory_gb(),
+		memory_gb: machine.memory_gb,
+		omp_version: match versions.get("omp") {
+			Some(Value::String(version)) => Some(version.clone()),
+			_ => tool_version("omp"),
+		},
+		jocasta_commit: repo_commit(jocasta::shared::install::REPO),
+		machine,
 		versions,
 		jocasta_sha256: tools.iter().any(|tool| tool.as_ref() == "jocasta").then(|| program_sha256("jocasta")),
 		finished_at: None,
@@ -157,6 +235,38 @@ mod host {
 		}
 		let info = std::fs::read_to_string("/proc/cpuinfo").ok()?;
 		info.lines().find_map(|line| line.strip_prefix("model name")?.split_once(':').map(|(_, m)| m.trim().to_owned()))
+	}
+
+	/// The OS's name: `/etc/os-release` on Linux, `sw_vers` on macOS, the edition's caption on Windows.
+	pub(super) fn os_name() -> String {
+		let name = if cfg!(windows) {
+			output(
+				"powershell.exe",
+				&["-NoProfile", "-NonInteractive", "-Command", "(Get-CimInstance Win32_OperatingSystem).Caption"],
+			)
+		} else if cfg!(target_os = "macos") {
+			let product = output("sw_vers", &["-productName"]).unwrap_or_default();
+			output("sw_vers", &["-productVersion"]).map(|version| format!("{product} {version}"))
+		} else {
+			std::fs::read_to_string("/etc/os-release").ok().and_then(|text| super::os_release_name(&text))
+		};
+		name.unwrap_or_else(|| platform().to_owned())
+	}
+
+	/// The graphics cards: `lspci` on Linux, `Win32_VideoController` on Windows, `system_profiler` on macOS.
+	pub(super) fn gpu() -> Option<String> {
+		if cfg!(windows) {
+			let script = "(Get-CimInstance Win32_VideoController).Name -join '; '";
+			return output("powershell.exe", &["-NoProfile", "-NonInteractive", "-Command", script])
+				.filter(|names| !names.is_empty());
+		}
+		if cfg!(target_os = "macos") {
+			let text = output("system_profiler", &["SPDisplaysDataType"])?;
+			let names: Vec<&str> =
+				text.lines().filter_map(|line| line.trim().strip_prefix("Chipset Model:")).map(str::trim).collect();
+			return (!names.is_empty()).then(|| names.join("; "));
+		}
+		super::lspci_gpus(&output("lspci", &[])?)
 	}
 
 	/// `Math.round(os.totalmem() / 2 ** 30 * 10) / 10`.

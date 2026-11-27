@@ -10,8 +10,10 @@ runs, how often and what is measured is fixed there, as amended for the harness-
   start, kill and measure, and runs nothing.
 - Each writes `<out>/<name>.json` (the summary, with the run's conditions: time and local hour, OS, CPU, memory and the
   tools' versions, no host or user names; the scripts that measure Jocasta also carry `jocasta --version`'s line and
-  `jocastaSha256`, the SHA-256 of the `jocasta` on PATH, so each row names the build it measured, 0533, 0576) and,
-  where it has them, raw rows in `<out>/<name>.jsonl`. A script refuses an `--out` that already holds its `.jsonl`
+  `jocastaSha256`, the SHA-256 of the `jocasta` on PATH, so each row names the build it measured, 0533, 0576; since 0720
+  every summary also carries the machine stamp `machine {os, kernel, cpu, memoryGb, gpu}`, `ompVersion` and
+  `jocastaCommit`, the commit of the checkout the bench runs from, so the two machines' results tell themselves apart)
+  and, where it has them, raw rows in `<out>/<name>.jsonl`. A script refuses an `--out` that already holds its `.jsonl`
   ("results are never overwritten"), so a rerun never mixes rows of two runs; tokscale parity rewrites its own rows.
 - Medians, p95 and percentile-bootstrap 95% CIs (10,000 resamples, seed 482) come from `lib/stats.rs`.
 - Cost is priced with one table for every arm and benchmark (0538): LiteLLM's `model_prices_and_context_window.json`,
@@ -35,13 +37,13 @@ runs, how often and what is measured is fixed there, as amended for the harness-
 |---|---|---|
 | `h1-guard omp-verdicts`, `h1-guard evaluate` | none | anywhere with omp 19.2.0 installed (no command runs) |
 | `h1-guard live-check` | 31 cheap-model turns (30 picks and a canary; a few cents) | his PC (its ACP client runs none of the picks, 0585, 0657) |
-| `h1-guard git-guard-check` | none, but it runs the corpus's git lines (`--run`) | the VM `JOCASTA-CLEAN` only; not rerun since the VM, its VM results stand (0657) |
+| `h1-guard git-guard-check` | none, but it runs the corpus's git lines (`--run`) | the VM `JOCASTA-CLEAN` only; not rerun since the VM, its VM results stand (0657); Windows only (0720) |
 | `h7-longpath` | none | anywhere (git only, temp folders) |
-| `h2-toast`, `h3-recovery`, `h5-startup` | none, except `h2 --start` | a sandbox Jocasta |
+| `h2-toast`, `h3-recovery`, `h5-startup` | none, except `h2 --start` | a sandbox Jocasta; `h2-toast` on the laptop only, since its notifications would show on the PC's live desktop (0720) |
 | `h4-isolation` | the `h4 plant` thread's turn | his PC, in a sandbox Jocasta (0502) |
 | `h6-memory`, `h8-parallel` | the threads' turns | his PC, in a sandbox Jocasta (0657) |
-| `h9-footprint` | none | 0481's VM `JOCASTA-CLEAN` only (refused elsewhere); not rerun since the VM, its VM results stand (0657) |
-| `footprint` | none (a stub agent stands in for omp) | his PC with no Jocasta running (`mise run footprint`; 0674) |
+| `h9-footprint` | none | 0481's VM `JOCASTA-CLEAN` only (refused elsewhere); not rerun since the VM, its VM results stand (0657); Windows only (0720) |
+| `footprint` | none (a stub agent stands in for omp) | his PC with no Jocasta running (`mise run footprint`; 0674); `--out <dir>` also writes `<dir>/footprint.json` (0720) |
 | `tokscale-parity` | none | his PC, with tokscale 4.21.0 from `D:/thesis/tools/tokscale` on the session's PATH (0657) |
 
 The scripts that act on a running Jocasta (H2–H6, H8) refuse to start without a sandbox (0502, 0576): its own data
