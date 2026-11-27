@@ -1,0 +1,6 @@
+# T1 settings trials (0719): the advisor off. A0 already pins `advisor.enabled: false` (0619), so on A1 this arm is
+# the base itself; it is kept as a file so the three advisor arms read side by side.
+extends: [a1]
+settings:
+  advisor:
+    enabled: false

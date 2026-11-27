@@ -1,0 +1,6 @@
+# T1 settings trials (0719): omp's eval tool without its Python and JavaScript runtimes.
+extends: [a1]
+settings:
+  eval:
+    py: false
+    js: false

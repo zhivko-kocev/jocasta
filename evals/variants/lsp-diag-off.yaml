@@ -1,0 +1,8 @@
+# T1 settings trials (0719): no language-server diagnostics after an edit. The snapshot ships
+# `lsp.diagnosticsOnEdit: true`; omp's own default (19.2.1) is false.
+extends: [a1]
+settings:
+  lsp:
+    diagnosticsOnEdit: false
+# On a machine whose own omp config leaves the key unset (this PC), A1 already runs with false: the trial then runs
+# the shipped value (`lsp.diagnosticsOnEdit=true`) as the arm and this file's value is the base.

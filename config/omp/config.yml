@@ -48,9 +48,10 @@ advisor:
 tools:
   restrictedFolders: ["~/.ssh", "~/.aws", "~/.azure", "~/.docker"]
 
-# The settings trials on omp 18.22.2 (0651; still in force on 19.2.0): a todo list suggested on the first message cut a trial's cost by 21% at
-# the same pass rate. `edit.mode` stays omp's hashline: removing the edit tool was faster on the 12 small cases, but
-# it would turn edits on real code into bash rewrites.
+# The settings trials on omp 18.22.2 (0651) and again on 19.2.1 (0719): a todo list suggested on the first message cut a
+# trial's cost by 21% (16% in 0719's confirm) at the same pass rate. `edit.mode` stays omp's hashline: removing the edit
+# tool was faster on the 12 small cases, but it would turn edits on real code into bash rewrites (only the boss, which
+# never edits, turns it off in `boss.yml`, 0719).
 todo:
   eager: preferred
 

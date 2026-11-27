@@ -1,0 +1,9 @@
+# T1 settings trials (0719): the advisor as it shipped before J2 (0616, `config/omp/config.yml` until 37d7db7): on,
+# reviewing every third update with omp's default `turn` mode and `concern` severity, on the snapshot's `advisor` role.
+extends: [a1]
+settings:
+  advisor:
+    enabled: true
+    reviewInterval: 3
+  modelRoles:
+    advisor: anthropic/claude-fable-5-2:medium

@@ -1,0 +1,10 @@
+# T1 settings trials (0719): the advisor as J2 ships it (0695): on, reviewing once when the agent ends its turn and
+# waking it only for a blocker, on the snapshot's `advisor` role (Fable 5.2 at medium, 0590).
+extends: [a1]
+settings:
+  advisor:
+    enabled: true
+    reviewMode: agent-end
+    continueSeverity: blocker
+  modelRoles:
+    advisor: anthropic/claude-fable-5-2:medium

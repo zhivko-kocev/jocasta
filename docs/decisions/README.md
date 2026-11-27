@@ -656,7 +656,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0648](0648-audit-ignores-picomatch-redos.md) | CI's `bun audit` ignores picomatch's ReDoS advisory by ID | process | v1 | program | 2026-11-18 |  |
 | [0649](0649-herdr-fork-one-binary-one-server.md) | The herdr fork: one binary, one server | product | v1 | fork build | 2026-11-18 | 0659, 0661, 0665, 0666, 0683 |
 | [0650](0650-omp-snapshot-replaces-his-omp-files.md) | The omp snapshot: setup writes Jocasta's omp files over his | product | v1 | fork build | 2026-11-18 | 0696, 0697 |
-| [0651](0651-snapshot-settings-from-trials-on-omp-18-22-2.md) | The snapshot's settings come from trials on omp 18.22.2 | product, benchmark | v1 | fork build | 2026-11-19 | 0653, 0696 |
+| [0651](0651-snapshot-settings-from-trials-on-omp-18-22-2.md) | The snapshot's settings come from trials on omp 18.22.2 | product, benchmark | v1 | fork build | 2026-11-19 | 0653, 0696, 0719 |
 | [0652](0652-benchmarks-on-his-pc-vm-removed.md) | The benchmarks run on his PC on his own omp; the VM is removed | process | v1 | fork build | 2026-11-18 | 0657 |
 | [0653](0653-omp-19-1-0-pinned.md) | omp 19.1.0 is the pinned omp | product, benchmark | v1 | fork build | 2026-11-21 | 0663 |
 | [0654](0654-fork-build-review.md) | His review of the fork build: what stays as built | process, product | v1 | fork build | 2026-11-23 |  |
@@ -725,4 +725,5 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0716](0716-jocasta-brief-open.md) | `jocasta brief open` | product | v1 | ultron 0.3 iteration, M2 R8 | 2026-11-27 |  |
 | [0717](0717-today-and-ask-layout.md) | `today` and `ask` layout | product | v1 | ultron 0.3 iteration, M2 R8 | 2026-11-27 | 0718 |
 | [0718](0718-the-board.md) | The board | product | v1 | ultron 0.3 iteration, M3 W1 | 2026-11-27 |  |
+| [0719](0719-settings-from-the-2026-12-trials.md) | Settings from the 2026-12 trials | product, benchmark | v1 | ultron 0.3 iteration, M3 T1 | 2026-11-27 |  |
 | [0720](0720-benchmark-on-linux.md) | Benchmark on Linux | process | v1 | ultron 0.3 iteration, M3 B1 | 2026-11-27 |  |

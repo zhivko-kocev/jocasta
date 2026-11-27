@@ -1,0 +1,6 @@
+# T1 settings trials (0719): omp's default cache warming (`idle`, a pre-warm shortly before the prompt cache expires)
+# instead of A0's and the snapshot's `streaming` (0541, 0567).
+extends: [a1]
+settings:
+  providers:
+    cacheWarming: idle

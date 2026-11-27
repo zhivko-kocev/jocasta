@@ -62,3 +62,17 @@ statusLine:
 # leaves the machine (0675: the collab relay it once shared with is gone). The collab pins stay as the snapshot has them.
 share:
   serverUrl: "http://127.0.0.1:47499/s"
+
+# The boss's tools it never uses (0719): the boss calls Jocasta's tools through bash and reads skills; it never
+# edits, debugs, rewrites by AST, browses or asks a language server. Together they cut 12 % (≈1 160 tokens) off every
+# boss request in the replay (omp 19.2.1).
+lsp:
+  enabled: false
+debug:
+  enabled: false
+astEdit:
+  enabled: false
+browser:
+  enabled: false
+edit:
+  mode: none

@@ -1,0 +1,6 @@
+# T1 settings trials (0719): thinking at medium. A0 passes `--thinking high`, which wins over the setting, so the arm
+# also passes `--thinking medium` (the last one wins); the setting is what a pane without the flag would read.
+extends: [a1]
+args: [--thinking, medium]
+settings:
+  defaultThinkingLevel: medium
