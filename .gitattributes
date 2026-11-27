@@ -1,1 +1,3 @@
 * text=auto eol=lf
+# Microsoft's notices ship byte for byte as pinned in packaging/windows/conpty.json (CRLF).
+packaging/windows/licenses/* -text

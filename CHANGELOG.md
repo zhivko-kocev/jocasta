@@ -6,6 +6,10 @@
 - **R2, works first (0706):** a pull-request review runs the project's check in the clean room before its first turn; when that isn't possible the Allow box asks `Run PR #<n> by <author> on this machine?` once per project and author (`projects.yaml` `prRun`). A failing check ends the review with one P0 card `It doesn't work: <check> failed` and no reviewer turn. New thread tool `review_try {what, steps: [{run, expect}], screenshots?}`: Jocasta runs each step (clean room for pull requests, the worktree for his threads, guard-checked like `done_when`), a failed step ends the review; screenshots go to `<data>/briefs/assets/<brief id>/`, served at `/brief/assets/<brief id>/<name>`. Finish runs the clean-room check on the head before its question (`Finish: the clean-room check fails: <tail>`). New `works` section first on thread and pull-request pages (it replaces the thread page's checks table); one step executor `steps.rs`. `config/pr-review.md` and the thread reviewer's prompt try first.
 - **R4, review panes ask before running (0709):** `config/review.yml` sets `browser.headless: true` and `bash.patterns`: reading commands (`git diff|log|show|status|blame|ls-files|grep`, `rg`, `grep`, `ls`, `cat`, `head`, `tail`, `wc`, `find`) and Jocasta's tools run unasked, their writing forms (`find -delete|-exec|-ok|-fprint`, `rg --pre`, `git --output`, `git grep -O`) and every other command ask him; the guard still decides first. The allow-list is expressible in omp 19.2.1, so the `always-ask-cached` contingency isn't used.
 
+## 0.1.1
+
+- The Windows package build failed on the ConPTY notices: the repo had stored Microsoft's two notice files with LF line endings, so their SHA-256 no longer matched the pins in `packaging/windows/conpty.json`. They are stored byte for byte again (CRLF, `-text` in `.gitattributes`). The release workflow retries a failed test twice (#16). 0.1.0 was tagged but never released.
+
 ## 0.1.0
 
 ### Phase 0: Foundation

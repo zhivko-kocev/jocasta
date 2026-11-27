@@ -66,7 +66,8 @@ jobs:
         shell: bash
       - run: mise exec -- cargo clippy --all-targets --locked
         shell: bash
-      - run: mise exec -- cargo nextest run --locked
+      # The same commit already passed ci.yml; retries keep a known Windows timing flake (#16) from blocking a release.
+      - run: mise exec -- cargo nextest run --locked --retries 2
         shell: bash
       - run: mise exec -- bun run typecheck
         shell: bash
