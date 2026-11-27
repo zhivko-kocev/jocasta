@@ -43,7 +43,7 @@ runs, how often and what is measured is fixed there, as amended for the harness-
 | `h4-isolation` | the `h4 plant` thread's turn | his PC, in a sandbox Jocasta (0502) |
 | `h6-memory`, `h8-parallel` | the threads' turns | his PC, in a sandbox Jocasta (0657) |
 | `h9-footprint` | none | 0481's VM `JOCASTA-CLEAN` only (refused elsewhere); not rerun since the VM, its VM results stand (0657); Windows only (0720) |
-| `footprint` | none (a stub agent stands in for omp) | his PC with no Jocasta running (`mise run footprint`; 0674); `--out <dir>` also writes `<dir>/footprint.json` (0720) |
+| `footprint` | none (a stub agent stands in for omp) | his PC with no Jocasta running (`mise run footprint`; 0674); `--out <dir>` also writes `<dir>/footprint.json`; the budget is per OS, `footprint-budget.<os>.json` (0720) |
 | `tokscale-parity` | none | his PC, with tokscale 4.21.0 from `D:/thesis/tools/tokscale` on the session's PATH (0657) |
 
 The scripts that act on a running Jocasta (H2–H6, H8) refuse to start without a sandbox (0502, 0576): its own data
@@ -144,6 +144,8 @@ jocasta-bench h8-parallel --out $D/h8-parallel --project acme-h8 --repo $B1/proj
 
 ```powershell
 jocasta-bench footprint --out "$D\footprint"
+# footprint-budget.windows.json predates the iced views (0721): measure it again here once, then commit the new file
+Remove-Item bench\footprint-budget.windows.json; jocasta-bench footprint --write-budget
 jocasta-bench h7-longpath --out "$D\h7-longpath" --root "$B1\h7"
 jocasta-bench h5-startup --out "$D\h5-startup" --tools jocasta,omp --cwd "$B1\projects\acme-api"
 jocasta-bench h2-toast --out "$D\h2-toast" --start acme-api

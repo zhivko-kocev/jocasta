@@ -60,7 +60,7 @@ description = "the eval runner (jocasta-bench evals; 0636)"
 run = "cargo run --locked --release --bin jocasta-bench -- evals"
 
 # The footprint budget (0674, 0676): the release build's own processes, idle memory and CPU, startup, binary size and
-# bridge round trip against bench/footprint-budget.json, which only goes down. Not part of `check`.
+# bridge round trip against bench/footprint-budget.<os>.json (one per OS, 0720), which only goes down. Not part of `check`.
 [tasks.footprint]
 description = "the release build against the footprint budget (jocasta-bench footprint [--write-budget])"
 # `cargo run` names the binary portably (cmd refuses `target/release/...`); the first step builds `jocasta` beside it.

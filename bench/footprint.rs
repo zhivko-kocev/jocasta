@@ -13,7 +13,7 @@
 //! service's token, 0675). Processes named `omp` and their trees are listed under `omp` and never budgeted; the ConPTY
 //! hosts the OS runs for every terminal pane (`OpenConsole.exe`, `conhost.exe`) are left out (0689).
 //! It measures three times, each in a fresh sandbox. `--write-budget` writes each number's worst run to
-//! `bench/footprint-budget.json`; without it each number's median over its budget's limit prints
+//! this OS's `bench/footprint-budget.<os>.json` (0720); without it each number's median over its budget's limit prints
 //! `footprint: <key> <value> over budget <budget>` and exits 1 (a null budget is skipped). The limit is 5% over the
 //! budget, and for the noisy numbers (`startup_ms`, `idle_cpu_pct`, `bridge_ms`) the larger of that and an absolute
 //! slack ([`LIMITS`]). `--out <dir>` (outside the repo) also writes `<dir>/footprint.json`: the run's conditions with
@@ -40,7 +40,6 @@ use jocasta::shared::errors::{Error, Result};
 use jocasta::shared::proctree::kill_tree;
 use jocasta::shared::service_file::read_service_file;
 
-const BUDGET_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/bench/footprint-budget.json");
 const RUNS: usize = 3;
 const PROJECTS: usize = 4;
 const IDLE: Duration = Duration::from_secs(60);
@@ -223,25 +222,36 @@ fn median(values: &[f64]) -> f64 {
 	sorted[sorted.len() / 2]
 }
 
+/// This OS's budget file, `bench/footprint-budget.<os>.json` (0720): each OS ships its own binary (Linux's carries the
+/// iced views' fonts and renderer, 0721), so each is held to its own numbers.
+fn budget_file() -> String {
+	format!("{}/bench/footprint-budget.{}.json", env!("CARGO_MANIFEST_DIR"), std::env::consts::OS)
+}
+
 fn write_budget(runs: &[Map<String, Value>]) -> Result<ExitCode> {
+	let file = budget_file();
 	let measured = combine(runs, |values| values.iter().copied().fold(f64::MIN, f64::max));
 	// The budget only goes down (0674): each number keeps the lower of its old budget and its new worst run.
 	let old: Map<String, Value> =
-		fs::read_to_string(BUDGET_FILE).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
+		fs::read_to_string(&file).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
 	let budget = ratchet(&measured, &old);
 	// Tab-indented, as the repo's formatter (Biome) keeps JSON.
 	let mut text = Vec::new();
 	let formatter = serde_json::ser::PrettyFormatter::with_indent(b"\t");
 	serde::Serialize::serialize(&budget, &mut serde_json::Serializer::with_formatter(&mut text, formatter))?;
 	text.push(b'\n');
-	fs::write(BUDGET_FILE, text)?;
-	println!("wrote {BUDGET_FILE}");
+	fs::write(&file, text)?;
+	println!("wrote {file}");
 	Ok(ExitCode::SUCCESS)
 }
 
 fn compare(runs: &[Map<String, Value>]) -> Result<ExitCode> {
+	let file = budget_file();
 	let numbers = combine(runs, median);
-	let budget: Map<String, Value> = serde_json::from_str(&fs::read_to_string(BUDGET_FILE)?)?;
+	let Ok(text) = fs::read_to_string(&file) else {
+		return Err(Error::other(format!("no budget for this OS ({file}); run with --write-budget once")));
+	};
+	let budget: Map<String, Value> = serde_json::from_str(&text)?;
 	let over = over_budget(&numbers, &budget);
 	for line in &over {
 		println!("{line}");
