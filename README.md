@@ -18,7 +18,7 @@ It is built on [omp](https://github.com/can1357/oh-my-pi) (oh-my-pi, the coding 
 
 ## Features
 
-Features marked *0.2* arrive with Jocasta 0.2, which the recordings show; earlier releases don't have them.
+Features marked *0.2* are new in Jocasta 0.2, which the recordings show; earlier releases don't have them.
 
 - **Threads on worktrees, with a boss.** The boss starts, watches and steers threads; it never edits your code itself. Threads run in parallel, each isolated on its own branch, and each starts in omp's plan mode and waits for you to approve its plan. A thread can carry `done_when` commands, and its review runs them.
 - **Works-first reviews with proven findings** *(0.2)*. A review runs the project's check first, then the reviewer tries the change (commands for a CLI or library, a headless browser and screenshots for a web UI). A change that doesn't work ends the review at once with one P0 card, before any reviewer spend. Every finding carries a proof, a command and the output it must give, which Jocasta runs itself and keeps only when it reproduces; anything unproven is a question or one of at most three opinions. Notes are checked against the committed code, a change that weakens the tests fails, and design findings are judged against a shipped code-quality rubric.

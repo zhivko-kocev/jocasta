@@ -70,6 +70,6 @@ Paths appear when the slice that fills them is built.
 - Thesis (0483, 0507, 0626): the kit is in `D:/thesis/`. His mentor's permission is in hand (`D:/thesis/mentor-permission.md`), so the agent writes the thesis now, in eight chapters, in Macedonian with an English abstract, filling the evaluation and the Rust build's parts when their facts exist; he rewrites it in his words; the slides follow; the disclosure appendix (Прилог Г) says so.
 
 ## Where we are
-The ultron 0.3 iteration's M2, Jocasta 0.2.0 (2026-11-27): V1 and R1–R8 built (records 0706–0717, 0721), and M3's W1, the board (0718), and B1's harness (0720); next R9, the 0.2.0 release, T1 (0719) and B1's runs. Last record written: 0720, highest 0721 (0597 is in the thesis thread's branch); every earlier round is in `docs/status.md`.
+The ultron 0.3 iteration's M2, Jocasta 0.2.0 (2026-11-27): V1 and R1–R8 built (records 0706–0717, 0721), M3's W1, the board (0718), B1's harness (0720) and T1's settings (0719) adopted; 0.2.0 ready to tag (R9). Next: the `v0.2.0` tag, B1's runs, T1's live boss check and task benchmark. Last record written: 0719, highest 0721 (0597 is in the thesis thread's branch); every earlier round is in `docs/status.md`.
 
 The history of every round, what is next and the open items are in `docs/status.md` (0475); update it when a slice's records are written, when its build lands, and when a grilling session stops (name the next slice), and keep the line above in step.

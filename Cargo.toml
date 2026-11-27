@@ -1,6 +1,6 @@
 [package]
 name = "jocasta"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.100"
 description = "An orchestration environment around omp threads in a shell of its own"
