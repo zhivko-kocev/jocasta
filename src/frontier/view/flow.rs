@@ -1,7 +1,8 @@
-//! A flow drawn on a canvas (0721): its nodes placed by `layout.rs`'s layers and orders, left to right (top down with 4
-//! or more layers or in a narrow window), curved edges with their labels, the active node ringed, and the first-open
-//! entrance of `motion.rs`. A system (0710) is drawn the same way, each part as present as its Before / After switch
-//! makes it.
+//! A flow drawn on a canvas (0721, 0713): its nodes placed by `layout.rs`'s layers and orders, left to right (top down
+//! with 4 or more layers or in a narrow window), curved edges with their labels, the active node ringed, the node Play
+//! or Prev / Next is on ringed in the text colour, a node's detail drawn on it (a link when it is a web address), and the
+//! first-open entrance of `motion.rs`. A system (0710) is drawn the same way, each part as present as its Before / After
+//! switch makes it.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -10,6 +11,7 @@ use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Text};
 use iced::{Point, Rectangle, Renderer, Size, Theme, alignment, mouse};
 
 use crate::frontier::brief::model::{FlowEdge, FlowNode, NodeState};
+use crate::frontier::view::model::node_link;
 use crate::frontier::view::motion::{Motion, edges_at, node_at};
 use crate::frontier::view::style::{self, Colours, fade};
 
@@ -185,12 +187,16 @@ pub struct Presence {
 }
 
 /// The canvas program of one flow: what it draws `elapsed` ms after the window first opened.
-pub struct FlowCanvas<'a> {
+pub struct FlowCanvas<'a, M> {
 	pub nodes: Cow<'a, [FlowNode]>,
 	pub shape: Shape,
 	pub elapsed: f32,
 	pub motion: Motion,
 	pub presence: Presence,
+	/// The node Play, Prev or Next is on (its index): a static ring in the text colour, no motion (0713).
+	pub step: Option<usize>,
+	/// What a click on a node's link sends (0713).
+	pub on_link: fn(String) -> M,
 }
 
 fn state_colour(c: &Colours, state: NodeState) -> iced::Color {
@@ -202,7 +208,16 @@ fn state_colour(c: &Colours, state: NodeState) -> iced::Color {
 	}
 }
 
-impl FlowCanvas<'_> {
+impl<M> FlowCanvas<'_, M> {
+	/// The node under `point` whose detail is a link.
+	fn link_at(&self, point: Point) -> Option<usize> {
+		self.shape
+			.boxes
+			.iter()
+			.position(|at| at.contains(point))
+			.filter(|&index| self.nodes.get(index).is_some_and(|node| node_link(node).is_some()))
+	}
+
 	fn draw_edges(&self, frame: &mut Frame, c: &Colours) {
 		let (whole_opacity, drawn) = edges_at(self.elapsed, self.motion);
 		for (index, curve) in self.shape.curves.iter().enumerate() {
@@ -237,8 +252,9 @@ impl FlowCanvas<'_> {
 		}
 	}
 
-	/// The node at `index` in its box, as present (its opacity and its scale around its centre) as the switch makes it.
-	fn draw_node(&self, frame: &mut Frame, c: &Colours, index: usize) {
+	/// The node at `index` in its box, as present (its opacity and its scale around its centre) as the switch makes it;
+	/// its detail a link (blue, the text colour under the pointer) when it is a web address.
+	fn draw_node(&self, frame: &mut Frame, c: &Colours, index: usize, hovered: bool) {
 		let (node, at) = (&self.nodes[index], self.shape.boxes[index]);
 		let shown = self.presence.nodes.get(index).copied().unwrap_or((1.0, 1.0));
 		let (entered, rise) = node_at(self.elapsed, node.layer, self.motion);
@@ -261,6 +277,14 @@ impl FlowCanvas<'_> {
 			);
 			frame.stroke(&ring, Stroke::default().with_color(fade(c.blue, 0.45 * opacity)).with_width(2.0));
 		}
+		if self.step == Some(index) {
+			let ring = Path::rounded_rectangle(
+				Point::new(top.x - 4.0, top.y - 4.0),
+				Size::new(at.width + 8.0, at.height + 8.0),
+				(style::RADIUS + 4.0).into(),
+			);
+			frame.stroke(&ring, Stroke::default().with_color(fade(c.fg, opacity)).with_width(2.0));
+		}
 		let label = Text {
 			content: fit(&node.label, at.width - 24.0, style::LABEL),
 			position: Point::new(top.x + 12.0, top.y + 10.0),
@@ -271,14 +295,21 @@ impl FlowCanvas<'_> {
 			..Text::default()
 		};
 		frame.fill_text(label);
-		let under =
-			[node.group.as_deref(), node.detail.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+		let link = node_link(node);
+		let detail =
+			link.as_deref().map_or(node.detail.as_deref(), |url| Some(url.split_once("://").map_or(url, |s| s.1)));
+		let under = [node.group.as_deref(), detail].into_iter().flatten().collect::<Vec<_>>().join(" · ");
 		if !under.is_empty() {
+			let colour = match (&link, hovered) {
+				(Some(_), true) => c.fg,
+				(Some(_), false) => c.blue,
+				(None, _) => c.muted,
+			};
 			frame.fill_text(Text {
 				content: fit(&under, at.width - 24.0, style::META),
 				position: Point::new(top.x + 12.0, top.y + 32.0),
 				max_width: at.width - 24.0,
-				color: fade(c.muted, opacity),
+				color: fade(colour, opacity),
 				size: style::META.into(),
 				font: style::ui_font(),
 				..Text::default()
@@ -287,12 +318,34 @@ impl FlowCanvas<'_> {
 	}
 }
 
-impl<Message> canvas::Program<Message> for FlowCanvas<'_> {
-	type State = ();
+impl<M> canvas::Program<M> for FlowCanvas<'_, M> {
+	/// The node whose link is under the pointer.
+	type State = Option<usize>;
+
+	fn update(
+		&self,
+		hovered: &mut Option<usize>,
+		event: &canvas::Event,
+		bounds: Rectangle,
+		cursor: mouse::Cursor,
+	) -> Option<canvas::Action<M>> {
+		let under = cursor.position_in(bounds).and_then(|point| self.link_at(point));
+		match event {
+			canvas::Event::Mouse(mouse::Event::CursorMoved { .. } | mouse::Event::CursorLeft) if under != *hovered => {
+				*hovered = under;
+				Some(canvas::Action::request_redraw())
+			}
+			canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+				let url = node_link(&self.nodes[under?])?;
+				Some(canvas::Action::publish((self.on_link)(url)).and_capture())
+			}
+			_ => None,
+		}
+	}
 
 	fn draw(
 		&self,
-		_state: &(),
+		hovered: &Option<usize>,
 		renderer: &Renderer,
 		_theme: &Theme,
 		bounds: Rectangle,
@@ -302,8 +355,20 @@ impl<Message> canvas::Program<Message> for FlowCanvas<'_> {
 		let mut frame = Frame::new(renderer, bounds.size());
 		self.draw_edges(&mut frame, &c);
 		for index in 0..self.nodes.len().min(self.shape.boxes.len()) {
-			self.draw_node(&mut frame, &c, index);
+			self.draw_node(&mut frame, &c, index, *hovered == Some(index));
 		}
 		vec![frame.into_geometry()]
+	}
+
+	fn mouse_interaction(
+		&self,
+		_hovered: &Option<usize>,
+		bounds: Rectangle,
+		cursor: mouse::Cursor,
+	) -> mouse::Interaction {
+		match cursor.position_in(bounds).and_then(|point| self.link_at(point)) {
+			Some(_) => mouse::Interaction::Pointer,
+			None => mouse::Interaction::default(),
+		}
 	}
 }

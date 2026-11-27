@@ -683,7 +683,7 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0675](0675-the-bridge-one-extension-one-pipe.md) | The bridge: one omp extension and one local pipe | product | v1 | lightweight program | 2026-11-24 | 0683, 0702 |
 | [0676](0676-process-diet.md) | Process diet: panes start on demand and sleep; a footprint that only goes down | product | v1 | lightweight program | 2026-11-24 | 0689 |
 | [0677](0677-deterministic-loops.md) | Deterministic validation loops | product | v1 | lightweight program | 2026-11-24 |  |
-| [0678](0678-briefs-as-html-pages.md) | Briefs: animated HTML pages served on loopback | product | v1 | lightweight program | 2026-11-24 | 0698, 0699, 0706, 0707, 0710, 0712, 0721 |
+| [0678](0678-briefs-as-html-pages.md) | Briefs: animated HTML pages served on loopback | product | v1 | lightweight program | 2026-11-24 | 0698, 0699, 0706, 0707, 0710, 0712, 0713, 0721 |
 | [0679](0679-whiteboard-and-hunk-removed.md) | Whiteboard and hunk removed; `show` draws a brief | product | v1 | lightweight program | 2026-11-24 |  |
 | [0680](0680-day-flows-and-new-sources.md) | Day flows and three new read-only sources | product | v1 | lightweight program | 2026-11-24 | 0706, 0707, 0709, 0711, 0712 |
 | [0681](0681-privacy-boundary.md) | Privacy boundary: one door to the model | product | v1 | lightweight program | 2026-11-24 |  |
@@ -717,5 +717,6 @@ This index is also the feature register (0016); requests after v1 are GitHub iss
 | [0710](0710-review-system-view.md) | Review: system view | product, prompts | v1 | ultron 0.3 iteration, M2 R5 | 2026-11-26 |  |
 | [0711](0711-polish-to-english-own-comments.md) | Polish, To English, his own comments | product, prompts | v1 | ultron 0.3 iteration, M2 R6 | 2026-11-26 |  |
 | [0712](0712-submit-with-a-verdict-one-page.md) | Submit with a verdict; one page for threads and pull requests | product | v1 | ultron 0.3 iteration, M2 R6 | 2026-11-26 |  |
+| [0713](0713-page-motion-and-design.md) | Page motion and design | product | v1 | ultron 0.3 iteration, M2 R7 | 2026-11-26 |  |
 | [0708](0708-clean-room-runs.md) | Clean-room runs | product, security | v1 | ultron 0.3 iteration, M2 R1 | 2026-11-26 |  |
-| [0721](0721-native-views-with-iced.md) | Native views with iced | product, security | v1 | ultron 0.3 iteration, M2 V1 | 2026-11-27 | 0710, 0711, 0712 |
+| [0721](0721-native-views-with-iced.md) | Native views with iced | product, security | v1 | ultron 0.3 iteration, M2 V1 | 2026-11-27 | 0710, 0711, 0712, 0713 |

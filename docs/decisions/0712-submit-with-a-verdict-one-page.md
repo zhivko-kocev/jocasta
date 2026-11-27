@@ -1,6 +1,6 @@
 # 0712 Submit with a verdict; one page for threads and pull requests
 
-- Status: v1 (service, page order and the read-only verdict section built 2026-11-27; the window's verdict buttons and `Show its code` are not built yet)
+- Status: v1 (built 2026-11-27: the service, the page order, the window's verdict buttons and `Show its code`)
 - Kind: product
 - Phase/slice: ultron 0.3 iteration, M2 R6
 - Date: 2026-11-26
@@ -29,6 +29,7 @@ His answers of 2026-11-26 and the approved plan:
 - Built details: a review is submitted once (`submit: this review was submitted already.`); Request changes and Comment need a summary or a card to send (`submit: write a summary first; GitHub needs one for this verdict.`); the cards it sent count as published with the review's link; the page shows `Submitted: <verdict>` with the link instead of the buttons. A GitHub 422 says the CLI's last line and that a comment outside the diff can be published on its own (Publish falls back to a pull-request comment); nothing is stored.
 - Thread pages (`thread_brief.rs`) and pull-request pages are built from the same sections in this order: facts, works, system, cards, then (pull requests) the verdict box with his summary and the three buttons, the changed files (map), and the diff. The "Where it stands" flows go: the facts already say where the thread or the review stands. Merge / Open PR / Send back stay on thread pages.
 - The diff stays closed behind `Show code (<n> files, +a −b)`. Each card whose file and line fall in a hunk of the diff gets `Show its code`, which opens that hunk under the card, drawn as the diff section draws it.
+- Built details, the window (2026-11-27): the verdict section's buttons are Approve (blue), Request changes and Comment; they send `submit` and are quiet while the summary box holds unsaved words (`Save the summary first: it goes with the review.`), so what is sent is what he sees saved. The answer's brief replaces the shown one (cards marked published, the verdict submitted), his unsaved words in cards stay, and the section then says `Submitted: <verdict>` with `Open the review` (his browser) and the summary. A refusal (`submit: write a summary first; …`, a 422) shows under the buttons. `Show its code` sits beside `✓ proven`, opens the hunk holding the card's line (the head's numbering) under the card with that line lit, over the `fast` 180 ms fade (0713), and turns into `Hide its code`; opening it in place needs no scroll, since it unfolds where he is reading.
 
 ## Reason
 The author gets his verdict and his words in one review; he reads both kinds of page the same way, top to bottom, code last.

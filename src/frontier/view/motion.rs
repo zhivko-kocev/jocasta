@@ -1,6 +1,6 @@
-//! The brief windows' motion (0721, R7's tokens): one curve, two durations, the first-open entrance of a flow, and a
-//! system's Before / After switch (0710). The entrance is a pure function of the time since the window opened, so a
-//! press never replays it; the switch moves only when he presses it.
+//! The brief windows' motion (0713, 0721): one curve and two durations for everything that moves, the first-open
+//! entrance of a flow, and a system's Before / After switch (0710). The entrance is a pure function of the time since
+//! the window opened, so a press never replays it; the switch and the disclosures move only when he presses them.
 
 use std::time::Duration;
 
@@ -10,10 +10,15 @@ use crate::frontier::brief::model::Mark;
 #[path = "motion_tests.rs"]
 mod tests;
 
-/// `base`: an edge drawing itself.
-pub const BASE_MS: f32 = 220.0;
-/// A node's fade and rise, and a disclosure opening.
-pub const REVEAL_MS: f32 = 180.0;
+/// `fast`, the first token (0713): what appears in place, a node's fade and rise and a disclosure opening.
+pub const FAST: Duration = Duration::from_millis(180);
+/// `base`, the second token (0713): what travels or swaps, an edge drawing itself and the Before / After switch.
+pub const BASE: Duration = Duration::from_millis(220);
+
+/// `base` in milliseconds.
+pub const BASE_MS: f32 = BASE.as_millis() as f32;
+/// `fast` in milliseconds.
+pub const REVEAL_MS: f32 = FAST.as_millis() as f32;
 /// How much later each layer's nodes start.
 pub const STAGGER_MS: f32 = 25.0;
 /// Layers past this one start with it.
@@ -25,11 +30,8 @@ pub const RISE_PX: f32 = 4.0;
 /// When everything of the entrance has settled: the last staggered node's end (125 + 180 ms).
 pub const SETTLED_MS: f32 = STAGGER_MS * STAGGER_LAYERS as f32 + REVEAL_MS;
 
-/// A disclosure's opening, as `iced::Animation` takes it.
-pub const DISCLOSURE: Duration = Duration::from_millis(180);
-
-/// A system's Before / After switch, the `base` token (0710).
-pub const SWITCH: Duration = Duration::from_millis(220);
+/// How long a flow's Play shows each step before the next (a pace, not a motion: the highlight moves at once).
+pub const STEP: Duration = Duration::from_millis(700);
 
 /// The scale an added part grows from as it appears.
 pub const APPEAR_SCALE: f32 = 0.96;

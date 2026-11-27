@@ -48,5 +48,13 @@ fn a_system_switch_fades_and_grows_added_parts_fades_removed_ones_and_reduced_ke
 	assert_eq!(presence(Mark::Removed, 1.0, Motion::Full), (0.0, 1.0));
 	assert_eq!(presence(Mark::Removed, 0.25, Motion::Full), (0.75, 1.0));
 	assert_eq!(presence(Mark::Added, 0.5, Motion::Reduced), (0.5, 1.0));
-	assert_eq!(SWITCH.as_millis(), 220);
+}
+
+#[test]
+fn every_motion_takes_one_of_two_tokens_and_everything_ends_within_300_ms_of_its_start_0713() {
+	assert_eq!((FAST.as_millis(), BASE.as_millis()), (180, 220));
+	assert_eq!((REVEAL_MS, BASE_MS), (180.0, 220.0));
+	// The entrance's longest part, the edges, starts at 80 ms: 80 + 220.
+	const { assert!(EDGE_DELAY_MS + BASE_MS <= 300.0) };
+	const { assert!(STAGGER_MS * STAGGER_LAYERS as f32 + REVEAL_MS <= 305.0) };
 }

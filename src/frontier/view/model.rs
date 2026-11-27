@@ -7,9 +7,11 @@ use chrono::{Local, TimeZone};
 use serde_json::{Value, json};
 
 use crate::frontier::brief::model::{
-	Anchor, Brief, Card, DiffFile, FlowNode, Mark, NodeState, RanProof, Section, SystemNode, Verdict, WorksState,
+	Anchor, Brief, Card, DiffFile, DiffHunk, FlowNode, Mark, NodeState, RanProof, Section, Submitted, SystemNode,
+	Verdict, WorksState,
 };
 use crate::frontier::brief::store;
+use crate::shared::link::web_link;
 
 #[cfg(test)]
 #[path = "model_tests.rs"]
@@ -186,7 +188,16 @@ pub enum Act {
 	Finish { mode: &'static str },
 	/// Send the thread back with his words.
 	Send { text: String },
+	/// A comment of his own (0711), on `file` and `line` when he gave them (the service checks both).
+	Add { text: String, file: String, line: String },
+	/// Save the review's summary (0711); empty clears it.
+	Summary { text: String },
+	/// Submit the review: `approve`, `request_changes` or `comment` (0712).
+	Submit { verdict: &'static str },
 }
+
+/// The summary box's name where a card's id would go (`polish` and `english` on the summary, 0711).
+pub const SUMMARY: &str = "summary";
 
 impl Act {
 	/// The action as the service takes it.
@@ -198,16 +209,30 @@ impl Act {
 			Self::Publish { card } => json!({ "op": "publish", "card": card }),
 			Self::Finish { mode } => json!({ "op": "finish", "mode": mode }),
 			Self::Send { text } => json!({ "op": "send", "text": text }),
+			Self::Add { text, file, line } => {
+				let mut wire = json!({ "op": "add", "text": text });
+				if !file.is_empty() {
+					wire["file"] = json!(file);
+				}
+				if !line.is_empty() {
+					wire["line"] = json!(line);
+				}
+				wire
+			}
+			Self::Summary { text } => json!({ "op": "summary", "text": text }),
+			Self::Submit { verdict } => json!({ "op": "submit", "verdict": verdict }),
 		}
 	}
 
-	/// The card it acts on; `None` for the thread's own buttons.
+	/// The card it acts on (`summary` for the summary box's helpers); `None` for the page's own buttons.
 	pub fn card(&self) -> Option<&str> {
 		match self {
 			Self::Edit { card, .. } | Self::Help { card, .. } | Self::Verdict { card, .. } | Self::Publish { card } => {
 				Some(card)
 			}
-			Self::Finish { .. } | Self::Send { .. } => None,
+			Self::Finish { .. } | Self::Send { .. } | Self::Add { .. } | Self::Summary { .. } | Self::Submit { .. } => {
+				None
+			}
 		}
 	}
 
@@ -219,9 +244,58 @@ impl Act {
 			Self::Help { op: "english", .. } => "Putting it into English\u{2026}",
 			Self::Help { .. } => "Polishing\u{2026}",
 			Self::Publish { .. } => "Publishing\u{2026}",
-			Self::Edit { .. } | Self::Verdict { .. } => "Saving\u{2026}",
+			Self::Add { .. } => "Adding\u{2026}",
+			Self::Submit { .. } => "Submitting\u{2026}",
+			Self::Edit { .. } | Self::Verdict { .. } | Self::Summary { .. } => "Saving\u{2026}",
 		}
 	}
+}
+
+/// A pull request's review end as shown (0712): his saved summary and what he submitted, if he has.
+pub fn verdict_of(brief: &Brief) -> Option<(&str, Option<&Submitted>)> {
+	brief.sections.iter().find_map(|section| match section {
+		Section::Verdict { summary, submitted, .. } => Some((summary.as_str(), submitted.as_ref())),
+		_ => None,
+	})
+}
+
+/// The hunk of the brief's diff that holds line `line` of `file` at the head (0712's `Show its code`).
+pub fn hunk_of<'a>(brief: &'a Brief, file: &str, line: usize) -> Option<&'a DiffHunk> {
+	if file.is_empty() || line == 0 {
+		return None;
+	}
+	brief
+		.sections
+		.iter()
+		.flat_map(|section| match section {
+			Section::Diff { files, .. } => files.as_slice(),
+			_ => &[],
+		})
+		.filter(|diffed| diffed.path == file)
+		.flat_map(|diffed| &diffed.hunks)
+		.find(|hunk| hunk.lines.iter().any(|shown| shown.new == Some(line)))
+}
+
+/// The order a flow's Play, Prev and Next walk its nodes in (0713): layer by layer, each layer in its order; the
+/// nodes' indices.
+pub fn steps(nodes: &[FlowNode]) -> Vec<usize> {
+	let mut order: Vec<usize> = (0..nodes.len()).collect();
+	order.sort_by_key(|&index| (nodes[index].layer, nodes[index].order));
+	order
+}
+
+/// The caption under a flow at a step: `2 of 5 · Checks · verify 48 s`.
+pub fn caption(node: &FlowNode, at: usize, of: usize) -> String {
+	let head = format!("{} of {of} \u{b7} {}", at + 1, node.label);
+	match node.detail.as_deref().filter(|detail| !detail.is_empty()) {
+		Some(detail) => format!("{head} \u{b7} {detail}"),
+		None => head,
+	}
+}
+
+/// A node's detail when it is a web link (0713): drawn as a link on the node, opened by a click.
+pub fn node_link(node: &FlowNode) -> Option<String> {
+	web_link(node.detail.as_deref())
 }
 
 /// The service's answer to an action: the brief after it and a reword's suggestion `(card, text)`.

@@ -246,6 +246,15 @@ fn pr_brief() -> Brief {
 		"Името на функцијата не кажува што прави; reconcile_refunds би било појасно. 🙂",
 	);
 	opinion.file = String::new();
+	// His own (0711), right to left, with a word longer than any line (break-ui).
+	let mut yours = card(
+		"n5",
+		Severity::P2,
+		Kind::Yours,
+		"התור של ההודעות שנכשלו צריך גבול; dead_letter_queue_retry_limit_per_subscription_endpoint_configuration_value",
+	);
+	yours.ran = None;
+	yours.proof.ok = true;
 	Brief {
 		id: "pr-acme-7".to_owned(),
 		kind: "pr".to_owned(),
@@ -269,7 +278,13 @@ fn pr_brief() -> Brief {
 					card("n1", Severity::P0, Kind::Finding, "A delivery that fails forever is retried forever."),
 					published,
 					opinion,
+					yours,
 				],
+			},
+			Section::Verdict {
+				heading: Some("Your review".to_owned()),
+				summary: "Works as described; two comments on the retry limit.".to_owned(),
+				submitted: None,
 			},
 			Section::Checks { heading: Some("Checks".to_owned()), rows: vec![] },
 			diff(),
@@ -305,7 +320,12 @@ fn morning_brief() -> Brief {
 				nodes: vec![
 					node("a", "acme-api: refunds-total", NodeState::Active, Some("review")),
 					node("b", "acme-web: nightly is red", NodeState::Failed, Some("CI")),
-					node("c", "client-a: export CSV with a much longer title than fits", NodeState::Pending, None),
+					node(
+						"c",
+						"client-a: export CSV with a much longer title than fits",
+						NodeState::Pending,
+						Some("https://meet.example.org/client-a-sync"),
+					),
 				],
 				edges: vec![],
 			},
@@ -407,12 +427,12 @@ fn a_disclosure_opens_over_its_duration_then_asks_for_no_more_frames() {
 	let _ = window.update(Message::Toggle(Fold::Diff(6)));
 	assert!(window.animating());
 	let start = window.now;
-	let _ = window.update(Message::Tick(start + DISCLOSURE + std::time::Duration::from_millis(1)));
+	let _ = window.update(Message::Tick(start + FAST + std::time::Duration::from_millis(1)));
 	assert_eq!(window.fold(&Fold::Diff(6)), Some(1.0));
 	assert!(!window.animating());
 	let _ = window.update(Message::Toggle(Fold::Diff(6)));
 	let later = window.now;
-	let _ = window.update(Message::Tick(later + DISCLOSURE + std::time::Duration::from_millis(1)));
+	let _ = window.update(Message::Tick(later + FAST + std::time::Duration::from_millis(1)));
 	assert_eq!(window.fold(&Fold::Diff(6)), None);
 }
 
@@ -430,9 +450,129 @@ fn the_system_switch_goes_to_before_over_220_ms_and_turns_back_from_where_it_is_
 	assert!(mid > 0.0 && mid < 1.0, "half way: {mid}");
 	let _ = window.update(Message::Side(2, true));
 	assert!((after(&window) - mid).abs() < 0.2, "it turns back from where it is, not from Before");
-	let _ = window.update(Message::Tick(window.now + SWITCH + std::time::Duration::from_millis(1)));
+	let _ = window.update(Message::Tick(window.now + BASE + std::time::Duration::from_millis(1)));
 	assert_eq!(after(&window), 1.0);
 	assert!(!window.animating(), "settled: no more frames");
+}
+
+#[test]
+fn the_add_box_sends_his_comment_with_its_place_and_empties_once_the_card_is_in_0711() {
+	let mut window = settled_window(pr_brief());
+	window.editors.insert("n1".to_owned(), text_editor::Content::with_text("unsaved on n1"));
+	window.add = text_editor::Content::with_text("  Name the limit.  ");
+	let _ = window.update(Message::AddFile("src/billing/invoice_reconciliation/handlers.rs".to_owned()));
+	let _ = window.update(Message::AddLine("14a2".to_owned()));
+	assert_eq!(window.add_line, "142", "the line box keeps digits only");
+	let act = Act::Add {
+		text: "Name the limit.".to_owned(),
+		file: "src/billing/invoice_reconciliation/handlers.rs".to_owned(),
+		line: "142".to_owned(),
+	};
+	assert_eq!(
+		act.to_json(),
+		json!({"op": "add", "text": "Name the limit.", "file": "src/billing/invoice_reconciliation/handlers.rs", "line": "142"})
+	);
+	assert_eq!(
+		Act::Add { text: "x".to_owned(), file: String::new(), line: String::new() }.to_json(),
+		json!({"op": "add", "text": "x"})
+	);
+	let _ = window.update(Message::Act(act.clone()));
+	assert_eq!(window.busy, Some((Target::Add, "Adding\u{2026}")));
+	let mut after = pr_brief();
+	if let Section::Cards { cards, .. } = &mut after.sections[1] {
+		cards.push(card("n6", Severity::P2, Kind::Yours, "Name the limit."));
+	}
+	let _ = window.update(Message::Answered(act, Ok(serde_json::to_value(&after).unwrap())));
+	assert_eq!(window.editors["n6"].text().trim(), "Name the limit.");
+	assert_eq!(window.editors["n1"].text().trim(), "unsaved on n1", "his words elsewhere stay");
+	assert_eq!((words(&window.add).as_str(), window.add_file.as_str(), window.add_line.as_str()), ("", "", ""));
+	assert!(!window.entering);
+}
+
+#[test]
+fn the_summary_is_polished_saved_and_then_submitted_with_a_verdict_0711_0712() {
+	let mut window = settled_window(pr_brief());
+	let help = Act::Help { card: SUMMARY.to_owned(), text: "works, two comments".to_owned(), op: "english" };
+	assert_eq!(Target::of(&help), Target::Verdict);
+	assert_eq!(Target::of(&Act::Submit { verdict: "approve" }), Target::Verdict);
+	let mut answer = serde_json::to_value(pr_brief()).unwrap();
+	answer["suggestion"] = json!({"card": SUMMARY, "text": "It works; two comments."});
+	let _ = window.update(Message::Answered(help, Ok(answer)));
+	assert_eq!(window.suggestion, Some((SUMMARY.to_owned(), "It works; two comments.".to_owned())));
+	// Accept saves the suggestion as the summary.
+	let accept = Act::Summary { text: "It works; two comments.".to_owned() };
+	assert_eq!(accept.to_json(), json!({"op": "summary", "text": "It works; two comments."}));
+	let mut saved = pr_brief();
+	if let Section::Verdict { summary, .. } = &mut saved.sections[2] {
+		*summary = "It works; two comments.".to_owned();
+	}
+	let _ = window.update(Message::Answered(accept, Ok(serde_json::to_value(&saved).unwrap())));
+	assert_eq!(words(&window.summary), "It works; two comments.");
+	assert_eq!(window.suggestion, None);
+	let submit = Act::Submit { verdict: "request_changes" };
+	assert_eq!(submit.to_json(), json!({"op": "submit", "verdict": "request_changes"}));
+	let _ = window.update(Message::Act(submit.clone()));
+	assert_eq!(window.busy, Some((Target::Verdict, "Submitting\u{2026}")));
+	let mut sent = saved.clone();
+	if let Section::Verdict { submitted, .. } = &mut sent.sections[2] {
+		*submitted = Some(Submitted {
+			verdict: "request_changes".to_owned(),
+			url: "https://github.com/example-org/acme-api/pull/7#pullrequestreview-1".to_owned(),
+			at_ms: 1,
+		});
+	}
+	let _ = window.update(Message::Answered(submit, Ok(serde_json::to_value(&sent).unwrap())));
+	assert!(verdict_of(&window.brief).and_then(|(_, done)| done).is_some());
+}
+
+#[test]
+fn show_its_code_opens_the_hunk_that_holds_the_cards_line_0712() {
+	let brief = pr_brief();
+	let hunk = hunk_of(&brief, "src/billing/invoice_reconciliation/handlers.rs", 142).expect("line 142 is in the hunk");
+	assert_eq!(hunk.header, "@@ -138,7 +138,9 @@ fn reconcile(");
+	assert!(hunk_of(&brief, "src/billing/invoice_reconciliation/handlers.rs", 900).is_none());
+	assert!(hunk_of(&brief, "", 142).is_none(), "a card on the whole change has no code to show");
+	let mut window = settled_window(brief);
+	let _ = window.update(Message::Toggle(Fold::Code("n1".to_owned())));
+	let _ = window.update(Message::Tick(window.now + FAST));
+	assert_eq!(window.fold(&Fold::Code("n1".to_owned())), Some(1.0));
+}
+
+#[test]
+fn play_walks_the_nodes_once_and_stops_at_the_last_and_prev_and_next_step_by_hand_0713() {
+	let mut window = settled_window(morning_brief());
+	let flow = 2;
+	assert!(window.steps.is_empty() && window.playing.is_none());
+	let _ = window.update(Message::Walk(flow, Walk::Play));
+	assert_eq!((window.steps[&flow], window.playing), (0, Some(flow)));
+	let _ = window.update(Message::Step);
+	assert_eq!((window.steps[&flow], window.playing), (1, Some(flow)));
+	let _ = window.update(Message::Step);
+	assert_eq!((window.steps[&flow], window.playing), (2, None), "it stops at the last node");
+	let _ = window.update(Message::Step);
+	assert_eq!(window.steps[&flow], 2, "no wrap around");
+	let _ = window.update(Message::Walk(flow, Walk::Prev));
+	assert_eq!(window.steps[&flow], 1);
+	let _ = window.update(Message::Walk(flow, Walk::Play));
+	assert_eq!((window.steps[&flow], window.playing), (1, Some(flow)), "Play goes on from where he is");
+	let _ = window.update(Message::Walk(flow, Walk::Next));
+	assert_eq!((window.steps[&flow], window.playing), (2, None), "a step by hand stops Play");
+	let _ = window.update(Message::Walk(flow, Walk::Play));
+	assert_eq!(window.steps[&flow], 0, "from the end, Play starts again at the first");
+	assert!(!window.entering && !window.animating(), "the walk moves nothing: no entrance, no frames");
+	let Section::Flow { nodes, .. } = &window.brief.sections[flow] else { panic!("a flow") };
+	let order = steps(nodes);
+	assert_eq!(caption(&nodes[order[0]], 0, 3), "1 of 3 \u{b7} acme-api: refunds-total \u{b7} review");
+}
+
+#[test]
+fn a_map_row_is_lit_while_the_pointer_is_on_it_and_a_late_leave_of_another_row_changes_nothing_0713() {
+	let mut window = settled_window(thread_brief());
+	let _ = window.update(Message::Hover("t".to_owned(), true));
+	let _ = window.update(Message::Hover("h".to_owned(), false));
+	assert_eq!(window.hovered.as_deref(), Some("t"));
+	let _ = window.update(Message::Hover("t".to_owned(), false));
+	assert_eq!(window.hovered, None);
 }
 
 /// `snapshot` as the PNG `path` (iced_test names its files `<stem>-<renderer>.png`; this renames it to `path`).
@@ -479,7 +619,7 @@ fn view_shots() {
 	let _ = thread.update(Message::Toggle(Fold::Diff(6)));
 	let _ = thread.update(Message::Toggle(Fold::Row(2, "brings", 0)));
 	let _ = thread.update(Message::Toggle(Fold::Proof("n1".to_owned())));
-	let now = thread.now + DISCLOSURE;
+	let now = thread.now + FAST;
 	let _ = thread.update(Message::Tick(now));
 	thread.width = 640.0;
 	shoot(&thread, "thread-open-narrow", Size::new(640.0, 3200.0));
@@ -496,12 +636,109 @@ fn view_shots() {
 	let at = before.now;
 	let _ = before.update(Message::Tick(at + std::time::Duration::from_millis(60)));
 	shoot(&before, "system-switch-60ms", Size::new(1040.0, 1500.0));
-	let _ = before.update(Message::Tick(at + SWITCH));
+	let _ = before.update(Message::Tick(at + BASE));
 	shoot(&before, "system-before", Size::new(1040.0, 1500.0));
 
 	let mut pr = settled_window(pr_brief());
 	pr.suggestion = Some(("n1".to_owned(), "Failing deliveries are retried without end.".to_owned()));
 	pr.banners.insert(Target::Card("n1".to_owned()), "publish: gh answered 422: line is outside the diff".to_owned());
-	shoot(&pr, "pr", tall);
-	shoot(&settled_window(morning_brief()), "morning", Size::new(1040.0, 1600.0));
+	let _ = pr.update(Message::Toggle(Fold::Code("n1".to_owned())));
+	let _ = pr.update(Message::Tick(pr.now + FAST));
+	pr.add = text_editor::Content::with_text("Name the limit in the config, not in the code.");
+	pr.add_file = "src/billing/invoice_reconciliation/handlers.rs".to_owned();
+	pr.add_line = "142".to_owned();
+	shoot(&pr, "pr", Size::new(1040.0, 3000.0));
+	// The summary typed, unsaved, with To English's suggestion; then submitted.
+	let mut summary = settled_window(pr_brief());
+	summary.summary = text_editor::Content::with_text("Работи; два коментари за границата.");
+	summary.suggestion = Some((SUMMARY.to_owned(), "It works; two comments on the limit.".to_owned()));
+	summary
+		.banners
+		.insert(Target::Verdict, "submit: write a summary first; GitHub needs one for this verdict.".to_owned());
+	shoot(&summary, "pr-verdict", Size::new(1040.0, 3000.0));
+	let mut sent = pr_brief();
+	if let Section::Verdict { submitted, .. } = &mut sent.sections[2] {
+		*submitted = Some(Submitted {
+			verdict: "request_changes".to_owned(),
+			url: "https://github.com/example-org/acme-api/pull/7#pullrequestreview-1".to_owned(),
+			at_ms: 1,
+		});
+	}
+	shoot(&settled_window(sent), "pr-submitted", Size::new(1040.0, 3000.0));
+	let mut morning = settled_window(morning_brief());
+	shoot(&morning, "morning", Size::new(1040.0, 1600.0));
+	let _ = morning.update(Message::Walk(2, Walk::Next));
+	let _ = morning.update(Message::Walk(2, Walk::Next));
+	let _ = morning.update(Message::Walk(2, Walk::Next));
+	shoot(&morning, "morning-walk", Size::new(1040.0, 1600.0));
+	// break-ui: long words, right to left, a five-layer flow, empty sections, a 1-line file beside a 600-line one.
+	shoot(&settled_window(edge_brief()), "edges", Size::new(1040.0, 2200.0));
+	let mut narrow = settled_window(edge_brief());
+	narrow.width = 600.0;
+	shoot(&narrow, "edges-narrow", Size::new(600.0, 2600.0));
+}
+
+/// A `show` brief at the edges (break-ui, 0713).
+fn edge_brief() -> Brief {
+	let chain = ["Request", "Gateway", "Auth", "Queue", "Worker"];
+	let nodes: Vec<FlowNode> = chain
+		.iter()
+		.map(|label| node(&label.to_lowercase(), label, NodeState::Done, Some("https://status.example.org/acme")))
+		.collect();
+	let edges: Vec<FlowEdge> =
+		chain.windows(2).map(|pair| edge(&pair[0].to_lowercase(), &pair[1].to_lowercase(), None)).collect();
+	let mut brief = Brief {
+		id: "show-edges".to_owned(),
+		kind: "show".to_owned(),
+		title: "Supercalifragilisticexpialidocious_reconciliation_of_refunded_invoice_lines_across_every_tenant"
+			.to_owned(),
+		subtitle:
+			"https://example.org/workspaces/acme/projects/billing/boards/42?tab=comments&filter=unresolved&sort=newest"
+				.to_owned(),
+		generated_at_ms: 1_795_000_000_000,
+		sections: vec![
+			Section::Text {
+				heading: Some("عربي: سطر من اليمين إلى اليسار".to_owned()),
+				body: "هذا النص يُقرأ من اليمين إلى اليسار، وفيه كلمة English في وسطه.\n\nהטקסט הזה בעברית.".to_owned(),
+			},
+			Section::Facts { heading: Some("Facts".to_owned()), rows: vec![] },
+			Section::Flow { heading: Some("Five layers".to_owned()), nodes, edges },
+			Section::Checks {
+				heading: Some("Checks".to_owned()),
+				rows: vec![
+					CheckRow { command: "mise run e2e".to_owned(), exit: None, ms: 0 },
+					CheckRow {
+						command: "cargo test --package billing_reconciliation_integration_tests_for_every_tenant"
+							.to_owned(),
+						exit: Some(0),
+						ms: 0,
+					},
+				],
+			},
+			Section::Map {
+				heading: Some("Files".to_owned()),
+				groups: vec![MapGroup {
+					label: "src".to_owned(),
+					items: vec![
+						MapItem {
+							id: "big".to_owned(),
+							label: "generated_schema.rs".to_owned(),
+							added: 600,
+							removed: 0,
+						},
+						MapItem {
+							id: "tiny".to_owned(),
+							label: "a_very_long_module_name_without_any_break.rs".to_owned(),
+							added: 1,
+							removed: 1,
+						},
+					],
+				}],
+				links: vec![],
+			},
+			Section::List { heading: Some("Links".to_owned()), rows: vec![] },
+		],
+	};
+	lay_out(&mut brief).unwrap();
+	brief
 }

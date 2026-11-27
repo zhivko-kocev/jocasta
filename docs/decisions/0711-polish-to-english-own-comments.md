@@ -1,6 +1,6 @@
 # 0711 Polish, To English, his own comments
 
-- Status: v1 (service and card Polish / To English built 2026-11-27; the window's Add comment box and summary box are not built yet)
+- Status: v1 (built 2026-11-27: the service, the cards' Polish and To English, the window's Add comment box and summary box)
 - Kind: product, prompts
 - Phase/slice: ultron 0.3 iteration, M2 R6
 - Date: 2026-11-26
@@ -32,6 +32,7 @@ His answers of 2026-11-26 and the approved plan:
 - New action `add {text, file?, line?}`: a card of his own, kind `yours` (shown "yours"), no proof, verdict `post`, P2. With a file it needs a line, and the head must have that file with that line; the card quotes that line. Without one it is a comment on the pull request as a whole.
 - New action `summary {text}`: the review's summary box, kept in `review.json`; an empty text clears it.
 - Built details: Polish and To English work on what is in the card's editor (or the summary box) when pressed, unsaved words included; `card: "summary"` names the summary box. His cards and the summary are on pull-request pages, whose cards he edits; a thread page's cards stay the reviewer's, and his words for a thread go through Send back.
+- Built details, the window (2026-11-27): under the cards of a pull-request page that isn't closed, `Add your own comment` is a text box, a one-line `File (optional), as in the diff` box, a `Line` box that keeps digits only, and Add (blue; quiet while the text is empty). Add sends `add` with the file and the line only when given (the service checks them and says why it refuses under the box); the answer's new card appears with its own editor, the box empties, and his unsaved words in other cards stay. The verdict section (`Your review`) holds the summary box with Save (when it differs from the saved summary), Polish and To English; a summary suggestion's Accept sends `summary`.
 
 ## Reason
 His review says what he means, in his words; the helper fixes language and nothing else, on a local model first.
