@@ -34,3 +34,4 @@ A status bar learns everything it shows in one fast call, without guessing from 
 ## Consequences
 - `Route::Status`; `thread_cli::run_status_json`; the service's `status json` bridge command answers from `Status::status_json`, which reads nothing but the day's queue.
 - ultron's bar reads it every third tick instead of `pgrep`.
+- Note (2026-11-27): the client waits at most 2 s for the service's answer; past that it prints `{"running":false,"reason":"no answer"}` and exits 3, so a status bar never hangs on a service that doesn't answer (a start that hangs).

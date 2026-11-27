@@ -221,7 +221,12 @@ impl OmpTracker {
 		});
 		let Some(state) = state else {
 			if was.is_some() {
-				log(LogLevel::Info, "threads", &format!("{name}: omp's bridge is gone; herdr decides"), None);
+				log(
+					LogLevel::Info,
+					"threads",
+					&format!("{name}: omp's bridge is gone; the pane's state decides"),
+					None,
+				);
 			}
 			return;
 		};

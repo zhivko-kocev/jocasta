@@ -131,6 +131,35 @@ pub struct UninstallPaths {
 	/// Whether this process runs from the install and Windows holds its program open: Jocasta's entries there go after
 	/// it exits. On Linux and macOS a running program's files can be removed at once.
 	pub running_from_install: bool,
+	/// The program as mise installed it (`mise use -g github:zhivko-kocev/jocasta`): listed, and its removal is mise's.
+	pub mise: Option<MiseInstall>,
+}
+
+/// mise's folder for this tool's versions: `<mise data>/installs/github-<owner>-<repo>/<version>`.
+const MISE_TOOL_FOLDER: &str = "github-zhivko-kocev-jocasta";
+/// What removes the program when mise installed it; uninstall prints it, never runs it (Windows holds the running
+/// `jocasta.exe`, and a system config that lists the tool keeps it anyway).
+pub const MISE_UNUSE: &str = "mise unuse -g github:zhivko-kocev/jocasta";
+/// ultron's system-wide mise file, which lists the tool for every user of the machine.
+pub const ULTRON_TOOLS: &str = "/etc/mise/conf.d/ultron-tools.toml";
+
+/// The program installed by mise.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MiseInstall {
+	/// Its version folder.
+	pub dir: PathBuf,
+	/// A system mise file that lists the tool too (ultron's), so `mise unuse -g` alone doesn't take it away.
+	pub listed_in: Option<PathBuf>,
+}
+
+/// `dir` as a mise install of the program: no `install.json` (the install scripts write one) and its parent is mise's
+/// folder for this tool. `system_file` is read for a line naming the tool (ultron's [`ULTRON_TOOLS`]).
+pub fn mise_install_of(dir: &Path, system_file: &Path) -> Option<MiseInstall> {
+	if dir.join(INSTALL_MARKER).exists() || dir.parent()?.file_name()? != MISE_TOOL_FOLDER {
+		return None;
+	}
+	let listed = fs::read_to_string(system_file).is_ok_and(|text| text.contains("zhivko-kocev/jocasta"));
+	Some(MiseInstall { dir: dir.to_path_buf(), listed_in: listed.then(|| system_file.to_path_buf()) })
 }
 
 type RemovePathEntry = Arc<dyn Fn(&Path) -> Result<bool> + Send + Sync>;
@@ -783,6 +812,9 @@ pub async fn run_uninstall(paths: &UninstallPaths, deps: &UninstallDeps, io: &dy
 	if let Some(install) = &paths.install {
 		io.print(&format!("- the install: {}", install.dir.display()));
 	}
+	if let Some(mise) = &paths.mise {
+		io.print(&format!("- the program (installed by mise): {}", mise.dir.display()));
+	}
 	io.print("");
 	if !answered_yes(io.ask("Remove these? [y/N] ").await.as_deref()) {
 		io.print("Nothing removed.");
@@ -821,10 +853,21 @@ pub async fn run_uninstall(paths: &UninstallPaths, deps: &UninstallDeps, io: &dy
 			if failed > 1 { "s" } else { "" },
 			if failed > 1 { "them" } else { "it" }
 		));
-		return Ok(1);
+	} else if paths.mise.is_some() {
+		io.print("Jocasta is uninstalled, except the program: mise installed it, and mise removes it.");
+	} else {
+		io.print("Jocasta is uninstalled.");
 	}
-	io.print("Jocasta is uninstalled.");
-	Ok(0)
+	if let Some(mise) = &paths.mise {
+		if let Some(listed) = &mise.listed_in {
+			io.print(&format!(
+				"ultron lists it in {} too: mise keeps it until that line goes (as root; ultron's install puts it back).",
+				listed.display()
+			));
+		}
+		io.print(&format!("To remove the program: {MISE_UNUSE}"));
+	}
+	Ok(if failed > 0 { 1 } else { 0 })
 }
 
 /// The user PATH without `entry` (as stored, `%VARS%` kept); open programs are told the environment changed.

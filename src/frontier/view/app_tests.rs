@@ -154,7 +154,7 @@ fn thread_brief() -> Brief {
 				heading: Some("Works".to_owned()),
 				rows: vec![
 					WorksRow {
-						label: "mise run verify (clean room)".to_owned(),
+						label: "`mise run verify` in the clean room".to_owned(),
 						state: WorksState::Passed,
 						ms: Some(48_200),
 						tail: "test result: ok. 214 passed; 0 failed".to_owned(),
@@ -265,7 +265,7 @@ fn pr_brief() -> Brief {
 			Section::Works {
 				heading: Some("Works".to_owned()),
 				rows: vec![WorksRow {
-					label: "mise run verify (clean room)".to_owned(),
+					label: "`mise run verify` in the clean room".to_owned(),
 					state: WorksState::Passed,
 					ms: Some(61_000),
 					tail: String::new(),
@@ -359,6 +359,26 @@ fn a_window_opens_with_its_cards_text_in_editors_and_only_a_flow_plays_an_entran
 	);
 	let (plain, _) = Window::open(pr_brief());
 	assert!(!plain.entering && !plain.animating(), "no flow, nothing moves, no frames asked for");
+}
+
+#[test]
+fn a_works_labels_command_is_drawn_as_code_without_its_backticks_and_an_odd_backtick_stays_as_written() {
+	assert_eq!(
+		code_parts("`mise run verify` in the clean room"),
+		[("mise run verify", true), (" in the clean room", false)]
+	);
+	assert_eq!(code_parts("on this machine"), [("on this machine", false)]);
+	assert_eq!(code_parts("a ` alone"), [("a ` alone", false)]);
+}
+
+#[test]
+fn text_that_mixes_directions_wraps_at_any_glyph_and_other_text_at_words() {
+	let mixed =
+		"התור של ההודעות שנכשלו צריך גבול; dead_letter_queue_retry_limit_per_subscription_endpoint_configuration_value";
+	assert_eq!(wrap_for(mixed), text::Wrapping::Glyph);
+	assert_eq!(wrap_for("هذا النص يُقرأ من اليمين إلى اليسار، وفيه كلمة English في وسطه."), text::Wrapping::Glyph);
+	assert_eq!(wrap_for("הטקסט הזה בעברית; 42."), text::Wrapping::WordOrGlyph);
+	assert_eq!(wrap_for("Името на функцијата не кажува што прави; reconcile_refunds."), text::Wrapping::WordOrGlyph);
 }
 
 #[test]
@@ -656,6 +676,12 @@ fn view_shots() {
 	let mut record = settled_window(pr_brief());
 	record.live = Some(false);
 	shoot(&record, "pr-record", Size::new(1040.0, 2400.0));
+	// break-ui: at 720 px a right-to-left card ending in a long left-to-right word ran past its card (cosmic-text
+	// wraps no word that starts a run of the other direction); it wraps at any glyph now. And a narrow window.
+	record.width = 720.0;
+	shoot(&record, "pr-record-720", Size::new(720.0, 3000.0));
+	record.width = 460.0;
+	shoot(&record, "pr-record-narrow", Size::new(460.0, 3600.0));
 	// The summary typed, unsaved, with To English's suggestion; then submitted.
 	let mut summary = settled_window(pr_brief());
 	summary.summary = text_editor::Content::with_text("Работи; два коментари за границата.");

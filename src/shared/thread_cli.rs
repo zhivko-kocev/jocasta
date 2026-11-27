@@ -3,6 +3,8 @@
 //! send|stop|finish`, `worktree remove`) wait for his Allow, asked in his terminal; the rest run at once. `jocasta
 //! status --json` (0700) goes the same way.
 
+use std::time::Duration;
+
 use serde_json::{Map, Value, json};
 
 use crate::shared::bridge_wire::{CliPeer, unreachable};
@@ -20,6 +22,10 @@ pub struct Exit {
 
 /// `EXIT`.
 pub const EXIT: Exit = Exit { done: 0, refused: 1, usage: 2, not_running: 3 };
+
+/// How long `jocasta status --json` waits for the service's answer. A status bar asks every few seconds, and a service
+/// that doesn't answer (a start that hangs) is down for it.
+const STATUS_WAIT: Duration = Duration::from_secs(2);
 
 pub const THREAD_USAGE: &str = concat!(
 	"usage: jocasta thread new <project> \"<brief>\" [--title <t>] [--done-when \"<cmd>\"]... [--heavy]\n",
@@ -177,9 +183,18 @@ pub async fn run_cli_command(request: &CliRequest, deps: &impl CliDeps) -> i32 {
 }
 
 /// `jocasta status --json` (0700): the service's own JSON line as it answered it; `{"running":false}` on stdout and
-/// exit 3 when Jocasta isn't running.
+/// exit 3 when Jocasta isn't running, and `{"running":false,"reason":"no answer"}` with exit 3 when its service doesn't
+/// answer within 2 s.
 pub async fn run_status_json(deps: &impl CliDeps) -> i32 {
-	run_request(&request("status json", json!({}), false), deps, || deps.print(r#"{"running":false}"#)).await
+	let status = request("status json", json!({}), false);
+	let asked = run_request(&status, deps, || deps.print(r#"{"running":false}"#));
+	match tokio::time::timeout(STATUS_WAIT, asked).await {
+		Ok(code) => code,
+		Err(_) => {
+			deps.print(r#"{"running":false,"reason":"no answer"}"#);
+			EXIT.not_running
+		}
+	}
 }
 
 /// [`run_cli_command`]'s steps; `not_running` says that Jocasta isn't running.

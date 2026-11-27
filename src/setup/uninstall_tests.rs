@@ -174,6 +174,7 @@ impl Machine {
 			mise_config_dir: self.setup.mise_config_dir.clone(),
 			install: record,
 			running_from_install,
+			mise: None,
 		}
 	}
 
@@ -299,6 +300,51 @@ impl Machine {
 	async fn uninstall_with(&self, answers: &[&str], record: &InstallRecord) -> Out {
 		self.uninstall(answers, &self.paths(Some(record.clone()), false), &self.deps(ServiceState::Down)).await.unwrap()
 	}
+}
+
+#[tokio::test]
+async fn a_mise_install_is_listed_and_the_unuse_command_is_printed_last() {
+	let m = Machine::new().await;
+	let version = m.root.join("mise").join("installs").join("github-zhivko-kocev-jocasta").join("0.1.2");
+	put(&version.join("jocasta"), "exe");
+	fs::create_dir_all(version.join("config")).unwrap();
+	let elsewhere = m.root.join("local").join("lib").join("jocasta");
+	put(&elsewhere.join("jocasta"), "exe");
+	let no_system_file = m.root.join("no-such-ultron-tools.toml");
+	// Only mise's folder for this tool, and only without the install scripts' record, is mise's install.
+	assert_eq!(mise_install_of(&elsewhere, &no_system_file), None);
+	let mise = mise_install_of(&version, &no_system_file).unwrap();
+	assert_eq!(mise, MiseInstall { dir: version.clone(), listed_in: None });
+	put(&version.join("install.json"), "{}");
+	assert_eq!(mise_install_of(&version, &no_system_file), None);
+	fs::remove_file(version.join("install.json")).unwrap();
+
+	let paths = UninstallPaths { mise: Some(mise), ..m.paths(None, false) };
+	let Out { code, text, .. } = m.uninstall(&["y", "n"], &paths, &m.deps(ServiceState::Down)).await.unwrap();
+	assert_eq!(code, 0);
+	assert!(text.contains(&format!("- the program (installed by mise): {}", version.display())), "{text}");
+	assert!(
+		text.ends_with(
+			"Jocasta is uninstalled, except the program: mise installed it, and mise removes it.\nTo remove the program: \
+			 mise unuse -g github:zhivko-kocev/jocasta"
+		),
+		"{text}"
+	);
+	// The program is mise's to remove: its folder stays.
+	assert!(version.join("jocasta").exists());
+	assert!(!m.setup.jocasta_config_dir.exists());
+
+	// On ultron the system file lists the tool too, and that is said before the command (a machine set up again).
+	drop(m);
+	let again = Machine::new().await;
+	let ultron = again.root.join("etc").join("ultron-tools.toml");
+	put(&ultron, "[tools]\n\"github:zhivko-kocev/jocasta\" = \"latest\"\n");
+	let listed = mise_install_of(&version, &ultron).unwrap();
+	let paths = UninstallPaths { mise: Some(listed), ..again.paths(None, false) };
+	let Out { text, .. } = again.uninstall(&["y", "n"], &paths, &again.deps(ServiceState::Down)).await.unwrap();
+	let tail: Vec<&str> = text.rsplit('\n').take(2).collect();
+	assert_eq!(tail[0], "To remove the program: mise unuse -g github:zhivko-kocev/jocasta");
+	assert!(tail[1].starts_with(&format!("ultron lists it in {} too", ultron.display())), "{text}");
 }
 
 #[tokio::test]

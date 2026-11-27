@@ -49,3 +49,34 @@ fn a_sleeping_pane_shows_its_text_and_asks_one_wake_at_a_time_saying_why_one_fai
 	pane.send(b"z");
 	assert_eq!(asked.load(Ordering::SeqCst), 2, "after a failed wake a key asks again");
 }
+
+/// The `Ui::Exit` a pane running `argv` sends, waited for up to 10 s.
+fn exit_of(argv: &[&str], kill: bool) -> bool {
+	let (ui, rx) = channel();
+	let argv: Vec<String> = argv.iter().map(|arg| (*arg).to_owned()).collect();
+	let cwd = std::env::temp_dir();
+	let launch = Launch { argv: &argv, cwd: &cwd, env: &[], cols: 40, rows: 8 };
+	let pane = Pane::spawn(7, ui, &launch).expect("the pane starts");
+	if kill {
+		pane.close();
+	}
+	let deadline = Instant::now() + Duration::from_secs(10);
+	loop {
+		let left = deadline.saturating_duration_since(Instant::now());
+		if let Ui::Exit(uid, clean) = rx.recv_timeout(left).expect("the pane's exit is told") {
+			assert_eq!(uid, 7);
+			return clean;
+		}
+	}
+}
+
+#[test]
+fn a_panes_exit_says_whether_its_process_ended_cleanly_or_was_killed_0521() {
+	let (done, waits): (&[&str], &[&str]) = if cfg!(windows) {
+		(&["cmd", "/c", "exit 0"], &["cmd", "/c", "ping -n 30 127.0.0.1 >nul"])
+	} else {
+		(&["sh", "-c", "exit 0"], &["sh", "-c", "sleep 30"])
+	};
+	assert!(exit_of(done, false));
+	assert!(!exit_of(waits, true));
+}

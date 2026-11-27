@@ -36,3 +36,4 @@ An upgrade, a closing window, a killed process and a leftover socket must not co
 
 ## Consequences
 - Plan appendix I: the socket path and `RunOptions::end_with_jocasta`.
+- Note (2026-11-27): a start hung for good when the projects sync held the catalog lock across git and status calls blocked the runtime's two workers, so git's exit, its time limit and the SIGTERM handler never ran. The sync now reads, runs git with no lock and writes; each start step logs `[start] <step> (N ms in)`; on Unix SIGHUP and SIGTERM are caught on their own thread with its own small runtime, which exits the process 5 s after the signal if the window's loop hasn't quit (else after the 50 s stop); the stop wait is a channel's `recv_timeout`, not a runtime timer. Windows keeps its console-close handler (0683).

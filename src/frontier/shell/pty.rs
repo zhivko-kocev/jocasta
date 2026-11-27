@@ -27,8 +27,8 @@ pub enum Ui {
 	Wake(u64),
 	/// Something the frame shows changed: a title, an exit, a tab made or closed by the service.
 	Changed,
-	/// A pane's process ended (by pane uid).
-	Exit(u64),
+	/// A pane's process ended (by pane uid), and whether it ended cleanly (exit code 0).
+	Exit(u64, bool),
 	/// A program asked to copy text (OSC 52).
 	Clip(String),
 	/// A key, mouse or paste event of his.
@@ -100,8 +100,11 @@ impl EventListener for Proxy {
 				let _ = self.ui.send(Ui::Clip(text));
 			}
 			TermEvent::ClipboardLoad(_, format) => self.write(format("").as_bytes()),
-			TermEvent::ChildExit(_) | TermEvent::Exit => {
-				let _ = self.ui.send(Ui::Exit(self.uid));
+			TermEvent::ChildExit(status) => {
+				let _ = self.ui.send(Ui::Exit(self.uid, status.success()));
+			}
+			TermEvent::Exit => {
+				let _ = self.ui.send(Ui::Exit(self.uid, true));
 			}
 			TermEvent::MouseCursorDirty | TermEvent::CursorBlinkingChange | TermEvent::Bell => {}
 		}
@@ -285,8 +288,8 @@ impl Pane {
 		})?;
 		// The child's exit.
 		std::thread::Builder::new().name("pty-wait".into()).spawn(move || {
-			let _ = child.wait();
-			let _ = ui.send(Ui::Exit(uid));
+			let clean = child.wait().is_ok_and(|status| status.success());
+			let _ = ui.send(Ui::Exit(uid, clean));
 		})?;
 		let live = Live { cols, rows, master: Some(pair.master), killer: Some(killer) };
 		Ok(Self { uid, term, proxy, pid, title, size, live: Mutex::new(live) })

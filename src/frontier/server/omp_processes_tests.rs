@@ -337,7 +337,7 @@ async fn each_thread_panes_omp_as_its_bridge_reports_it_working_blocked_or_idle_
 	// The pipe ends: the thread's own state decides again.
 	t.ctx.omps.host_reports("p1", None);
 	assert_eq!(host_of(&thread), None);
-	assert!(logged().contains("demo/Readme line: omp's bridge is gone; herdr decides"), "{}", logged());
+	assert!(logged().contains("demo/Readme line: omp's bridge is gone; the pane's state decides"), "{}", logged());
 }
 
 #[tokio::test]

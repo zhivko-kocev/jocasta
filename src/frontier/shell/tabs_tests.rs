@@ -30,3 +30,22 @@ fn a_sleeping_tab_reads_asleep_in_the_sidebar_not_starting_0689() {
 		[("acme", "asleep")]
 	);
 }
+
+#[test]
+fn a_pane_whose_process_was_killed_keeps_its_tab_for_the_service_to_start_omp_again_one_that_exited_cleanly_closes_0521_0405()
+ {
+	let (ui, _rx) = std::sync::mpsc::channel();
+	let hub = Hub::new(ui);
+	let wake: Wake = Arc::new(|_done| {});
+	let killed = hub.start_still("demo/Readme line", Arc::clone(&wake));
+	let (_, _, killed_id) = hub.add_workspace("Readme line", Path::new("."), killed);
+	let quit = hub.start_still("demo/Quiet one", wake);
+	let (quit_uid, (_, _, quit_id)) = (quit.uid, hub.add_workspace("Quiet one", Path::new("."), quit));
+	hub.touched();
+	assert_eq!(hub.snapshot().panes.len(), 2);
+	hub.exited(quit_uid);
+	let panes: Vec<String> = hub.snapshot().panes.into_iter().map(|pane| pane.pane_id).collect();
+	assert_eq!(panes, std::slice::from_ref(&killed_id));
+	assert!(hub.pane(&killed_id).is_some() && hub.pane(&quit_id).is_none());
+	assert_eq!(hub.workspaces().iter().map(|ws| ws.label.as_str()).collect::<Vec<_>>(), ["Readme line"]);
+}

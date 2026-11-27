@@ -176,8 +176,10 @@ impl Hub {
 		locked(&self.model)
 	}
 
-	/// Everything changed that the frame or the service reads.
-	fn touched(&self) {
+	/// Everything changed that the frame or the service reads. Also told when a pane's process crashed or was killed:
+	/// its tab stays with its last screen, so the service sees an omp that ended in a pane left open and starts it again
+	/// there (0521), and its thread stays listed.
+	pub fn touched(&self) {
 		locked(&self.changed).retain(|waiter| waiter.upgrade().inspect(|notify| notify.notify_one()).is_some());
 		let _ = self.ui.send(Ui::Changed);
 	}
@@ -291,8 +293,8 @@ impl Hub {
 		panes
 	}
 
-	/// A pane's process ended: its tab goes, and its workspace with its last tab (as herdr closed them); a pane a
-	/// respawn already replaced is not in any tab.
+	/// A pane's process ended cleanly (omp's `/exit`): its tab goes, and its workspace with its last tab; a thread
+	/// closed that way is a leftover (0405). A pane a respawn already replaced is not in any tab.
 	pub fn exited(&self, uid: u64) {
 		let gone = {
 			let mut model = self.model();

@@ -468,8 +468,13 @@ impl JocastaService {
 
 	async fn start_up(&self, me: Weak<Self>) -> Result<()> {
 		let c = &self.ctx;
+		// Each step is said as it begins, so a start that hangs names the step it hangs in.
+		let begun = std::time::Instant::now();
+		let step =
+			|what: &str| log(LogLevel::Info, "start", &format!("{what} ({} ms in)", begun.elapsed().as_millis()), None);
 		// The server answers /health before the catalog sync holds the event loop (PERF-7): bare `jocasta` polls it.
 		tokio::task::yield_now().await;
+		step("syncing the projects");
 		c.places.sync().await;
 		// Each problem in jocasta.yaml is said once, at the start (0584, C7).
 		for problem in settings_problems() {
@@ -478,22 +483,32 @@ impl JocastaService {
 		}
 		// Only a session whose server this run started and that holds nothing of Jocasta's yet is new (0495).
 		self.refresher.set_herdr_default(c.herdr.started_server() && fresh_session(&c.herdr.workspaces().await?));
+		let left = crate::frontier::server::reopen::left_panes(c).await;
+		step("the boss pane");
 		c.panes.ensure_boss(true).await?;
 		if c.stopping() {
 			return Ok(());
 		}
+		step("opening the last run's threads again");
+		let mid_turn = crate::frontier::server::reopen::reopen_threads(c, left).await;
+		step("finding the threads");
 		self.refresher.discover(&c.herdr.snapshot().await?).await?;
 		self.found.send_replace(true);
+		crate::frontier::server::reopen::resume_turns(c, &mid_turn).await;
 		self.begin_watching();
+		step("the day");
 		c.day.start();
 		self.start_spend_backfill().await;
 		self.start_setup_notice();
 		if let Some(keys) = c.options.first_run {
 			tokio::spawn(crate::frontier::server::first_run::check(Arc::downgrade(c), keys));
 		}
+		step("the session watcher");
 		self.start_watcher().await;
+		step("the first refresh");
 		self.refresh().await;
 		self.start_timers(&me);
+		step("reading today's sessions");
 		self.warm_sessions().await;
 		c.set_warmed();
 		if c.stopping() {
@@ -501,6 +516,7 @@ impl JocastaService {
 		}
 		c.day.refresh_activity(Some(true));
 		self.refresh().await;
+		step("started");
 		Ok(())
 	}
 

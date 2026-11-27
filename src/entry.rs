@@ -21,8 +21,8 @@ use crate::setup::setup::{
 	default_setup_paths, mise_config_dir, refresh_setup, run_setup, setup_check, setup_undo,
 };
 use crate::setup::uninstall::{
-	UninstallDeps, UninstallPaths, processes_under, read_install_record, remove_after_exit, remove_run_value_for,
-	remove_user_path_entry, run_uninstall,
+	ULTRON_TOOLS, UninstallDeps, UninstallPaths, mise_install_of, processes_under, read_install_record,
+	remove_after_exit, remove_run_value_for, remove_user_path_entry, run_uninstall,
 };
 use crate::shared::credentials::{delete_credential, read_credential, take_calendar_env, take_source_envs};
 use crate::shared::env;
@@ -153,10 +153,14 @@ async fn run_setup_route(refresh: Option<String>, asking: Asking, calendar_env: 
 
 async fn run_uninstall_route() -> Result<i32> {
 	// Only the install this command runs from: a source run removes no install.
-	let install = install_dir(None).and_then(|dir| {
+	let dir = install_dir(None);
+	let install = dir.as_deref().and_then(|dir| {
 		let local = env::var("LOCALAPPDATA").map(PathBuf::from);
-		read_install_record(&dir, local.as_deref(), None)
+		read_install_record(dir, local.as_deref(), None)
 	});
+	// Without install.json, mise's version folder: mise removes the program, uninstall says how.
+	let mise =
+		dir.as_deref().filter(|_| install.is_none()).and_then(|dir| mise_install_of(dir, Path::new(ULTRON_TOOLS)));
 	let paths = UninstallPaths {
 		jocasta_config_dir: config_dir(),
 		data_dir: data_dir(),
@@ -164,6 +168,7 @@ async fn run_uninstall_route() -> Result<i32> {
 		// Windows holds the running jocasta.exe: its files go after this exits. POSIX removes them at once.
 		running_from_install: install.is_some() && cfg!(windows),
 		install,
+		mise,
 	};
 	let setup = default_setup_paths(&shipped_config_dir(None), self_command(None));
 	let deps = UninstallDeps {

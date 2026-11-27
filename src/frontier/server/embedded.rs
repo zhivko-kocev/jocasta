@@ -7,6 +7,7 @@
 //! push-to-talk hook (0556). A service that can't start logs why and the window closes; bare `jocasta` says it (0582).
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Sender, channel};
 use std::time::Duration;
 
@@ -32,6 +33,9 @@ use crate::shared::service_file::read_service_file;
 /// guards against a hang. 50 s, inside the 60 s a closing terminal (foot and others) gives its process group before
 /// SIGKILL (0702, #6).
 const STOP_WAIT: Duration = Duration::from_secs(50);
+/// How long the window's own loop is given to take the word to leave from a signal before the process ends anyway.
+#[cfg(unix)]
+const UI_QUIT_WAIT: Duration = Duration::from_secs(5);
 
 /// Takes the single-instance lock: the lock this service holds, or `None` when another service holds it and answers.
 async fn take_lock() -> Result<Option<Instance>> {
@@ -145,36 +149,57 @@ pub fn run_embedded() -> Result<()> {
 		..ServerOptions::default()
 	};
 	let closed = Arc::new(Notify::new());
-	let service = runtime.spawn(serve(Arc::clone(&native), options, tx.clone(), Arc::clone(&closed)));
-	// A closed window hangs up its terminal on Linux and macOS, and the default for that signal ends the process on
-	// the spot, the service file and every pane left behind; it and a plain terminate are the word to leave, as the
-	// console's close event is on Windows.
+	// The service's end is awaited on a plain channel, not on the runtime's timer: a runtime whose workers are all held
+	// (the start hang of 2026-11-27) runs no timer, and the wait would never end.
+	let (ended, service_ended) = channel::<()>();
+	let serving = serve(Arc::clone(&native), options, tx.clone(), Arc::clone(&closed));
+	runtime.spawn(async move {
+		serving.await;
+		let _ = ended.send(());
+	});
+	let ui_returned = Arc::new(AtomicBool::new(false));
 	#[cfg(unix)]
-	{
-		use tokio::signal::unix::{SignalKind, signal};
-		let _entered = runtime.enter();
-		if let (Ok(mut hangup), Ok(mut terminate)) = (signal(SignalKind::hangup()), signal(SignalKind::terminate())) {
-			let quit = tx.clone();
-			runtime.spawn(async move {
-				tokio::select! {
-					_ = hangup.recv() => {}
-					_ = terminate.recv() => {}
-				}
-				let _ = quit.send(Ui::Quit);
-			});
-		}
-	}
+	quit_on_signals(tx.clone(), Arc::clone(&ui_returned));
 	let parts = Parts { hub, shell: JocastaShell::new(now_ms), native, tx, rx, enhanced };
 	crate::shared::log::set_stderr(false);
 	let ran = run(parts);
+	ui_returned.store(true, Ordering::SeqCst);
 	crate::shared::log::set_stderr(true);
 	// The window closed, or the service stopped under it: what is left stops now, and the process waits for it.
 	closed.notify_one();
-	runtime.block_on(async {
-		if tokio::time::timeout(STOP_WAIT, service).await.is_err() {
-			log(LogLevel::Warn, "service", "didn't stop within a minute; ending", None);
-		}
-	});
+	if service_ended.recv_timeout(STOP_WAIT).is_err() {
+		log(LogLevel::Warn, "service", "didn't stop within a minute; ending", None);
+	}
 	runtime.shutdown_timeout(Duration::from_secs(1));
 	ran.map_err(|error| Error::other(format!("the terminal failed: {error}")))
+}
+
+/// A closed window hangs up its terminal on Linux and macOS, and the default for that signal ends the process on the
+/// spot, the service file and every pane left behind; it and a plain terminate are the word to leave, as the console's
+/// close event is on Windows. They are awaited on a thread and runtime of their own, so they are heard while the
+/// service's runtime is held up (a hung start). A process that doesn't end after one ends anyway: at once when the
+/// window's own loop didn't take the word within 5 s, else once the service's stop had its 50 s.
+#[cfg(unix)]
+fn quit_on_signals(quit: Sender<Ui>, ui_returned: Arc<AtomicBool>) {
+	use tokio::signal::unix::{SignalKind, signal};
+	std::thread::spawn(move || {
+		let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else { return };
+		runtime.block_on(async move {
+			let (Ok(mut hangup), Ok(mut terminate)) = (signal(SignalKind::hangup()), signal(SignalKind::terminate()))
+			else {
+				return;
+			};
+			tokio::select! {
+				_ = hangup.recv() => {}
+				_ = terminate.recv() => {}
+			}
+			let _ = quit.send(Ui::Quit);
+			tokio::time::sleep(UI_QUIT_WAIT).await;
+			if ui_returned.load(Ordering::SeqCst) {
+				tokio::time::sleep(STOP_WAIT + UI_QUIT_WAIT).await;
+			}
+			log(LogLevel::Warn, "service", "didn't end after the word to leave; ending now", None);
+			std::process::exit(1);
+		});
+	});
 }

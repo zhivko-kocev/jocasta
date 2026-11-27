@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use futures_util::StreamExt;
 use globset::{GlobBuilder, GlobMatcher};
@@ -363,7 +363,8 @@ fn settle_mains(db: &Connection) -> Result<()> {
 /// before its first commit (SHR-2), so it becomes `root:<sha>` once it has one (0103). Git runs asynchronously before
 /// the write; the write is one short transaction with no git in it (SHR-3). `file` defaults to the projects file.
 ///
-/// The future holds `db` across git's awaits, so it isn't `Send`: run it where the connection lives.
+/// The future holds `db` across git's awaits, so it isn't `Send`: run it where the connection lives. The service, whose
+/// catalog is shared, holds it only to read and to write ([`known_paths`], [`plan_sync`], [`write_sync`]).
 pub async fn sync_catalog(db: &Connection, file: Option<&ProjectsFile>) -> Result<()> {
 	let read;
 	let file = match file {
@@ -373,24 +374,54 @@ pub async fn sync_catalog(db: &Connection, file: Option<&ProjectsFile>) -> Resul
 			&read
 		}
 	};
+	let planned = plan_sync(file, known_paths(db)?).await?;
+	write_sync(db, &planned)
+}
+
+/// The catalog's paths with their projects' identities, as a sync's plan starts from.
+pub struct KnownPaths(Vec<(PathRow, String)>);
+
+/// The catalog's paths, read for [`plan_sync`].
+pub fn known_paths(db: &Connection) -> Result<KnownPaths> {
+	Ok(KnownPaths(known_rows(db)?))
+}
+
+/// What a sync writes, decided with git and the disk and no connection held.
+pub struct SyncPlan {
+	excluded: HashSet<String>,
+	candidates: Vec<(String, PathBuf)>,
+	missing: HashSet<String>,
+	plans: Vec<Option<PathPlan>>,
+}
+
+/// A sync's scan and git calls (each bounded, CO-10) against the catalog's paths as `known` read them.
+pub async fn plan_sync(file: &ProjectsFile, known: KnownPaths) -> Result<SyncPlan> {
 	let excluded: HashSet<String> = file.exclude.iter().map(|p| path_key(&real_path(Path::new(p)))).collect();
 	let candidates = candidates_of(file, &excluded)?;
-
-	let known = known_rows(db)?;
+	let known = known.0;
 	let missing: HashSet<String> = known
 		.iter()
 		.filter(|(row, _)| !Path::new(&row.path).exists())
 		.map(|(row, _)| path_key(Path::new(&row.path)))
 		.collect();
-	let by_key: HashMap<String, (PathRow, String)> =
-		known.into_iter().map(|(row, identity)| (path_key(Path::new(&row.path)), (row, identity))).collect();
-	// Worktree paths that are gone are checked before the write, so the transaction does no I/O.
-	let plans: Vec<Option<PathPlan>> = futures_util::stream::iter(candidates.iter())
-		.map(|(key, path)| plan_path(&by_key, key, path))
+	let by_key: Arc<HashMap<String, (PathRow, String)>> =
+		Arc::new(known.into_iter().map(|(row, identity)| (path_key(Path::new(&row.path)), (row, identity))).collect());
+	// Worktree paths that are gone are checked before the write, so the transaction does no I/O. Each plan owns what it
+	// reads, so the service's start can await this on its runtime (a borrowing stream isn't `Send` there).
+	let plans: Vec<Option<PathPlan>> = futures_util::stream::iter(candidates.clone())
+		.map(|(key, path)| {
+			let by_key = Arc::clone(&by_key);
+			async move { plan_path(&by_key, &key, &path).await }
+		})
 		.buffered(GIT_PARALLEL)
 		.collect()
 		.await;
+	Ok(SyncPlan { excluded, candidates, missing, plans })
+}
 
+/// Writes `planned` in one short transaction with no git in it.
+pub fn write_sync(db: &Connection, planned: &SyncPlan) -> Result<()> {
+	let SyncPlan { excluded, candidates, missing, plans } = planned;
 	let now = now_iso();
 	let tx = db.unchecked_transaction()?;
 	// Read again inside the write: another sync may have written since the plan was made.

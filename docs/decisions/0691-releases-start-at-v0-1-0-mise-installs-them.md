@@ -38,3 +38,4 @@ A tagged, attested release that mise installs is what ultron and a newcomer both
 - `release.yml`: the publish job gains `id-token: write`, `attestations: write` and the attestation step over `dist/*.zip` and `dist/*.tar.gz`, before the release is created.
 - README and manual: the mise line first, the install script as the alternative.
 - ultron installs Jocasta through its mise tool list and drops its source build and omp pin.
+- Note (2026-11-27): `jocasta uninstall` knows a mise install (the program's folder has no `install.json` and sits in mise's `github-zhivko-kocev-jocasta` folder): it lists `the program (installed by mise)`, leaves it, and ends with `To remove the program: mise unuse -g github:zhivko-kocev/jocasta`, saying first when ultron's `/etc/mise/conf.d/ultron-tools.toml` lists it too.

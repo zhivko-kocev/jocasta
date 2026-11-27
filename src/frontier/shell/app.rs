@@ -630,8 +630,12 @@ fn event_loop(app: &mut App, terminal: &mut Term, rx: &Receiver<Ui>) -> io::Resu
 							}
 						}
 						Ui::Changed => touched = true,
-						Ui::Exit(uid) => {
-							app.hub.exited(uid);
+						Ui::Exit(uid, clean) => {
+							if clean {
+								app.hub.exited(uid);
+							} else {
+								app.hub.touched();
+							}
 							touched = true;
 						}
 						Ui::Clip(text) => copy(&text),

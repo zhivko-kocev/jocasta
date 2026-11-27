@@ -133,6 +133,15 @@ fn locked(mutex: &Mutex<Launched>) -> MutexGuard<'_, Launched> {
 	mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// A pane the last run left in `panes.json` ([`LaunchedPanes::take_gone`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeftPane {
+	pub cwd: PathBuf,
+	/// The session it comes back to: mid-turn as Jocasta stopped (0549) unless it was asleep (0676).
+	pub restore: Option<String>,
+	pub asleep: bool,
+}
+
 impl LaunchedPanes {
 	/// The record in `file` (`<data>/panes.json` by default).
 	pub fn new(file: Option<&Path>) -> Self {
@@ -253,6 +262,32 @@ impl LaunchedPanes {
 	/// The session `pane_id`'s omp was mid-turn in when Jocasta last stopped, or `None`.
 	pub fn paused(&self, pane_id: &str) -> Option<String> {
 		locked(&self.state).entry(pane_id).and_then(|entry| text(entry, "restore")).map(str::to_owned)
+	}
+
+	/// Takes out the records of the panes `panes` doesn't hold and returns them: at a start of the own shell, which keeps
+	/// no tabs across a restart (0683), every record is what the last run left, and its ids are free to be given again.
+	pub fn take_gone(&self, panes: &[PaneInfo]) -> Result<Vec<LeftPane>> {
+		let mut state = locked(&self.state);
+		let (gone, kept): (Vec<_>, Vec<_>) =
+			state.entries.drain(..).partition(|(pane_id, _)| !panes.iter().any(|p| &p.pane_id == pane_id));
+		state.entries = kept;
+		if gone.is_empty() {
+			return Ok(Vec::new());
+		}
+		for (pane_id, _) in &gone {
+			state.ran.remove(pane_id);
+		}
+		self.save(&state)?;
+		Ok(gone
+			.into_iter()
+			.filter_map(|(_, entry)| {
+				Some(LeftPane {
+					cwd: PathBuf::from(text(&entry, "cwd")?),
+					restore: text(&entry, "restore").map(str::to_owned),
+					asleep: text(&entry, "asleep") == Some("true"),
+				})
+			})
+			.collect())
 	}
 
 	/// Notes each recorded pane's terminal the first time it is seen, and the terminal its omp is seen running in

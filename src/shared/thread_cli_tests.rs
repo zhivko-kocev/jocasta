@@ -243,3 +243,26 @@ async fn status_json_prints_the_services_line_and_running_false_with_exit_3_when
 		assert!(deps.err.borrow().is_empty());
 	}
 }
+
+#[tokio::test]
+async fn status_json_says_running_false_no_answer_with_exit_3_when_the_service_doesnt_answer_in_2_s() {
+	let port = crate::shared::fsx::free_port().unwrap();
+	let address = bridge_address(port);
+	// The bridge is there and takes the connection, but the service never answers (a start that hangs).
+	#[cfg(unix)]
+	let _held = {
+		std::fs::create_dir_all(std::path::Path::new(&address).parent().unwrap()).unwrap();
+		tokio::net::UnixListener::bind(&address).unwrap()
+	};
+	#[cfg(windows)]
+	let _held =
+		tokio::net::windows::named_pipe::ServerOptions::new().first_pipe_instance(true).create(&address).unwrap();
+	let deps = at(port);
+	let asked = std::time::Instant::now();
+	assert_eq!(run_status_json(&deps).await, EXIT.not_running);
+	assert!(asked.elapsed() < std::time::Duration::from_secs(5), "{:?}", asked.elapsed());
+	assert_eq!(*deps.out.borrow(), [r#"{"running":false,"reason":"no answer"}"#]);
+	assert!(deps.err.borrow().is_empty());
+	#[cfg(unix)]
+	let _ = std::fs::remove_file(address);
+}

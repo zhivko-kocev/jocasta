@@ -9,8 +9,8 @@ use std::time::Instant;
 
 use iced::animation::Easing;
 use iced::widget::{
-	Column, button, canvas, column, container, image, mouse_area, pick_list, row, rule, scrollable, space, text,
-	text_editor, text_input,
+	Column, button, canvas, column, container, image, mouse_area, pick_list, rich_text, row, rule, scrollable, space,
+	span, text, text_editor, text_input,
 };
 use iced::{Alignment, Animation, Color, Element, Fill, Length, Size, Subscription, Task, window};
 use serde_json::Value;
@@ -606,7 +606,7 @@ impl Window {
 			let mut item = column![
 				row![
 					badge(works_state(row.state), colour),
-					text(&row.label).size(BODY).color(c.fg).wrapping(text::Wrapping::WordOrGlyph).width(Fill),
+					with_code(&row.label).width(Fill),
 					text(duration(row.ms)).size(META).color(c.muted),
 				]
 				.spacing(12)
@@ -909,7 +909,7 @@ impl Window {
 		}
 		let editable = card.published.is_none() && self.his_review();
 		if !editable {
-			body = body.push(text(card_text(card)).size(BODY).color(c.fg).wrapping(text::Wrapping::WordOrGlyph));
+			body = body.push(text(card_text(card)).size(BODY).color(c.fg).wrapping(wrap_for(card_text(card))));
 		}
 		if let Some(published) = &card.published {
 			body = body.push(
@@ -938,7 +938,7 @@ impl Window {
 					.height(Length::Fixed(88.0))
 					.padding(10)
 					.size(BODY)
-					.wrapping(text::Wrapping::WordOrGlyph)
+					.wrapping(wrap_for(&words))
 					.style(style::editor),
 			);
 			controls = controls.push(self.helpers(&id, &words, changed.then_some(save)));
@@ -1089,7 +1089,7 @@ impl Window {
 				.height(Length::Fixed(88.0))
 				.padding(10)
 				.size(BODY)
-				.wrapping(text::Wrapping::WordOrGlyph)
+				.wrapping(wrap_for(&words))
 				.style(style::editor),
 			self.helpers(SUMMARY, &words, save),
 		]
@@ -1140,11 +1140,45 @@ fn code_block<'a>(body: &str, alpha: f32) -> Element<'a, Message> {
 	.into()
 }
 
+/// `label` cut at its backticks: each part with whether it is code (between a pair); a label with an odd number of
+/// backticks is one plain part, as written.
+fn code_parts(label: &str) -> Vec<(&str, bool)> {
+	if label.matches('`').count() % 2 == 1 {
+		return vec![(label, false)];
+	}
+	label.split('`').enumerate().filter(|(_, part)| !part.is_empty()).map(|(at, part)| (part, at % 2 == 1)).collect()
+}
+
+/// A Works row's label (0713): its `` `command` `` parts in the monospace font, without the backticks.
+fn with_code(label: &str) -> text::Rich<'_, (), Message> {
+	let spans: Vec<text::Span<'_, (), iced::Font>> = code_parts(label)
+		.into_iter()
+		.map(|(part, code)| if code { span(part).font(mono_font()) } else { span(part) })
+		.collect();
+	rich_text(spans).size(BODY).color(colours().fg).wrapping(text::Wrapping::WordOrGlyph)
+}
+
+/// How a reader's text wraps: at words, a word longer than its line at any glyph; at any glyph when the text mixes
+/// right-to-left and left-to-right words. cosmic-text 0.15, under iced, never wraps before a word that starts a run
+/// of the other direction when it doesn't fit (`ShapeLine::layout_to_buffer` commits a line only from words of the
+/// same run), so such a word ran past the right edge of its card or box at most widths.
+fn wrap_for(said: &str) -> text::Wrapping {
+	let rtl = said.chars().any(right_to_left);
+	let ltr = said.chars().any(|ch| ch.is_alphabetic() && !right_to_left(ch));
+	if rtl && ltr { text::Wrapping::Glyph } else { text::Wrapping::WordOrGlyph }
+}
+
+/// A letter of a right-to-left script: Hebrew, Arabic, Syriac, Thaana, N'Ko and their presentation forms.
+fn right_to_left(ch: char) -> bool {
+	matches!(ch, '\u{0590}'..='\u{08FF}' | '\u{FB1D}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}' | '\u{10800}'..='\u{10FFF}')
+}
+
 fn prose(body: &str) -> Element<'_, Message> {
 	let c = colours();
 	let mut column = Column::new().spacing(12).max_width(640);
 	for para in paragraphs(body) {
-		column = column.push(text(para).size(BODY).color(c.fg).wrapping(text::Wrapping::WordOrGlyph));
+		let wrapping = wrap_for(&para);
+		column = column.push(text(para).size(BODY).color(c.fg).wrapping(wrapping));
 	}
 	column.into()
 }

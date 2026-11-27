@@ -43,3 +43,4 @@ Everything stops; autostart removed; paused work resumes.
 - Amended by 0552: Jocasta is herdr's `jocasta` session plus the Bun service it starts; there is no app or tray.
 - Amended by 0557: `frontier.autostart` goes; he starts `jocasta` himself.
 - Amended by 0563: closing the terminal while threads work reopens it on the same herdr session and asks the close question in the popup.
+- Note (2026-11-27): in the own shell (0683) nothing reopened thread panes at start, so after a restart no thread came back and their worktrees showed as leftovers. `reopen.rs` now takes the last run's entries out of `panes.json` before the boss pane is made and reopens each thread pane whose worktree still exists, asleep in its own workspace (titled from its task); a key or `thread_send` starts its omp with `--continue`, or `--restore` with its saved session. Threads saved mid-turn wake at once with `--restore <session>`.

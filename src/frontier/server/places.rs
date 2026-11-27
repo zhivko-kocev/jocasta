@@ -12,7 +12,8 @@ use crate::shared::clock::now_ms;
 use crate::shared::errors::{Error, Result};
 use crate::shared::git::git;
 use crate::shared::pathkey::{path_key, real_path, resolve, same_dir};
-use crate::shared::projects::{Project, list_projects, sync_catalog};
+use crate::shared::projects::{Project, known_paths, list_projects, plan_sync, write_sync};
+use crate::shared::projects_file::read_projects_file;
 
 /// How long git places and projects found for a folder are kept before being looked up again.
 const PLACES_KEPT_MS: i64 = 10 * 60_000;
@@ -315,17 +316,18 @@ impl Places {
 	}
 
 	/// Projects from the watched roots into the catalog (0105), and the cached places with them. A sync that fails (a
-	/// malformed `projects.yaml`, C8) is logged and said once; the catalog goes on as it was. `sync_catalog` holds the
-	/// connection across git's awaits and so isn't `Send`: it runs on a blocking thread, with the catalog locked.
+	/// malformed `projects.yaml`, C8) is logged and said once; the catalog goes on as it was. The catalog is held only to
+	/// read its paths and to write the result, never across git: a git that hangs holds nothing else up, and the start's
+	/// sync can't starve the runtime the way a lock held over git did (the start hang of 2026-11-27).
 	pub async fn sync(&self) {
 		let catalog = self.catalog.clone();
-		let handle = tokio::runtime::Handle::current();
-		let done = tokio::task::spawn_blocking(move || {
-			let db = catalog_of(&catalog);
-			handle.block_on(sync_catalog(&db, None))
-		})
+		let result = async {
+			let file = read_projects_file(None)?;
+			let known = known_paths(&catalog_of(&catalog))?;
+			let planned = plan_sync(&file, known).await?;
+			write_sync(&catalog_of(&catalog), &planned)
+		}
 		.await;
-		let result = done.unwrap_or_else(|error| Err(Error::other(error.to_string())));
 		let mut state = self.state();
 		if let Err(error) = result {
 			state.said(format!("projects.yaml: {error}; showing the last good list."));
