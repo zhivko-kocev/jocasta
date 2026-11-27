@@ -856,9 +856,10 @@ async fn over_budget(choice: usize) -> OverBudget {
 		let boss = boss_pane(&server.herdr).expect("a boss pane");
 		state_of(&boss, &server, AgentState::Idle, None);
 		let record_file = task_dir_of(&project_id, "Readme line").join("thread.json");
-		// The ledger reaches $5.10; the turn ends.
+		// The ledger reaches $5.10; the turn ends once the service has taken the session herdr pushed (the cap reads the
+		// spend from it, and a turn end before that has nothing to read).
 		let file = session_file(&path, &[Msg::new("A long turn.", 5.10)]);
-		state_of(&pane.pane_id, &server, AgentState::Working, Some(&file));
+		push_state(&server, &pane.pane_id, AgentState::Working, file.to_str()).await;
 		let idle = PaneAgent { idle_reported: true, ..PaneAgent::default() };
 		pane_reports(&server, &pane.pane_id, &PaneEvent::AgentEnd { idle: true, jobs: 0 }, idle);
 		let find = || shown.lock().unwrap_or_else(PoisonError::into_inner).iter().find(|p| p.open()).cloned();
