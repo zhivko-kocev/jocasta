@@ -66,6 +66,116 @@ not results): every script's `--dry-run`, then `h3-recovery --runs 1` and `h5-st
 fixed before the long runs. The task benchmark refuses only an omp folder that would hide a layered arm's own
 `jocasta` server (0587, 0652).
 
+## Two machines (0720)
+
+The thesis measures Jocasta on his PC (Linux, `linux-pc`) and on his Windows 11 ThinkPad E14 (`win-laptop`). Every
+script writes into `<thesis>/data/<machine>/<date>/<script>`, one folder per script; each summary's `conditions` name
+the machine (`machine`, `ompVersion`, `jocastaCommit`). Results stay outside the repo and uncommitted (the thesis kit's
+`data/` is git-ignored).
+
+| Script | PC (Linux) | Laptop (Windows 11) |
+|---|---|---|
+| `footprint`, `h3-recovery`, `h4-isolation`, `h5-startup`, `h6-memory`, `h7-longpath`, `h8-parallel` | yes | yes |
+| `h2-toast` | no: its notifications would show on his live desktop | yes |
+| `h9-footprint`, `h1-guard git-guard-check` | no: Windows, VM `JOCASTA-CLEAN` only | no: VM only, its VM results stand (0657) |
+| the task benchmark | once `tasks.jsonl` is copied from his Windows PC | yes |
+
+**The sandbox.** Every live script runs against a sandbox Jocasta: its own data, config, omp and mise folders, never
+his. On the PC the sandbox also has no display and no session bus, and `notify-send`, `xdg-open` and `gdbus` are stubs
+that only log to `$B1/stubs.log`, so nothing reaches his desktop. The sandbox's omp shares his omp login store (a link
+to `agent.db`; its `settings` table is empty), not his omp settings. Each bench that starts threads gets a data folder
+of its own, so it starts with none open. Linux, as run on 2026-11-27 (from the checkout, bash):
+
+```bash
+cargo build --release --bins
+export B1=/tmp/jocasta-b1 D=~/thesis/data/linux-pc/2026-11-27
+export JOCASTA_DATA_DIR=$B1/data JOCASTA_CODING_AGENT_DIR=$B1/config PI_CODING_AGENT_DIR=$B1/omp-agent MISE_CONFIG_DIR=$B1/mise
+unset WAYLAND_DISPLAY DISPLAY DBUS_SESSION_BUS_ADDRESS
+mkdir -p $B1/{data,config,omp-agent,mise,stubs,projects}
+for t in notify-send xdg-open gdbus; do printf '#!/bin/sh\necho "$(date -Iseconds) %s $*" >> %s/stubs.log\n' $t $B1 > $B1/stubs/$t; chmod +x $B1/stubs/$t; done
+export PATH=$B1/stubs:$PWD/target/release:$PATH
+ln -s ~/.omp/agent/agent.db $PI_CODING_AGENT_DIR/agent.db
+printf 'threads:\n  maxRunning: 8\n' > $B1/config/jocasta.yaml   # H6's 8 threads; the default 4 queues the fifth (0687)
+jocasta setup --yes
+for p in acme-api acme-web acme-h6; do git init -q -b main $B1/projects/$p; echo "# $p" > $B1/projects/$p/README.md; git -C $B1/projects/$p add .; git -C $B1/projects/$p commit -qm fixture; jocasta project add $B1/projects/$p; done
+jocasta-bench h8-parallel --out $B1/h8-fixture --project acme-h8 --repo $B1/projects/acme-h8 --threads 2,4,8 --make-fixture
+jocasta project add $B1/projects/acme-h8
+# The sandbox Jocasta, when a script needs one running: a detached tmux session (no window).
+tmux -L jb1 new-session -d -s jocasta "jocasta"   # attach with: tmux -L jb1 attach
+```
+
+The laptop (PowerShell, from the checkout after `mise trust; mise install --locked; mise exec -- bun install
+--frozen-lockfile; mise run build`). Sign the sandbox's omp in once (`omp`, `/login`, `/exit`) with the variables set;
+`jocasta setup --yes` also adds its Windows Terminal profile. A sandbox Jocasta runs in a second PowerShell window
+with the same variables (`jocasta`).
+
+```powershell
+$B1 = "$env:TEMP\jocasta-b1"; $D = "D:\thesis\data\win-laptop\$(Get-Date -Format yyyy-MM-dd)"
+$env:JOCASTA_DATA_DIR = "$B1\data"; $env:JOCASTA_CODING_AGENT_DIR = "$B1\config"
+$env:PI_CODING_AGENT_DIR = "$B1\omp-agent"; $env:MISE_CONFIG_DIR = "$B1\mise"
+$env:Path = "$PWD\target\release;$env:Path"
+"data","config","omp-agent","mise","projects" | ForEach-Object { New-Item -ItemType Directory -Force "$B1\$_" | Out-Null }
+Set-Content "$B1\config\jocasta.yaml" "threads:`n  maxRunning: 8"
+jocasta setup --yes
+omp
+foreach ($p in "acme-api","acme-web","acme-h6") { git init -q -b main "$B1\projects\$p"; Set-Content "$B1\projects\$p\README.md" "# $p"; git -C "$B1\projects\$p" add .; git -C "$B1\projects\$p" commit -qm fixture; jocasta project add "$B1\projects\$p" }
+jocasta-bench h8-parallel --out "$B1\h8-fixture" --project acme-h8 --repo "$B1\projects\acme-h8" --threads 2,4,8 --make-fixture
+jocasta project add "$B1\projects\acme-h8"
+```
+
+**The scripts**, Linux as run, then the laptop's lines. Each live script starts its own sandbox Jocasta in a fresh
+data folder (Linux: `export JOCASTA_DATA_DIR=$B1/data-<script>; tmux -L jb1 new-session -d -s jocasta "jocasta"`, and
+`tmux -L jb1 kill-server` after; laptop: the same `$env:JOCASTA_DATA_DIR` in both windows, `jocasta` in the second).
+Plans are approved in the thread's pane (attach, Alt+<n> for the thread, Enter on "Approve and execute").
+
+```bash
+jocasta-bench footprint --out $D/footprint
+jocasta-bench h7-longpath --out $D/h7-longpath --root $B1/h7b
+jocasta-bench h5-startup --out $D/h5-startup --tools jocasta,omp --cwd $B1/projects/acme-api
+# data-h6b
+jocasta-bench h6-memory --out $D/h6-memory --tools omp --threads 0,1,4,8 --project acme-h6 --runs 1 --cwd $B1/projects/acme-api
+# data-h4: one small thread in each project gives A and B their project panes (ids in $JOCASTA_DATA_DIR/panes.json)
+jocasta thread new acme-web "Reply with the word ready and change nothing." --title "h4 b"
+jocasta thread new acme-api "Reply with the word ready and change nothing." --title "h4 a"
+jocasta-bench h4-isolation --out $D/h4-isolation --project-a p-95000f820871e216 --pane-a p10 --pane-b p4
+# data-h8; approve each thread's plan
+jocasta-bench h8-parallel --out $D/h8-parallel --project acme-h8 --repo $B1/projects/acme-h8 --threads 2,4
+```
+
+```powershell
+jocasta-bench footprint --out "$D\footprint"
+jocasta-bench h7-longpath --out "$D\h7-longpath" --root "$B1\h7"
+jocasta-bench h5-startup --out "$D\h5-startup" --tools jocasta,omp --cwd "$B1\projects\acme-api"
+jocasta-bench h2-toast --out "$D\h2-toast" --start acme-api
+# data-h6
+jocasta-bench h6-memory --out "$D\h6-memory" --tools omp --threads 0,1,4,8 --project acme-h6 --runs 1 --cwd "$B1\projects\acme-api"
+# data-h4: the two threads as above; --project-a from `jocasta project list`, the panes from panes.json
+jocasta-bench h4-isolation --out "$D\h4-isolation" --project-a <acme-api's id> --pane-a <acme-api's pane> --pane-b <acme-web's pane>
+# data-h3: three small threads as for H4 first
+jocasta-bench h3-recovery --out "$D\h3-recovery"
+# data-h8
+jocasta-bench h8-parallel --out "$D\h8-parallel" --project acme-h8 --repo "$B1\projects\acme-h8" --threads 2,4
+```
+
+H3 is not in the Linux list yet: on 2026-11-27 a killed thread pane was not started again and a restarted Jocasta
+listed no threads, so it is re-run after that restore fix (same command, `--out $D/h3-recovery`, in `data-h3`).
+
+**The task benchmark**, once `tasks.jsonl` is in `~/thesis/data/bench/tasks/` (copied from his Windows PC; A4 needs
+Claude Code signed in, A7 the key in `JOCASTA_A7_ANTHROPIC_API_KEY`):
+
+```bash
+JOCASTA_EVALS_REAL=1 jocasta-bench evals bench --tasks ~/thesis/data/bench/tasks/tasks.jsonl --cache ~/thesis/data/bench/tasks/cache --out $D/tasks --reps 1
+```
+
+```powershell
+$env:JOCASTA_EVALS_REAL = "1"; jocasta-bench evals bench --tasks D:\thesis\data\bench\tasks\tasks.jsonl --cache D:\thesis\data\bench\tasks\cache --out "$D\tasks" --reps 1
+```
+
+**Bringing the laptop's results home.** Copy `D:\thesis\data\win-laptop` to a stick (`Copy-Item -Recurse
+D:\thesis\data\win-laptop E:\`) and on the PC `cp -r /run/media/$USER/<stick>/win-laptop ~/thesis/data/`; or, with
+OpenSSH Server on the laptop, `scp -r <laptop>:D:/thesis/data/win-laptop ~/thesis/data/`. Nothing in `data/` is
+committed.
+
 ## The scripts
 
 - **H1 (0482, 0500, 0501, 0535, 0600, 0623).** Four scripts; the corpus is a separate file and this folder holds no command list.

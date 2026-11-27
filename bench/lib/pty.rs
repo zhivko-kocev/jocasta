@@ -181,10 +181,20 @@ impl Pty {
 	}
 
 	/// Closes the window as he does: the pseudo console goes (on a thread of its own: closing a ConPTY can wait on its
-	/// output) and the program is left to end by itself, with every process it started (0683).
+	/// output) and the program is left to end by itself, with every process it started (0683). On Linux and macOS the
+	/// program is sent the hangup a closing terminal sends: the reader and writer keep their copies of the pty open, so
+	/// dropping the master alone never hangs it up (0720).
 	pub fn close_window(&self) {
 		if let Some(master) = locked(&self.master).take() {
 			std::thread::spawn(move || drop(master));
+		}
+		#[cfg(unix)]
+		if let Some(pid) = self.pid {
+			let _ = std::process::Command::new("kill")
+				.args(["-HUP", &pid.to_string()])
+				.stdout(std::process::Stdio::null())
+				.stderr(std::process::Stdio::null())
+				.status();
 		}
 	}
 
